@@ -1,11 +1,9 @@
-// Where the reader's mounted card window starts, held outside React.
+// Where a transcript window's mounted card window starts, held outside React.
 //
-// It was `useState` in the OpenTUI root, so every window slide re-rendered the
-// whole root (~4-5ms before a single card mounts) to move a slice of the
-// transcript. The transcript window component subscribes here instead, and a
-// slide re-renders it alone. The root reads the value imperatively (key
-// handlers, effects) and never subscribes — `readerWindowSmoke.tsx` asserts
-// that with `readRootRenderCount()`, because the frame is identical either way.
+// As state in the window, every slide re-rendered the whole window to move a
+// slice of the transcript. The card component subscribes here instead, and a
+// slide re-renders it alone — `readerWindowSmoke.tsx` asserts the root does
+// not render, because the frame is identical either way.
 //
 // `null` means "follow the tail": the window is derived from the card count.
 
@@ -39,13 +37,6 @@ export function createReaderWindowStore(): ReaderWindowStore {
     prime: (next) => { start = next },
   }
 }
-
-// The window the root's reader draws in.
-export const rootReaderWindowStore = createReaderWindowStore()
-export const getReaderWindowStart = rootReaderWindowStore.get
-export const subscribeReaderWindowStart = rootReaderWindowStore.subscribe
-export const setReaderWindowStart = rootReaderWindowStore.set
-export const primeReaderWindowStart = rootReaderWindowStore.prime
 
 export type ReaderWindow = { start: number; end: number }
 

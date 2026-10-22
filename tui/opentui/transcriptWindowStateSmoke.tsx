@@ -171,13 +171,6 @@ try {
   await chordKey('1')
   await waitFor('thinking body in the background transcript', () => paneHas(64, 'DETAIL-001-1'))
   check(!paneText(64).includes('DETAIL-002-1'), 'thinking mode expanded ordinary collapsed cards')
-  if (CARD_COUNT > 240) {
-    await press('g')
-    await settle(300)
-    const { setReaderWindowStart } = await import('./readerWindowStore')
-    await act(async () => { setReaderWindowStart(80) }); await settle(500)
-    check(paneText(64).includes('DETAIL-001-1'), 'scrolling the selected transcript shifted a different window')
-  }
   console.log('Transcript window state smoke passed (independent folding, background position, float relocation, workspace return, persisted state, shared thinking renderer)')
 } finally {
   setup.renderer.destroy()

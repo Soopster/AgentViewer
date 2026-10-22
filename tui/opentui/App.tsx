@@ -31,7 +31,7 @@ import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../
 import { SurfacePanel } from './SurfacePanel'
 import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
-import { transcriptViewportPosition, useTranscriptWindowPositions, type TranscriptWindowPosition } from './transcriptWindowState'
+import { transcriptViewportPosition, useTranscriptWindowPositions } from './transcriptWindowState'
 import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree } from './windowSplitTree'
 import { WINDOW_SURFACE_TITLES, surfaceKindOf, surfaceTitle, type WindowSurfaceKind } from './windowSurfaceNames'
 import { copySurfaceViewState, migratePanelViewState, surfaceViewNamespace } from './windowViewState'
@@ -96,7 +96,7 @@ import {
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
-import { createReaderWindowStore, deriveReaderWindow, getReaderWindowStart, primeReaderWindowStart, rootReaderWindowStore, setReaderWindowStart, stepReaderWindow, subscribeReaderWindowStart } from './readerWindowStore'
+import { createReaderWindowStore, deriveReaderWindow, stepReaderWindow } from './readerWindowStore'
 import type { ReaderWindow, ReaderWindowStore } from './readerWindowStore'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
@@ -919,11 +919,8 @@ const READER_SCROLL_POLL_MS = 120
 // A requested slide that never commits (its window turned out unchanged) must
 // not block slide detection for good.
 const READER_SLIDE_REQUEST_TTL_MS = 500
-// The tab-restore fixup waits for the next Yoga layout pass on a short timer,
-// bounded by READER_FIXUP_MAX_TRIES. (Window slides do not: see the
-// layout-pass fixup.)
+// A restored window waits for the next Yoga layout pass on a short timer.
 const READER_FIXUP_RETRY_MS = 16
-const READER_FIXUP_MAX_TRIES = 12
 // A card box sits at most this deep under the scrollbox content: the content
 // holds one wrapper box per card (landmarks + the `card:` box itself), and a
 // user bubble adds one more level of alignment box.
@@ -932,7 +929,7 @@ const READER_CARD_SEARCH_DEPTH = 3
 // OpenTUI's `findDescendantById` is a recursive walk of the WHOLE subtree, and
 // it sorts each level's children on the way down. Under a mounted transcript
 // that is every renderable inside every card — and the fixup executors below
-// call it on a 16ms timer, up to READER_FIXUP_MAX_TRIES times, each time a
+// call it on a 16ms timer, each time a
 // window slides or a tab is restored. Profiled during tab switching against
 // real sessions it was 9.7% of all CPU, landing squarely in the window between
 // the switch and the first paint. A card box is never deeper than
@@ -2154,7 +2151,6 @@ const composerKeyBindings: ComposerKeyBinding[] = [
   { name: 'j', ctrl: true, action: 'newline' },
   { name: 'linefeed', action: 'newline' },
 ]
-const TRANSCRIPT_TOP_MARGIN = 1
 // Metadata refresh is intentionally slow because Claude control queries are
 // expensive and can still cause main-thread pressure when they complete.
 const CLAUDE_METADATA_REFRESH_MS = 5 * 60_000
@@ -7880,6 +7876,8 @@ type SplitPaneHandle = {
    * whole transcript is searched. 'loading' means it is being paged in.
    */
   search: (query: string, direction: 1 | -1) => 'found' | 'loading' | 'none'
+  /** What the window has mounted: the root's diff keys act on the cursor card's display. */
+  mountedOutput: () => ReaderWindowOutput
   /** A jump made elsewhere (search, bookmarks, markers) lands on this card. */
   jumpToKey: (cardKey: string, follow: boolean) => void
   /** SCROLLBACK: the text scrolls by rows and has no visible cursor. */
@@ -8039,9 +8037,11 @@ type SplitTranscriptPaneProps = {
   /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
   searchLabel: string | null
   stickyHeaders: boolean
-  /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). */
+  /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). True when one was. */
   onTranscriptPress: (event: MouseEvent) => void
-  onTranscriptRelease: (event: MouseEvent) => void
+  onTranscriptRelease: (event: MouseEvent) => boolean
+  /** A card's follow-up questions, opened by clicking it in SCROLLBACK. */
+  onOpenAsyncQuestions: (session: Session, card: TuiTranscriptCard) => void
   /** Dragging the pane by its title onto the window area (App's shared press/move/release). */
   sessionDrag: { press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => void; move: (event: { x: number; y: number }) => void; release: (event: { x: number; y: number }) => void }
   // True while the reader is opening a session. The threading worker is
@@ -8096,6 +8096,7 @@ function SplitTranscriptPaneInner({
   stickyHeaders,
   onTranscriptPress,
   onTranscriptRelease,
+  onOpenAsyncQuestions,
   sessionDrag,
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
@@ -8383,6 +8384,7 @@ function SplitTranscriptPaneInner({
         }
       },
       isScrollback: () => scrollbackRef.current,
+      mountedOutput: () => windowOutputRef.current,
       jumpToKey: (cardKey, follow) => {
         jumpCursor(cardKey)
         setFollowTail(follow)
@@ -8526,6 +8528,49 @@ function SplitTranscriptPaneInner({
     }
   })
 
+  // SCROLLBACK folds with the mouse: a click on a folded tool row or group
+  // expands it. Like a link it acts on mouse UP with the pointer unmoved, so a
+  // drag is still a text selection. Folding again takes a click on the item's
+  // first row only — an expanded diff has its own click targets below it.
+  const transcriptPressRef = useRef<{ x: number; y: number } | null>(null)
+  const pressTranscript = (event: MouseEvent) => {
+    transcriptPressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
+    onTranscriptPress(event)
+  }
+  const releaseTranscript = (event: MouseEvent) => {
+    const press = transcriptPressRef.current
+    transcriptPressRef.current = null
+    if (onTranscriptRelease(event)) return
+    if (!paneScrollbackLike || event.button !== 0 || !press || press.x !== event.x || press.y !== event.y) return
+    const sb = scrollRef.current
+    if (!sb) return
+    let hit: Renderable | undefined
+    for (const row of sb.content.getChildren()) {
+      const child = readerRowCard(row as Renderable)
+      if (child && event.y >= child.y && event.y < child.y + child.height) {
+        hit = child
+        break
+      }
+    }
+    if (!hit) return
+    const cardKey = hit.id.slice('card:'.length)
+    const card = allPaneCards.find((entry) => entry.key === cardKey)
+    if (card?.asyncQuestions?.length) { onOpenAsyncQuestions(session, card); return }
+    if (!card || !(card.autoFold || agentToolCardsFor(card).length > 0)) return
+    if (windowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && event.y !== hit.y) return
+    // At the tail the view sticks to the bottom, so the rows a click unfolds
+    // would push the clicked row up and away. Let go of the tail first.
+    if (followTail) {
+      scrollbackSyncedCursorKeyRef.current = cardKey
+      setCursorKey(cardKey)
+      setFollowTail(false)
+    }
+    setScrollbackToggledKeys((current) => {
+      const next = new Set(current)
+      if (!next.delete(cardKey)) next.add(cardKey)
+      return next
+    })
+  }
   const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, stickyHeaders)
   const turnFooter = useMemo(
     () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
@@ -8708,8 +8753,8 @@ function SplitTranscriptPaneInner({
             scrollAcceleration={MESSAGE_SCROLL_ACCEL}
             viewportCulling
             scrollbarOptions={scrollbarOptions}
-            onMouseDown={onTranscriptPress}
-            onMouseUp={onTranscriptRelease}
+            onMouseDown={pressTranscript}
+            onMouseUp={releaseTranscript}
           >
             <TuiErrorBoundary>
               <TranscriptWindowBody inputs={windowInputs} />
@@ -8789,8 +8834,8 @@ type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   | 'diffSelectionAnchorByCardKey' | 'setDiffRowCursor' | 'setDiffSelectionAnchor' | 'linkCwd'
 > & {
   /** A pane supplies its own viewport range; it never subscribes to another window's scroll position. */
-  /** The window's own card-window store; the root reader's when omitted. */
-  windowStore?: ReaderWindowStore
+  /** The window's own card-window store. */
+  windowStore: ReaderWindowStore
   visibleTranscriptCards: TuiTranscriptCard[]
   followTail: boolean
   isScrubbing: boolean
@@ -9059,7 +9104,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   // there is bounded by density, not by how many are mounted. Scrub is already
   // covered without a cap: the transcript unmounts entirely while isScrubbing.
   const totalTranscriptCards = visibleTranscriptCards.length
-  const windowStore = inputs.windowStore ?? rootReaderWindowStore
+  const { windowStore } = inputs
   const readerWindowStart = useSyncExternalStore(windowStore.subscribe, windowStore.get, windowStore.get)
   const targetWindow = deriveReaderWindow(totalTranscriptCards, READER_CARD_WINDOW, followTail, readerWindowStart)
   // What the last commit mounted, and for which session. Read during render to
@@ -10019,13 +10064,7 @@ function OpenTuiWorkspace() {
   const [waitingSessions, setWaitingSessions] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['waiting']>([])
   const [viewerAttentionNotes, setViewerAttentionNotes] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['attention']>([])
   const [selectedSessionKey, setSelectedSessionKeyState] = useWorkspaceState<string | null>('selectedSessionKey', null)
-  const captureReaderPositionRef = useRef<(() => { sessionKey: string; position: TranscriptWindowPosition } | undefined) | null>(null)
-  const setSelectedSessionKey = useCallback((next: React.SetStateAction<string | null>) => {
-    // Capture before React replaces the outgoing transcript, including rapid
-    // tab switches that happen before the disk-write debounce has fired.
-    captureReaderPositionRef.current?.()
-    setSelectedSessionKeyState(next)
-  }, [])
+  const setSelectedSessionKey = setSelectedSessionKeyState
   const [sessionDetail, setSessionDetail] = useWorkspaceState<TuiSessionDetail | null>('sessionDetail', null, false)
   const sessionDetailRef = useRef<TuiSessionDetail | null>(sessionDetail)
   useLayoutEffect(() => {
@@ -10451,51 +10490,21 @@ function OpenTuiWorkspace() {
   // provider switches (looking them up in `sessions` loses other-provider tabs).
   const [openTabSessions, setOpenTabSessions] = useWorkspaceState<Session[]>('openTabSessions', [])
 
-  const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
-  const transcriptViewportBoxRef = useRef<BoxRenderable>(null)
-  const [measuredTranscriptViewportRows, setMeasuredTranscriptViewportRows] = useState<number | null>(null)
-  // Pending scroll correction for a reader window change. 'slide' is a window
-  // change requested but not yet committed; the commit turns it into 'anchor'
-  // (a row mounted in both windows and where it sat), which the next layout
-  // pass resolves. 'cursor' scrolls the cursor card into view once its window
-  // has committed and laid out.
-  const readerScrollFixupRef = useRef<ReaderScrollFixup | null>(null)
-  // Last scrollTop the slide detector saw, and which way the user last moved.
-  // What the transcript window last committed, for the root's handlers.
-  const readerWindowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
-  // Bumped when the window start is primed silently, to carry it on a render.
-  const [readerWindowEpoch, setReaderWindowEpoch] = useState(0)
-  // Metrics-only mirror of the mounted card window (assigned during render,
-  // read by the gauge timer).
-  const readerWindowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
-  // The reader box is flex-sized (flexGrow inside a stretched row), so its real
-  // height is a few rows more than the mainContentHeight arithmetic implies.
-  // Split panes must match the frame the reader actually gets, so measure it
-  // once per commit and size panes from that instead of recomputing the budget.
-  const readerBoxRef = useRef<BoxRenderable>(null)
-  const [measuredReaderBoxHeight, setMeasuredReaderBoxHeight] = useState(0)
-  // The window area's real height, measured like the reader's: the estimate
-  // from the content budget runs a couple of rows short of what flex gives it.
+  // The window area's real height: the estimate from the content budget runs
+  // a couple of rows short of what flex gives it.
   const [measuredWindowAreaHeight, setMeasuredWindowAreaHeight] = useState(0)
-  const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   // The cursor key SCROLLBACK last placed by scrolling. The reveal and recenter
   // effects skip a cursor that matches it: scrolling it back into view would
   // undo the scroll that moved it.
   const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
   const tabReaderPositionsRef = useTranscriptWindowPositions()
-  const recenterCursorKeyRef = useRef<string | null>(null)
-  const pendingTabReaderRestoreRef = useRef<{
-    sessionKey: string
-    position: NonNullable<ReturnType<typeof tabReaderPositionsRef.current.get>>
-  } | null>(null)
   const prevFollowTailRef = useRef(true)
   // Velocity scroll: ramps the per-tick cursor step up smoothly the longer j/k/↑/↓
   // is held, by tracking how recently the same-direction key keeps repeating.
   // A gap longer than VELOCITY_SCROLL_RESET_MS means the key was released (or
   // re-pressed deliberately), so the streak — and the speed — resets to base.
   const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
-  const prevTranscriptLengthRef = useRef(0)
   const tabSelectRef = useRef<TabSelectRenderable>(null)
   const syncingTabSelectionRef = useRef(false)
   const sessionRequestRef = useRef(0)
@@ -10667,9 +10676,6 @@ function OpenTuiWorkspace() {
     liveTranscriptBaseline: liveTranscriptBaselineRef.current.size,
     backgroundRefreshInFlight: backgroundRefreshInFlightRef.current.size,
     sessionDetailMtime: sessionDetailMtimeRef.current.size,
-    readerWindowStart: readerWindowGaugeRef.current.start,
-    readerWindowEnd: readerWindowGaugeRef.current.end,
-    readerWindowTotal: readerWindowGaugeRef.current.total,
   })), [sessions.length, sessionDetail])
   useEffect(() => {
     if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
@@ -10853,7 +10859,7 @@ function OpenTuiWorkspace() {
   // at, which is true of a pointer moving over content that is standing still.
   const transcriptDiffHoverScrollTopRef = useRef(new Map<string, number | null>())
   const activateTranscriptDiffHover = useCallback((anchor: string, position?: { namespace: string; scrollTop: number | null }) => {
-    const scrollTop = position ? position.scrollTop : transcriptScrollRef.current?.scrollTop ?? null
+    const scrollTop = position ? position.scrollTop : null
     const namespace = position?.namespace ?? 'active'
     const offeredAt = transcriptDiffHoverScrollTopRef.current.get(namespace) ?? null
     transcriptDiffHoverScrollTopRef.current.set(namespace, scrollTop)
@@ -11797,15 +11803,6 @@ function OpenTuiWorkspace() {
     }
   }, [visibleTranscriptCards])
 
-  const selectTranscriptCard = useCallback((cardKey: string) => {
-    setFocusedPane('messages')
-    // A press in SCROLLBACK focuses the pane and starts a text selection; it
-    // has no card to select, and moving the cursor would scroll the text.
-    if (isScrollbackView) return
-    const index = transcriptIndexByKey.get(cardKey)
-    if (index == null) return
-    jumpToTranscriptIndex(index)
-  }, [transcriptIndexByKey, jumpToTranscriptIndex, isScrollbackView])
 
   const selectSidebarSession = useEffectEvent((session: Session) => {
     const existing = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === sessionKey(session))
@@ -11865,16 +11862,6 @@ function OpenTuiWorkspace() {
       return next
     })
   }, [])
-  const thinkingFullKeys = useMemo(() => {
-    if (!thinkingMode) return new Set<string>()
-    const next = new Set<string>()
-    for (const card of visibleTranscriptCards) {
-      if (card.lines.some((line) => line.tone === 'thinking')) {
-        next.add(card.key)
-      }
-    }
-    return next
-  }, [thinkingMode, visibleTranscriptCards])
 
   const resolvedExpandedKeys = useMemo(
     () => resolveExpandedCardKeys(visibleTranscriptCards, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys),
@@ -11910,10 +11897,6 @@ function OpenTuiWorkspace() {
     () => unreadBoundaryKey ? (transcriptIndexByKey.get(unreadBoundaryKey) ?? -1) : -1,
     [transcriptIndexByKey, unreadBoundaryKey],
   )
-  const resumeMarkerIndex = useMemo(
-    () => resumeMarkerKey ? (transcriptIndexByKey.get(resumeMarkerKey) ?? -1) : -1,
-    [resumeMarkerKey, transcriptIndexByKey],
-  )
 
   const readerTitle = useMemo(() => (
     sessionDetail?.info?.customTitle
@@ -11926,11 +11909,6 @@ function OpenTuiWorkspace() {
   // null (not 'unknown') so joinMeta drops it — a session whose model we can't
   // resolve shows just its project, never a dangling "· unknown".
   const readerModel = sessionDetail?.info?.currentModel ?? null
-  // Resolves a relative path in the reader's transcript to a clickable target.
-  // It is the TRANSCRIPT's session, not the selection or the composer target: a
-  // path is relative to the repository the messages were written in, and while
-  // scrubbing the reader still shows the committed session's transcript.
-  const transcriptLinkCwd = sessionDetail?.info?.cwd ?? transcriptSession?.cwd ?? undefined
 
   // Git follows the focused split pane when there is one: the popover is
   // cwd-scoped, and the pane you are looking at is the repo you mean.
@@ -13764,15 +13742,8 @@ function OpenTuiWorkspace() {
   const splitPaneBoxHeight = stackedSplit
     ? Math.max(splitLayout.paneExtent, SPLIT_PANE_MIN_ROWS)
     // Side by side, a window fills the window area's height.
-    : Math.max(measuredWindowAreaHeight > 0 ? windowAreaHeight : measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset, 8)
+    : Math.max(measuredWindowAreaHeight > 0 ? windowAreaHeight : mainContentHeight - 2 - splitPaneTopOffset, 8)
   const TAB_BAR_HEIGHT = 1
-  const streamTurnFooter = useMemo(() => {
-    if (
-      !isStreamView
-      || turnRunningForComposer
-    ) return null
-    return streamCompletedTurnHint(visibleTranscriptCards)
-  }, [transcriptView, turnRunningForComposer, visibleTranscriptCards])
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
   // already in the status bar.
   const streamActionFooterRows = isChatLikeView && !isScrollbackView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
@@ -13808,7 +13779,7 @@ function OpenTuiWorkspace() {
   // Keep the scrollbox's explicit row budget inside its actual content area.
   // Window chrome (search results, notices, composer) can use more rows than
   // the estimate, especially in a small or floating window.
-  const transcriptViewportRows = Math.min(estimatedTranscriptViewportRows, measuredTranscriptViewportRows ?? estimatedTranscriptViewportRows)
+  const transcriptViewportRows = estimatedTranscriptViewportRows
 
   const activeTabIndex = useMemo(() => {
     if (!selectedSessionKey) return -1
@@ -13958,9 +13929,7 @@ function OpenTuiWorkspace() {
     },
     [sidebarInnerWidth, coordinatorHeaderCounts],
   )
-  const totalTranscriptCards = visibleTranscriptCards.length
   const imessageStyle = themeMode === 'imessage'
-  const transcriptNoteNamespace = committedSessionKey ?? 'no-session'
   const transcriptDiffControls = useMemo<TranscriptDiffControls>(() => ({
     diffNotes: transcriptDiffNotes, diffDraft: transcriptDiffDraft, hoveredDiffAnchor: hoveredTranscriptDiffAnchor,
     activateDiffHover: activateTranscriptDiffHover, openDiffNote: openScopedTranscriptDiffNote,
@@ -13976,69 +13945,6 @@ function OpenTuiWorkspace() {
   const selectAgentTool = useCallback((groupKey: string, toolKey: string) => {
     setAgentToolCursorByGroupKey((current) => current[groupKey] === toolKey ? current : { ...current, [groupKey]: toolKey })
   }, [])
-  // Everything the transcript window needs from the root. The window itself
-  // (which cards are mounted) is NOT here: TranscriptWindowBody reads it from
-  // readerWindowStore, so a slide re-renders that component and not this one.
-  const readerWindowInputs: TranscriptWindowInputs = {
-    visibleTranscriptCards,
-    followTail,
-    isScrubbing,
-    isScrollbackView,
-    scrollbackExpanded,
-    scrollbackToggledKeys,
-    resolvedExpandedKeys,
-    thinkingFullKeys,
-    expandedCardKeys,
-    collapsedCardKeys,
-    transcriptView,
-    focused: effectiveFocus === 'messages' && splitFocusIndex === null && !hasPrimaryFrame,
-    isPreviewMode,
-    isChatLikeView,
-    isContinuousView,
-    groupedToolView,
-    liveCardCount: liveTranscriptMessagesForSession.length,
-    resumeMarkerIndex,
-    unreadBoundaryIndex,
-    pendingNewCount,
-    provider,
-    shouldEnableSyntaxHighlighting,
-    searchMatches,
-    searchMatchIndex,
-    bookmarkKeys,
-    agentToolCursorByGroupKey,
-    transcriptCursorKey,
-    cursorIndex,
-    sessionKey: committedSessionKey,
-    readerWindowGaugeRef,
-    readerWindowOutputRef,
-    readerScrollFixupRef,
-    transcriptScrollRef,
-    theme,
-    densityState,
-    syntaxStyle,
-    rightPaneWidth,
-    onSelectCard: selectTranscriptCard,
-    thinkingMode,
-    diffLayout,
-    imessageStyle,
-    transcriptWidth,
-    onSelectAgentTool: selectAgentTool,
-    noteNamespace: transcriptNoteNamespace,
-    diffNotes: transcriptDiffNotes,
-    diffDraft: transcriptDiffDraft,
-    hoveredDiffAnchor: hoveredTranscriptDiffAnchor,
-    activateDiffHover: activateTranscriptDiffHover,
-    openDiffNote: openTranscriptDiffNote,
-    sendDiffNoteToComposer: sendTranscriptDiffNoteToComposer,
-    diffPlainCardKeys: transcriptDiffPlainCardKeys,
-    diffHiddenLineNumberCardKeys: transcriptDiffHiddenLineNumberCardKeys,
-    diffHiddenHunkHeaderCardKeys: transcriptDiffHiddenHunkHeaderCardKeys,
-    diffRowCursorByCardKey: transcriptDiffRowCursorByCardKey,
-    diffSelectionAnchorByCardKey: transcriptDiffSelectionAnchorByCardKey,
-    setDiffRowCursor: setTranscriptDiffRowCursorForCard,
-    setDiffSelectionAnchor: setTranscriptDiffSelectionAnchorForCard,
-    linkCwd: transcriptLinkCwd,
-  }
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
     preserveSelection = true,
@@ -14612,36 +14518,6 @@ function OpenTuiWorkspace() {
     }
   })
 
-  // SCROLLBACK's scroll position is the reading position. After any scroll —
-  // a key, the wheel — re-engage tail-follow at the bottom, and otherwise park
-  // the invisible cursor on a message the viewport still shows, so a jump
-  // (next prompt, search) starts from what is on screen.
-  const settleScrollbackPosition = useEffectEvent((sb: ScrollBoxRenderable, scrollTop: number, limit: number) => {
-    if (scrollTop >= limit && readerWindowGaugeRef.current.end >= totalTranscriptCards) {
-      if (!followTail) {
-        setFollowTail(true)
-        setPendingNewCount(0)
-        setUnreadBoundaryKey(null)
-      }
-      return
-    }
-    pausedTranscriptScrollTopRef.current = scrollTop
-    const nextKey = scrollbackParkedCursorKey(sb, scrollTop, transcriptCursorKey)
-    if (nextKey) {
-      scrollbackSyncedCursorKeyRef.current = nextKey
-      setTranscriptCursorKey(nextKey)
-    }
-    if (followTail) setFollowTail(false)
-  })
-
-  const scrollTranscriptRows = useEffectEvent((rows: number) => {
-    const sb = transcriptScrollRef.current
-    if (!sb) return
-    const limit = Math.max(sb.scrollHeight - sb.viewport.height, 0)
-    const next = clamp(sb.scrollTop + rows, 0, limit)
-    sb.scrollTo(next)
-    settleScrollbackPosition(sb, next, limit)
-  })
 
   const moveAgentToolCursor = useEffectEvent((delta: -1 | 1): boolean => {
     if (!groupedToolView) return false
@@ -19070,52 +18946,10 @@ function OpenTuiWorkspace() {
     }
   }, [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
 
-  useLayoutEffect(() => {
-    captureReaderPositionRef.current = () => {
-      if (!committedSessionKey || restoredReaderState.sessionKey !== committedSessionKey
-        || selectedSessionKey !== committedSessionKey || isScrubbing
-        || !restoredReaderState.loaded || pendingTabReaderRestoreRef.current) return
-      const sb = transcriptScrollRef.current
-      if (!sb || visibleTranscriptCards.length === 0) return
-      const { scrollTop, anchorKey, anchorOffset } = transcriptViewportPosition(sb)
-      const positions = tabReaderPositionsRef.current
-      positions.delete(committedSessionKey)
-      const position: TranscriptWindowPosition = {
-        state: {
-          followTail: followTail && scrollTop >= Math.max(0, sb.scrollHeight - sb.viewport.height) - 1,
-          cursorKey: transcriptCursorKey,
-          topKey: anchorKey,
-          expandedKeys: [...expandedCardKeys],
-          collapsedKeys: [...collapsedCardKeys],
-        },
-        searchQuery, searchMatchIndex, scrollbackExpanded, scrollbackToggledKeys: [...scrollbackToggledKeys],
-        presentationExpandedKeys: [...(readerWindowOutputRef.current.scrollbackExpandedKeys ?? resolvedExpandedKeys)],
-        windowStart: readerWindowGaugeRef.current.start,
-        scrollTop,
-        anchorKey,
-        anchorOffset,
-      }
-      positions.set(committedSessionKey, position)
-      // Preserve every open tab, with only a small LRU for sidebar previews.
-      const pinned = new Set(openTabSessions.map(sessionKey))
-      for (const key of positions.keys()) {
-        if (positions.size <= pinned.size + 10) break
-        if (key !== committedSessionKey && !pinned.has(key)) positions.delete(key)
-      }
-      return { sessionKey: committedSessionKey, position }
-    }
-  })
 
   useEffect(() => {
     let cancelled = false
     const saved = committedSessionKey ? tabReaderPositionsRef.current.get(committedSessionKey) : undefined
-    pendingTabReaderRestoreRef.current = saved && committedSessionKey
-      ? { sessionKey: committedSessionKey, position: saved } : null
-    readerScrollFixupRef.current = null
-    primeReaderWindowStart(saved?.windowStart ?? null)
-    setReaderWindowEpoch((epoch) => epoch + 1)
-    pausedTranscriptScrollTopRef.current = saved?.scrollTop ?? null
-    if (saved) recenterCursorKeyRef.current = saved.state.cursorKey
 
     setTranscriptCursorKey(saved?.state.cursorKey ?? null)
     setExpandedCardKeys(new Set(saved?.state.expandedKeys))
@@ -19438,25 +19272,17 @@ function OpenTuiWorkspace() {
     if (composerActive || (splitFocusIndex >= visibleSplitPaneCount && !floatingFocused)) setSplitFocusIndex(null)
   }, [composerActive, floatingKey, splitFocusIndex, visibleSplitPaneCount])
 
-  // Track the reader box's real height. Reads after every commit (cheap
+  // Track the window area's real height. Reads after every commit (cheap
   // property read) and only setStates when it actually changed, so a resize
   // settles in one extra frame and idle renders don't loop.
-  // No dependency list, deliberately: the box's height moves with the dock,
-  // the tab bar and the status rows as well as with the terminal, and a split
-  // pane sized from a stale reading stops short of the reader beside it. Yoga
-  // lays out on the frame after a commit, so the reading taken at commit can
-  // itself be one layout behind; the timer picks up the settled value.
+  // No dependency list, deliberately: the area moves with the dock, the tab bar
+  // and the status rows as well as with the terminal. Yoga lays out on the
+  // frame after a commit, so the reading taken at commit can itself be one
+  // layout behind; the timer picks up the settled value.
   useLayoutEffect(() => {
     const measure = () => {
-      const measured = readerBoxRef.current?.height ?? 0
-      if (!treeGeometry && measured > 0) setMeasuredReaderBoxHeight((current) => (current === measured ? current : measured))
       const area = (windowAreaRef.current?.height ?? 0) + (windowOverflowRef.current?.height ?? 0)
       if (area > 0) setMeasuredWindowAreaHeight((current) => (current === area ? current : area))
-      const viewport = transcriptViewportBoxRef.current
-      if (viewport && viewport.height > 0) {
-        const rows = Math.max(1, Math.floor(viewport.height) - 1 - streamActionFooterRows)
-        setMeasuredTranscriptViewportRows(current => current === rows ? current : rows)
-      }
     }
     // Absolute split frames settle on the renderer's next layout pass;
     // measuring them synchronously feeds the previous geometry back into React.
@@ -19595,105 +19421,6 @@ function OpenTuiWorkspace() {
     return () => clearInterval(id)
   }, [runningTabKeys, tabOptions, showTabs])
 
-  const activeAgentToolCursorKey = groupedToolView
-    && transcriptCursorKey
-    && resolvedExpandedKeys.has(transcriptCursorKey)
-    ? agentToolCursorByGroupKey[transcriptCursorKey] ?? null
-    : null
-  useEffect(() => {
-    const scrollTargetKey = transcriptCursorScrollTargetKey(
-      transcriptCursorKey,
-      activeAgentToolCursorKey,
-      followTail,
-    )
-    if (!scrollTargetKey || pendingTabReaderRestoreRef.current) return
-    if (isScrollbackView && scrollTargetKey === scrollbackSyncedCursorKeyRef.current) return
-    const timer = setTimeout(() => {
-      const scrollbox = transcriptScrollRef.current
-      scrollbox?.scrollChildIntoView(`card:${scrollTargetKey}`)
-      const scrollTop = scrollbox?.scrollTop
-      if (typeof scrollTop === 'number') {
-        pausedTranscriptScrollTopRef.current = scrollTop
-      }
-    }, 0)
-    return () => clearTimeout(timer)
-  }, [activeAgentToolCursorKey, followTail, transcriptCursorKey, isScrollbackView])
-
-  // SCROLLBACK wheel: the scrollbox emits no scroll events, so poll for a
-  // scroll the keys did not make. While following, only scrollTop going DOWN
-  // in value under content that did not shrink is the user — a growing reply
-  // briefly sits above the bottom before sticky scroll catches up, and reading
-  // that as a detach would stop following mid-stream.
-  useEffect(() => {
-    if (!isScrollbackView || isScrubbing) return undefined
-    let lastTop = -1
-    let lastHeight = 0
-    const interval = setInterval(() => {
-      if (pendingTabReaderRestoreRef.current || readerScrollFixupRef.current) return
-      const sb = transcriptScrollRef.current
-      if (!sb) return
-      const scrollTop = sb.scrollTop
-      const scrollHeight = sb.scrollHeight
-      const moved = followTail
-        ? lastTop >= 0 && scrollTop < lastTop && scrollHeight >= lastHeight
-        : scrollTop !== lastTop
-      lastTop = scrollTop
-      lastHeight = scrollHeight
-      if (moved) settleScrollbackPosition(sb, scrollTop, Math.max(scrollHeight - sb.viewport.height, 0))
-    }, READER_SCROLL_POLL_MS)
-    return () => clearInterval(interval)
-  }, [isScrollbackView, isScrubbing, followTail])
-
-  const stickyHeaderKey = useStickyPromptKey(transcriptScrollRef, visibleTranscriptCards, stickyHeaders && !isScrubbing)
-
-  // ── Reader window management ───────────────────────────────────────────────
-  useReaderWindowSliding({
-    recenterKeyRef: recenterCursorKeyRef,
-    store: rootReaderWindowStore, scrollRef: transcriptScrollRef, gaugeRef: readerWindowGaugeRef, fixupRef: readerScrollFixupRef,
-    cards: visibleTranscriptCards, cursorKey: transcriptCursorKey, cursorIndex, followTail, setFollowTail,
-    active: effectiveFocus === 'messages' && !isScrubbing,
-    holdRef: pendingTabReaderRestoreRef, scrollbackSyncedKeyRef: isScrollbackView ? scrollbackSyncedCursorKeyRef : undefined,
-    onScrolled: (top) => { pausedTranscriptScrollTopRef.current = top },
-  })
-
-  // Native layout happens after the React commit. Restore by the visible card
-  // and its row offset once that card has laid out, rather than scrolling the
-  // cursor into view (mouse scrolling can leave the cursor far off screen).
-  useEffect(() => {
-    const pending = pendingTabReaderRestoreRef.current
-    if (!pending || pending.sessionKey !== committedSessionKey
-      || restoredReaderState.sessionKey !== committedSessionKey || !restoredReaderState.loaded) return
-    let timer: ReturnType<typeof setTimeout>
-    let tries = 0
-    const restore = () => {
-      if (pendingTabReaderRestoreRef.current !== pending) return
-      const sb = transcriptScrollRef.current
-      const { position } = pending
-      const anchor = position.anchorKey ? findReaderCard(sb?.content, `card:${position.anchorKey}`) : null
-      if ((!sb || (position.anchorKey && (!anchor || anchor.height <= 0)) || tries < 1)
-        && ++tries < READER_FIXUP_MAX_TRIES) {
-        timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
-        return
-      }
-      if (sb) {
-        sb.scrollTo(position.state.followTail ? sb.scrollHeight
-          : anchor ? Math.max(0, anchor.y - sb.content.y - position.anchorOffset) : position.scrollTop)
-        pausedTranscriptScrollTopRef.current = position.state.followTail ? null : sb.scrollTop
-      }
-      pendingTabReaderRestoreRef.current = null
-    }
-    timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
-    return () => clearTimeout(timer)
-  }, [committedSessionKey, restoredReaderState, visibleTranscriptCards, resolvedExpandedKeys, scrollbackExpanded, effectiveFocus, readerWindowEpoch])
-
-  useLayoutEffect(() => {
-    if (!followTail) return
-    if (visibleTranscriptCards.length === 0) return
-    const lastKey = visibleTranscriptCards[visibleTranscriptCards.length - 1]?.key
-    if (!lastKey) return
-    transcriptScrollRef.current?.scrollChildIntoView(`card:${lastKey}`)
-  }, [followTail, visibleTranscriptCards.length])
-
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
     if (!entry) return
@@ -19704,39 +19431,6 @@ function OpenTuiWorkspace() {
     }, 0)
     return () => clearTimeout(timer)
   }, [selectedSidebarEntryIndex, sidebarEntries])
-
-  useEffect(() => {
-    if (followTail) {
-      pausedTranscriptScrollTopRef.current = null
-      return
-    }
-    const scrollTop = transcriptScrollRef.current?.scrollTop
-    if (typeof scrollTop === 'number') {
-      pausedTranscriptScrollTopRef.current = scrollTop
-    }
-  }, [followTail, pendingNewCount, visibleTranscriptCards.length, unreadBoundaryKey])
-
-  useLayoutEffect(() => {
-    if (followTail) {
-      if (visibleTranscriptCards.length > 0 && (prevTranscriptLengthRef.current !== visibleTranscriptCards.length || !prevFollowTailRef.current)) {
-        transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
-      }
-    } else {
-      const scrollTop = pausedTranscriptScrollTopRef.current
-      if (scrollTop != null) {
-        transcriptScrollRef.current?.scrollTo(scrollTop)
-      }
-    }
-    prevFollowTailRef.current = followTail
-    prevTranscriptLengthRef.current = visibleTranscriptCards.length
-  }, [followTail, pendingNewCount, visibleTranscriptCards.length, unreadBoundaryKey])
-
-  useLayoutEffect(() => {
-    if (!followTail) return
-    if (composerSendState === 'sending' && composerLiveText) {
-      transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
-    }
-  }, [composerLiveText, composerSendState, followTail])
 
   // When switching to a filtered/grouped transcript mode the cursor may be on a
   // hidden technical card. Snap it to the last visible card so navigation stays coherent.
@@ -19961,6 +19655,11 @@ function OpenTuiWorkspace() {
   const noteTranscriptLinkPress = useEffectEvent((event: MouseEvent) => {
     linkPressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
   })
+  const openCardAsyncQuestions = useEffectEvent((session: Session, card: TuiTranscriptCard) => {
+    if (!card.asyncQuestions?.length) return
+    setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: session.sessionId,
+      provider: session.provider, providerInstanceId: session.providerInstanceId, asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
+  })
   const openTranscriptLinkAt = useEffectEvent((event: MouseEvent): boolean => {
     const press = linkPressRef.current
     linkPressRef.current = null
@@ -19999,46 +19698,6 @@ function OpenTuiWorkspace() {
     } else toggleExpansion('parent')
   })
 
-  const releaseTranscriptPress = useEffectEvent((event: MouseEvent) => {
-    const press = linkPressRef.current
-    if (openTranscriptLinkAt(event)) return
-    if (!isScrollbackView || event.button !== 0 || !press) return
-    if (press.x !== event.x || press.y !== event.y) return
-    const sb = transcriptScrollRef.current
-    if (!sb) return
-    let hit: Renderable | undefined
-    for (const row of sb.content.getChildren()) {
-      const child = readerRowCard(row as Renderable)
-      if (child && event.y >= child.y && event.y < child.y + child.height) {
-        hit = child
-        break
-      }
-    }
-    if (!hit) return
-    const cardKey = hit.id.slice('card:'.length)
-    const index = transcriptIndexByKey.get(cardKey)
-    const card = index == null ? null : visibleTranscriptCards[index]
-    if (card?.asyncQuestions?.length && selectedSession) {
-      setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: selectedSession.sessionId,
-        provider: selectedSession.provider, providerInstanceId: selectedSession.providerInstanceId, asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
-      return
-    }
-    if (!card || !(card.autoFold || agentToolCardsFor(card).length > 0)) return
-    if (readerWindowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && event.y !== hit.y) return
-    // At the tail the view sticks to the bottom, so the rows a click unfolds
-    // would push the clicked row up and away. Let go of the tail first.
-    if (followTail) {
-      pausedTranscriptScrollTopRef.current = sb.scrollTop
-      scrollbackSyncedCursorKeyRef.current = cardKey
-      setTranscriptCursorKey(cardKey)
-      setFollowTail(false)
-    }
-    setScrollbackToggledKeys((current) => {
-      const next = new Set(current)
-      if (!next.delete(cardKey)) next.add(cardKey)
-      return next
-    })
-  })
 
   const toggleSurfacePanelPlacement = useEffectEvent(() => {
     const next = surfacePanelPlacement === 'right' ? 'bottom' : 'right'
@@ -23721,7 +23380,7 @@ function OpenTuiWorkspace() {
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     // cardDisplayData is window-relative (preview cap while browsing, sliding
     // window while reading); shift the absolute cursor index into window space.
-    const mountedOutput = readerWindowOutputRef.current
+    const mountedOutput = selectedWindowHandleRef.current?.()?.mountedOutput() ?? { start: 0, cardDisplayData: [], scrollbackExpandedKeys: null }
     const selectedTranscriptCardDisplay = cursorIndex >= mountedOutput.start
       ? mountedOutput.cardDisplayData[cursorIndex - mountedOutput.start] ?? null
       : null
@@ -24963,7 +24622,13 @@ function OpenTuiWorkspace() {
     // focus back. Everything else is swallowed rather than falling through to
     // the primary reader — a j that scrolled the pane must not also move the
     // reader's cursor behind it.
-    if (splitFocusIndex !== null) {
+    // On the selected transcript's interactive diff card its keys come first, as
+    // from the reader: they skip the window's own keys for the root's diff handling.
+    const diffCardKey = focusedWindowItem?.kind === 'session' && sessionKey(focusedWindowItem.session) === selectedSessionKey
+      && selectedInteractiveTranscriptCard?.category === 'diff' && Boolean(selectedInteractiveTranscriptCardDisplay?.diffView)
+      && (['v', 'n', 'm', '{', '}', 'a', 'x', 'A'].includes(sequence)
+        || (key.shift && (key.name === 'j' || key.name === 'k' || key.name === 'up' || key.name === 'down')))
+    if (splitFocusIndex !== null && !diffCardKey) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
       const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
@@ -25464,27 +25129,6 @@ function OpenTuiWorkspace() {
     // trap as the resume-marker `m`).
     // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
     // text here, by rows, and `e`/Enter fold or unfold the whole transcript.
-    if (effectiveFocus === 'messages' && isScrollbackView && !key.shift) {
-      const page = Math.max(transcriptViewportRows - 2, 1)
-      const rows = isCtrl('d') ? Math.ceil(page / 2)
-        : isCtrl('u') ? -Math.ceil(page / 2)
-        : key.name === 'j' || key.name === 'down' ? velocityScrollStep(1)
-        : key.name === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
-        : key.name === 'pagedown' ? page
-        : key.name === 'pageup' ? -page
-        : 0
-      if (rows !== 0) {
-        handled(() => scrollTranscriptRows(rows))
-        return
-      }
-      if (key.name === 'return' || key.name === 'e') {
-        handled(() => {
-          setScrollbackExpanded((current) => !current)
-          setScrollbackToggledKeys(EMPTY_EXPANDED_KEYS)
-        })
-        return
-      }
-    }
 
     if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down') && !key.shift) {
       handled(() => {
@@ -26017,9 +25661,6 @@ function OpenTuiWorkspace() {
     },
     [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, isScrollbackView, pendingNewCount, railVisible, width],
   )
-  const readerFrameTitle = isCopilotView || isOpenCodeView ? undefined : isStreamView
-    ? joinMeta([TRANSCRIPT_VIEW_LABELS[transcriptView], headerStatusRight])
-    : headerStatusRight
   const readerContextMeta = useMemo(
     () => fitText(
       joinMeta([
@@ -26541,17 +26182,6 @@ function OpenTuiWorkspace() {
     )
   }
 
-  // A placement change can replace the scrollbox without changing its session.
-  // Capture before detaching it, then restore its anchor after the new layout.
-  const attachTranscriptScroll = useCallback((node: ScrollBoxRenderable | null) => {
-    const previous = transcriptScrollRef.current
-    if (previous && previous !== node) {
-      const saved = captureReaderPositionRef.current?.()
-      if (saved) pendingTabReaderRestoreRef.current = saved
-    }
-    transcriptScrollRef.current = node
-    if (node && node !== previous) setReaderWindowEpoch(epoch => epoch + 1)
-  }, [])
 
   // The active transcript uses the same controls in a tiled or floating window,
   // independently of the tool tab displayed elsewhere in the layout.
@@ -27029,6 +26659,7 @@ function OpenTuiWorkspace() {
         stickyHeaders={stickyHeaders}
         onTranscriptPress={noteTranscriptLinkPress}
         onTranscriptRelease={openTranscriptLinkAt}
+        onOpenAsyncQuestions={openCardAsyncQuestions}
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />
@@ -27115,7 +26746,6 @@ function OpenTuiWorkspace() {
 
   useLayoutEffect(() => {
     const capture = () => {
-      captureReaderPositionRef.current?.()
       const text = composerTextareaRef.current?.plainText ?? composerDraftRef.current
       if (composerDraftStorageKeyRef.current) {
         writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
