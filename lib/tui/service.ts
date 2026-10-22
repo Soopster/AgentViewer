@@ -16,6 +16,7 @@ import {
   getConfiguredTuiDiffLayout,
   getConfiguredTuiFocusMode,
   getConfiguredTuiStickyHeaders,
+  getConfiguredTuiLightweightWindows,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
   getConfiguredTuiSidebarSort,
@@ -36,6 +37,7 @@ import {
   setConfiguredTuiDiffLayout,
   setConfiguredTuiFocusMode,
   setConfiguredTuiStickyHeaders,
+  setConfiguredTuiLightweightWindows,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
   setConfiguredTuiSidebarSort,
@@ -349,6 +351,14 @@ export async function readTuiStickyHeaders(): Promise<boolean> {
 
 export async function writeTuiStickyHeaders(stickyHeaders: boolean): Promise<void> {
   await setConfiguredTuiStickyHeaders(stickyHeaders)
+}
+
+export async function readTuiLightweightWindows(): Promise<boolean> {
+  return getConfiguredTuiLightweightWindows()
+}
+
+export async function writeTuiLightweightWindows(lightweightWindows: boolean): Promise<void> {
+  await setConfiguredTuiLightweightWindows(lightweightWindows)
 }
 
 export async function readTuiDensity(): Promise<TuiDensity> {

@@ -147,6 +147,7 @@ import {
   readTuiDiffLayout,
   readTuiFocusMode,
   readTuiStickyHeaders,
+  readTuiLightweightWindows,
   readTuiProvider,
   readTuiProviderInstances,
   readTuiRailVisible,
@@ -211,6 +212,7 @@ import {
   writeTuiDiffLayout,
   writeTuiFocusMode,
   writeTuiStickyHeaders,
+  writeTuiLightweightWindows,
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
@@ -4395,16 +4397,17 @@ function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
 // A card's expansion is its view's default — technical cards fold in the
 // conversation, agents and stream views — overridden per card: `expanded`
 // opens a folding card, `collapsed` closes any other.
-function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean): boolean {
-  return (transcriptView === 'conversation' || transcriptView === 'pane' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
+function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean, foldAll = false): boolean {
+  if (foldAll) return true
+  return (transcriptView === 'conversation' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
 }
 function resolveExpandedCardKeys(
   cards: TuiTranscriptCard[], transcriptView: TuiTranscriptView, chatLike: boolean,
-  expanded: ReadonlySet<string>, collapsed: ReadonlySet<string>,
+  expanded: ReadonlySet<string>, collapsed: ReadonlySet<string>, foldAll = false,
 ): Set<string> {
   const next = new Set<string>()
   for (const card of cards) {
-    if (cardFoldsByDefault(card, transcriptView, chatLike) ? expanded.has(card.key) : !collapsed.has(card.key)) next.add(card.key)
+    if (cardFoldsByDefault(card, transcriptView, chatLike, foldAll) ? expanded.has(card.key) : !collapsed.has(card.key)) next.add(card.key)
   }
   return next
 }
@@ -5201,7 +5204,7 @@ const QUESTION_PREVIEW_MAX_LINES = 8
 // reserving anything, so the preview is dropped instead.
 const QUESTION_PREVIEW_MIN_ROWS = 2
 
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'pane']
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']
 
 const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
@@ -5216,7 +5219,6 @@ const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   'claude-code': 'CLAUDE',
   copilot: 'COPILOT',
   opencode: 'OPENCODE',
-  pane: 'PANE',
 }
 
 const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
@@ -5232,7 +5234,6 @@ const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
   copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
   opencode: 'OpenCode-style continuous transcript with context sidebar',
-  pane: 'Lightweight windows: compact cards, a plain cursor, no header; long transcripts load a page at a time',
 }
 
 // A session from a further provider instance — a configured ACP agent, a second
@@ -5839,6 +5840,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
   { id: 'sticky-headers', label: 'Toggle sticky prompt headers', key: 'l', category: 'View' },
+  { id: 'lightweight-windows', label: 'Toggle lightweight windows (compact, folded, tail-loaded)', key: 'v tab', category: 'View' },
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Cycle layout: readable / centered / full', key: '⇧W', category: 'View' },
@@ -7705,7 +7707,7 @@ export function createLazyTranscriptIndexLookup(
 // Each pane owns its session data, viewport and saved state. All panes render
 // their cards through TranscriptWindowBody, including the selected transcript.
 const SPLIT_PANE_MIN_WIDTH = MIN_WINDOW_COLUMNS
-// PANE view: cards a window mounts from the tail, and loads per page walking back.
+// Lightweight windows: cards a window mounts from the tail, and loads per page walking back.
 const SPLIT_PANE_CARD_WINDOW = 80
 // Row minimums for the stacked orientation. A pane needs its two border rows,
 // a meta row, the reserved action row and a few body rows to say anything at
@@ -8047,6 +8049,8 @@ type SplitTranscriptPaneProps = {
   /** The pane's search, shown in its title while set (`/query`, with a caret while typed). */
   searchLabel: string | null
   stickyHeaders: boolean
+  /** Lightweight windows: the current view drawn the old pane's way (see `lightView`). */
+  lightweight: boolean
   /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). True when one was. */
   onTranscriptPress: (event: MouseEvent) => void
   onTranscriptRelease: (event: MouseEvent) => boolean
@@ -8107,6 +8111,7 @@ function SplitTranscriptPaneInner({
   onContextMenu,
   searchLabel,
   stickyHeaders,
+  lightweight,
   onTranscriptPress,
   onTranscriptRelease,
   onOpenAsyncQuestions,
@@ -8229,17 +8234,23 @@ function SplitTranscriptPaneInner({
   // message — otherwise the two halves of a split are two different apps.
   const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
     || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  // Lightweight windows draw the current view the way the old pane did:
+  // bookkeeping rows dropped, tool calls grouped into activity rows and no
+  // empty streaming placeholders, whatever the view; every card starts folded;
+  // and only the tail is mounted, loading a page at a time as the cursor walks
+  // back, so a long transcript costs nothing it is not showing.
+  const lightView = lightweight
   const fullPaneCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map(card => card.key))
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
-    return visibleCardsForTranscriptView(merged, transcriptView)
-  }, [cards, liveCards, transcriptView])
-  // PANE: the lightweight view mounts the tail and loads a page at a time as
-  // the cursor walks back, so a long transcript costs nothing it is not showing.
+    return lightView
+      ? groupStreamToolCards(merged.filter(card => card.category !== 'system')).filter(card => !isStreamGhostCard(card))
+      : visibleCardsForTranscriptView(merged, transcriptView)
+  }, [cards, liveCards, transcriptView, lightView])
   // Counted against the persisted cards: live cards are additions and must not
-  // push history out of the window while a turn streams.
-  const lightView = transcriptView === 'pane'
-  const [loadedCount, setLoadedCount] = useState(SPLIT_PANE_CARD_WINDOW)
+  // push history out of the window while a turn streams. Kept with the
+  // window's position, so a remount does not drop the pages already loaded.
+  const [loadedCount, setLoadedCount] = useState(initialPosition?.loadedCount ?? SPLIT_PANE_CARD_WINDOW)
   const lightStart = lightView ? Math.max(0, fullPaneCards.length - liveCards.length - loadedCount) : 0
   const allPaneCards = useMemo(() => lightStart > 0 ? fullPaneCards.slice(lightStart) : fullPaneCards, [fullPaneCards, lightStart])
   const fullCardsRef = useRef(fullPaneCards)
@@ -8267,15 +8278,15 @@ function SplitTranscriptPaneInner({
   const [expandedCardKeys, setExpandedCardKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.state.expandedKeys))
   const [collapsedCardKeys, setCollapsedCardKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.state.collapsedKeys))
   const expandedKeys = useMemo(
-    () => resolveExpandedCardKeys(allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys),
-    [allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys],
+    () => resolveExpandedCardKeys(allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys, lightView),
+    [allPaneCards, transcriptView, paneStreamLike, expandedCardKeys, collapsedCardKeys, lightView],
   )
   // SCROLLBACK folds everything or nothing (e), with clicked exceptions.
   const [scrollbackExpanded, setScrollbackExpanded] = useState(initialPosition?.scrollbackExpanded ?? false)
   const [scrollbackToggledKeys, setScrollbackToggledKeys] = useState<ReadonlySet<string>>(() => new Set(initialPosition?.scrollbackToggledKeys))
   const scrollbackSyncedCursorKeyRef = useRef<string | null>(null)
-  const expansionRef = useRef({ expandedKeys, view: transcriptView, chatLike: paneStreamLike })
-  expansionRef.current = { expandedKeys, view: transcriptView, chatLike: paneStreamLike }
+  const expansionRef = useRef({ expandedKeys, view: transcriptView, chatLike: paneStreamLike, foldAll: lightView })
+  expansionRef.current = { expandedKeys, view: transcriptView, chatLike: paneStreamLike, foldAll: lightView }
   const cardsRef = useRef(allPaneCards)
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
@@ -8331,7 +8342,7 @@ function SplitTranscriptPaneInner({
     // An explicit move is revealed, even onto the card scrolling parked it on.
     const jumpCursor = (cardKey: string) => {
       scrollbackSyncedCursorKeyRef.current = null
-      // PANE: a card older than what is loaded pages in, with a little above it.
+      // Lightweight: a card older than what is loaded pages in, with a little above it.
       const { light, start } = lightRef.current
       if (light && start > 0) {
         const index = fullCardsRef.current.findIndex((card) => card.key === cardKey)
@@ -8406,7 +8417,7 @@ function SplitTranscriptPaneInner({
         const card = list[cursorIndexNow()]
         if (!card) return
         jumpCursor(card.key)
-        const { expandedKeys: open, view, chatLike } = expansionRef.current
+        const { expandedKeys: open, view, chatLike, foldAll } = expansionRef.current
         const isExpanded = open.has(card.key)
         const toggle = (current: ReadonlySet<string>, add: boolean) => {
           if (current.has(card.key) === add) return current
@@ -8415,7 +8426,7 @@ function SplitTranscriptPaneInner({
           else next.delete(card.key)
           return next
         }
-        if (cardFoldsByDefault(card, view, chatLike)) {
+        if (cardFoldsByDefault(card, view, chatLike, foldAll)) {
           setCollapsedCardKeys((current) => toggle(current, false))
           setExpandedCardKeys((current) => toggle(current, !isExpanded))
         } else {
@@ -8547,8 +8558,9 @@ function SplitTranscriptPaneInner({
       state: { ...previous.state, followTail, cursorKey, expandedKeys: [...expandedCardKeys], collapsedKeys: [...collapsedCardKeys] },
       scrollbackExpanded,
       scrollbackToggledKeys: [...scrollbackToggledKeys],
+      loadedCount,
     })
-  }, [followTail, cursorKey, expandedCardKeys, collapsedCardKeys, scrollbackExpanded, scrollbackToggledKeys])
+  }, [followTail, cursorKey, expandedCardKeys, collapsedCardKeys, scrollbackExpanded, scrollbackToggledKeys, loadedCount])
 
   useLayoutEffect(() => {
     capturePanePositionRef.current = () => {
@@ -8567,6 +8579,7 @@ function SplitTranscriptPaneInner({
         windowStart: windowGaugeRef.current.start,
         scrollbackExpanded,
         scrollbackToggledKeys: [...scrollbackToggledKeys],
+        loadedCount,
       })
     }
   })
@@ -8640,7 +8653,7 @@ function SplitTranscriptPaneInner({
   // The action row is reserved in every pane so focus never changes viewport
   // height or the meaning of its stored scrollTop.
   // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
-  // PANE draws no view header: the title already names the session.
+  // Lightweight windows draw no view header: the title already names the session.
   const header = useSyncExternalStore(chromeHost && !lightView ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost && !lightView ? selectedWindowHeader.get : getNothing)
   const footer = useSyncExternalStore(chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, chromeHost ? selectedWindowFooter.get : getNothing)
   const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
@@ -9417,7 +9430,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       // Latest = last card of the FULL transcript; a detached reader window
       // may end before it.
       const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
-      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'pane' || transcriptView === 'agents') && card.autoFold && !isExpanded
+      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
         bodyLines: [],
@@ -9878,6 +9891,7 @@ function OpenTuiWorkspace() {
   const [transcriptWidth, setTranscriptWidth] = useAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
   const [focusMode, setFocusMode] = useAppState('focusMode', false)
   const [stickyHeaders, setStickyHeaders] = useAppState('stickyHeaders', false)
+  const [lightweightWindows, setLightweightWindows] = useAppState('lightweightWindows', false)
   // Prompt card pinned under the reader's top edge while its turn scrolls past.
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
@@ -14696,7 +14710,6 @@ function OpenTuiWorkspace() {
     const isAgentToolTarget = selectedAgentTool !== null
     const shouldAutoFold = (
       transcriptView === 'conversation'
-      || transcriptView === 'pane'
       || isChatLikeView
       || transcriptView === 'agents'
     ) && targetCard.autoFold
@@ -14889,6 +14902,16 @@ function OpenTuiWorkspace() {
     })
     setTranscriptViewMenuOpen(false)
   }, [])
+
+  // Lightweight windows apply to whichever view is chosen, like the old pane did.
+  const toggleLightweightWindows = useEffectEvent(() => {
+    const next = !lightweightWindows
+    setLightweightWindows(next)
+    showToggleOutcome('Lightweight windows', next)
+    void writeTuiLightweightWindows(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store lightweight windows')
+    })
+  })
 
   const persistTheme = useCallback(() => {
     try { writeTuiThemeSync(currentThemeRef.current, themeFollowsTerminalRef.current) } catch { /* best-effort */ }
@@ -18758,6 +18781,7 @@ function OpenTuiWorkspace() {
           configuredSplitReaderShare,
           configuredStickyHeaders,
           configuredThemeFollow,
+          configuredLightweightWindows,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -18778,6 +18802,7 @@ function OpenTuiWorkspace() {
           readTuiSplitReaderShare(),
           readTuiStickyHeaders(),
           readTuiThemeFollow(),
+          readTuiLightweightWindows(),
         ])
         if (cancelled) return
         // Attached to a daemon that may be older than this client: say so once,
@@ -18813,6 +18838,7 @@ function OpenTuiWorkspace() {
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
         setStickyHeaders(configuredStickyHeaders)
+        setLightweightWindows(configuredLightweightWindows)
         setDensity(configuredDensity)
         setDiffLayout(configuredDiffLayout)
         setTranscriptView(configuredTranscriptView)
@@ -22517,6 +22543,9 @@ function OpenTuiWorkspace() {
         openThemeMenu()
         break
       }
+      case 'lightweight-windows':
+        toggleLightweightWindows()
+        break
       case 'sticky-headers': {
         const next = !stickyHeaders
         setStickyHeaders(next)
@@ -24101,6 +24130,10 @@ function OpenTuiWorkspace() {
     if (transcriptViewMenuOpen) {
       if (key.name === 'escape' || (sequence === 'v' && !key.ctrl && !key.meta)) {
         handled(closeTranscriptViewMenu)
+        return
+      }
+      if (key.name === 'tab') {
+        handled(toggleLightweightWindows)
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
@@ -26782,6 +26815,7 @@ function OpenTuiWorkspace() {
         onContextMenu={splitPaneActions.sessionMenu}
         searchLabel={paneSearch && paneSearch.index === splitIndex ? `/${paneSearch.query}${paneSearch.editing ? '▏' : ''}` : null}
         stickyHeaders={stickyHeaders}
+        lightweight={lightweightWindows}
         onTranscriptPress={noteTranscriptLinkPress}
         onTranscriptRelease={openTranscriptLinkAt}
         onOpenAsyncQuestions={openCardAsyncQuestions}
@@ -28200,7 +28234,7 @@ function OpenTuiWorkspace() {
 
         {transcriptViewMenuOpen ? (() => {
           const menuWidth = Math.min(Math.max(width - 8, 28), 46)
-          const menuHeight = 10
+          const menuHeight = 11
           const originView = transcriptViewMenuOriginRef.current
           const viewOptions = TRANSCRIPT_VIEWS.map((view) => ({
             name: TRANSCRIPT_VIEW_LABELS[view] + (view === originView ? ' ✓' : ''),
@@ -28227,7 +28261,7 @@ function OpenTuiWorkspace() {
               </box>
               <box flexGrow={1} paddingX={1} paddingBottom={1}>
                 <select
-                  style={{ height: menuHeight - 4 }}
+                  style={{ height: menuHeight - 5 }}
                   focused
                   options={viewOptions}
                   selectedIndex={transcriptViewMenuIndex}
@@ -28253,6 +28287,12 @@ function OpenTuiWorkspace() {
                     if (next) chooseTranscriptView(next)
                   }}
                 />
+              </box>
+              <box id="transcript-view-lightweight" height={1} paddingX={2} flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">tab </text>
+                <text fg={lightweightWindows ? theme.text : theme.muted} wrapMode="none">
+                  {lightweightWindows ? '● lightweight windows' : '○ lightweight windows'}
+                </text>
               </box>
             </box>
           )

@@ -176,6 +176,7 @@ type TuiState = {
   sidebarWidth?: unknown
   focusMode?: unknown
   stickyHeaders?: unknown
+  lightweightWindows?: unknown
   density?: unknown
   diffLayout?: unknown
   transcriptView?: unknown
@@ -374,6 +375,17 @@ export async function setConfiguredTuiStickyHeaders(stickyHeaders: boolean): Pro
   await writeTuiState({ stickyHeaders })
 }
 
+// Lightweight windows: any view, drawn the old pane's way. A transcriptView of
+// 'pane' was that mode as a view of its own (October 2026) and reads as it.
+export async function getConfiguredTuiLightweightWindows(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.lightweightWindows === true || (parsed.lightweightWindows === undefined && parsed.transcriptView === 'pane')
+}
+
+export async function setConfiguredTuiLightweightWindows(lightweightWindows: boolean): Promise<void> {
+  await writeTuiState({ lightweightWindows })
+}
+
 export async function getConfiguredTuiDensity(): Promise<TuiDensity> {
   const parsed = await readTuiState()
   if (parsed.density === 'comfortable' || parsed.density === 'dense') return parsed.density
@@ -394,7 +406,7 @@ export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Pro
 }
 
 const VALID_TUI_TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = [
-  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'pane',
+  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode',
 ]
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {

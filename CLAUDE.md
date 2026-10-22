@@ -1281,9 +1281,14 @@ frameless under the restore row.
   opening the editor. `isTranscriptLocalKey` must not claim `n`/`N` without search matches
   (Shift+N is new session).
 - **Watching a team keeps the lead's window first** (`planTeammateWatch`, `watchCoordinatorRun`).
-- **PANE (`v`) is the lightweight view**: compact cards, plain cursor, no header or sticky prompt,
-  and only the last `SPLIT_PANE_CARD_WINDOW` cards mounted, with `↑ N earlier messages — k/g to
-  load`; `jumpCursor` pages in an older target. `paneViewSmoke.tsx`.
+- **Lightweight windows are a toggle on the current view, not a view** (Tab in the `v` menu, the
+  palette; `lightweightWindows` in `tui.json`, which also reads an old `transcriptView: 'pane'`).
+  They draw the chosen view the old pane's way: system rows dropped, tool calls grouped and empty
+  placeholders dropped *whatever the view*, every card starting folded (`foldAll`), no header or
+  sticky prompt, and only the last `SPLIT_PANE_CARD_WINDOW` cards mounted, with `↑ N earlier
+  messages — k/g to load`; `jumpCursor` pages in an older target. The loaded count is kept with the
+  window's position (`loadedCount`), so a remount keeps its pages. `lightweightWindowSmoke.tsx`
+  (three mutations verified: fold-all, shaping, the kept count).
 - Smokes from before the change read row 0 (now the spaces bar), `READING` (a window title says
   `paused`) and the view label in the title; find the window by id instead.
 

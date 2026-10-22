@@ -13,6 +13,8 @@ export type TranscriptWindowPosition = {
   scrollbackExpanded?: boolean
   scrollbackToggledKeys?: string[]
   presentationExpandedKeys?: string[]
+  /** Lightweight windows: how many persisted cards are loaded from the tail. */
+  loadedCount?: number
 }
 
 /** One workspace-owned record per transcript, independent of its renderer or placement. */
