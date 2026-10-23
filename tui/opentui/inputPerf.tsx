@@ -83,6 +83,8 @@ type Scenario = {
   // Substring the frame must contain once setup has run (any one of several).
   // The guard against measuring a surface the harness never actually reached.
   expect?: string | string[]
+  // How many windows setup must have left, and which one has the keyboard.
+  windows?: { count: number; focus: number }
   // The reader must be focused over a transcript taller than its viewport.
   reader?: boolean
   // The transcript must actually move during the window.
@@ -108,11 +110,6 @@ const OPEN_THREE_TABS: Press[] = [
 ]
 const ADD_COLUMN_SPLIT: Press[] = [{ key: 'b', ctrl: true }, { key: '%' }]
 const ADD_ROW_SPLIT: Press[] = [{ key: 'b', ctrl: true }, { key: '"' }]
-// An unfocused pane's border says how to reach it — unless the notice that
-// announces the split is still drawn over that border, which says the same.
-const SPLIT_OPEN = ['⌃B 1 focus', 'Split panes: 1']
-// Only a focused pane offers the way back to the reader in the status bar.
-const PANE_FOCUSED = 'esc reader'
 const PAGE_UP: Press = { raw: '\x1b[5~' }
 const PAGE_DOWN: Press = { raw: '\x1b[6~' }
 
@@ -187,33 +184,33 @@ const SCENARIOS: Scenario[] = [
     name: 'split-reader-columns',
     setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: SPLIT_OPEN,
+    windows: { count: 2, focus: 1 },
   },
   {
     name: 'split-pane-columns',
     setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT, { key: 'b', ctrl: true }, { key: 'o' }],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: PANE_FOCUSED,
+    windows: { count: 2, focus: 0 },
   },
-  // ⌃B o between two session windows: the focused one is drawn by the reader
-  // pipeline, so each press moves that renderer to the other window.
+  // ⌃B o between two session windows: each press moves the selection, and the
+  // selected window's chrome, to the other window.
   {
     name: 'split-focus-cycle',
     setup: [...OPEN_THREE_TABS, ...ADD_COLUMN_SPLIT],
     press: [{ key: 'b', ctrl: true }, { key: 'o' }],
-    expect: SPLIT_OPEN,
+    windows: { count: 2, focus: 1 },
   },
   {
     name: 'split-reader-rows',
     setup: [...OPEN_THREE_TABS, ...ADD_ROW_SPLIT, ...ADD_ROW_SPLIT],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: '⌃B 2 focus',
+    windows: { count: 3, focus: 2 },
   },
   {
     name: 'split-pane-rows',
     setup: [...OPEN_THREE_TABS, ...ADD_ROW_SPLIT, ...ADD_ROW_SPLIT, { key: 'b', ctrl: true }, { key: 'o' }],
     press: [{ key: 'j' }, { key: 'k' }],
-    expect: PANE_FOCUSED,
+    windows: { count: 3, focus: 0 },
   },
 ]
 
@@ -454,6 +451,15 @@ if (useRealSessions) {
   }))
 }
 
+// Which pane has the keyboard is workspace state: a window's scrollbox never
+// takes OpenTUI's focus slot, since the root routes keys to it.
+const spacesStore = await import('./spacesStore')
+const spaces: { controller: InstanceType<typeof spacesStore.SpacesController> | null } = { controller: null }
+mock.module('./spacesStore', () => ({ ...spacesStore, SpacesController: class extends spacesStore.SpacesController { constructor() { super(); spaces.controller = this } } }))
+const transcriptFocused = () => {
+  const values = spaces.controller?.runtime(spaces.controller.activeWorkspace()!).values
+  return values?.get('focusedPane') === 'messages' && values.get('splitFocusIndex') !== null
+}
 const { default: OpenTuiApp } = await import('./App')
 
 const profiled = { commits: 0, over: 0, worst: 0, renderWorst: 0, commitWorst: 0, renderTotal: 0, commitTotal: 0 }
@@ -537,7 +543,6 @@ type TranscriptScrollbox = {
   y: number
   width: number
   height: number
-  focused: boolean
   viewport: { height: number }
   content: ProbeNode
 }
@@ -607,6 +612,14 @@ for (const press of scenario.setup ?? []) {
 }
 await settle(500)
 
+if (scenario.windows) {
+  let count = 0
+  while (setup.renderer.root.findDescendantById(`split-pane:${count}`)) count += 1
+  const focus = spaces.controller?.runtime(spaces.controller.activeWorkspace()!).values.get('splitFocusIndex')
+  if (count !== scenario.windows.count || focus !== scenario.windows.focus) {
+    skip(`precondition not met (${count} windows, window ${focus} focused; wanted ${scenario.windows.count}, window ${scenario.windows.focus})`)
+  }
+}
 if (scenario.expect) {
   const frame = setup.captureCharFrame()
   const anyOf = Array.isArray(scenario.expect) ? scenario.expect : [scenario.expect]
@@ -619,7 +632,7 @@ if (scenario.reader) {
   if (!sb) skip('precondition not met (no transcript scrollbox)')
   else if (mountedWindow().count === 0) skip('precondition not met (transcript has no cards mounted)')
   else if (sb.scrollHeight <= sb.viewport.height) skip('precondition not met (transcript does not overflow its viewport)')
-  else if (!sb.focused) skip('precondition not met (transcript is not focused)')
+  else if (!transcriptFocused()) skip('precondition not met (transcript is not focused)')
 }
 
 const seconds = scenario.seconds ?? SECONDS

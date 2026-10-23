@@ -547,8 +547,9 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   commits during focus toggling missed the 60fps budget, worst frame 46ms, against zero over budget
   and 13ms once the window was held fixed. Holding it fixed costs nothing on open because browse-mode
   cards all render collapsed (`expandedKeysForRender`), so a mounted card's cost there is bounded by
-  density, not by how many are mounted; scrubbing is covered separately, by the transcript unmounting
-  entirely while `isScrubbing`.
+  density, not by how many are mounted. (Scrubbing once unmounted the transcript while the selection ran
+  ahead of the open session; since every window became a transcript window nothing does, and
+  `sidebar-scroll` measures what scrubbing costs now.)
 - **Measure with `npm run tui:inputperf`** (`tui/opentui/inputPerf.tsx`) for anything that changes what
   the reader mounts or how a keystroke renders. It drives each navigation surface at key-repeat speed
   and reports the app's own frame canary: commits, how many blew the 60fps budget, and the worst one.
@@ -557,7 +558,8 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   mismeasures every scenario after it, and it reads as an app regression rather than a harness bug.
   It is **not deterministic across runs**: scenarios drive the real sidebar, so a run measures
   whichever sessions sit at those positions, and a 12-card session and a 263-card one are not
-  comparable. The `cards` column reports what the reader was actually holding — check it before
+  comparable. The `cards` column reports what the selected window was actually holding (its
+  `readerWindowTotal` gauge) — check it before
   believing any before/after, and interleave A/B runs rather than batching them.
 - **A switch to another session mounts a seed, not the whole window** (`READER_OPEN_WINDOW`, 48
   cards around the focus, grown to `READER_CARD_WINDOW` by the ordinary 8-card steps, anchored like
