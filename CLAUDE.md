@@ -2396,6 +2396,25 @@ main isolate and the transcript worker both import is paid for twice. At steady 
 ~60MB (main) + ~65MB (worker) against a ~400MB physical footprint — the rest is module code, JIT
 output, and allocator arenas.
 
+- **The root's callbacks are `useStableEvent`, never `useCallback`** (`tui/opentui/useStableEvent.ts`).
+  A memoized closure keeps the render scope it was made in, and in the root that scope holds
+  every variable of a 20,000-line component, including that render's `sessionDetail`. Two
+  callbacks recreated at different renders each keep a scope holding the other's older copy, so
+  every past render stays reachable: browsing ~42 sessions retained one transcript per session,
+  heap 1,052MB against 262MB once the ladder was broken (`sidebar-walk`, below). The heap snapshot
+  showed one chain alternating `buildSidebarRow` and `jumpToTranscriptIndex` 42 times. A
+  `useStableEvent` wrapper is made once outside the component's scope and keeps only the latest
+  closure. `useMemo` values that hold closures or JSX can form the same ladder.
+  `INPUT_FIXTURE_DISTINCT=1 INPUT_MEMORY=1 INPUT_SCENARIO=sidebar-walk` measures it (every session
+  its own transcript, which the harness keeps none of), and `INPUT_HEAP_SNAPSHOT=<file>` writes a
+  V8-format snapshot for retainer paths.
+- **What a keystroke re-renders is countable**: `INPUT_COUNT_RENDERS=1` (with
+  `INPUT_COUNT_HOOKS=OpenTuiWorkspace` and `INPUT_COUNT_TRACE=n`) prints commits per press, renders
+  per component and which root state changed in each commit. A window's `j` was three commits,
+  one of them the whole root, because the cursor was mirrored into root state that nothing drew;
+  the cursor now lives in the workspace runtime unsubscribed (`readTranscriptCursorKey`). The
+  harness also turns off React's development performance tracks (`INPUT_REACT_TRACKS=1` keeps
+  them): they diffed every changed prop object and were half of every profile.
 - **Idle polling is the app's largest allocator, and allocation rate is what a user sees as
   "it's using a gigabyte".** A JS engine keeps its allocator arenas mapped long after the garbage in
   them is collected: a full `Bun.gc(true)` drops the physical footprint from 180MB to 60MB and moves
