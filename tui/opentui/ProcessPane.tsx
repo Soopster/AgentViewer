@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useWindowSnapshot } from './windowActivity'
 import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
 // The surface panel's Terminal tab: long-running processes (a dev server, a
 // watcher, `docker compose logs -f`) and their output, and interactive shells.
@@ -10,7 +11,7 @@ import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
 // A shell is driven in terminal mode, where every key goes to it — Escape and
 // the ⌃ chords included, since vim and readline need them — until ⌃] hands the
 // keys back (telnet's escape, and bound by no shell or editor by default).
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useRenderer } from '@opentui/react'
 import type { BoxRenderable, MouseEvent as TuiMouseEvent } from '@opentui/core'
 
@@ -105,9 +106,9 @@ export function ProcessPane({
   const workspace = useWorkspaceContext()
   const ownerId = workspace?.runtime.workspace.id
   const renderer = useRenderer()
-  const allProcesses = useSyncExternalStore(subscribeProcesses, getProcesses, getProcesses)
+  const allProcesses = useWindowSnapshot(subscribeProcesses, getProcesses)
   // Only the list; a shell's screen changes are ShellView's to re-render.
-  const allShells = useSyncExternalStore(subscribeShells, getShells, getShells)
+  const allShells = useWindowSnapshot(subscribeShells, getShells)
   const processes = useMemo(() => allProcesses.filter(entry => entry.ownerId === ownerId), [allProcesses, ownerId])
   const shellList = useMemo(() => allShells.filter(entry => entry.ownerId === ownerId), [allShells, ownerId])
   const shellIds = shellList.map((entry) => `${entry.id}:${entry.status}:${entry.name}`).join('|')
@@ -115,7 +116,7 @@ export function ProcessPane({
   const shells = useMemo(() => shellList, [shellIds])
   const [selectedId, setSelectedId] = useWorkspaceState<string | null>('process:selectedId', initialSelectedId, false)
   const onSelectedChangeRef = useRef(onSelectedChange)
-  onSelectedChangeRef.current = onSelectedChange
+  useLayoutEffect(() => { onSelectedChangeRef.current = onSelectedChange }, [onSelectedChange])
   useEffect(() => { onSelectedChangeRef.current?.(selectedId) }, [selectedId])
   const [hadShell, setHadShell] = useWorkspaceState('process:hadShell', false)
   const [terminalMode, setTerminalMode] = useState(false)

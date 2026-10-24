@@ -8,6 +8,8 @@ export type TranscriptWindowPosition = {
   scrollTop: number
   anchorKey: string | null
   anchorOffset: number
+  blockAnchorKey?: string
+  blockAnchorOffset?: number
   searchQuery?: string
   searchMatchIndex?: number
   scrollbackExpanded?: boolean
@@ -31,7 +33,19 @@ export function transcriptViewportPosition(sb: ScrollBoxRenderable) {
     if (node.id?.startsWith('card:')) {
       const offset = node.y - sb.content.y - scrollTop
       if (node.height > 0 && offset + node.height > 0) {
-        return { scrollTop, anchorKey: node.id.slice(5), anchorOffset: offset }
+        const findBlock = (parent: Renderable): Renderable | undefined => {
+          for (const child of parent.getChildren() as Renderable[]) {
+            if (child.height <= 0 || child.y - sb.content.y + child.height <= scrollTop) continue
+            if (child.id.startsWith('virtual-row:')) return child
+            const block = findBlock(child)
+            if (block) return block
+          }
+          return undefined
+        }
+        const block = findBlock(node)
+        return { scrollTop, anchorKey: node.id.slice(5), anchorOffset: offset,
+          blockAnchorKey: block?.id, blockAnchorOffset: block ? block.y - sb.content.y - scrollTop : undefined }
+
       }
     } else {
       const children = node.getChildren()

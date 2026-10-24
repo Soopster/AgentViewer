@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+import { useWorkspaceContext } from './workspaceContext'
 import type { ReactNode } from 'react'
 
 // Chrome the root draws around the transcript being read — the view header,
@@ -35,5 +37,12 @@ function createWindowChromeStore(): WindowChromeStore {
   }
 }
 
-export const selectedWindowHeader = createWindowChromeStore()
-export const selectedWindowFooter = createWindowChromeStore()
+/** Chrome contains render closures and native styles, so its ownership must
+ * match a workspace view, never the module/process. */
+export function useTranscriptWindowChrome() {
+  const runtime = useWorkspaceContext()?.runtime
+  return useMemo(() => {
+    const create = () => ({ header: createWindowChromeStore(), footer: createWindowChromeStore() })
+    return runtime ? runtime.get('ref:transcriptWindowChrome', create, false) : create()
+  }, [runtime])
+}

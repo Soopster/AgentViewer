@@ -247,7 +247,7 @@ try {
   await chordKey('2')
   await waitFor('legacy layout transcript beside tool tab', () => !!frame('popover-tab-frame') && paneHas(1, marker(SESSIONS[1]!)))
   await search('Second transcript in a legacy layout with a tool tab')
-  check(contains(frame('split-pane:1')!, frame('transcript-scroll')!), 'legacy transcript viewport escaped its frame')
+  check(contains(frame('split-pane:1')!, frame('transcript-scroll')!), `legacy transcript viewport escaped its frame: ${JSON.stringify({ frame: frame('split-pane:1'), scroll: frame('transcript-scroll') })}`)
   await chordKey('1'); await chordKey('m')
   check(!setup.captureCharFrame().includes(marker(SESSIONS[1]!)), 'zooming the tool tab painted a transcript over it')
   check(frame('popover-tab-frame')!.width === frame('window-area')!.width, 'zoomed tool tab did not fill the workspace')

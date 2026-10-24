@@ -203,6 +203,8 @@ import {
 
 
 export type TuiSessionDetail = {
+  /** Worker-computed retention estimate; avoids walking transcript payloads on the UI thread. */
+  estimatedRetainedBytes?: number
   info: SessionInfo | null
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]

@@ -97,7 +97,10 @@ import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { pruneUnmountedCardData } from './readerCardCache'
-import { createReaderWindowStore, deriveReaderWindow, stepReaderWindow } from './readerWindowStore'
+import { RowHeightIndex } from './rowHeightIndex'
+import { TranscriptDetailCache } from './transcriptDetailCache'
+import { mainTranscriptBudget } from './sessionCacheBudget'
+import { createReaderWindowStore, deriveRowReaderWindow, stepReaderWindow } from './readerWindowStore'
 import type { ReaderWindow, ReaderWindowStore } from './readerWindowStore'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
@@ -255,8 +258,12 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
+import { RetainedWindow, useWindowVisible } from './windowActivity'
+import { TranscriptViewportContext, TranscriptBlockRestoreContext, type TranscriptBlockRestore, VirtualTranscriptRows } from './VirtualTranscriptRows'
+import { parseMarkdownBlocksAsync } from './markdownBlocksWorkerClient'
+import type { MarkdownBlock } from './markdownBlocks'
 import { useStableEvent } from './useStableEvent'
-import { selectedWindowFooter, selectedWindowHeader, type WindowChrome } from './windowChrome'
+import { useTranscriptWindowChrome, type WindowChrome } from './windowChrome'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
@@ -542,12 +549,13 @@ function Spinner({
   frames?: readonly string[]
   intervalMs?: number
 }) {
+  const visible = useWindowVisible()
   const [frame, setFrame] = useState(0)
   useEffect(() => {
+    if (!visible) return
     const id = setInterval(() => setFrame((f) => (f + 1) % frames.length), intervalMs)
     return () => clearInterval(id)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [visible, frames, intervalMs])
   return (
     <text wrapMode="none">
       <span fg={fg}>{frames[frame % frames.length]}</span>
@@ -557,16 +565,18 @@ function Spinner({
 }
 
 function IdleTicker({ seed, theme }: { seed: string; theme: TuiThemePalette }) {
+  const visible = useWindowVisible()
   const hash = stableHash(seed)
   const spinnerFrames = IDLE_TICKER_SPINNER_VARIANTS[hash % IDLE_TICKER_SPINNER_VARIANTS.length]!
   const [phraseIndex, setPhraseIndex] = useState(() => (hash >>> 8) % IDLE_TICKER_PHRASES.length)
   useEffect(() => {
+    if (!visible) return
     const id = setInterval(
       () => setPhraseIndex((i) => (i + 1) % IDLE_TICKER_PHRASES.length),
       IDLE_TICKER_ROTATE_MS,
     )
     return () => clearInterval(id)
-  }, [])
+  }, [visible])
   return (
     <Spinner
       label={IDLE_TICKER_PHRASES[phraseIndex]!}
@@ -594,6 +604,7 @@ function ComposerWaitingStatus({
   /** What the turn is actually waiting on, when that is the user. */
   message?: string | null
 }) {
+  const visible = useWindowVisible()
   const [frame, setFrame] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const hash = stableHash(seed)
@@ -601,12 +612,13 @@ function ComposerWaitingStatus({
   const message = messageOverride ?? COMPOSER_WAITING_MESSAGES[hash % COMPOSER_WAITING_MESSAGES.length] ?? COMPOSER_WAITING_MESSAGES[0]
 
   useEffect(() => {
+    if (!visible) return
     const id = setInterval(() => {
       setFrame((current) => current + 1)
       setNow(Date.now())
     }, 120)
     return () => clearInterval(id)
-  }, [])
+  }, [visible])
 
   const elapsed = formatElapsedClock(startedAt == null ? 0 : Math.max(now - startedAt, 0))
   // Segment the status so the live metadata reads as labelled chips: spinner +
@@ -6070,6 +6082,7 @@ type TranscriptCardProps = {
 
 type SelectableMarkdownProps = {
   content: string
+  documentKey?: string
   syntaxStyle: SyntaxStyle
   fg: string
   width: number
@@ -6077,7 +6090,7 @@ type SelectableMarkdownProps = {
   borderColor: string
 }
 
-function SelectableMarkdown({
+function NativeSelectableMarkdown({
   content,
   syntaxStyle,
   fg,
@@ -6102,6 +6115,29 @@ function SelectableMarkdown({
       tableOptions={{ widthMode: 'content', borders: true, borderColor, selectable: true }}
     />
   )
+}
+
+// Large documents are tokenized off-thread and virtualized within a card.
+// Short prose keeps the existing one-text/native Markdown path.
+function SelectableMarkdown(props: SelectableMarkdownProps) {
+  const visible = useWindowVisible()
+  const [parsed, setParsed] = useState<{ source: string; blocks: MarkdownBlock[] } | null>(null)
+  const large = props.content.length > 16_384
+  const viewport = React.useContext(TranscriptViewportContext)
+  useEffect(() => {
+    if (!large || !visible || !viewport) return
+    let cancelled = false
+    const abort = new AbortController()
+    void parseMarkdownBlocksAsync(props.content, abort.signal).then(blocks => {
+      if (!cancelled) setParsed({ source: props.content, blocks })
+    }).catch(() => { if (!cancelled) setParsed({ source: props.content, blocks: [] }) })
+    return () => { cancelled = true; abort.abort() }
+  }, [large, visible, viewport, props.content])
+  if (!large || !viewport || parsed?.source === props.content && parsed.blocks.length < 2) return <NativeSelectableMarkdown {...props} />
+  if (parsed?.source !== props.content) return <box id="transcript-block-loading" height={Math.max(1, Math.ceil(props.content.length / Math.max(props.width, 20)))}><text fg={props.fg}>Loading…</text></box>
+  return <VirtualTranscriptRows rows={parsed.blocks} threshold={1} rowKey={block => block.key}
+    documentKey={props.documentKey} geometryKey={`markdown:${props.width}`} estimateHeight={block => Math.max(block.estimatedRows, Math.ceil(block.content.length / Math.max(props.width, 20))) + block.marginBottom}
+    renderRow={block => <box key={block.key} marginBottom={block.marginBottom} flexDirection="column"><NativeSelectableMarkdown {...props} content={block.content} /></box>} />
 }
 
 // Shared block-markdown body for the Stream and Agents views. Mirrors the
@@ -6153,6 +6189,7 @@ function renderCardMarkdownBody(opts: {
   if (shouldRenderSyntaxMarkdown && markdownContent && syntaxStyle) {
     return (
       <SelectableMarkdown
+        documentKey={keyPrefix}
         content={markdownContent}
         syntaxStyle={syntaxStyle}
         fg={fg}
@@ -6198,6 +6235,10 @@ function groupLinesByBackground<T>(lines: readonly T[], backgroundOf: (line: T) 
   }
   return groups
 }
+
+const EMPTY_STACK_DIFF_ROWS: TuiPierreDiffRow[] = []
+const EMPTY_SPLIT_DIFF_ROWS: TuiPierreSplitRow[] = []
+const EMPTY_DIFF_ROWS: Array<TuiPierreDiffRow | TuiPierreSplitRow> = []
 
 function TranscriptCardInner({
   card,
@@ -6329,38 +6370,30 @@ function TranscriptCardInner({
   const effectiveDiffLayout = diffLayout === 'split' && (diffView?.splitRows.length ?? 0) > 0
     ? 'split'
     : 'stack'
-  const rawDiffLines = diffPlain
-    ? ((card.editDiff ?? extractDiffText(card.expandedLines) ?? '').split('\n').filter((line) => line.length > 0))
-    : []
+  const rawDiffLines = useMemo(() => diffPlain
+    ? ((card.editDiff ?? extractDiffText(card.expandedLines) ?? '').split('\n').filter(line => line.length > 0))
+    : [], [diffPlain, card])
   const activeDiffRows = !diffPlain && diffView
     ? effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
-    : []
-  const renderedDiffRows = activeDiffRows.filter((row) => diffShowHunkHeaders || row.tone !== 'hunk')
-  const diffRows = renderedDiffRows.slice(0, isExpanded ? renderedDiffRows.length : densityState.bodyLines)
+    : EMPTY_DIFF_ROWS
+  const renderedDiffRows = useMemo(() => diffShowHunkHeaders ? activeDiffRows : activeDiffRows.filter(row => row.tone !== 'hunk'), [activeDiffRows, diffShowHunkHeaders])
+  const diffRows = useMemo(() => isExpanded ? renderedDiffRows : renderedDiffRows.slice(0, densityState.bodyLines), [renderedDiffRows, isExpanded, densityState.bodyLines])
   const hiddenDiffRows = renderedDiffRows.length - diffRows.length
-  const stackedDiffRows = !diffPlain && effectiveDiffLayout === 'stack' ? diffRows as TuiPierreDiffRow[] : []
-  const splitDiffRows = !diffPlain && effectiveDiffLayout === 'split' ? diffRows as TuiPierreSplitRow[] : []
-  const diffLineNumbers = diffShowLineNumbers
-    ? stackedDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
-    : []
-  const diffGutterWidth = Math.max(
-    diffLineNumbers.length > 0 ? Math.max(...diffLineNumbers).toString().length : 1,
-    1,
-  )
+  const stackedDiffRows = !diffPlain && effectiveDiffLayout === 'stack' ? diffRows as TuiPierreDiffRow[] : EMPTY_STACK_DIFF_ROWS
+  const splitDiffRows = !diffPlain && effectiveDiffLayout === 'split' ? diffRows as TuiPierreSplitRow[] : EMPTY_SPLIT_DIFF_ROWS
+  const diffGutterWidth = useMemo(() => {
+    let max = 1
+    if (diffShowLineNumbers) for (const row of stackedDiffRows) max = Math.max(max, row.oldLine ?? 0, row.newLine ?? 0)
+    return String(max).length
+  }, [diffShowLineNumbers, stackedDiffRows])
   const diffBadgeWidth = 3
   const diffTextWidth = Math.max(bodyInnerWidth - (diffShowLineNumbers ? (diffGutterWidth * 2 + 2) : 0) - 5 - diffBadgeWidth - 1, 12)
-  const splitLineNumbers = diffShowLineNumbers
-    ? splitDiffRows.flatMap((row) => [
-        row.left?.lineNum,
-        row.right?.lineNum,
-      ].filter((value): value is number => value != null))
-    : []
-  const splitGutterWidth = diffShowLineNumbers
-    ? Math.max(
-        splitLineNumbers.length > 0 ? Math.max(...splitLineNumbers).toString().length : 1,
-        1,
-      )
-    : 0
+  const splitGutterWidth = useMemo(() => {
+    if (!diffShowLineNumbers) return 0
+    let max = 1
+    for (const row of splitDiffRows) max = Math.max(max, row.left?.lineNum ?? 0, row.right?.lineNum ?? 0)
+    return String(max).length
+  }, [diffShowLineNumbers, splitDiffRows])
   const splitDividerWidth = 1
   const splitBadgeWidth = 1
   const splitContentWidth = Math.max(bodyInnerWidth - splitBadgeWidth, 2)
@@ -7236,6 +7269,7 @@ function TranscriptCardInner({
           ) : shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
             <box paddingX={1}>
               <SelectableMarkdown
+                documentKey={card.key}
                 content={card.markdownContent}
                 syntaxStyle={syntaxStyle}
                 fg={bubbleTextColor}
@@ -7382,7 +7416,9 @@ function TranscriptCardInner({
             </box>
           ) : diffView && effectiveDiffLayout === 'stack' ? (
             <box paddingX={1} marginTop={1}>
-              {stackedDiffRows.map((row, rowIndex) => (
+              <VirtualTranscriptRows documentKey={card.key} rows={stackedDiffRows} rowKey={row => row.key} estimateHeight={() => 1}
+                geometryKey={`${card.key}:${effectiveDiffLayout}:${bodyInnerWidth}`} jumpKey={hasCursor ? diffSelectionRows[diffSelectionCurrentIndex]?.key : undefined}
+                renderRow={(row, rowIndex) => (
                 (() => {
                   const anchor = transcriptDiffStackRowAnchor(noteNamespace, row)
                   const point = transcriptDiffSelectionPointForStackRow(row)
@@ -7467,7 +7503,7 @@ function TranscriptCardInner({
                     </React.Fragment>
                   )
                 })()
-              ))}
+               )} />
               {hiddenDiffRows > 0 ? (
                 <text fg={theme.dim} selectable {...selectionColors}>
                   {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
@@ -7483,7 +7519,9 @@ function TranscriptCardInner({
             </box>
           ) : diffView ? (
             <box paddingX={1} marginTop={1}>
-              {splitDiffRows.map((row, rowIndex) => {
+              <VirtualTranscriptRows documentKey={card.key} rows={splitDiffRows} rowKey={row => row.key} estimateHeight={() => 1}
+                geometryKey={`${card.key}:${effectiveDiffLayout}:${bodyInnerWidth}`} jumpKey={hasCursor ? diffSelectionRows[diffSelectionCurrentIndex]?.key : undefined}
+                renderRow={(row, rowIndex) => {
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
                   const rowColor = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
                   const rowBackground = row.tone === 'hunk'
@@ -7584,7 +7622,7 @@ function TranscriptCardInner({
                     ))}
                   </React.Fragment>
                 )
-              })}
+              }} />
               {hiddenDiffRows > 0 ? (
                 <text fg={theme.dim} selectable {...selectionColors}>
                   {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
@@ -7730,6 +7768,8 @@ const SPLIT_PANE_CARD_WINDOW = 80
 // a meta row, the reserved action row and a few body rows to say anything at
 // all; below that the layout drops the pane rather than render a sliver.
 const SPLIT_PANE_MIN_ROWS = MIN_WINDOW_ROWS
+const SPLIT_TREE_LIMITS = { paneWidth: SPLIT_PANE_MIN_WIDTH, paneRows: SPLIT_PANE_MIN_ROWS, readerWidth: SPLIT_PANE_MIN_WIDTH, readerRows: SPLIT_PANE_MIN_ROWS }
+const ZOOM_TREE_LIMITS = { paneWidth: 0, paneRows: 0, readerWidth: 0, readerRows: 0 }
 const MIN_READER_ROWS = MIN_WINDOW_ROWS
 const SPLIT_PANE_MAX = 2
 // A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
@@ -7756,21 +7796,9 @@ function isDoubleClick(last: { current: { x: number; y: number; at: number } | n
 }
 // Main + stack and the grid hold more: up to five panes beside the reader.
 const SPLIT_PANE_ARRANGED_MAX = 5
-// Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
-// a pane that mounted the whole transcript would cost the same as a second
-// reader; 80 collapsed cards provides deeper scroll-back while retaining the
-// existing paged growth behavior for older history.
-const SPLIT_PANE_POLL_MS = 2500
-// A yielded poll retries soon rather than waiting out the full interval — the
-// open it stepped aside for is usually done in well under a second.
-const SPLIT_PANE_YIELD_RETRY_MS = 300
-// Stagger panes onto different ticks. Two panes mounted in the same commit
-// (a rotate, or restoring a saved 2-pane layout) would otherwise post their
-// reads into the serial worker back-to-back, every interval, forever — the
-// offset persists because the interval is shared. Kept small deliberately: a
-// pane remounts whenever its session changes (⌃B n), and this delay is on that
-// path, so it buys tick separation without a visible wait.
-const SPLIT_PANE_POLL_STAGGER_MS = 120
+// Transcript refreshes are owned by TranscriptSessionLoader. Views acquire
+// one observer while visible; the broker orders foreground reads and shares
+// updates across transcript and pinned-tool views of the same variant.
 const EMPTY_SEARCH_MATCHES: number[] = []
 const SPLIT_PANE_EMPTY_LIVE: ThreadedMessage[] = []
 const noopSelectCard = () => {}
@@ -7779,40 +7807,25 @@ const noopSelectCard = () => {}
 // windows. Poll only when its revision changes, yielding to foreground work.
 function usePinnedSessionDetail(session: Session | null, density: TuiDensity, showToolCalls: boolean, shouldYield: () => boolean) {
   const loader = useTranscriptSessionLoader()
+  const visible = useWindowVisible()
   const [detail, setDetail] = useState<TuiSessionDetail | null>(() => session ? loader.peek(session, density, showToolCalls)?.detail ?? null : null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'gone'>(session ? 'loading' : 'gone')
-  const key = session ? `${session.provider ?? 'claude'}:${session.sessionId}` : null
+  const key = session ? sessionKey(session) : null
+  const latest = useStableEvent(() => session)
   useEffect(() => {
     if (!session || !key) { setStatus('gone'); setDetail(null); return }
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
+    if (!visible) return
     const cached = loader.peek(session, density, showToolCalls)
-    let lastModified = cached?.revision
     setDetail(cached?.detail ?? null)
-    const load = async () => {
-      if (shouldYield()) { timer = setTimeout(() => { void load() }, SPLIT_PANE_YIELD_RETRY_MS); return }
-      const modified = sessionTranscriptUpdatedAt(session)
-      if (lastModified !== undefined && modified !== undefined && modified <= lastModified) {
-        timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
-        return
-      }
-      try {
-        const next = await loader.read(session, density, showToolCalls, modified)
-        if (cancelled) return
-        setDetail(next)
-        setStatus('ready')
-        lastModified = modified
-      } catch {
-        if (!cancelled) setStatus('error')
-      } finally {
-        if (!cancelled) timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
-      }
-    }
     setStatus(cached ? 'ready' : 'loading')
-    void load()
-    return () => { cancelled = true; if (timer) clearTimeout(timer) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, density, showToolCalls, loader])
+    return loader.observe({
+      session, density, tools: showToolCalls,
+      revision: () => { const current = latest(); return current ? sessionTranscriptUpdatedAt(current) : undefined },
+      active: () => false, priority: () => 1, shouldYield,
+      onDetail: next => { setDetail(next); setStatus('ready') },
+      onError: () => setStatus('error'),
+    })
+  }, [key, density, showToolCalls, loader, visible, shouldYield, latest])
   return { detail, status }
 }
 
@@ -8055,7 +8068,7 @@ type SplitTranscriptPaneProps = {
   onSelectAgentTool: (groupKey: string, toolKey: string) => void
   onActivity: (key: string, version: string, errorVersion: string | null) => void
   liveText: string | null
-  registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
+  registerHandle: (paneIndex: number, handle: SplitPaneHandle | null, expected?: SplitPaneHandle) => void
   onActivate: (paneIndex: number) => void
   /** Title bar actions target this window. */
   onClosePane: (paneIndex: number) => void
@@ -8134,6 +8147,7 @@ function SplitTranscriptPaneInner({
   shouldYieldToForeground,
 }: SplitTranscriptPaneProps) {
   const key = sessionKey(session)
+  const { header: selectedWindowHeader, footer: selectedWindowFooter } = useTranscriptWindowChrome()
   const positions = useTranscriptWindowPositions()
   const loader = useTranscriptSessionLoader()
   const paneWorkspace = useWorkspaceContext()
@@ -8162,63 +8176,40 @@ function SplitTranscriptPaneInner({
     paneWorkspace?.runtime.flushers.add(capture)
     return () => { capture(); paneWorkspace?.runtime.flushers.delete(capture) }
   }, [key, paneWorkspace?.runtime])
-  const variant = `${density}|${showToolCalls ? 1 : 0}`
-  const activityVisible = running || liveMessages.length > 0 || Boolean(liveText)
-  const lastLoadedRef = useRef<{ key: string; variant: string; lastModified: number } | null>(initialDetail?.revision !== undefined ? { key, variant, lastModified: initialDetail.revision } : null)
-
+  const visible = useWindowVisible()
+  const currentRefresh = useStableEvent(() => ({
+    session, active: running || liveMessages.length > 0 || Boolean(liveText), focused,
+  }))
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    const load = async () => {
-      // Yield BEFORE the mtime check: stepping aside must not consume this
-      // pane's turn, or a pane that yields once would then believe it was
-      // already up to date and skip the read entirely.
-      if (shouldYieldToForeground()) {
-        timer = setTimeout(() => { void load() }, SPLIT_PANE_YIELD_RETRY_MS)
-        return
-      }
-      const lastModified = sessionTranscriptUpdatedAt(session)
-      if (!shouldPollSplitPaneDetail(lastLoadedRef.current, key, variant, lastModified, activityVisible)) {
-        timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
-        return
-      }
-      try {
-        const detail = await loader.read(session, density, showToolCalls, lastModified)
-        if (cancelled) return
-        // The read carries the worker's cards for this variant, as the reader's did.
-        const next = attachedTranscriptCardsForVariant(detail, density, showToolCalls)
-          ?? getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
-          ?? await formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls)
-        if (cancelled) return
-        setCards((prev) => {
-          // Identity bail-out: an idle session re-reads to the same cached card
-          // array every poll, and keeping the reference skips the whole
-          // display-data + card subtree rebuild below.
-          return preserveArrayIdentity(prev, next)
-        })
-        if (lastModified !== undefined) lastLoadedRef.current = { key, variant, lastModified }
-        setStatus('ready')
-        setError(null)
-      } catch (err) {
-        if (cancelled) return
-        setStatus('error')
-        setError(err instanceof Error ? err.message : 'Failed to load transcript')
-      } finally {
-        if (!cancelled) timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
-      }
-    }
-
+    let version = 0
     if (!loader.peek(session, density, showToolCalls)) setStatus('loading')
-    // First read is staggered by pane so simultaneously-mounted panes land on
-    // different ticks; the interval then keeps them apart.
-    const staggerIndex = paneIndex === FLOATING_PANE_INDEX ? 0 : paneIndex
-    timer = setTimeout(() => { void load() }, staggerIndex * SPLIT_PANE_POLL_STAGGER_MS)
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [activityVisible, key, session, density, showToolCalls, variant, paneIndex, shouldYieldToForeground])
+    const release = loader.observe({
+      session, density, tools: showToolCalls,
+      revision: () => sessionTranscriptUpdatedAt(currentRefresh().session),
+      active: () => currentRefresh().active,
+      priority: () => currentRefresh().focused ? 0 : 1,
+      shouldYield: shouldYieldToForeground,
+      onDetail: detail => {
+        const request = ++version
+        const accept = (next: TuiTranscriptCard[]) => {
+          if (cancelled || request !== version) return
+          setCards(previous => preserveArrayIdentity(previous, next))
+          setStatus('ready')
+          setError(null)
+        }
+        const cached = attachedTranscriptCardsForVariant(detail, density, showToolCalls)
+          ?? getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
+        if (cached) accept(cached)
+        else void formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls).then(accept).catch(error => {
+          if (!cancelled && request === version) { setStatus('error'); setError(String(error)) }
+        })
+      },
+      onError: error => { if (!cancelled) { setStatus('error'); setError(error instanceof Error ? error.message : 'Failed to load transcript') } },
+    })
+    return () => { cancelled = true; release() }
+  }, [visible, key, density, showToolCalls, loader, shouldYieldToForeground, currentRefresh])
 
   // The mounted card window slides like the reader's, from this window's own
   // store, starting where the transcript was last read.
@@ -8506,7 +8497,7 @@ function SplitTranscriptPaneInner({
       },
     }
     registerHandle(paneIndex, handle)
-    return () => registerHandle(paneIndex, null)
+    return () => registerHandle(paneIndex, null, handle)
   }, [paneIndex, registerHandle])
 
   // Following the tail pins the bottom once the tail window has mounted — on
@@ -8528,7 +8519,7 @@ function SplitTranscriptPaneInner({
   useEffect(() => {
     // Following, the bottom is pinned; a card not laid out yet would scroll to
     // where it was last measured, which for a freshly mounted tail is the top.
-    if (!cursorKey || followTail) return
+    if (!cursorKey || followTail || restoreHold.current) return
     // A cursor the scroll parked must not be revealed: that undoes the scroll.
     if (cursorKey === scrollbackSyncedCursorKeyRef.current) return
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -8544,20 +8535,37 @@ function SplitTranscriptPaneInner({
   // it was at mount: a window that moved (floated, docked) remounts before
   // its previous instance has written where it was.
   const paneRestored = useRef(false)
+  const restoreHold = useRef(Boolean(initialPosition && !followTail))
+  const blockRestore = useRef<TranscriptBlockRestore | null>(initialPosition?.blockAnchorKey ? { id: initialPosition.blockAnchorKey, offset: initialPosition.blockAnchorOffset ?? 0 } : null)
   useEffect(() => {
     if (paneRestored.current || !allPaneCards.length) return
-    // Following the tail, the bottom is the position: nothing to restore, and
-    // nothing later — a jump that lets go of the tail must not be undone.
-    if (followTail) { paneRestored.current = true; return }
-    const timer = setTimeout(() => {
+    if (followTail) { paneRestored.current = true; restoreHold.current = false; blockRestore.current = null; return }
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout>
+    const restore = () => {
       const sb = scrollRef.current
       const position = positions.current.get(key) ?? initialPosition
       const saved = position?.scrollTop ?? initialScrollTop
-      if (!sb || saved == null) return
-      const anchor = position?.anchorKey ? findReaderCard(sb.content, `card:${position.anchorKey}`) : null
-      sb.scrollTo(anchor && anchor.height > 0 ? Math.max(0, anchor.y - sb.content.y - position!.anchorOffset) : saved)
+      if (!sb || saved == null) { restoreHold.current = false; blockRestore.current = null; return }
+      let anchor = position?.anchorKey ? findReaderCard(sb.content, `card:${position.anchorKey}`) : undefined
+      if (!anchor && position?.anchorKey && tries++ < 120) {
+        const index = allPaneCards.findIndex(card => card.key === position.anchorKey)
+        if (index >= 0) { windowStore.set(Math.max(0, index - 2)); timer = setTimeout(restore, READER_FIXUP_RETRY_MS); return }
+      }
+      const block = anchor && blockRestore.current ? anchor.findDescendantById(blockRestore.current.id) : undefined
+      const loading = anchor?.findDescendantById('transcript-block-loading')
+      if ((blockRestore.current && !block || loading || !windowGaugeRef.current.settled) && tries++ < 120) {
+        timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
+        return
+      }
+      const target = block && block.height > 0 ? block.y - sb.content.y - (blockRestore.current?.offset ?? 0)
+        : anchor && anchor.height > 0 ? anchor.y - sb.content.y - position!.anchorOffset : saved
+      sb.scrollTo(Math.max(0, target))
+      blockRestore.current = null
       paneRestored.current = true
-    }, READER_FIXUP_RETRY_MS)
+      restoreHold.current = false
+    }
+    timer = setTimeout(restore, READER_FIXUP_RETRY_MS)
     return () => clearTimeout(timer)
   }, [allPaneCards, followTail])
   // What the reader keeps about a transcript is written through as it
@@ -8579,7 +8587,7 @@ function SplitTranscriptPaneInner({
   useLayoutEffect(() => {
     capturePanePositionRef.current = () => {
       const sb = scrollRef.current
-      if (!sb || status === 'loading' || !cards.length || (!followTail && !paneRestored.current && initialScrollTop !== null)) return
+      if (!visible || !sb || sb.viewport.height <= 0 || sb.viewport.width <= 0 || status === 'loading' || !cards.length || (!followTail && !paneRestored.current && initialScrollTop !== null)) return
       const viewport = transcriptViewportPosition(sb)
       const previous = positions.current.get(key)
       positions.current.set(key, {
@@ -8597,6 +8605,17 @@ function SplitTranscriptPaneInner({
       })
     }
   })
+
+  // Keep the last *visible commit*, not the closure from the first mount:
+  // follow-tail and folding may have changed many times before this hides.
+  const lastVisibleCaptureRef = useRef(() => {})
+  useLayoutEffect(() => {
+    if (visible) lastVisibleCaptureRef.current = capturePanePositionRef.current
+  })
+  useLayoutEffect(() => {
+    if (!visible) return
+    return () => lastVisibleCaptureRef.current()
+  }, [visible])
 
   // SCROLLBACK folds with the mouse: a click on a folded tool row or group
   // expands it. Like a link it acts on mouse UP with the pointer unmoved, so a
@@ -8641,7 +8660,7 @@ function SplitTranscriptPaneInner({
       return next
     })
   }
-  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, stickyHeaders && !lightView)
+  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && stickyHeaders && !lightView)
   const turnFooter = useMemo(
     () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
     [running, transcriptView, paneScrollbackLike, allPaneCards],
@@ -8668,18 +8687,18 @@ function SplitTranscriptPaneInner({
   // height or the meaning of its stored scrollTop.
   // The reader's trailing chrome (CHAT's composer bar), in the window showing the selected transcript.
   // Lightweight windows draw no view header: the title already names the session.
-  const header = useSyncExternalStore(chromeHost && !lightView ? selectedWindowHeader.subscribe : subscribeNothing, chromeHost && !lightView ? selectedWindowHeader.get : getNothing)
-  const footer = useSyncExternalStore(chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, chromeHost ? selectedWindowFooter.get : getNothing)
+  const header = useSyncExternalStore(visible && chromeHost && !lightView ? selectedWindowHeader.subscribe : subscribeNothing, visible && chromeHost && !lightView ? selectedWindowHeader.get : getNothing)
+  const footer = useSyncExternalStore(visible && chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, visible && chromeHost ? selectedWindowFooter.get : getNothing)
   const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
   const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   // The window holding the selected transcript reports its card window, which
   // is what `tui:inputperf`'s cards column reads.
-  useEffect(() => chromeHost ? registerTuiMetricsGauge(() => ({
+  useEffect(() => visible && chromeHost ? registerTuiMetricsGauge(() => ({
     readerWindowStart: windowGaugeRef.current.start,
     readerWindowEnd: windowGaugeRef.current.end,
     readerWindowTotal: windowGaugeRef.current.total,
-  })) : undefined, [chromeHost])
+  })) : undefined, [visible, chromeHost])
   const windowOutputRef = useRef<ReaderWindowOutput>({ start: 0, cardDisplayData: [], scrollbackExpandedKeys: null })
   const scrollFixupRef = useRef<ReaderScrollFixup | null>(null)
   const cursorIndex = useMemo(() => cursorKey ? allPaneCards.findIndex(card => card.key === cursorKey) : allPaneCards.length - 1, [allPaneCards, cursorKey])
@@ -8713,11 +8732,11 @@ function SplitTranscriptPaneInner({
   // in value under content that did not shrink is the user — a growing reply
   // sits above the bottom for a frame before sticky scroll catches up.
   useEffect(() => {
-    if (!paneScrollbackLike) return undefined
+    if (!visible || !paneScrollbackLike) return undefined
     let lastTop = -1
     let lastHeight = 0
     const interval = setInterval(() => {
-      if (scrollFixupRef.current) return
+      if (scrollFixupRef.current || restoreHold.current) return
       const sb = scrollRef.current
       if (!sb) return
       const { scrollTop, scrollHeight } = sb
@@ -8727,10 +8746,10 @@ function SplitTranscriptPaneInner({
       if (moved) settleScrollRef.current(sb, scrollTop, Math.max(scrollHeight - sb.viewport.height, 0))
     }, READER_SCROLL_POLL_MS)
     return () => clearInterval(interval)
-  }, [paneScrollbackLike, followTail])
+  }, [visible, paneScrollbackLike, followTail])
   useReaderWindowSliding({
     store: windowStore, scrollRef, gaugeRef: windowGaugeRef, fixupRef: scrollFixupRef,
-    cards: allPaneCards, cursorKey, cursorIndex, followTail, setFollowTail, active: true,
+    cards: allPaneCards, cursorKey, cursorIndex, followTail, setFollowTail, active: visible, holdRef: restoreHold,
     scrollbackSyncedKeyRef: paneScrollbackLike ? scrollbackSyncedCursorKeyRef : undefined,
   })
   const thinkingFullKeys = useMemo(() => thinkingMode
@@ -8740,6 +8759,8 @@ function SplitTranscriptPaneInner({
   const openPaneDiffNote = useCallback((selection: SelectedLineRange, cardKey?: string) => diffControls.openDiffNote(key, selection, cardKey), [diffControls.openDiffNote, key])
   const sendPaneDiffNote = useCallback((...args: Parameters<TranscriptWindowInputs['sendDiffNoteToComposer']>) => diffControls.sendDiffNoteToComposer(key, ...args), [diffControls.sendDiffNoteToComposer, key])
   const windowInputs: TranscriptWindowInputs = {
+    viewportRows: bodyRows,
+    blockRestore,
     visibleTranscriptCards: allPaneCards, windowStore, followTail,
     isScrollbackView: paneScrollbackLike, scrollbackExpanded, scrollbackToggledKeys,
     resolvedExpandedKeys: expandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys,
@@ -8788,7 +8809,7 @@ function SplitTranscriptPaneInner({
       ).trimEnd()}
       titleColor={attentionBadge?.includes('?') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : accent}
       ref={paneFrameRef}
-      id={selected ? 'transcript-reader' : undefined}
+      id={selected && visible ? 'transcript-reader' : undefined}
       onMouseDown={(event) => {
         if (event.button === 2) {
           onActivate(paneIndex)
@@ -8825,7 +8846,7 @@ function SplitTranscriptPaneInner({
         ) : (
           <scrollbox
             ref={scrollRef}
-            id={selected ? 'transcript-scroll' : `split-scroll:${paneIndex}`}
+            id={selected && visible ? 'transcript-scroll' : `split-scroll:${paneIndex}`}
             style={{ height: bodyRows }}
             backgroundColor={theme.surface}
             // Sticky only while the pane is still following: once the reader
@@ -8908,7 +8929,7 @@ type ReaderScrollFixup =
   | { kind: 'cursor'; cardKey: string; committed: boolean }
 // The window the reader is heading for (the mounted one trails it by a few
 // commits after a jump), and whether it has arrived.
-type ReaderWindowGauge = { start: number; end: number; total: number; settled: boolean }
+type ReaderWindowGauge = { start: number; end: number; total: number; settled: boolean; maxStart?: number; cursorStart?: (index: number) => number }
 type ReaderWindowOutput = {
   // First mounted card's index: cardDisplayData is relative to it.
   start: number
@@ -8926,6 +8947,8 @@ type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   /** A pane supplies its own viewport range; it never subscribes to another window's scroll position. */
   /** The window's own card-window store. */
   windowStore: ReaderWindowStore
+  viewportRows: number
+  blockRestore: React.RefObject<TranscriptBlockRestore | null>
   visibleTranscriptCards: TuiTranscriptCard[]
   followTail: boolean
   isScrollbackView: boolean
@@ -9016,13 +9039,14 @@ function useReaderWindowSliding({
     // recentering on the cursor it dragged along would yank the text.
     if (scrollbackSyncedKeyRef && cursorKey === scrollbackSyncedKeyRef.current) return
     if (!active || followTail) return
-    if (totalCards <= READER_CARD_WINDOW) return
     if (cursorIndex < 0) return
     const { start, end } = gaugeRef.current
+    if (end - start >= totalCards) return
     const nearStart = start > 0 && cursorIndex < start + READER_WINDOW_MARGIN
     const nearEnd = end < totalCards && cursorIndex >= end - READER_WINDOW_MARGIN
     if (!nearStart && !nearEnd) return
-    const nextStart = clamp(cursorIndex - Math.floor(READER_CARD_WINDOW / 2), 0, totalCards - READER_CARD_WINDOW)
+    const nextStart = gaugeRef.current.cursorStart?.(cursorIndex)
+      ?? clamp(cursorIndex - Math.floor(READER_CARD_WINDOW / 2), 0, Math.max(0, totalCards - READER_CARD_WINDOW))
     if (nextStart === start) return
     const cursorCard = cards[cursorIndex]
     if (cursorCard) fixupRef.current = { kind: 'cursor', cardKey: cursorCard.key, committed: false }
@@ -9041,7 +9065,7 @@ function useReaderWindowSliding({
     const start = gaugeRef.current.start
     const nextStart = direction < 0
       ? Math.max(0, start - READER_WINDOW_SLIDE)
-      : Math.min(start + READER_WINDOW_SLIDE, totalCards - READER_CARD_WINDOW)
+      : Math.min(start + READER_WINDOW_SLIDE, gaugeRef.current.maxStart ?? Math.max(0, totalCards - READER_CARD_WINDOW))
     if (nextStart === start) return
     fixupRef.current = { kind: 'slide', at: performance.now() }
     // Out of the frame that noticed the scroll: a store update renders
@@ -9054,7 +9078,7 @@ function useReaderWindowSliding({
       if (direction < 0 && followTail) setFollowTail(false)
     }, 0)
   })
-  const slides = totalCards > READER_CARD_WINDOW
+  const slides = totalCards > 0
   useEffect(() => {
     if (!active || !slides) return undefined
     const seen = seenRef.current
@@ -9155,6 +9179,8 @@ function useReaderWindowSliding({
 }
 
 function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
+  const renderer = useRenderer()
+  const windowVisible = useWindowVisible()
   const {
     visibleTranscriptCards, followTail, isScrollbackView, scrollbackExpanded, scrollbackToggledKeys,
     resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, transcriptView, focused,
@@ -9194,7 +9220,36 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   const totalTranscriptCards = visibleTranscriptCards.length
   const { windowStore } = inputs
   const readerWindowStart = useSyncExternalStore(windowStore.subscribe, windowStore.get, windowStore.get)
-  const targetWindow = deriveReaderWindow(totalTranscriptCards, READER_CARD_WINDOW, followTail, readerWindowStart)
+  // Six viewport heights give wheel flings room to advance before a slide.
+  // Source estimates are cheap; native layout refines only the mounted rows.
+  // A card-count cap still protects pathological runs of one-line cards.
+  const rowBudget = Math.max(120, inputs.viewportRows * 6)
+  const rowIndex = useMemo(() => new RowHeightIndex(visibleTranscriptCards.map(card => {
+    const expanded = transcriptView === 'full' || resolvedExpandedKeys.has(card.key)
+      || isScrollbackView && scrollbackExpanded
+      || isChatLikeView && (card.category === 'conversation' || card.category === 'insight')
+    const lines = expanded ? card.expandedLines : card.lines
+    const prose = expanded && card.markdownContent ? Math.ceil(card.markdownContent.length / Math.max(rightPaneWidth - 8, 20)) : 0
+    return 3 + densityState.cardGap + Math.max(lines.length, prose)
+  })), [visibleTranscriptCards, transcriptView, resolvedExpandedKeys, isScrollbackView, scrollbackExpanded, isChatLikeView, rightPaneWidth, densityState.cardGap])
+  const targetWindow = deriveRowReaderWindow(rowIndex, READER_CARD_WINDOW, rowBudget, followTail, readerWindowStart)
+  useEffect(() => {
+    if (!windowVisible) return
+    const measure = () => {
+      const sb = transcriptScrollRef.current
+      if (!sb) return
+      const rows = (sb.content.getChildren() as Renderable[]).filter(row => readerRowKey(row))
+      for (let relative = 0; relative < rows.length; relative++) {
+        const row = rows[relative]!
+        const index = readerWindowOutputRef.current.start + relative
+        if (index >= rowIndex.length) break
+        const next = rows[relative + 1]
+        rowIndex.update(index, next ? next.y - row.y : row.height + densityState.cardGap)
+      }
+    }
+    renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
+    return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
+  }, [renderer, rowIndex, transcriptScrollRef, densityState.cardGap, windowVisible])
   // What the last commit mounted, and for which session. Read during render to
   // decide how far this commit may move: it only changes at a commit, so a
   // render repeated without one derives the same window.
@@ -9219,7 +9274,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   // scroll fixup is still waiting on its layout pass.
   const [, growWindow] = useState(0)
   useEffect(() => {
-    if (windowSettled) return undefined
+    if (!windowVisible || windowSettled) return undefined
     let timer: ReturnType<typeof setTimeout>
     const grow = () => {
       const fixup = readerScrollFixupRef.current
@@ -9231,7 +9286,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
     }
     timer = setTimeout(grow, READER_GROW_INTERVAL_MS)
     return () => clearTimeout(timer)
-  }, [windowSettled, transcriptRenderStart, transcriptRenderEnd])
+  }, [windowVisible, windowSettled, transcriptRenderStart, transcriptRenderEnd])
   const renderedTranscriptCards = useMemo(
     () => transcriptRenderStart === 0 && transcriptRenderEnd === visibleTranscriptCards.length
       ? visibleTranscriptCards
@@ -9244,8 +9299,10 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       end: targetWindow.end,
       total: totalTranscriptCards,
       settled: windowSettled,
+      maxStart: targetWindow.maxStart,
+      cursorStart: index => Math.min(targetWindow.maxStart, rowIndex.at(Math.max(0, rowIndex.offset(index) - rowBudget / 2))),
     }
-  }, [totalTranscriptCards, targetWindow.start, targetWindow.end, windowSettled])
+  }, [totalTranscriptCards, targetWindow.start, targetWindow.end, targetWindow.maxStart, windowSettled, rowIndex, rowBudget])
   // Browse-mode preview renders every card COLLAPSED. Text cards are expanded
   // by default in conversation view, and an expanded card mounts its entire
   // body — for prompt-heavy sessions that means feeding 100KB+ of markdown to
@@ -9318,10 +9375,10 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
   }, [stageExpansion, stagedCards, fullExpandedKeys, renderedTranscriptCards])
   useEffect(() => {
     previewCollapsedRef.current = fullExpandedKeys === EMPTY_EXPANDED_KEYS
-    if (!stageExpansion) return undefined
+    if (!windowVisible || !stageExpansion) return undefined
     const timer = setTimeout(() => setExpansionStage({ keys: fullExpandedKeys, cards: stagedCards + READER_EXPAND_STEP }), READER_GROW_INTERVAL_MS)
     return () => clearTimeout(timer)
-  }, [stageExpansion, stagedCards, fullExpandedKeys])
+  }, [windowVisible, stageExpansion, stagedCards, fullExpandedKeys])
   const expandedKeysForRender = stagedExpansion ?? fullExpandedKeys
   // A tool group expands to its tools, each folded by its own key — which
   // nothing in SCROLLBACK can press. An expanded group shows its tools' output.
@@ -9772,7 +9829,7 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
       break
     }
   }, [expandedKeysForRender, stagedExpansion])
-  return <>{transcriptChildren}</>
+  return <TranscriptViewportContext value={transcriptScrollRef}><TranscriptBlockRestoreContext value={inputs.blockRestore}>{transcriptChildren}</TranscriptBlockRestoreContext></TranscriptViewportContext>
 }
 
 export default function OpenTuiApp() {
@@ -9789,11 +9846,17 @@ export default function OpenTuiApp() {
   const { width, height } = useTerminalDimensions()
   const welcomeKey = useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean) | null>(null)
   useKeyboard(key => { if (!workspace) { if (welcomeKey.current?.(key)) key.preventDefault(); key.stopPropagation() } })
-  if (!space || !workspace) return <box width={width} height={height}><SpacesManager controller={controller} theme={LIGHT_THEME} width={width} height={height} onClose={() => {}} onKeyHandlerReady={handler => { welcomeKey.current = handler }} /></box>
-  return <WorkspaceContext.Provider value={{ controller, runtime: controller.runtime(workspace), space }}><OpenTuiWorkspace key={workspace.id} /></WorkspaceContext.Provider>
+  const contextValue = useMemo(() => space && workspace ? { controller, runtime: controller.runtime(workspace), space } : null, [controller, workspace, space])
+  if (!space || !workspace || !contextValue) return <box width={width} height={height}><SpacesManager controller={controller} theme={LIGHT_THEME} width={width} height={height} onClose={() => {}} onKeyHandlerReady={handler => { welcomeKey.current = handler }} /></box>
+  return <WorkspaceContext.Provider value={contextValue}><OpenTuiWorkspace key={workspace.id} /></WorkspaceContext.Provider>
 }
 
 function OpenTuiWorkspace() {
+  const { header: selectedWindowHeader, footer: selectedWindowFooter } = useTranscriptWindowChrome()
+  useLayoutEffect(() => () => {
+    selectedWindowHeader.set(null)
+    selectedWindowFooter.set(null)
+  }, [selectedWindowHeader, selectedWindowFooter])
   const workspaceContext = useWorkspaceContext()!
   const workspaceId = workspaceContext.runtime.workspace.id
   const workspaceCwd = workspaceContext.space.cwd
@@ -10115,9 +10178,9 @@ function OpenTuiWorkspace() {
     [],
   )
   const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
-  const registerSplitPaneHandle = useStableEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
+  const registerSplitPaneHandle = useStableEvent((paneIndex: number, handle: SplitPaneHandle | null, expected?: SplitPaneHandle) => {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
-    else splitPaneHandlesRef.current.delete(paneIndex)
+    else if (!expected || splitPaneHandlesRef.current.get(paneIndex) === expected) splitPaneHandlesRef.current.delete(paneIndex)
   })
   const [showToolCalls, setShowToolCalls] = useAppState('showToolCalls', true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useAppState('velocityScrollEnabled', false)
@@ -10629,7 +10692,8 @@ function OpenTuiWorkspace() {
     lastKey: null,
   })
   const loader = useTranscriptSessionLoader()
-  const sessionDetailCacheRef = useRef(new Map<string, TuiSessionDetail>())
+  const [ownedDetailCache] = useState(() => new TranscriptDetailCache())
+  const sessionDetailCacheRef = useRef(ownedDetailCache)
   const sessionContextUsageCacheRef = useRef(new Map<string, ContextUsage | null>())
   const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
   const sessionMetadataInFlightRef = useRef(new Set<string>())
@@ -10776,6 +10840,9 @@ function OpenTuiWorkspace() {
     transcriptMessages: sessionDetail?.rawMessages.length ?? 0,
     threadedMessages: sessionDetail?.threadedMessages.length ?? 0,
     sessionDetailCache: sessionDetailCacheRef.current.size,
+    transcriptEstimatedBytes: mainTranscriptBudget.bytes,
+    transcriptBrokerObservers: loader.stats.pinned,
+    transcriptBrokerTimer: loader.stats.timer ? 1 : 0,
     sessionContextUsageCache: sessionContextUsageCacheRef.current.size,
     sessionMetadataFetchedAt: sessionMetadataFetchedAtRef.current.size,
     sessionMetadataInFlight: sessionMetadataInFlightRef.current.size,
@@ -13435,7 +13502,9 @@ function OpenTuiWorkspace() {
     : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 1)
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
-  const orderedWindowKeys = orderWindows(windowOrder, pinnedWindowSessions.map((session) => sessionKey(session)), windowSurfaces)
+  const pinnedWindowKeys = pinnedWindowSessions.map(sessionKey)
+  const pinnedWindowSignature = JSON.stringify(pinnedWindowKeys)
+  const orderedWindowKeys = useMemo(() => orderWindows(windowOrder, pinnedWindowKeys, windowSurfaces), [windowOrder, pinnedWindowSignature, windowSurfaces])
   // A shown popover tab takes over a session window — laid out in its place,
   // the transcript hidden (still mounted) behind it — and gets a slot of its
   // own only when there is no session window to take.
@@ -13443,26 +13512,32 @@ function OpenTuiWorkspace() {
   const primaryLeaf = hasPrimaryFrame && !popoverTakesWindow
   // With no saved tree the windows sit in one row (or column), a popover tab's
   // own slot first.
-  const fallbackLeaves = [...(primaryLeaf ? [-1] : []), ...orderedWindowKeys.map((_, slot) => slot)]
-  const fallbackPaneTree: WindowSplitTree | null = fallbackLeaves.length ? {
+  const fallbackPaneTree = useMemo((): WindowSplitTree | null => {
+    const fallbackLeaves = [...(primaryLeaf ? [-1] : []), ...orderedWindowKeys.map((_, slot) => slot)]
+    return fallbackLeaves.length ? {
     ...(primaryLeaf ? {} : { primary: false }), keys: orderedWindowKeys,
     root: fallbackLeaves.map((slot) => ({ slot })).reduce<import('./windowSplitTree').WindowSplitNode>((root, node, index) => index === 0 ? node : ({ axis: splitOrientation === 'columns' ? 'x' : 'y', ratio: index / (index + 1), first: root, second: node }), { slot: fallbackLeaves[0]! }),
-  } : null
+    } : null
+  }, [primaryLeaf, orderedWindowKeys, splitOrientation])
   // A layout saved while the reader existed keeps its slot (-1) until the
   // selected session moves into it, so upgrading does not displace a pane.
   const legacyReaderSlot = !primaryLeaf && validWindowSplitTree(windowSplitTree) && windowSplitTree.primary !== false
     && Boolean(selectedSessionKey) && !orderedWindowKeys.includes(selectedSessionKey!)
-  const reconciledSplitTree = validWindowSplitTree(windowSplitTree) ? reconcileWindowSplitTree(windowSplitTree, orderedWindowKeys, primaryLeaf || legacyReaderSlot) : fallbackPaneTree
-  const splitTreeLimits = { paneWidth: SPLIT_PANE_MIN_WIDTH, paneRows: SPLIT_PANE_MIN_ROWS, readerWidth: SPLIT_PANE_MIN_WIDTH, readerRows: SPLIT_PANE_MIN_ROWS }
+  const reconciledSplitTree = useMemo(() => validWindowSplitTree(windowSplitTree) ? reconcileWindowSplitTree(windowSplitTree, orderedWindowKeys, primaryLeaf || legacyReaderSlot) : fallbackPaneTree,
+    [windowSplitTree, orderedWindowKeys, primaryLeaf, legacyReaderSlot, fallbackPaneTree])
   // Zoomed neighbours are hidden, so their minimums must not evict the zoomed
   // frame or unmount its siblings when the terminal becomes smaller.
-  const splitTreeFitLimits = windowZoom === null ? splitTreeLimits : { paneWidth: 0, paneRows: 0, readerWidth: 0, readerRows: 0 }
-  let treeGeometry = reconciledSplitTree && !fullscreenMode ? computeWindowSplitTree(reconciledSplitTree, readerAreaWidth, windowBudgetHeight, splitTreeFitLimits) : null
-  const treeOverflowRows = treeGeometry && treeGeometry.layout.visibleCount < orderedWindowKeys.length ? 1 : 0
-  if (treeGeometry && treeOverflowRows) treeGeometry = computeWindowSplitTree(reconciledSplitTree!, readerAreaWidth, Math.max(1, windowBudgetHeight - 1), splitTreeLimits)
+  const splitTreeLimits = SPLIT_TREE_LIMITS
+  const splitTreeFitLimits = windowZoom === null ? SPLIT_TREE_LIMITS : ZOOM_TREE_LIMITS
+  const { baseTreeGeometry, treeOverflowRows } = useMemo(() => {
+    let geometry = reconciledSplitTree && !fullscreenMode ? computeWindowSplitTree(reconciledSplitTree, readerAreaWidth, windowBudgetHeight, splitTreeFitLimits) : null
+    const overflow = geometry && geometry.layout.visibleCount < orderedWindowKeys.length ? 1 : 0
+    if (geometry && overflow) geometry = computeWindowSplitTree(reconciledSplitTree!, readerAreaWidth, Math.max(1, windowBudgetHeight - 1), SPLIT_TREE_LIMITS)
+    return { baseTreeGeometry: geometry, treeOverflowRows: overflow }
+  }, [reconciledSplitTree, fullscreenMode, readerAreaWidth, windowBudgetHeight, splitTreeFitLimits, orderedWindowKeys.length])
   const popoverHostSlot = (() => {
-    if (!popoverTakesWindow || !treeGeometry) return -1
-    const shown = orderedWindowKeys.slice(0, treeGeometry.layout.visibleCount)
+    if (!popoverTakesWindow || !baseTreeGeometry) return -1
+    const shown = orderedWindowKeys.slice(0, baseTreeGeometry.layout.visibleCount)
     const slotOf = (key: string | null) => key && !isSurfaceWindowKey(key) ? shown.indexOf(key) : -1
     const slot = slotOf(popoverTabHostKey)
     if (slot >= 0) return slot
@@ -13479,10 +13554,11 @@ function OpenTuiWorkspace() {
   // Windows are numbered in order; a popover tab in a slot of its own is 1,
   // one that took a window has that window's number.
   const windowNumberOffset = primaryLeaf ? 2 : 1
-  if (treeGeometry && popoverHostSlot >= 0) {
-    const host = treeGeometry.rects.get(popoverHostSlot)!
-    treeGeometry = { ...treeGeometry, rects: new Map(treeGeometry.rects).set(-1, host), layout: { ...treeGeometry.layout, reader: { width: host.width, height: host.height } } }
-  }
+  const treeGeometry = useMemo(() => {
+    if (!baseTreeGeometry || popoverHostSlot < 0) return baseTreeGeometry
+    const host = baseTreeGeometry.rects.get(popoverHostSlot)!
+    return { ...baseTreeGeometry, rects: new Map(baseTreeGeometry.rects).set(-1, host), layout: { ...baseTreeGeometry.layout, reader: { width: host.width, height: host.height } } }
+  }, [baseTreeGeometry, popoverHostSlot])
   const splitTreeSignature = JSON.stringify(reconciledSplitTree)
   useEffect(() => {
     if (windowSplitTree && splitTreeSignature !== JSON.stringify(windowSplitTree)) setWindowSplitTree(reconciledSplitTree)
@@ -26650,7 +26726,9 @@ function OpenTuiWorkspace() {
           <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
         </box>
         <box flexGrow={1} overflow="hidden">
+          <RetainedWindow visible={!hidden}>
           {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
+          </RetainedWindow>
         </box>
       </box>
     )
@@ -26738,6 +26816,7 @@ function OpenTuiWorkspace() {
       flexDirection="column"
       overflow="hidden"
     >
+      <RetainedWindow visible={!hidden} identity={`${splitIndex}:${sessionKey(splitSession) === selectedSessionKey}:${splitIndex === chromeWindowIndex}`}>
       <SplitTranscriptPane
         session={splitSession}
         paneIndex={splitIndex}
@@ -26797,6 +26876,7 @@ function OpenTuiWorkspace() {
         sessionDrag={sessionDragHandlers}
         shouldYieldToForeground={splitPaneShouldYield}
       />
+      </RetainedWindow>
       {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
     </box>
   )

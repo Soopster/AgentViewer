@@ -1,3 +1,5 @@
+import { SessionCacheBudget } from './sessionCacheBudget'
+import { transcriptPayloadBytes } from './transcriptPayloadSize'
 import {
   buildThreadedMessages,
   buildThreadedMessagesIncremental,
@@ -108,9 +110,10 @@ type SubagentsRequest = {
   id: number
   session: Session
 }
-type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest | SubagentsRequest
+type RetainRequest = { kind: 'retain'; id: number; session: Session; retain: boolean }
+type WorkerRequest = RetainRequest | DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest | SubagentsRequest
 
-type WorkerResponse =
+type WorkerResponse = (
   | {
       id: number
       ok: true
@@ -129,6 +132,7 @@ type WorkerResponse =
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
+      estimatedRetainedBytes?: number
       externalWriter?: boolean
       turnDurationLabels?: TurnDurationLabels
       turnDurationPatch?: TurnDurationPatch
@@ -139,6 +143,7 @@ type WorkerResponse =
       info: SessionInfo | null
       unchanged: true
       deliveryToken: number
+      estimatedRetainedBytes?: number
       externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number; turnDurationLabels?: TurnDurationLabels }
@@ -162,6 +167,7 @@ type WorkerResponse =
       options: Awaited<ReturnType<typeof readTuiComposerOptions>>
     } }
   | { id: number; ok: false; error: string }
+) & { estimatedRetainedBytes?: number }
 
 declare const self: {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null
@@ -177,6 +183,7 @@ declare const self: {
 // itself and the prefetch becomes a pure cost.
 const THREADING_CACHE_LIMIT = 6
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
+const sessionBudget = new SessionCacheBudget(96 * 1024 * 1024)
 
 // Arrays from the previous detail response per session, for the identity-prefix
 // counts in WorkerResponse. These hold references into threadingCacheByKey /
@@ -188,6 +195,7 @@ type LastSentDetail = {
   cards: TuiTranscriptCard[]
   cardsVariant: string
   deliveryToken: number
+  estimatedRetainedBytes?: number
   turnDurationLabels?: TurnDurationLabels
 }
 const lastSentByKey = new Map<string, LastSentDetail>()
@@ -263,14 +271,21 @@ type LastFormatted = {
   cards: TuiTranscriptCard[]
   formatToken: number
   hasTaskList: boolean
+  estimatedRetainedBytes?: number
   turnDurationLabels?: TurnDurationLabels
 }
 const lastFormattedByKey = new Map<string, LastFormatted>()
 
-function touchLastFormatted(key: string, value: LastFormatted): void {
+function touchLastFormatted(owner: string, key: string, value: LastFormatted): void {
   if ((lastFormattedByKey.get(key)?.formatToken ?? -1) > value.formatToken) return
+  const previous = lastFormattedByKey.get(key)
+  value.estimatedRetainedBytes = previous?.cards === value.cards && previous.threaded === value.threaded
+    ? previous.estimatedRetainedBytes
+    : transcriptPayloadBytes({ info: null, rawMessages: [], threadedMessages: value.threaded, transcriptCards: value.cards, contextUsage: null })
   if (lastFormattedByKey.has(key)) lastFormattedByKey.delete(key)
   lastFormattedByKey.set(key, value)
+  sessionBudget.touch(owner, Math.max(lastSentByKey.get(owner)?.estimatedRetainedBytes ?? 0, value.estimatedRetainedBytes ?? 0))
+  trimSessionBudget()
   while (lastFormattedByKey.size > THREADING_CACHE_LIMIT * 4) {
     const oldestKey = lastFormattedByKey.keys().next().value
     if (oldestKey === undefined) break
@@ -295,15 +310,25 @@ function cacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+function trimSessionBudget() {
+  sessionBudget.trim(key => {
+    threadingCacheByKey.delete(key)
+    cardCacheByKey.delete(key)
+    lastSentByKey.delete(key)
+    dropLastFormattedForSession(key)
+  })
+}
+
 function touchThreadingCache(key: string, cache: IncrementalThreadingCache): void {
   if (threadingCacheByKey.has(key)) threadingCacheByKey.delete(key)
   threadingCacheByKey.set(key, cache)
   while (threadingCacheByKey.size > THREADING_CACHE_LIMIT) {
-    const oldestKey = threadingCacheByKey.keys().next().value
+    const oldestKey = [...threadingCacheByKey.keys()].find(key => !sessionBudget.isPinned(key))
     if (oldestKey === undefined) break
     threadingCacheByKey.delete(oldestKey)
     cardCacheByKey.delete(oldestKey)
     lastSentByKey.delete(oldestKey)
+    sessionBudget.forget(oldestKey)
     dropLastFormattedForSession(oldestKey)
   }
 }
@@ -407,11 +432,12 @@ async function formatCards(
   cardCacheByKey.delete(sessionCacheKey)
   cardCacheByKey.set(sessionCacheKey, perSession)
   while (cardCacheByKey.size > THREADING_CACHE_LIMIT) {
-    const oldestKey = cardCacheByKey.keys().next().value
+    const oldestKey = [...cardCacheByKey.keys()].find(key => !sessionBudget.isPinned(key))
     if (oldestKey === undefined) break
     cardCacheByKey.delete(oldestKey)
     threadingCacheByKey.delete(oldestKey)
     lastSentByKey.delete(oldestKey)
+    sessionBudget.forget(oldestKey)
     dropLastFormattedForSession(oldestKey)
   }
   const { activeForms, taskRegistry } = buildTranscriptTaskContext(messages)
@@ -517,6 +543,12 @@ self.onmessage = async (event) => {
   const data = event.data
   reportWorkerHeap('threading')
   try {
+    if (data.kind === 'retain') {
+      const key = cacheKey(data.session)
+      if (data.retain) sessionBudget.retain(key)
+      else { sessionBudget.release(key); trimSessionBudget() }
+      return
+    }
     if (data.kind === 'sessions') {
       const sessions = await readTuiSessions(data.provider, data.providerInstanceId)
       self.postMessage({ id: data.id, ok: true, sessions })
@@ -546,10 +578,12 @@ self.onmessage = async (event) => {
     }
     if (data.kind === 'warm') {
       const { info: _info, rawMessages } = await readTuiSessionDetailSource(data.session)
-      const { threaded } = threadMessages(data.session, rawMessages)
+      const { threaded, messages: aligned } = threadMessages(data.session, rawMessages)
       // Populates this worker's per-message card cache for the variant the
       // reader will ask for; the cards themselves stay here.
-      await formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls, true, data.separateTurnDurations)
+      const cards = await formatCards(cacheKey(data.session), threaded, data.density, data.showToolCalls, true, data.separateTurnDurations)
+      sessionBudget.touch(cacheKey(data.session), transcriptPayloadBytes({ info: _info, rawMessages: aligned, threadedMessages: threaded, transcriptCards: cards, contextUsage: null }))
+      trimSessionBudget()
       self.postMessage({ id: data.id, ok: true, warmed: true })
       return
     }
@@ -585,8 +619,8 @@ self.onmessage = async (event) => {
       const patch = canApplyPatch && prev ? data.threadedPatch ?? [] : null
       const sameVariantPatch = canApplyPatch && inputBaseline === prev
       if (sameVariantPatch && prev && unchangedInput) {
-        touchLastFormatted(formatKey, { ...prev, formatToken: data.id })
-        self.postMessage({ id: data.id, ok: true, cardsPatch: [], cardsPrefix: prev.cards.length, cardsDeleteCount: 0, formatToken: data.id, baseFormatToken: prev.formatToken })
+        touchLastFormatted(sessionCacheKey, formatKey, { ...prev, formatToken: data.id })
+        self.postMessage({ id: data.id, ok: true, cardsPatch: [], cardsPrefix: prev.cards.length, cardsDeleteCount: 0, formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes, baseFormatToken: prev.formatToken })
         return
       }
       const patchHasTaskList = patch?.some(hasTaskListBlock) ?? false
@@ -620,10 +654,10 @@ self.onmessage = async (event) => {
           replacementCards,
           prev.cards.slice(previousEnd),
         )
-        touchLastFormatted(formatKey, {
+        touchLastFormatted(sessionCacheKey, formatKey, {
           threaded,
           cards: transcriptCards,
-          formatToken: data.id,
+          formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes,
           hasTaskList: false,
           turnDurationLabels,
         })
@@ -635,7 +669,7 @@ self.onmessage = async (event) => {
           cardsPatch: transcriptCards.slice(cardsPrefix, transcriptCards.length - cardsSuffix),
           cardsPrefix,
           cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
-          formatToken: data.id,
+          formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes,
           baseFormatToken: prev.formatToken,
           turnDurationPatch: turnDurationLabels && turnDurationPatch(turnDurationLabels, prev.turnDurationLabels),
         })
@@ -643,10 +677,10 @@ self.onmessage = async (event) => {
       }
 
       const transcriptCards = await formatCards(sessionCacheKey, threaded, data.density, data.showToolCalls, true, separateTurnDurations)
-      touchLastFormatted(formatKey, {
+      touchLastFormatted(sessionCacheKey, formatKey, {
         threaded,
         cards: transcriptCards,
-        formatToken: data.id,
+        formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes,
         hasTaskList: threaded.some(hasTaskListBlock),
         turnDurationLabels,
       })
@@ -659,17 +693,17 @@ self.onmessage = async (event) => {
           cardsPatch: transcriptCards.slice(cardsPrefix, transcriptCards.length - cardsSuffix),
           cardsPrefix,
           cardsDeleteCount: prev.cards.length - cardsPrefix - cardsSuffix,
-          formatToken: data.id,
+          formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes,
           baseFormatToken: prev.formatToken,
           turnDurationPatch: turnDurationLabels && turnDurationPatch(turnDurationLabels, prev.turnDurationLabels),
         })
         return
       }
       if (canApplyPatch && inputBaseline && data.threadedBaseVariant) {
-        self.postMessage({ id: data.id, ok: true, densityCards: transcriptCards.map((card, index) => densityCardDelivery(card, inputBaseline.cards[index], index)), formatToken: data.id, baseFormatToken: inputBaseline.formatToken, turnDurationLabels })
+        self.postMessage({ id: data.id, ok: true, densityCards: transcriptCards.map((card, index) => densityCardDelivery(card, inputBaseline.cards[index], index)), formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes, baseFormatToken: inputBaseline.formatToken, turnDurationLabels })
         return
       }
-      self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id, turnDurationLabels })
+      self.postMessage({ id: data.id, ok: true, transcriptCards, formatToken: data.id, estimatedRetainedBytes: lastFormattedByKey.get(formatKey)?.estimatedRetainedBytes, turnDurationLabels })
       return
     }
     const { info, rawMessages, externalWriter } = await readTuiSessionDetailSource(data.session)
@@ -687,6 +721,7 @@ self.onmessage = async (event) => {
       self.postMessage({
         id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards, deliveryToken: data.id, rawPrefix: 0, threadedPrefix: 0, cardsPrefix: 0, externalWriter,
         turnDurationLabels: separateTurnDurations ? turnDurationLabelsFor(threadedMessages, data.showToolCalls) : undefined,
+        estimatedRetainedBytes: transcriptPayloadBytes({ info, rawMessages, threadedMessages, transcriptCards, contextUsage: null }),
       })
       return
     }
@@ -713,6 +748,7 @@ self.onmessage = async (event) => {
         info,
         unchanged: true,
         deliveryToken: prev.deliveryToken,
+        estimatedRetainedBytes: prev.estimatedRetainedBytes,
         externalWriter,
       })
       return
@@ -742,6 +778,9 @@ self.onmessage = async (event) => {
       && cardsPrefix === transcriptCards.length,
     )
     const deliveryToken = canReusePreviousDelivery && prev ? prev.deliveryToken : data.id
+    const estimatedRetainedBytes = canReusePreviousDelivery && prev?.estimatedRetainedBytes !== undefined
+      ? prev.estimatedRetainedBytes
+      : transcriptPayloadBytes({ info, rawMessages: alignedMessages, threadedMessages, transcriptCards, contextUsage: null })
     if ((lastSentByKey.get(sessionCacheKey)?.requestId ?? -1) <= data.id) {
       lastSentByKey.set(sessionCacheKey, {
         requestId: data.id,
@@ -750,11 +789,14 @@ self.onmessage = async (event) => {
         cards: transcriptCards,
         cardsVariant,
         deliveryToken,
+        estimatedRetainedBytes,
         turnDurationLabels,
       })
     }
+    sessionBudget.touch(sessionCacheKey, estimatedRetainedBytes)
+    trimSessionBudget()
     if (canReusePreviousDelivery) {
-      self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken, externalWriter })
+      self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken, externalWriter, estimatedRetainedBytes })
       return
     }
     // Only omit a prefix when this request captured the matching delivery.
@@ -771,6 +813,7 @@ self.onmessage = async (event) => {
       threadedMessages: suffixOnly ? threadedMessages.slice(threadedPrefix) : threadedMessages,
       transcriptCards: suffixOnly ? transcriptCards.slice(cardsPrefix) : transcriptCards,
       deliveryToken,
+      estimatedRetainedBytes,
       baseDeliveryToken: prev?.deliveryToken,
       rawPrefix,
       threadedPrefix,

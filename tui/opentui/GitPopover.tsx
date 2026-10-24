@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useWindowVisible } from './windowActivity'
 import { GitWorkspace } from './GitWorkspace'
 import { PopoverDetachButton } from './dockedPopover'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -597,6 +598,7 @@ export function GitPopover(props: GitPopoverProps) {
 }
 
 export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: GitPopoverProps) {
+  const visible = useWindowVisible()
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
   const focusDiff = useCallback(() => setFocusSide('right'), [])
@@ -779,7 +781,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   // patch fingerprint catches edits to an already-changed file as well as
   // changes to Git status, while setData is skipped for unchanged snapshots.
   useEffect(() => {
-    if (!watching) return
+    if (!visible || !watching) return
     let cancelled = false
     const poll = async () => {
       if (watchInFlightRef.current) return
@@ -801,7 +803,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     void poll()
     const timer = setInterval(() => { void poll() }, 2000)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [diffSource, loadGitData, repoCwd, watching])
+  }, [visible, diffSource, loadGitData, repoCwd, watching])
 
   // When data loads, expand all dirs and place cursor on the first file node
   useEffect(() => {

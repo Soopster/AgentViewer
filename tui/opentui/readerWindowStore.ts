@@ -105,3 +105,24 @@ export function stepReaderWindow(
   }
   return { start, end }
 }
+
+/** A card limit remains a safety cap, while the actual working set is sized
+ * in terminal rows. The same row index is used by wheel slides and cursor jumps. */
+export function deriveRowReaderWindow(
+  rows: import('./rowHeightIndex').RowHeightIndex,
+  maxCards: number,
+  rowBudget: number,
+  followTail: boolean,
+  storedStart: number | null,
+): ReaderWindow & { maxStart: number } {
+  const total = rows.length
+  if (!total) return { start: 0, end: 0, maxStart: 0 }
+  const budget = Math.max(1, rowBudget)
+  const maxStart = Math.max(0, total - maxCards, Math.min(total - 1, rows.at(Math.max(0, rows.total - budget))))
+  const start = followTail || storedStart === null ? maxStart : Math.max(0, Math.min(storedStart, maxStart))
+  // The row threshold can land inside a tall card. Starting at that card is
+  // necessary, but applying the budget again from its *beginning* can omit
+  // every short card after it. The final window must end at the true tail.
+  const end = start === maxStart ? total : Math.min(total, start + maxCards, rows.at(rows.offset(start) + budget - 1) + 1)
+  return { start, end: Math.max(start + 1, end), maxStart }
+}

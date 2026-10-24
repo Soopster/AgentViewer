@@ -2,7 +2,8 @@
 // One interactive shell's screen, painted from its emulator. It subscribes to
 // the shell store itself, so a shell redrawing sixty times a second re-renders
 // this view and nothing above it.
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useWindowSnapshot } from './windowActivity'
+import { useEffect, useMemo } from 'react'
 
 import type { TuiThemePalette } from '../theme'
 import { readScreenRuns } from './shellScreen'
@@ -23,7 +24,7 @@ export function ShellView({
   showCursor: boolean
   scrollBack: number
 }) {
-  const shells = useSyncExternalStore(subscribeShells, getShells, getShells)
+  const shells = useWindowSnapshot(subscribeShells, getShells)
   const shell = shells.find((entry) => entry.id === shellId) ?? null
 
   // The PTY is told the pane's size, so line editing and full-screen programs wrap where the pane does.

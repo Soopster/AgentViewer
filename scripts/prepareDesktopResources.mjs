@@ -100,6 +100,7 @@ function main() {
       'build',
       'tui/opentui/main.tsx',
       'tui/opentui/threadingWorker.ts',
+      'tui/opentui/markdownBlocksWorker.ts',
       'tui/opentui/analyticsWorker.ts',
       'tui/opentui/editorProjectSearchWorker.ts',
       'tui/opentui/composerMentionWorker.ts',

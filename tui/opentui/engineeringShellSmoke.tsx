@@ -8,6 +8,21 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { TuiTranscriptCard } from '../format'
 
+const sizes = [[80, 40], [120, 40], [200, 40], [100, 24]] as const
+const childSize = process.env.ENGINEERING_SHELL_CHILD_SIZE
+if (!childSize) {
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  for (const [width, height] of sizes) {
+    const run = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      env: { ...process.env, ENGINEERING_SHELL_CHILD_SIZE: `${width}x${height}` }, encoding: 'utf8',
+    })
+    if (run.status !== 0) { process.stderr.write(run.stdout + run.stderr); process.exit(run.status ?? 1) }
+  }
+  console.log('Engineering shell render smoke passed at 80, 120 and 200 columns and 100x24 with a long draft')
+  process.exit(0)
+}
+
 const fixtureDirectory = path.join(mkdtempSync(path.join(tmpdir(), 'agent-viewer-engineering-shell-')), 'agentViewer')
 mkdirSync(fixtureDirectory)
 process.chdir(fixtureDirectory)
@@ -96,7 +111,7 @@ mock.module('../../lib/tui/service', () => ({
 }))
 
 const { default: OpenTuiApp } = await import('./App')
-for (const [width, height] of [[80, 40], [120, 40], [200, 40], [100, 24]]) {
+for (const [width, height] of sizes.filter(([width, height]) => `${width}x${height}` === childSize)) {
   fixtureTheme = width === 80 ? 'light' : 'dark'
   SESSION.sessionId = `engineering-shell-${width}`
   const setup = await testRender(<OpenTuiApp />, { width, height, kittyKeyboard: true })

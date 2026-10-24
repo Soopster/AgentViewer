@@ -1,3 +1,4 @@
+import { useWindowVisible } from './windowActivity'
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { captureDiffAnchor, diffRowWindow, resolveDiffAnchor, type DiffGeometry, type DiffViewportAnchor } from './gitDiffGeometry'
@@ -17,12 +18,14 @@ export function useGitDiffViewport(
   jumpRevision = 0,
   anchorGroup = documentKey,
 ) {
+  const visible = useWindowVisible()
   const [top, setTop] = useState(0)
   const current = useRef<{ geometry: DiffGeometry; key: string; group: string; top: number; preferredKey?: string } | null>(null)
   const lastJump = useRef<string | undefined>(undefined)
   const acceptingScroll = useRef(false)
   const positions = useRef(new Map<string, DiffViewportAnchor>())
   useEffect(() => {
+    if (!visible) return
     const bar = scrollRef.current?.verticalScrollBar
     if (!bar) return
     const changed = ({ position }: { position: number }) => {
@@ -32,11 +35,11 @@ export function useGitDiffViewport(
     }
     bar.on('change', changed)
     return () => { bar.off('change', changed) }
-  }, [scrollRef])
+  }, [scrollRef, visible])
 
   useLayoutEffect(() => {
-    acceptingScroll.current = ready
-    if (!ready) return
+    acceptingScroll.current = ready && visible
+    if (!ready || !visible) return
     const previous = current.current
     if (previous) {
       positions.current.delete(previous.key)
@@ -68,7 +71,7 @@ export function useGitDiffViewport(
     }
     timer = setTimeout(apply, 0)
     return () => { clearTimeout(timer) }
-  }, [anchorGroup, documentKey, geometry, jumpKey, jumpRevision, onJump, ready, scrollRef, viewportHeight])
+  }, [anchorGroup, documentKey, geometry, jumpKey, jumpRevision, onJump, ready, scrollRef, viewportHeight, visible])
 
   return { ...diffRowWindow(geometry, top, viewportHeight), top }
 }

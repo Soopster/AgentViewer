@@ -1,3 +1,4 @@
+import { mainTranscriptBudget } from './sessionCacheBudget'
 import type { ThreadedMessage } from '../../lib/threading'
 import { deferTranscriptCardSearchText, withTranscriptCardPreview, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
@@ -15,6 +16,7 @@ export type SessionDetailPayload = {
   transcriptCards: TuiTranscriptCard[]
   /** Present only for a read that asked for `separateTurnDurations`. */
   turnDurationLabels?: TurnDurationLabels
+  estimatedRetainedBytes?: number
   externalWriter?: boolean
 }
 
@@ -53,6 +55,7 @@ type Pending =
     }
   | {
       kind: 'format'
+      sessionKey: string
       formatKey: string
       threaded: ThreadedMessage[]
       previousDelivery?: LastFormattedDelivery
@@ -85,7 +88,7 @@ type Pending =
       reject: (error: Error) => void
     }
 
-type WorkerResponse =
+type WorkerResponse = (
   | {
       id: number
       ok: true
@@ -99,7 +102,8 @@ type WorkerResponse =
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
-      externalWriter?: boolean
+      estimatedRetainedBytes?: number
+  externalWriter?: boolean
       turnDurationLabels?: TurnDurationLabels
       turnDurationPatch?: TurnDurationPatch
     }
@@ -109,7 +113,8 @@ type WorkerResponse =
       info: SessionInfo | null
       unchanged: true
       deliveryToken: number
-      externalWriter?: boolean
+      estimatedRetainedBytes?: number
+  externalWriter?: boolean
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[]; formatToken: number; turnDurationLabels?: TurnDurationLabels }
   | { id: number; ok: true; densityCards: (TuiTranscriptCard | { sharedCardIndex: number; lines: TuiTranscriptCard['lines']; compactSummary: string })[]; formatToken: number; baseFormatToken: number; turnDurationLabels?: TurnDurationLabels }
@@ -129,9 +134,13 @@ type WorkerResponse =
   | { id: number; ok: true; affordances: TuiComposerAffordances }
   | { id: number; ok: true; subagents: SubagentSummary[] }
   | { id: number; ok: false; error: string }
+) & { estimatedRetainedBytes?: number }
 
 let worker: Worker | null = null
 let requestCounter = 0
+const sessionBudget = mainTranscriptBudget
+const estimatesBySession = new Map<string, number>()
+const retainedSessions = new Map<string, { session: Session; count: number }>()
 const pending = new Map<number, Pending>()
 // Holds the recent session neighbourhood. With tabs enabled users commonly
 // switch between 4-8 sessions; a cap of 2 evicted almost everything on the
@@ -155,6 +164,7 @@ type LastDeliveredDetail = {
   cards: TuiTranscriptCard[]
   cardsVariant: string
   deliveryToken: number
+  estimatedRetainedBytes?: number
 }
 const lastDeliveredByKey = new Map<string, LastDeliveredDetail>()
 
@@ -297,12 +307,48 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
   if ((threadingCacheByKey.get(key)?.requestId ?? -1) > cache.requestId) return
   if (threadingCacheByKey.has(key)) threadingCacheByKey.delete(key)
   threadingCacheByKey.set(key, cache)
+  sessionBudget.touch(key, estimatesBySession.get(key) ?? lastDeliveredByKey.get(key)?.estimatedRetainedBytes
+    ?? cache.threadedMessages.length * 1024 + [...cache.cardsByVariant.values()].reduce((bytes, cards) => bytes + cards.length * 1024, 0))
+  trimSessionBudget()
   while (threadingCacheByKey.size > THREADING_CACHE_LIMIT) {
-    const oldestKey = threadingCacheByKey.keys().next().value
+    const oldestKey = [...threadingCacheByKey.keys()].find(key => !sessionBudget.isPinned(key))
     if (oldestKey === undefined) break
     threadingCacheByKey.delete(oldestKey)
+    sessionBudget.evictSession(oldestKey)
+    estimatesBySession.delete(oldestKey)
     lastDeliveredByKey.delete(oldestKey)
     dropLastFormattedForSession(oldestKey)
+  }
+}
+
+const deliveryBudgetOwner = { evictSession(key: string) {
+  threadingCacheByKey.delete(key)
+  estimatesBySession.delete(key)
+  lastDeliveredByKey.delete(key)
+  dropLastFormattedForSession(key)
+} }
+sessionBudget.register(deliveryBudgetOwner)
+function trimSessionBudget() { sessionBudget.trim() }
+
+/** A visibility lease. Retaining never starts a provider worker by itself. */
+export function retainTranscriptSession(session: Session): () => void {
+  const key = cacheKey(session)
+  const previous = retainedSessions.get(key)
+  retainedSessions.set(key, { session, count: (previous?.count ?? 0) + 1 })
+  sessionBudget.retain(key)
+  if (!previous) worker?.postMessage({ kind: 'retain', id: ++requestCounter, session, retain: true })
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    sessionBudget.release(key)
+    const entry = retainedSessions.get(key)
+    if (entry && entry.count > 1) entry.count--
+    else {
+      retainedSessions.delete(key)
+      worker?.postMessage({ kind: 'retain', id: ++requestCounter, session, retain: false })
+    }
+    trimSessionBudget()
   }
 }
 
@@ -316,6 +362,9 @@ function ensureWorker(): Worker {
     const data = event.data
     const entry = pending.get(data.id)
     if (!entry) return
+    if ((entry.kind === 'detail' || entry.kind === 'format') && data.estimatedRetainedBytes !== undefined) {
+      estimatesBySession.set(entry.sessionKey, Math.max(estimatesBySession.get(entry.sessionKey) ?? 0, data.estimatedRetainedBytes))
+    }
     pending.delete(data.id)
     if (!data.ok) {
       entry.reject(new Error(data.error))
@@ -335,6 +384,7 @@ function ensureWorker(): Worker {
         transcriptCards: prev.cards,
         turnDurationLabels: turnDurationLabelsByCards.get(prev.cards),
         externalWriter: data.externalWriter,
+        estimatedRetainedBytes: data.estimatedRetainedBytes,
       })
     } else if (entry.kind === 'detail' && 'rawMessages' in data) {
       const prev = entry.previousDelivery?.deliveryToken === data.baseDeliveryToken
@@ -370,6 +420,7 @@ function ensureWorker(): Worker {
         cards: transcriptCards,
         cardsVariant: entry.cardsVariant,
         deliveryToken: data.deliveryToken,
+        estimatedRetainedBytes: data.estimatedRetainedBytes,
       })
       entry.resolve({
         info: data.info,
@@ -378,6 +429,7 @@ function ensureWorker(): Worker {
         transcriptCards,
         turnDurationLabels,
         externalWriter: data.externalWriter,
+        estimatedRetainedBytes: data.estimatedRetainedBytes,
       })
     } else if (entry.kind === 'format' && 'transcriptCards' in data && 'formatToken' in data) {
       deferSearchText(data.transcriptCards)
@@ -446,6 +498,7 @@ function ensureWorker(): Worker {
     worker = null
   }
   worker = w
+  for (const { session } of retainedSessions.values()) w.postMessage({ kind: 'retain', id: ++requestCounter, session, retain: true })
   return w
 }
 
@@ -700,6 +753,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
     let retriedWithFullTranscript = false
     const entry: Extract<Pending, { kind: 'format' }> = {
       kind: 'format',
+      sessionKey: key,
       formatKey,
       threaded,
       previousDelivery,

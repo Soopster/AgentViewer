@@ -12,7 +12,7 @@ export async function readTuiSessionDetailAsync(
 ): Promise<TuiSessionDetail> {
   // Read + normalize + thread + format all happen in the worker; only the
   // finished payload crosses back to the main thread.
-  const { info, rawMessages, threadedMessages, transcriptCards, externalWriter } = await readAndBuildTranscriptAsync(
+  const { info, rawMessages, threadedMessages, transcriptCards, externalWriter, estimatedRetainedBytes } = await readAndBuildTranscriptAsync(
     session,
     density,
     showToolCalls,
@@ -27,6 +27,7 @@ export async function readTuiSessionDetailAsync(
     transcriptCardsShowToolCalls: showToolCalls,
     contextUsage: null,
     externalWriter,
+    estimatedRetainedBytes,
   }
 }
 
@@ -46,5 +47,5 @@ export function attachedTranscriptCardsForVariant(
     : null
 }
 
-export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, readTuiSubagentSummariesAsync, turnDurationLabelsForCards, warmTranscriptAsync } from './threadingWorkerClient'
+export { retainTranscriptSession, formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, readTuiSubagentSummariesAsync, turnDurationLabelsForCards, warmTranscriptAsync } from './threadingWorkerClient'
 export type { TranscriptCardOptions, TurnDurationLabels } from './threadingWorkerClient'
