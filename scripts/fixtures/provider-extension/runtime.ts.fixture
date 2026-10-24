@@ -1,0 +1,36 @@
+import type { ProviderRuntime } from '../types'
+import { setRunningSession, clearRunningSession } from '../../../sessionRuntime'
+export const calls: Array<{ operation: string; instance: string }> = []
+export const runtime: ProviderRuntime = {
+  async createSession(params) {
+    calls.push({ operation: 'create', instance: params.providerInstanceId })
+    return { sessionId: 'same-native-id', provider: params.provider, cwd: params.cwd ?? process.cwd(), isPending: false }
+  },
+  async streamTurn(params, checkpoint) {
+    await checkpoint
+    calls.push({ operation: 'stream', instance: params.providerInstanceId })
+    let finish = () => {}
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"text":"fixture stream"}\n\n'))
+        let finished = false
+        finish = () => {
+          if (finished) return
+          finished = true
+          calls.push({ operation: 'cancel', instance: params.providerInstanceId })
+          clearRunningSession(params.sessionId)
+          params.signal.removeEventListener('abort', finish)
+          controller.close()
+        }
+        setRunningSession(params.sessionId, { provider: params.provider, providerInstanceId: params.providerInstanceId,
+          interrupt: async () => { finish() } })
+        params.signal.addEventListener('abort', finish, { once: true })
+        if (params.signal.aborted) finish()
+      },
+      cancel() { finish() },
+    })
+    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  },
+  async prewarm(params) { calls.push({ operation: 'prewarm', instance: params.providerInstanceId }) },
+  async closeSession(_sessionId, _provider, instance) { calls.push({ operation: 'close', instance }) },
+}

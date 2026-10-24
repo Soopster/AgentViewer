@@ -1,0 +1,232 @@
+# Composable application core and feature plugins
+
+Status: implementation underway, 24 October 2026. Provider contributions now have
+an extension contract, lazy registry and contributor scaffold; see
+[Provider extensions](provider-extensions.md). Feature surface hosting and the
+Analytics vertical slice described below remain planned.
+
+## Objective
+
+Make the Web and OpenTUI roots compose a small application shell. Optional
+features contribute commands and views through a versioned, typed plugin API
+instead of adding imports, state, key handlers and rendering branches to the
+roots. Share domain logic and contracts across renderers; keep DOM and native
+terminal components in separate adapters.
+
+Begin with trusted, bundled plugins. Installation, third-party executable code,
+hot replacement and a marketplace are separate projects. An in-process capability
+interface defines dependencies; it is not a security sandbox.
+
+## Current evidence
+
+The inspected checkout has approximately 30,400 lines in `tui/opentui/App.tsx`,
+10,700 in `components/MessageView.tsx`, and 6,900 in `components/MessageItem.tsx`.
+Moving those bodies into equally large hooks would preserve their coupling.
+Ownership and dependency boundaries must change alongside component extraction.
+
+Useful existing foundations:
+
+- `tui/opentui/popoverWindows.ts` describes pinning, instance multiplicity and
+  input capture. Rendering and feature state still live in `App.tsx`.
+- `lib/rightPanel.ts`, `components/RightPanel.tsx` and `useRightPanel.ts` already
+  separate Web surface layout from content, but surface kinds remain closed
+  unions and renderer switches.
+- Web `MessageView.tsx` already dynamically imports some optional views, while
+  retaining their state and orchestration in the transcript component.
+- Workspace runtimes, retained-window visibility, shared transcript loading,
+  window chrome ownership and transcript input policy provide reusable host
+  services. Preserve their performance and lifecycle contracts.
+- Provider extensions contribute browser-safe manifests, lazy read adapters and
+  turn runtimes through `lib/extensions/providers/`. Features consume the core
+  provider facade. Provider and feature contributions have different contracts;
+  neither should import the other's renderer or SDK implementation.
+
+## Ownership boundary
+
+| Application core | Feature plugins |
+| --- | --- |
+| Session/provider-instance identity, provider facade and canonical event contracts | Provider SDK adapters and turn implementations; Analytics, insights and daily summary |
+| Session selection, shared transcript subscriptions, polling and cache budgets | Git review, Git workspace, pull requests and file history |
+| Transcript threading, virtualization, anchors, selection and fallback rendering | Files, editor, terminal/process UI and browser |
+| Composer, send queue, approvals, interruption and attention routing | Coordination boards, teammates, desk and handoff views |
+| Window geometry, focus, tabs, docking, floating, overlays and input precedence | Prompt library, playbooks, bridge panels and diagnostic views |
+| Command dispatch, scoped state, persistence, theme/resources and plugin lifecycle | Feature-specific state, presentation and domain operations |
+
+Core runtime control and the attention/approval path must work with optional
+views disabled. Disabling a terminal or coordination view must not silently
+terminate a running process or agent. Domain services may remain independent
+modules and serve multiple plugin views without becoming root component state.
+
+## Proposed structure
+
+```text
+lib/core/                     identity, scoped stores, domain/service contracts
+lib/plugins/                  manifest types, registry, commands, lifecycle
+plugins/<feature>/
+  manifest.ts                 metadata only; no UI, SDK or worker imports
+  domain/                     shared models and feature logic where needed
+  web/                        DOM components and static lazy-load entry point
+  tui/                        OpenTUI components and lazy-load entry point
+  server/                     optional server-side service adapter
+components/shell/             Web shell, surface/overlay/plugin hosts
+tui/opentui/shell/            TUI shell, surface/overlay/plugin hosts
+```
+
+These are target responsibilities, not a requirement to move every existing
+domain file immediately. Migrate one feature at a time and retain adapters for
+existing imports until their callers are converted.
+
+The shell composes `SessionRail`, `TranscriptWindowHost`, `ComposerHost`,
+`SurfaceHost`, `OverlayHost` and `CommandHost`. Each gets a focused interface.
+Feature-specific props such as Git key-handler refs or Analytics loading state
+must not appear on the shell's public interface.
+
+## Plugin contract
+
+A manifest declares a stable plugin ID, API version, supported renderers,
+commands, surfaces, required service capabilities and state schema version.
+Surface metadata declares its title, pin target, multiplicity, supported host
+placements and input mode. Keep service requirements distinct from the active
+provider's session capabilities.
+
+The host supplies a view-instance context containing workspace and view IDs,
+an immutable target reference, visibility/focus state, theme, scoped state and
+only the declared service interfaces. Plugins never receive the root state
+object, arbitrary setters, raw provider SDK clients or the root renderer.
+
+Commands resolve a target once and pass it explicitly to an action. Async
+results retain that owner and cancellation scope when the active session,
+workspace or provider instance changes. No plugin constructs session key strings.
+
+Version one contribution points:
+
+1. Surface views presented in the supported panel, window or overlay hosts.
+2. Commands, menu entries and contextual actions through a shared dispatcher.
+3. Typed feature services and scoped settings/state.
+
+Defer arbitrary transcript-row injection. A later tool-renderer extension point
+must retain core-owned measurement, virtualization, selection, anchors and an
+unsupported-block fallback. It must not allow a plugin to bypass row budgets.
+
+## Composition and lifecycle
+
+- Use explicit view adapters for panel/window/overlay presentations rather than
+  extending components with an expanding list of unrelated boolean props.
+- Keep shared service references stable. Use selective subscriptions to domain
+  snapshots rather than a changing global React context containing every feature.
+- Plugin view state belongs to its workspace/view instance. Persist serializable
+  state through a versioned codec; keep callbacks, native styles and handles out
+  of saved state and global registries.
+- Metadata registration performs no work. Lazy loading begins on activation.
+  Merely listing commands or switching sessions must not import every feature.
+- Visibility controls presentation subscriptions, animations and timers.
+  Long-lived backend work has a separate, explicit service lifetime.
+- Scoped tasks use cancellation, foreground priority and bounded worker queues.
+  Cache owners register with shared budgets instead of creating unbounded maps.
+- The host routes keys according to focus/capture priority. Features do not
+  install competing global keyboard listeners.
+- A failed feature gets a local Retry/Close view. The transcript and composer
+  remain usable. API mismatches are rejected before activation.
+
+Web and TUI entry points remain separate import graphs. Use statically declared
+lazy imports in Web client boundaries, respecting the installed Next.js guide.
+Server services and SDKs must never enter a client component bundle. Existing
+API routes and mutation protections remain the boundary for backend operations.
+
+## Delivery sequence
+
+### 1. Define the host seams and capture baselines
+
+Inventory root state, side effects, imports and commands by owner. Extract
+focused shell/controller interfaces around the existing behavior. Establish
+startup, idle, session-switch, hidden-window, large-transcript and saved-layout
+fixtures for both renderers before migrating features.
+
+Deliver: ownership map, narrow host/service types and renderer-specific shell
+components. Avoid building a generic container for every future extension point.
+
+### 2. Add the registry and a minimal host
+
+Turn current popover/right-panel metadata into adapters for one typed registry.
+Add surface instances, command registration, lazy activation, scoped state,
+visibility/disposal and local failure handling. Prove the contract with a small
+fixture plugin while existing features continue using compatibility adapters.
+
+Deliver: adding a fixture plugin changes its package and the built-in registration
+list, without editing app roots, command-palette internals or window-kind unions.
+
+### 3. Migrate Analytics end to end in both apps
+
+Move Analytics commands, open state, pinned target and worker subscription into
+the plugin. Reuse the existing domain computations. Exercise overlay and window
+placements, multiple pinned sessions, hide/resume and disposal.
+
+Deliver: a real plugin with shared domain logic and separate Web/TUI views.
+Opening Analytics for one instance must never read its sibling's transcript.
+Closed Analytics must not load its UI or start background work at boot.
+
+### 4. Migrate Git review and workspace
+
+Move review/workspace presentation, commands and feature state together. Keep
+annotated changes as the default review experience, with mutations adjacent.
+Retain current review notes, repository targeting, conflict handling and Git
+operation services. Commands call typed services through explicit targets.
+
+Deliver: a second plugin proving mutations, persistence and richer service
+requirements without feature branches returning to the roots.
+
+### 5. Migrate the remaining feature families
+
+Move files/editor first, then terminal/process and browser views, then
+coordination/teammates/desk, followed by prompts, playbooks, summaries, bridges and
+diagnostics. Validate each family's distinct lifecycle before moving the next.
+In particular, editor drafts survive view transitions and running processes or
+agents survive hiding or disabling their view.
+
+Deliver each migration as a reviewable vertical slice. Do not relocate large
+directories before their state and service ownership are established.
+
+### 6. Remove compatibility code and enforce the boundaries
+
+Delete old feature booleans, renderer switches and duplicate command metadata
+only after all consumers have migrated. Add import-boundary checks preventing
+plugin-to-root and plugin-to-plugin-internal dependencies, eager optional UI
+imports, and client imports of server adapters.
+
+Deliver: small composition roots, a documented plugin authoring example and a
+contract suite that runs against every bundled plugin.
+
+## Migration compatibility
+
+Preserve existing command IDs, shortcuts, surface IDs and saved layout semantics
+through adapters. Version persistent state; avoid rewriting all layouts at once.
+A disabled or missing plugin restores as a recoverable placeholder with Enable
+or Close actions, retaining its serialized state and layout slot.
+
+Share logical session-reference contracts across Web and TUI without silently
+changing their existing persisted key formats. Provider drivers, provider-native
+plugins and application feature plugins remain distinct layers.
+
+## Acceptance gates
+
+- A new bundled feature adds no feature-specific state or rendering branch to an
+  app root. Disabling it removes its commands and views cleanly.
+- Disabled/unopened features perform no activation work or optional module load.
+- Hidden views have no presentation polls/timers/subscriptions; backend lifetimes
+  follow explicit service ownership. Resume reads a fresh snapshot.
+- Duplicate native session/prompt IDs across provider instances remain isolated,
+  including attention actions, fleet navigation and stale async completions.
+- Window focus, keyboard capture, saved layouts, tab restoration, fullscreen,
+  narrow-terminal recovery and composer behavior remain intact.
+- Plugin failures cannot take down the transcript/composer. State codecs handle
+  old versions and unknown plugin IDs without discarding user data.
+- Web/OpenTUI typechecks, focused feature checks, architecture contracts and
+  appropriate Web interaction checks pass. Use real rendered interactions for
+  behavior claims, not just helper tests.
+- Compare identical, isolated workloads against a frozen baseline. Keep initial
+  bundle/import cost, JS frames, mounted content, heap and RSS as separate metrics.
+  Extraction must not reintroduce eager SDK loads or global render fan-out.
+
+The first implementation milestone is Analytics running through the same host
+contract in Web and TUI, with the current application behavior preserved. That
+is the point to review the API before migrating Git and the remaining families.
