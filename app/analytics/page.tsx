@@ -1,5 +1,7 @@
 'use client'
 
+import { PROVIDER_CHOICES } from '@/lib/extensions/providers/catalog'
+
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
@@ -23,11 +25,7 @@ import type { ProviderSelection } from '@/lib/types'
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderSelection; label: string }> = [
   { value: 'all', label: 'All providers' },
-  { value: 'claude', label: 'Claude' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'opencode', label: 'OpenCode' },
-  { value: 'copilot', label: 'Copilot' },
-  { value: 'pi', label: 'Pi' },
+  ...PROVIDER_CHOICES,
 ]
 
 type Preset = '7d' | '30d' | '90d' | 'all' | 'custom'

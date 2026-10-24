@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { NEW_SESSION_PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import React, { useCallback, useEffect, useState } from 'react'
 import type { AgentProvider } from '../../lib/types'
 import { formatProviderLabel } from '../format'
@@ -12,7 +13,7 @@ export type NewSessionKeyEvent = {
 }
 
 // Providers a fresh single-agent session can be started for (no 'all' aggregate).
-export const NEW_SESSION_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
+export const NEW_SESSION_PROVIDERS: readonly AgentProvider[] = NEW_SESSION_PROVIDER_IDS
 
 type Row = 'folder' | 'provider'
 const ROWS: Row[] = ['folder', 'provider']

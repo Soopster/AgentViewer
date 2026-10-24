@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { sessionIdentityKey } from './sessionIdentity'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
@@ -656,7 +657,7 @@ function ComposerWaitingStatus({
   return <text wrapMode="none">{renderInlineTextSegments(segs, width, theme.dim)}</text>
 }
 
-const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio', 'claude-acp', 'codex-acp', 'acp', 'all']
+const PROVIDERS: ProviderSelection[] = [...PROVIDER_IDS, 'all']
 const TUI_PROVIDER_TAG: Record<string, string> = {
   claude: 'claude',
   codex: 'codex',

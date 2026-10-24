@@ -1,3 +1,6 @@
+import { INDEXABLE_PROVIDER_IDS } from './extensions/providers/catalog'
+import { getProviderRuntime, getLoadedProviderRuntime } from './extensions/providers/registry'
+import type { ProviderCreateRequest, ProviderPrewarmRequest, ProviderSessionRequest } from './extensions/providers/types'
 import { claudeArtifactStore } from './claudeArtifactStore'
 import { readClaudeMcpApp } from './claudeMcpApps'
 import { projectComposerContext } from './composerContext'
@@ -437,7 +440,7 @@ export type SessionIndexRebuildResult = {
 }
 
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
-const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
+const INDEX_REBUILD_PROVIDERS = [...INDEXABLE_PROVIDER_IDS]
 const INDEX_REBUILD_PAGE_SIZE = 500
 const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
 const INDEX_REBUILD_MESSAGE_CONCURRENCY = 4
@@ -1718,7 +1721,7 @@ function summarizeResolvedClaudeSettings(resolved: Awaited<ReturnType<typeof res
   }
 }
 
-export async function runViewSessionAction({ sessionId, body, provider }: SessionActionParams): Promise<Record<string, unknown>> {
+export async function builtinRunViewSessionAction({ sessionId, body, provider }: SessionActionParams): Promise<Record<string, unknown>> {
   const resolvedProvider = await resolveProvider(provider)
   // Only Claude sessions have a warm pool; loading it for another provider's
   // action would reinstate the cost this deferral exists to avoid.
@@ -1738,33 +1741,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   // the turn ended while the request was in flight — callers fall back to
   // queueing the message for the next turn.
   if (action === 'steer') {
-    const message = typeof body.message === 'string' ? body.message.trim() : ''
-    const turnRequestId = typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
-      ? body.turnRequestId.trim()
-      : undefined
-    const steerRequestId = typeof body.steerRequestId === 'string' && body.steerRequestId.trim()
-      ? body.steerRequestId.trim()
-      : undefined
-    if (!message) throw new Error('message is required')
-    if (steerRequestId && steerRequestId.length > 256) throw new Error('steerRequestId is too long')
-    if (isNativeComposerCommandText(message)) return { delivered: false }
-    try {
-      const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId)
-      if (!steered.delivered && body.allowInterrupt !== false && getRunningSession(sessionId)) {
-        // A runtime that cannot take input mid-turn is steered by ending the
-        // turn: the caller queues this message as `delivered: false` already
-        // asks, and the interrupt is what lets that queue run now instead of
-        // after the whole turn.
-        const plan = planFeature(resolvedProvider, 'steer')
-        if (plan.mode === 'fallback' && plan.strategy === 'interrupt_restart') {
-          await interruptRunningSession(sessionId, turnRequestId)
-          return { delivered: false, interrupted: true }
-        }
-      }
-      return { delivered: steered.delivered, messageUuid: steered.messageUuid }
-    } catch {
-      return body.allowInterrupt === false ? { delivered: false, deliveryUncertain: true } : { delivered: false }
-    }
+    return steerViewSession(sessionId, body, resolvedProvider)
   }
 
   if (resolvedProvider === 'opencode') {
@@ -2494,7 +2471,10 @@ export async function getProviderSubagentSummaries(
   providerOverride?: AgentProvider,
 ): Promise<SubagentSummary[]> {
   const provider = await resolveProvider(providerOverride)
-  if (provider === 'claude') return getClaudeSubagentSummaries(sessionId, provider)
+  const adapter = await getSessionAdapter(provider)
+  if (adapter.readSubagentSummaries) {
+    return withSessionInstance(provider, sessionId, () => adapter.readSubagentSummaries!(sessionId))
+  }
   if (provider === 'codex' || provider === 'opencode') return []
   if (provider === 'copilot') {
     const events = await readCopilotSessionEvents(sessionId).catch(() => [] as CopilotSessionEvent[])
@@ -2508,6 +2488,8 @@ export async function getProviderSubagentSummaries(
     messages = record ? mapLmstudioSessionToMessages(record) : []
   } else if (isAcpProvider(provider)) {
     messages = readAcpMessagesAll(sessionId, provider)
+  } else {
+    messages = (await withSessionInstance(provider, sessionId, () => adapter.readAllMessages?.(sessionId)))?.messages ?? []
   }
   return toolSubagentSummaries(messages, provider)
 }
@@ -6533,7 +6515,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
  * Existing-session focus treats failures as best-effort. Fresh-session loading
  * surfaces them and keeps sending disabled rather than racing a cold runtime.
  */
-export async function prewarmViewSession(params: {
+export async function builtinPrewarmViewSession(params: {
   sessionId: string
   provider?: AgentProvider
   cwd?: string
@@ -6899,6 +6881,13 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
     }).catch(() => null)
     : undefined
 
+  const runtime = await getProviderRuntime(provider)
+  return runtime.streamTurn({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) }, checkpoint)
+}
+
+/** Existing SDK dispatch, reached only through bundled extension runtime entries. */
+export async function builtinStreamViewSessionTurn(params: SendMessageParams, checkpoint?: Promise<TurnCheckpoint | null>): Promise<Response> {
+  const provider = await resolveProvider(params.provider)
   if (provider === 'codex') {
     return createCodexStream(params.sessionId, params.signal, params.body, checkpoint)
   }
@@ -6928,25 +6917,28 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
     return withSessionInstance(provider, params.sessionId, () => createAcpStream(provider, params.sessionId, params.signal, params.body))
   }
 
-  return createClaudeStream(params.sessionId, params.signal, params.body, checkpoint)
+  throw new Error(`No turn implementation for ${provider}`)
 }
 
 export async function forkViewSession(params: ForkParams): Promise<{ sessionId: string }> {
-  const forked = await forkViewSessionUnrecorded(params)
+  const provider = await resolveProvider(params.provider)
+  const runtime = await getProviderRuntime(provider)
+  if (!runtime.forkSession) throw new Error(`forkSession is not supported for ${provider} sessions`)
+  const forked = await runtime.forkSession({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) })
   recordContextTransfer({
     type: 'fork',
     source: {
-      provider: params.provider,
+      provider,
       sessionId: params.sessionId,
       point: typeof params.body.upToMessageId === 'string' ? params.body.upToMessageId : undefined,
     },
-    target: { provider: params.provider, sessionId: forked.sessionId },
+    target: { provider, sessionId: forked.sessionId },
     strategy: 'native',
   })
   return forked
 }
 
-async function forkViewSessionUnrecorded({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
+export async function builtinForkViewSessionUnrecorded({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
   const resolvedProvider = await resolveProvider(provider)
   if (resolvedProvider === 'codex') {
     const client = getCodexClient()
@@ -7012,7 +7004,7 @@ async function forkViewSessionUnrecorded({ sessionId, body, provider }: ForkPara
   return { sessionId: result.sessionId }
 }
 
-export async function createNewViewSession({
+export async function builtinCreateNewViewSession({
   provider: providerOverride,
   cwd,
   title,
@@ -7114,12 +7106,11 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
 }
 
 /** Release provider-side resources for an active session without deleting its durable history. */
-export async function closeViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
+export async function builtinCloseViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
   const provider = await resolveProvider(providerOverride)
   // Only Claude sessions have a warm pool; loading it for another provider's
   // action would reinstate the cost this deferral exists to avoid.
   if (provider === 'claude') await ensureClaudePool()
-  await interruptViewSession(sessionId, undefined, true).catch(() => {})
   if (provider === 'claude') {
     claudePoolModule().recycleClaudeSession(sessionId)
     return
@@ -7142,7 +7133,7 @@ export async function closeViewSession(sessionId: string, providerOverride?: Age
   }
 }
 
-function listPendingProviderPermissionPayloads(
+export function builtinListPendingProviderPermissionPayloads(
   sessionId: string,
   provider?: AgentProvider,
 ): Record<string, unknown>[] {
@@ -7237,6 +7228,14 @@ export function readViewSessionRunning(
 // answer it. Only the pending payloads below are genuinely this module's state,
 // so it registers a reader for them — and until it does, there are none, which
 // is exact: nothing can be pending before a turn has run.
+function listPendingProviderPermissionPayloads(sessionId: string, provider?: AgentProvider): Record<string, unknown>[] {
+  if (provider) {
+    const runtime = getLoadedProviderRuntime(provider)
+    if (runtime) return runtime.listPendingPermissions?.(sessionId, provider) ?? []
+  }
+  return builtinListPendingProviderPermissionPayloads(sessionId, provider)
+}
+
 registerPendingTurnPayloadReader({
   listPendingPrompts: listPendingClaudePrompts,
   listPendingPermissions: listPendingProviderPermissionPayloads,
@@ -7245,7 +7244,7 @@ registerPendingTurnPayloadReader({
 /** Process-local control-plane state for fleet and attention clients. */
 
 
-export async function rewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
+export async function builtinRewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
   const resolvedProvider = await resolveProvider(provider)
   // Only Claude sessions have a warm pool; loading it for another provider's
   // action would reinstate the cost this deferral exists to avoid.
@@ -7455,4 +7454,78 @@ async function openCodePendingPermissionSession(sessionId: string, permissionID:
   }).catch(() => null)
   const list = pending ? openCodeData<Array<{ id?: string; sessionID?: string }>>(pending) : []
   return list.find((entry) => entry.id === permissionID)?.sessionID
+}
+
+
+async function steerViewSession(sessionId: string, body: Record<string, unknown>, resolvedProvider: AgentProvider): Promise<Record<string, unknown>> {
+  const message = typeof body.message === 'string' ? body.message.trim() : ''
+  const turnRequestId = typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
+    ? body.turnRequestId.trim()
+    : undefined
+  const steerRequestId = typeof body.steerRequestId === 'string' && body.steerRequestId.trim()
+    ? body.steerRequestId.trim()
+    : undefined
+  if (!message) throw new Error('message is required')
+  if (steerRequestId && steerRequestId.length > 256) throw new Error('steerRequestId is too long')
+  if (isNativeComposerCommandText(message)) return { delivered: false }
+  try {
+    const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId)
+    if (!steered.delivered && body.allowInterrupt !== false && getRunningSession(sessionId)) {
+      // A runtime that cannot take input mid-turn is steered by ending the
+      // turn: the caller queues this message as `delivered: false` already
+      // asks, and the interrupt is what lets that queue run now instead of
+      // after the whole turn.
+      const plan = planFeature(resolvedProvider, 'steer')
+      if (plan.mode === 'fallback' && plan.strategy === 'interrupt_restart') {
+        await interruptRunningSession(sessionId, turnRequestId)
+        return { delivered: false, interrupted: true }
+      }
+    }
+    return { delivered: steered.delivered, messageUuid: steered.messageUuid }
+  } catch {
+    return body.allowInterrupt === false ? { delivered: false, deliveryUncertain: true } : { delivered: false }
+  }
+}
+
+
+// Extension-neutral public lifecycle entry points. The host resolves provider
+// identity once; implementations run inside the caller's instance scope.
+export async function runViewSessionAction(params: ProviderSessionRequest): Promise<Record<string, unknown>> {
+  const provider = await resolveProvider(params.provider)
+  if (params.body.action === 'steer') return steerViewSession(params.sessionId, params.body, provider)
+  const runtime = await getProviderRuntime(provider)
+  if ((params.body.action === 'respondPermission' || params.body.action === 'respondQuestion') && typeof params.body.expectedPermissionToken === 'string') {
+    const pending = extractPendingPermissions(listPendingProviderPermissionPayloads(params.sessionId, provider), { sessionId: params.sessionId, provider })
+    if (!pending.some(permission => permission.id === params.body.permissionId && coordinatorPermissionToken(permission) === params.body.expectedPermissionToken)) {
+      throw new PendingRequestGoneError(params.body.action === 'respondQuestion' ? 'Question' : 'Permission request')
+    }
+  }
+  if (!runtime.runAction) throw new Error(`runAction is not supported for ${provider} sessions`)
+  return runtime.runAction({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) })
+}
+
+export async function prewarmViewSession(params: ProviderPrewarmRequest): Promise<void> {
+  const provider = await resolveProvider(params.provider)
+  const runtime = await getProviderRuntime(provider)
+  await runtime.prewarm?.({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) })
+}
+
+export async function createNewViewSession(params: ProviderCreateRequest) {
+  const provider = await resolveProvider(params.provider)
+  const runtime = await getProviderRuntime(provider)
+  return runtime.createSession({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) })
+}
+
+export async function closeViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
+  const provider = await resolveProvider(providerOverride)
+  const runtime = await getProviderRuntime(provider)
+  await interruptViewSession(sessionId, undefined, true).catch(() => {})
+  await runtime.closeSession(sessionId, provider, currentProviderInstanceId(provider))
+}
+
+export async function rewindOrRollbackViewSession(params: ProviderSessionRequest): Promise<Record<string, unknown>> {
+  const provider = await resolveProvider(params.provider)
+  const runtime = await getProviderRuntime(provider)
+  if (!runtime.rewindSession) throw new Error(`rewindSession is not supported for ${provider} sessions`)
+  return runtime.rewindSession({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) })
 }

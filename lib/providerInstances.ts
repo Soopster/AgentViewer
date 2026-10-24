@@ -1,3 +1,4 @@
+import { PROVIDER_IDS, getProviderManifest } from './extensions/providers/catalog'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -8,19 +9,8 @@ const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data')
 const INSTANCE_FILE = path.join(DATA_DIR, 'provider-instances.json')
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/
 
-const DEFAULT_PROVIDER_LABELS: Record<AgentProvider, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-  copilot: 'GitHub Copilot',
-  pi: 'Pi',
-  lmstudio: 'LM Studio',
-  'claude-acp': 'Claude (ACP)',
-  'codex-acp': 'Codex (ACP)',
-  acp: 'ACP agent',
-}
-
-const DEFAULT_PROVIDER_ORDER = Object.keys(DEFAULT_PROVIDER_LABELS) as AgentProvider[]
+const DEFAULT_PROVIDER_LABELS = Object.fromEntries(PROVIDER_IDS.map(id => [id, id === 'copilot' ? 'GitHub Copilot' : getProviderManifest(id).displayName])) as Record<AgentProvider, string>
+const DEFAULT_PROVIDER_ORDER = PROVIDER_IDS
 
 export type ProviderInstance = {
   id: string
@@ -146,13 +136,9 @@ function parseInstanceFile(value: unknown): ProviderInstance[] {
     const row = raw as Record<string, unknown>
     const id = typeof row.id === 'string' ? row.id.trim() : ''
     if (!INSTANCE_ID_PATTERN.test(id) || seen.has(id) || !isAgentProvider(row.provider)) continue
-    // The provider SDKs that expose independent account/config roots today
-    // are Claude and Codex. Keep the registry honest for the other adapters:
-    // their default instance remains selectable, but duplicate configured
-    // labels would otherwise point at the same process/runtime. `acp` is the
-    // other exception: each instance names its own agent command, so two of
-    // them are two different agents.
-    if (id !== row.provider && row.provider !== 'claude' && row.provider !== 'codex' && row.provider !== 'acp') continue
+    // Extensions opt into configured instances only when their SDK resources
+    // are isolated. Do not offer duplicate labels for one shared runtime.
+    if (id !== row.provider && !getProviderManifest(row.provider).supportsInstances) continue
     seen.add(id)
     const displayName = typeof row.displayName === 'string' && row.displayName.trim()
       ? row.displayName.trim()

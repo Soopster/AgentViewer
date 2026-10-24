@@ -24,7 +24,7 @@ type Props = {
   onOpenSession: (target: { sessionId: string; provider: AgentProvider; uuid: string }) => void
 }
 
-const PROVIDER_META: Record<AgentProvider, { label: string; color: string }> = {
+const PROVIDER_META: Partial<Record<AgentProvider, { label: string; color: string }>> = {
   claude: { label: 'Claude', color: '#d97757' },
   codex: { label: 'Codex', color: '#10a37f' },
   opencode: { label: 'OpenCode', color: '#f59e0b' },

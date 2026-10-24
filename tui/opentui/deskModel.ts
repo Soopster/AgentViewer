@@ -180,7 +180,7 @@ export function deskSessionKey(session: Pick<Session, 'sessionId' | 'provider' |
   return sessionIdentityKey(session)
 }
 
-const PROVIDER_CODE: Record<AgentProvider, string> = {
+const PROVIDER_CODE: Partial<Record<AgentProvider, string>> = {
   claude: 'CLD', codex: 'CDX', opencode: 'OPC', copilot: 'CPL', pi: 'PI',
   lmstudio: 'LMS', 'claude-acp': 'CLA', 'codex-acp': 'CXA', acp: 'ACP',
 }

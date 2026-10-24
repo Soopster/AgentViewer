@@ -1,5 +1,7 @@
 'use client'
 
+import { PROVIDER_CHOICES } from '@/lib/extensions/providers/catalog'
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronLeft, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import type { AgentProvider } from '@/lib/types'
@@ -37,13 +39,7 @@ type Draft = {
 
 const EMPTY_DRAFT: Draft = { title: '', description: '', tags: '', providers: [], body: '' }
 
-const PROVIDER_OPTIONS: { value: AgentProvider; label: string }[] = [
-  { value: 'claude', label: 'Claude' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'opencode', label: 'OpenCode' },
-  { value: 'copilot', label: 'Copilot' },
-  { value: 'pi', label: 'Pi' },
-]
+const PROVIDER_OPTIONS = PROVIDER_CHOICES
 
 const PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z][\w.-]*)\s*\}\}/g
 

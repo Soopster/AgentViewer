@@ -77,7 +77,7 @@ export type SystemMessagePayload = {
   [key: string]: unknown
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | 'acp'
+export type AgentProvider = import('./extensions/providers/catalog').RegisteredProvider
 export type ProviderSelection = AgentProvider | 'all'
 export type ProviderInstanceId = string
 

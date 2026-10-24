@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { NEW_SESSION_PROVIDER_IDS, getProviderManifest } from '../../lib/extensions/providers/catalog'
 import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
@@ -51,18 +52,7 @@ const EDITOR_FIELD_LABEL: Record<EditorField, string> = {
   providers: 'Providers (1-6 toggle, blank = any)',
   body: 'Body  ({{placeholder}} tokens become fill-in fields)',
 }
-const PROVIDER_ORDER: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
-const PROVIDER_LABEL: Record<AgentProvider, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-  copilot: 'Copilot',
-  pi: 'Pi',
-  lmstudio: 'LM Studio',
-  'claude-acp': 'Claude (ACP)',
-  'codex-acp': 'Codex (ACP)',
-  acp: 'ACP agent',
-}
+const PROVIDER_ORDER = NEW_SESSION_PROVIDER_IDS
 
 function emptyDraft(): Draft {
   return { title: '', description: '', tags: '', providers: new Set<AgentProvider>(), body: '' }
@@ -444,7 +434,7 @@ export function PromptLibraryPopover({
         {filtered.map((entry, index) => {
           const active = index === selectedIndex
           const providerLabel = entry.providers.length > 0
-            ? entry.providers.map((p) => PROVIDER_LABEL[p] ?? p).join(' · ')
+            ? entry.providers.map((p) => getProviderManifest(p).displayName).join(' · ')
             : 'any provider'
           const tagsLabel = entry.tags.length > 0 ? entry.tags.map((t) => `#${t}`).join(' ') : ''
           const placeholderLabel = entry.placeholders.length > 0
@@ -498,7 +488,7 @@ export function PromptLibraryPopover({
                         fg={enabled ? accentColor : theme.dim}
                         wrapMode="none"
                       >
-                        {`${enabled ? '◉' : '○'} ${providerIndex + 1}:${PROVIDER_LABEL[provider]}`}
+                        {`${enabled ? '◉' : '○'} ${providerIndex + 1}:${getProviderManifest(provider).displayName}`}
                       </text>
                     )
                   })}

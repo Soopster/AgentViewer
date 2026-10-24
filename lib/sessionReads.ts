@@ -381,7 +381,11 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSessionInfo) return null
-  return withSessionInstance(provider, sessionId, () => adapter.readSessionInfo!(sessionId))
+  return withSessionInstance(provider, sessionId, async () => {
+    const info = await adapter.readSessionInfo!(sessionId)
+    const instance = currentProviderInstance()
+    return info && instance?.provider === provider ? applyProviderInstance(info, instance) : info
+  })
 }
 
 export async function patchViewSession(sessionId: string, body: Record<string, unknown>, providerOverride?: AgentProvider): Promise<void> {

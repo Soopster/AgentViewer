@@ -16,10 +16,10 @@ function shellQuote(s: string): string {
 // ACP-transport sessions (claude-acp/codex-acp/acp) are owned by
 // lib/acpClientPool.ts — no native CLI resume path either, and a configured
 // agent's own resume syntax is not ours to guess.
-const RESUME_COMMAND: Record<
+const RESUME_COMMAND: Partial<Record<
   Exclude<AgentProvider, 'lmstudio' | 'claude-acp' | 'codex-acp' | 'acp'>,
   (sessionId: string) => string
-> = {
+>> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
   opencode: (id) => `opencode --session ${id}`,

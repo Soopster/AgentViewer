@@ -1,3 +1,4 @@
+import { getProviderManifest } from './extensions/providers/catalog'
 import type { AgentProvider, SendAttachment } from './types'
 
 export type ComposerAttachmentPlan = {
@@ -142,54 +143,20 @@ export function resolveLocalComposerAttachmentPath(value: string, cwd?: string):
   return portableIsAbsolute(value) ? portableResolve('', value) : portableResolve(runtimeCwd, value)
 }
 
-function hasLocalImage(attachment: SendAttachment): boolean {
-  const path = attachmentPath(attachment)
-  return attachment.type === 'image' && Boolean(path && !isHttpUrl(path))
-}
-
-function hasImageBlob(attachment: SendAttachment): boolean {
-  return attachment.type === 'blob'
-    && Boolean(attachment.data)
-    && attachment.mimeType?.startsWith('image/') === true
-}
-
 function canEncodeNatively(provider: AgentProvider, attachment: SendAttachment): boolean {
-  const path = attachmentPath(attachment)
-  if (provider === 'claude' || provider === 'pi') {
-    return hasLocalImage(attachment) || hasImageBlob(attachment)
-  }
-  if (provider === 'codex') {
-    if (hasImageBlob(attachment)) return true
-    if (attachment.type === 'image') return Boolean(path)
-    if (attachment.type === 'skill') return Boolean(path)
-    return (attachment.type === 'file' || attachment.type === 'directory' || attachment.type === 'mention')
-      && Boolean(path)
-  }
-  if (provider === 'opencode') {
-    if (hasImageBlob(attachment)) return true
-    if (attachment.type === 'agent') return Boolean(attachment.text?.trim() || attachment.displayName)
-    return (attachment.type === 'file' || attachment.type === 'image' || attachment.type === 'mention')
-      && Boolean(path)
-  }
-  if (provider === 'lmstudio') {
-    // LM Studio's chat completions endpoint is text-only for now — no
-    // attachment type encodes natively.
-    return false
-  }
+  const policy = getProviderManifest(provider).attachments
+  if (!policy?.types.includes(attachment.type)) return false
   if (attachment.type === 'blob') {
-    return Boolean(attachment.data && attachment.mimeType)
+    return Boolean(attachment.data && attachment.mimeType
+      && (!policy.imageBlobsOnly || attachment.mimeType.startsWith('image/')))
   }
+  if (attachment.type === 'agent') return Boolean(attachment.text?.trim() || attachment.displayName)
   if (attachment.type === 'extension_context') {
     return Boolean(attachment.extensionId && attachment.capturedAt && attachment.displayName)
   }
-  if (attachment.type === 'selection') {
-    return Boolean((attachment.filePath || attachment.path) && attachment.displayName)
-  }
-  return (attachment.type === 'file'
-      || attachment.type === 'image'
-      || attachment.type === 'mention'
-      || attachment.type === 'directory')
-    && Boolean(path && !isHttpUrl(path))
+  if (attachment.type === 'selection') return Boolean((attachment.filePath || attachment.path) && attachment.displayName)
+  const path = attachmentPath(attachment)
+  return Boolean(path && (policy.remotePaths || !isHttpUrl(path)))
 }
 
 function selectionLocation(attachment: SendAttachment): string {

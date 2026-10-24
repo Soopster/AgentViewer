@@ -3526,7 +3526,7 @@ export function setActiveTheme(mode: TuiThemeMode): void {
   THEME = getThemePalette(mode)
 }
 
-function providerAccents(theme: TuiThemePalette): Record<ProviderSelection, string> {
+function providerAccents(theme: TuiThemePalette): Partial<Record<ProviderSelection, string>> {
   return {
     claude: theme.amber,
     codex: theme.cyan,

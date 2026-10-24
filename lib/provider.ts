@@ -1,123 +1,15 @@
 import type { AgentProvider, ProviderSelection, SessionCapabilities } from './types'
+import { getProviderManifest, PROVIDER_EXTENSIONS } from './extensions/providers/catalog'
 
-const CLAUDE_CAPABILITIES: SessionCapabilities = {
-  messageFork: true,
-  resumeAtMessage: true,
-  fileRewind: true,
-  rollback: false,
-  deleteSession: true,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: false,
-  unrevertSession: false,
-  respondToPermission: true,
-  activeSteering: true,
-  inPlaceRewind: false,
-}
-
-export const CODEX_CAPABILITIES: SessionCapabilities = {
-  messageFork: false,
-  resumeAtMessage: false,
-  fileRewind: false,
-  rollback: true,
-  deleteSession: false,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: false,
-  unrevertSession: false,
-  respondToPermission: true,
-  activeSteering: true,
-  inPlaceRewind: true,
-}
-
-export const OPENCODE_CAPABILITIES: SessionCapabilities = {
-  messageFork: true,
-  resumeAtMessage: true,
-  fileRewind: true,
-  rollback: false,
-  deleteSession: true,
-  shareSession: true,
-  unshareSession: true,
-  summarizeSession: true,
-  unrevertSession: true,
-  respondToPermission: true,
-  activeSteering: true,
-  inPlaceRewind: true,
-}
-
-export const COPILOT_CAPABILITIES: SessionCapabilities = {
-  messageFork: false,
-  resumeAtMessage: false,
-  fileRewind: true,
-  rollback: false,
-  deleteSession: true,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: false,
-  unrevertSession: false,
-  respondToPermission: true,
-  activeSteering: true,
-  inPlaceRewind: false,
-}
-
-export const PI_CAPABILITIES: SessionCapabilities = {
-  messageFork: true,
-  resumeAtMessage: false,
-  fileRewind: false,
-  rollback: false,
-  deleteSession: true,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: true,
-  unrevertSession: false,
-  respondToPermission: true,
-  activeSteering: true,
-  inPlaceRewind: false,
-}
-
-export const LMSTUDIO_CAPABILITIES: SessionCapabilities = {
-  messageFork: false,
-  resumeAtMessage: false,
-  fileRewind: false,
-  rollback: false,
-  deleteSession: true,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: false,
-  unrevertSession: false,
-  respondToPermission: false,
-  activeSteering: false,
-  inPlaceRewind: false,
-}
-
-// ACP-transport sessions: driven via an external claude-agent-acp/codex-acp
-// subprocess (see lib/acpClientPool.ts) instead of the native SDK. ACP has no
-// fork/resume-partial/rewind/rollback/delete/share RPCs, so those all stay
-// false regardless of what the underlying native provider supports.
-export const CLAUDE_ACP_CAPABILITIES: SessionCapabilities = {
-  messageFork: false,
-  resumeAtMessage: false,
-  fileRewind: false,
-  rollback: false,
-  deleteSession: false,
-  shareSession: false,
-  unshareSession: false,
-  summarizeSession: false,
-  unrevertSession: false,
-  respondToPermission: true,
-  activeSteering: false,
-  inPlaceRewind: false,
-}
-
-export const CODEX_ACP_CAPABILITIES: SessionCapabilities = {
-  ...CLAUDE_ACP_CAPABILITIES,
-}
-
-/** A user-configured agent speaking ACP (Gemini CLI, Goose, …). What it can do
- *  is read from the agent at runtime; nothing beyond a turn is assumed. */
-export const CUSTOM_ACP_CAPABILITIES: SessionCapabilities = {
-  ...CLAUDE_ACP_CAPABILITIES,
-}
+export const CLAUDE_CAPABILITIES: SessionCapabilities = getProviderManifest('claude').capabilities
+export const CODEX_CAPABILITIES: SessionCapabilities = getProviderManifest('codex').capabilities
+export const OPENCODE_CAPABILITIES: SessionCapabilities = getProviderManifest('opencode').capabilities
+export const COPILOT_CAPABILITIES: SessionCapabilities = getProviderManifest('copilot').capabilities
+export const PI_CAPABILITIES: SessionCapabilities = getProviderManifest('pi').capabilities
+export const LMSTUDIO_CAPABILITIES: SessionCapabilities = getProviderManifest('lmstudio').capabilities
+export const CLAUDE_ACP_CAPABILITIES: SessionCapabilities = getProviderManifest('claude-acp').capabilities
+export const CODEX_ACP_CAPABILITIES: SessionCapabilities = getProviderManifest('codex-acp').capabilities
+export const CUSTOM_ACP_CAPABILITIES: SessionCapabilities = getProviderManifest('acp').capabilities
 
 /** Every provider id driven through lib/acpClientPool.ts. */
 export type AcpProvider = Extract<AgentProvider, 'claude-acp' | 'codex-acp' | 'acp'>
@@ -127,60 +19,21 @@ export function isAcpProvider(provider: unknown): provider is AcpProvider {
 }
 
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
-  if (provider === 'codex') return CODEX_CAPABILITIES
-  if (provider === 'opencode') return OPENCODE_CAPABILITIES
-  if (provider === 'copilot') return COPILOT_CAPABILITIES
-  if (provider === 'pi') return PI_CAPABILITIES
-  if (provider === 'lmstudio') return LMSTUDIO_CAPABILITIES
-  if (provider === 'claude-acp') return CLAUDE_ACP_CAPABILITIES
-  if (provider === 'codex-acp') return CODEX_ACP_CAPABILITIES
-  if (provider === 'acp') return CUSTOM_ACP_CAPABILITIES
-  return CLAUDE_CAPABILITIES
+  return getProviderManifest(provider).capabilities
 }
 
 export function getAssistantLabel(provider: AgentProvider | undefined): string {
-  if (provider === 'codex') return 'CODEX'
-  if (provider === 'opencode') return 'OPENCODE'
-  if (provider === 'copilot') return 'COPILOT'
-  if (provider === 'pi') return 'PI'
-  if (provider === 'lmstudio') return 'LM STUDIO'
-  if (provider === 'claude-acp') return 'CLAUDE (ACP)'
-  if (provider === 'codex-acp') return 'CODEX (ACP)'
-  if (provider === 'acp') return 'ACP'
-  return 'CLAUDE'
+  return getProviderManifest(provider ?? 'claude').assistantLabel
 }
 
 export function isAgentProvider(value: unknown): value is AgentProvider {
-  return (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'opencode' ||
-    value === 'copilot' ||
-    value === 'pi' ||
-    value === 'lmstudio' ||
-    value === 'claude-acp' ||
-    value === 'codex-acp' ||
-    value === 'acp'
-  )
+  return typeof value === 'string' && Object.hasOwn(PROVIDER_EXTENSIONS, value)
 }
 
 export function isProviderSelection(value: unknown): value is ProviderSelection {
   return value === 'all' || isAgentProvider(value)
 }
 
-/**
- * Sentence-case assistant name for the web UI. `getAssistantLabel` returns the
- * all-caps form the terminal UIs render; the web chrome reads as prose, so it
- * uses this instead.
- */
 export function getAssistantDisplayName(provider: AgentProvider | undefined): string {
-  if (provider === 'codex') return 'Codex'
-  if (provider === 'opencode') return 'OpenCode'
-  if (provider === 'copilot') return 'Copilot'
-  if (provider === 'pi') return 'Pi'
-  if (provider === 'lmstudio') return 'LM Studio'
-  if (provider === 'claude-acp') return 'Claude (ACP)'
-  if (provider === 'codex-acp') return 'Codex (ACP)'
-  if (provider === 'acp') return 'ACP agent'
-  return 'Claude'
+  return getProviderManifest(provider ?? 'claude').displayName
 }

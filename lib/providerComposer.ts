@@ -1,4 +1,5 @@
 import type { AgentProvider } from './types'
+import { getProviderManifest } from './extensions/providers/catalog'
 
 export type ProviderComposerConfig = {
   /** Display label for the assistant. Mirrors getAssistantLabel but kept here so this module is self-contained. */
@@ -33,217 +34,24 @@ export type ProviderComposerConfig = {
   welcomeBullets: readonly string[]
 }
 
-const CLAUDE: ProviderComposerConfig = {
-  label: 'Claude',
-  glyph: '>',
-  cssAccentVar: '--violet',
-  cssAccentRgb: '139,128,240',
-  placeholderIdle: 'Try "fix the failing test" — Claude can read, edit, run, and explain code.',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick a Claude session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ! bash · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Send',
-  examples: [
-    'Try "find where API errors are logged"',
-    'Try "refactor this component to use hooks"',
-    'Try "summarise the diff on this branch"',
-    'Try "write a test for handleSubmit"',
-  ],
-  tuiAccentKey: 'violet',
-  welcomeTitle: '✻ Welcome to Claude Code',
-  welcomeSubtitle: '/help for help · /status for your setup · /model to change model',
-  welcomeBullets: [
-    'find where API errors are logged',
-    'refactor this component to use hooks',
-    'summarise the diff on this branch',
-  ],
-}
-
-const CODEX: ProviderComposerConfig = {
-  label: 'Codex',
-  glyph: '›',
-  cssAccentVar: '--green',
-  cssAccentRgb: '45,212,160',
-  // Mirror codex-rs PLACEHOLDERS[0] so the empty composer reads the same as the CLI.
-  placeholderIdle: 'Explain this codebase',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick a Codex thread to send a message',
-  // Match the bindings implemented by this composer: `/` for commands, `@` for file paths,
-  // and Shift+Enter for newline.
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Send',
-  // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.
-  examples: [
-    'Explain this codebase',
-    'Summarize recent commits',
-    'Implement {feature}',
-    'Find and fix a bug in @filename',
-    'Write tests for @filename',
-    'Improve documentation in @filename',
-    'Run /review on my current changes',
-    'Use /skills to list available skills',
-  ],
-  tuiAccentKey: 'green',
-  // Codex's onboarding banner: "Welcome to Codex, OpenAI's command-line coding agent".
-  welcomeTitle: 'Welcome to Codex',
-  welcomeSubtitle: "OpenAI's command-line coding agent · /status · /diff · /review",
-  welcomeBullets: [
-    'Explain this codebase',
-    'Summarize recent commits',
-    'Run /review on my current changes',
-  ],
-}
-
-const OPENCODE: ProviderComposerConfig = {
-  label: 'opencode',
-  glyph: '❯',
-  cssAccentVar: '--amber',
-  cssAccentRgb: '234,170,64',
-  placeholderIdle: 'Ask anything — opencode will plan, edit, and run. `!cmd` runs shell.',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick an opencode session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files/agents · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Send',
-  examples: [
-    'Try "explore the routing layer"',
-    'Try "open the failing CI logs and explain"',
-    'Try "draft a PR for the search refactor"',
-  ],
-  tuiAccentKey: 'amber',
-  welcomeTitle: '❯ opencode',
-  welcomeSubtitle: '/help · /summarize · @ to attach files',
-  welcomeBullets: [
-    'explore the routing layer',
-    'open the failing CI logs and explain',
-    'draft a PR for the search refactor',
-  ],
-}
-
-const COPILOT: ProviderComposerConfig = {
-  label: 'Copilot',
-  glyph: '»',
-  cssAccentVar: '--cyan',
-  cssAccentRgb: '56,217,245',
-  placeholderIdle: 'How can Copilot help with this repo?',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick a Copilot session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · mode picker · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Ask',
-  examples: [
-    'Try "what changed in the last release?"',
-    'Try "open a PR titled \'flaky test fix\'"',
-    'Try "review the diff for security issues"',
-  ],
-  tuiAccentKey: 'cyan',
-  welcomeTitle: '» GitHub Copilot',
-  welcomeSubtitle: '/help · /clear · ask about this repo',
-  welcomeBullets: [
-    'what changed in the last release?',
-    'open a PR titled "flaky test fix"',
-    'review the diff for security issues',
-  ],
-}
-
-const PI: ProviderComposerConfig = {
-  label: 'Pi',
-  glyph: '·',
-  cssAccentVar: '--red',
-  cssAccentRgb: '244,114,182',
-  placeholderIdle: 'What\'s on your mind? — Pi will write and run code with you. `!cmd` runs bash.',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick a Pi session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · ! bash · !! bash (no context) · / commands · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Send',
-  examples: [
-    'Try "build a quick prototype for X"',
-    'Try "fix this error trace"',
-    'Try "what does this regex match?"',
-  ],
-  tuiAccentKey: 'pink',
-  welcomeTitle: '· Pi',
-  welcomeSubtitle: '! to run a shell command · / for commands · drop files to attach',
-  welcomeBullets: [
-    'build a quick prototype for X',
-    'fix this error trace',
-    'what does this regex match?',
-  ],
-}
-
-const LMSTUDIO: ProviderComposerConfig = {
-  label: 'LM Studio',
-  glyph: '$',
-  cssAccentVar: '--red',
-  cssAccentRgb: '244,114,182',
-  placeholderIdle: 'Ask your local model anything — served by LM Studio.',
-  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
-  placeholderNoSession: 'Pick an LM Studio session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · ↑↓ history',
-  // LM Studio has no steer primitive, so Enter falls through to the queue —
-  // but the affordance is the same one every other provider advertises, and
-  // placeholderStreaming above already promises it.
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
-  sendVerb: 'Send',
-  examples: [
-    'Try "summarise this file"',
-    'Try "explain this error message"',
-    'Try "write a haiku about debugging"',
-  ],
-  tuiAccentKey: 'red',
-  welcomeTitle: '$ LM Studio',
-  welcomeSubtitle: 'Local models via LM Studio\'s server · set LMSTUDIO_BASE_URL to change host',
-  welcomeBullets: [
-    'summarise this file',
-    'explain this error message',
-    'write a haiku about debugging',
-  ],
-}
-
-// Whatever agent the user configured: nothing here may claim a command set or
-// a key binding the agent might not have.
-const CUSTOM_ACP: ProviderComposerConfig = {
-  label: 'ACP agent',
-  glyph: '>',
-  cssAccentVar: '--green',
-  cssAccentRgb: '52,211,153',
-  placeholderIdle: 'Message your ACP agent.',
-  placeholderStreaming: 'Type a follow-up — Enter queues it behind this turn',
-  placeholderNoSession: 'Pick an ACP session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ queue follow-up',
-  sendVerb: 'Send',
-  examples: [
-    'Try "summarise this repository"',
-    'Try "explain this error message"',
-  ],
-  tuiAccentKey: 'green',
-  welcomeTitle: '> ACP agent',
-  welcomeSubtitle: 'Any agent that speaks the Agent Client Protocol · set AGENT_VIEWER_ACP_COMMAND',
-  welcomeBullets: [
-    'summarise this repository',
-    'explain this error message',
-  ],
-}
-
-const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
-  claude: CLAUDE,
-  codex: CODEX,
-  opencode: OPENCODE,
-  copilot: COPILOT,
-  pi: PI,
-  lmstudio: LMSTUDIO,
-  'claude-acp': CLAUDE,
-  'codex-acp': CODEX,
-  acp: CUSTOM_ACP,
-}
-
+// Cached, neutral defaults for extensions that supply no composer branding.
+const generic = new Map<AgentProvider, ProviderComposerConfig>()
 export function getProviderComposer(provider: AgentProvider | undefined | null): ProviderComposerConfig {
-  if (!provider) return CLAUDE
-  return PROVIDER_COMPOSER[provider] ?? CLAUDE
+  const id = provider ?? 'claude'
+  const manifest = getProviderManifest(id)
+  if (manifest.composer) return manifest.composer
+  const cached = generic.get(id)
+  if (cached) return cached
+  const config: ProviderComposerConfig = {
+    label: manifest.displayName, glyph: '>', cssAccentVar: '--violet', cssAccentRgb: '139,128,240',
+    placeholderIdle: `Message ${manifest.displayName}`,
+    placeholderStreaming: 'Type a follow-up', placeholderNoSession: 'Pick a session to send a message',
+    footerHintIdle: 'Enter send · Shift+Enter newline', footerHintSending: 'Ctrl+C cancel',
+    sendVerb: 'Send', examples: [], tuiAccentKey: 'violet',
+    welcomeTitle: manifest.displayName, welcomeSubtitle: '', welcomeBullets: [],
+  }
+  generic.set(id, config)
+  return config
 }
 
 /** Pick a rotating example based on a stable index (e.g. session id hash). */

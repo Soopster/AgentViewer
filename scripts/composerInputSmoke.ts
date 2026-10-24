@@ -317,7 +317,7 @@ const attachmentMatrix: SendAttachment[] = [
   },
 ]
 
-const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
+const expectedNative: Partial<Record<AgentProvider, SendAttachment['type'][]>> = {
   claude: ['image', 'blob'],
   codex: ['file', 'directory', 'image', 'mention', 'skill', 'blob'],
   opencode: ['file', 'image', 'mention', 'blob', 'agent'],

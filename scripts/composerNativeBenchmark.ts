@@ -82,6 +82,8 @@ function commandFor(target: Target): { command: string; args: string[] } {
     case 'codex-acp':
     case 'acp':
       throw new Error('ACP-transport sessions are driven via claude-agent-acp/codex-acp subprocess RPC, not a native CLI invocation.')
+    default:
+      throw new Error(`No native CLI benchmark configured for ${target.provider}`)
   }
 }
 

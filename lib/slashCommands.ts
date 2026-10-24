@@ -12,7 +12,7 @@ export type SlashCommandSuggestion = {
 // provider's own CLI shows in its in-line slash menu, so the composer feels
 // native even when the SDK can't enumerate commands itself. Live results from
 // the SDK (when available) are merged on top so they always win.
-const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]> = {
+const SLASH_COMMANDS_BY_PROVIDER = {
   claude: [
     { command: '/help', description: 'Show available commands' },
     { command: '/clear', description: 'Start a fresh conversation' },
@@ -144,7 +144,7 @@ const AGENT_VIEWER_SESSION_COMMANDS: SlashCommandSuggestion[] = [
   { command: '/message', description: 'Send a message to another agent session', argumentHint: '<session-name> <message>' },
 ]
 
-const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandSuggestion[]> = {
+const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Partial<Record<AgentProvider, SlashCommandSuggestion[]>> = {
   claude: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.claude],
   codex: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.codex],
   opencode: [...AGENT_VIEWER_SESSION_COMMANDS, ...SLASH_COMMANDS_BY_PROVIDER.opencode],
@@ -157,8 +157,8 @@ const SLASH_COMMANDS_WITH_SESSION_MESSAGING: Record<AgentProvider, SlashCommandS
 }
 
 export function getSlashCommandSuggestions(provider: AgentProvider | undefined | null): SlashCommandSuggestion[] {
-  if (!provider) return SLASH_COMMANDS_WITH_SESSION_MESSAGING.claude
-  return SLASH_COMMANDS_WITH_SESSION_MESSAGING[provider] ?? SLASH_COMMANDS_WITH_SESSION_MESSAGING.claude
+  if (!provider) return SLASH_COMMANDS_WITH_SESSION_MESSAGING.claude!
+  return SLASH_COMMANDS_WITH_SESSION_MESSAGING[provider] ?? AGENT_VIEWER_SESSION_COMMANDS
 }
 
 export function filterSlashCommands(entries: SlashCommandSuggestion[], rawQuery: string): SlashCommandSuggestion[] {
