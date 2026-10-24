@@ -102,6 +102,7 @@ export class SpacesController {
   readonly file: string
   readonly migrated: boolean
   private healthy = true
+  private lastWritten: string | null = null
   private recoveredFromBackup = false
   persistenceError: string | null = null
   constructor(readonly launchCwd = process.cwd()) {
@@ -208,12 +209,20 @@ export class SpacesController {
     if (!this.healthy) return
     const state = { ...this.state, spaces: this.state.spaces.map(space => ({ ...space, workspaces: space.workspaces.map(workspace => ({ ...workspace, values: this.runtimes.get(workspace.id)?.snapshot() ?? workspace.values })) })) }
     mkdirSync(path.dirname(this.file), { recursive: true })
-    const data = JSON.stringify(state, encode, 2)
+    const data = `${JSON.stringify(state, encode, 2)}\n`
+    // Saves run on the render thread every 350ms while anything persistent
+    // changes, so an unchanged state writes nothing.
+    if (data === this.lastWritten) return
     // Preserve the previous validated generation before replacing the main file.
-    if (existsSync(this.file)) {
+    // What this process wrote last is that generation; the file on disk is read
+    // and validated only before the first write.
+    if (this.lastWritten !== null) {
+      writeFileSync(`${this.file}.bak.tmp`, this.lastWritten); renameSync(`${this.file}.bak.tmp`, `${this.file}.bak`)
+    } else if (existsSync(this.file)) {
       try { const old = readFileSync(this.file, 'utf8'); if (validState(JSON.parse(old, decode))) { writeFileSync(`${this.file}.bak.tmp`, old); renameSync(`${this.file}.bak.tmp`, `${this.file}.bak`) } } catch { /* retain last good backup */ }
     }
-    writeFileSync(`${this.file}.tmp`, `${data}\n`); renameSync(`${this.file}.tmp`, this.file)
+    writeFileSync(`${this.file}.tmp`, data); renameSync(`${this.file}.tmp`, this.file)
+    this.lastWritten = data
     if (this.persistenceError) { this.persistenceError = null; this.setAttention('__storage', '') }
   }
   private scheduleSave(): void {
