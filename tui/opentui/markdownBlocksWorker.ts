@@ -1,6 +1,8 @@
 import { buildMarkdownBlocks } from './markdownBlocks'
-const scope = globalThis as unknown as { onmessage: (event: MessageEvent<{ id: number; content: string }>) => void; postMessage: (response: unknown) => void }
+import { markdownCodeChunks } from './markdownStructure'
+import type { SimpleHighlight } from '@opentui/core'
+const scope = globalThis as unknown as { onmessage: (event: MessageEvent<{ id: number; content: string; kind?: 'code'; highlights?: SimpleHighlight[] }>) => void; postMessage: (response: unknown) => void }
 scope.onmessage = ({ data }) => {
-  try { scope.postMessage({ id: data.id, blocks: buildMarkdownBlocks(data.content) }) }
+  try { scope.postMessage(data.kind === 'code' ? { id: data.id, chunks: markdownCodeChunks(data.content, 32, data.highlights) } : { id: data.id, blocks: buildMarkdownBlocks(data.content) }) }
   catch (error) { scope.postMessage({ id: data.id, error: String(error) }) }
 }

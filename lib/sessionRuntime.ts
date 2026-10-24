@@ -1,4 +1,5 @@
 import type { AgentProvider } from './types'
+import { currentProviderInstance } from './providerInstances'
 
 export type SessionBackgroundTask = {
   id: string
@@ -17,6 +18,7 @@ export type SessionCronWakeup = {
 export type WaitingSession = {
   sessionId: string
   provider: AgentProvider
+  providerInstanceId?: string
   backgroundTasks: SessionBackgroundTask[]
   sessionCrons: SessionCronWakeup[]
   updatedAt: number
@@ -24,6 +26,7 @@ export type WaitingSession = {
 
 type RunningSession = {
   provider: AgentProvider
+  providerInstanceId?: string
   interrupt: (cancelQueued?: boolean) => Promise<unknown>
   background?: () => Promise<unknown>
   /**
@@ -87,7 +90,9 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
   // A new foreground turn supersedes the prior Stop-hook pause snapshot. The
   // next Stop callback will publish a fresh waiting state if work remains.
   waitingSessions.delete(sessionId)
-  runningSessions.set(sessionId, session)
+  const active = currentProviderInstance()
+  const instance = session.providerInstanceId ?? (active?.provider === session.provider ? active.id : undefined)
+  runningSessions.set(sessionId, instance && instance !== session.provider ? { ...session, providerInstanceId: instance } : session)
   const pending = pendingInterrupts.get(sessionId)
   if (pending && session.requestId === pending.requestId) {
     clearTimeout(pending.timer)
@@ -97,6 +102,10 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
 }
 
 export function setWaitingSession(state: Omit<WaitingSession, 'updatedAt'>): void {
+  const active = currentProviderInstance()
+  const instance = state.providerInstanceId ?? (active?.provider === state.provider ? active.id : undefined)
+    ?? runningSessions.get(state.sessionId)?.providerInstanceId
+  if (instance && instance !== state.provider) state = { ...state, providerInstanceId: instance }
   const observations = getSessionRuntimeState().waitingObservations!
   observations.delete(state.sessionId)
   observations.set(state.sessionId, { ...state, updatedAt: Date.now() })
@@ -272,8 +281,9 @@ export function getRunningSessionInfo(sessionId: string): {
  * Every session with a turn currently running in this process, for surfaces
  * that track liveness across sessions (reattach, attention inbox, fleet view).
  */
-export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider }> {
-  return Array.from(runningSessions, ([sessionId, running]) => ({ sessionId, provider: running.provider }))
+export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider; providerInstanceId?: string }> {
+  return Array.from(runningSessions, ([sessionId, running]) => ({ sessionId, provider: running.provider,
+    ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) }))
 }
 
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {

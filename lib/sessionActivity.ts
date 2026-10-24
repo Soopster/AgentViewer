@@ -34,6 +34,7 @@ export function registerPendingTurnPayloadReader(reader: PendingTurnPayloadReade
 export function listViewRunningSessions(): Array<{
   sessionId: string
   provider: AgentProvider
+  providerInstanceId?: string
   pendingPrompts: Record<string, unknown>[]
   pendingPermissions: Record<string, unknown>[]
 }> {

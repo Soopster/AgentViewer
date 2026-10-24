@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { Session } from '../../lib/types'
 import type { TuiSessionDetail } from '../../lib/tui/service'
 import type { TuiDensity } from '../theme'
@@ -6,7 +7,7 @@ import type { SessionCacheBudget } from './sessionCacheBudget'
 
 type Entry = { owner: string; detail: TuiSessionDetail; revision: number | undefined; bytes: number; readAt: number }
 type Read = (session: Session, density: TuiDensity, tools: boolean) => Promise<TuiSessionDetail>
-const identity = (session: Session) => `${session.provider ?? 'claude'}:${session.sessionId}`
+const identity = sessionIdentityKey
 const variant = (session: Session, density: TuiDensity, tools: boolean) => JSON.stringify([identity(session), density, tools])
 export type TranscriptObserver = {
   session: Session

@@ -1,3 +1,4 @@
+import { sessionIdentityKey, sessionVariantKey, sessionVariantParts } from './sessionIdentity'
 import { SessionCacheBudget } from './sessionCacheBudget'
 import { transcriptPayloadBytes } from './transcriptPayloadSize'
 import {
@@ -294,20 +295,19 @@ function touchLastFormatted(owner: string, key: string, value: LastFormatted): v
 }
 
 /** Every cache here is keyed by session except this one, which is keyed by
- *  `${sessionCacheKey}|${cardsVariant}` — so evicting a session from the
+ *  sessionVariantKey(sessionCacheKey, cardsVariant) — so evicting a session from the
  *  threading cache used to leave its formatted transcript behind. Each entry
  *  pins a full ThreadedMessage[] *and* a full card array, and the cap is four
  *  per session, so the worker could hold 24 whole transcripts while intending
  *  to hold 6. That gap was the bulk of this worker's resident memory. */
 function dropLastFormattedForSession(sessionCacheKey: string): void {
-  const prefix = `${sessionCacheKey}|`
   for (const key of lastFormattedByKey.keys()) {
-    if (key.startsWith(prefix)) lastFormattedByKey.delete(key)
+    if (sessionVariantParts(key)[0] === sessionCacheKey) lastFormattedByKey.delete(key)
   }
 }
 
 function cacheKey(session: Session): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+  return sessionIdentityKey(session)
 }
 
 function trimSessionBudget() {
@@ -591,10 +591,10 @@ self.onmessage = async (event) => {
       const sessionCacheKey = cacheKey(data.session)
       const separateTurnDurations = data.separateTurnDurations === true
       const cardsVariant = cardsVariantKey(data.density, data.showToolCalls, separateTurnDurations)
-      const formatKey = `${sessionCacheKey}|${cardsVariant}`
+      const formatKey = sessionVariantKey(sessionCacheKey, cardsVariant)
       const prev = lastFormattedByKey.get(formatKey)
       const inputBaseline = data.threadedBaseVariant
-        ? lastFormattedByKey.get(`${sessionCacheKey}|${data.threadedBaseVariant}`)
+        ? lastFormattedByKey.get(sessionVariantKey(sessionCacheKey, data.threadedBaseVariant))
         : prev
       const canApplyPatch = Boolean(
         inputBaseline

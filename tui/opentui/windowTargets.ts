@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { Session } from '../../lib/types'
 import { formatSessionTitle } from '../format'
 
@@ -12,7 +13,7 @@ export type WindowTarget = {
 }
 
 export function windowSessionKey(session: Session): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+  return sessionIdentityKey(session)
 }
 
 export function windowSessionTarget(session: Session, hidden: boolean): WindowTarget {

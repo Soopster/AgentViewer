@@ -1,3 +1,4 @@
+import { sessionIdentityKey, sessionVariantKey, sessionVariantParts } from './sessionIdentity'
 import { mainTranscriptBudget } from './sessionCacheBudget'
 import type { ThreadedMessage } from '../../lib/threading'
 import { deferTranscriptCardSearchText, withTranscriptCardPreview, type TuiTranscriptCard } from '../format'
@@ -187,13 +188,12 @@ function touchLastFormatted(key: string, value: LastFormattedDelivery): void {
 }
 
 /** Mirrors the worker's own eviction: this map is keyed by
- *  `${sessionKey}|${cardsVariant}`, so a session dropped from the threading
+ *  `[sessionKey, cardsVariant]`, so a session dropped from the threading
  *  cache would otherwise leave its threaded transcript and cards pinned here
  *  until twelve other format keys pushed them out. */
 function dropLastFormattedForSession(sessionKey: string): void {
-  const prefix = `${sessionKey}|`
   for (const key of lastFormattedByKey.keys()) {
-    if (key.startsWith(prefix)) lastFormattedByKey.delete(key)
+    if (sessionVariantParts(key)[0] === sessionKey) lastFormattedByKey.delete(key)
   }
 }
 
@@ -236,7 +236,7 @@ function threadedPatchBounds(next: ThreadedMessage[], prev: ThreadedMessage[]): 
 }
 
 function cacheKey(session: Session): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+  return sessionIdentityKey(session)
 }
 
 function variantKey(density: TuiDensity, showToolCalls: boolean, options?: TranscriptCardOptions): string {
@@ -732,7 +732,7 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
   const separateTurnDurations = request.options?.separateTurnDurations === true
   // Every density of one tool-visibility and duration mode ends the same way.
   const siblingSuffix = cardsVariant.slice(cardsVariant.indexOf('|'))
-  const formatKey = `${key}|${cardsVariant}`
+  const formatKey = sessionVariantKey(key, cardsVariant)
   const id = ++requestCounter
   const w = ensureWorker()
   let previousDelivery = lastFormattedByKey.get(formatKey)
@@ -740,11 +740,11 @@ function dispatchFormat(request: FormatRequest): Promise<void> {
   if (!previousDelivery) {
     // The first format of a density can use another density's exact token as
     // its input baseline. Output sharing is independently checked in worker.
-    const prefix = `${key}|`
     for (const [candidateKey, candidate] of lastFormattedByKey) {
-      if (candidateKey.startsWith(prefix) && candidateKey.slice(candidateKey.indexOf('|', prefix.length)) === siblingSuffix) {
+      const [candidateOwner, candidateVariant] = sessionVariantParts(candidateKey)
+      if (candidateOwner === key && candidateVariant.slice(candidateVariant.indexOf('|')) === siblingSuffix) {
         previousDelivery = candidate
-        threadedBaseVariant = candidateKey.slice(prefix.length)
+        threadedBaseVariant = candidateVariant
       }
     }
   }
@@ -850,7 +850,7 @@ export function readAndBuildTranscriptAsync(
       // are not the same request, and answering one with the other's cards
       // would hand back a transcript formatted for a display the caller is not
       // showing.
-      key: `detail:${cacheKey(session)}|${variantKey(density, showToolCalls, options)}`,
+      key: JSON.stringify(['detail', cacheKey(session), variantKey(density, showToolCalls, options)]),
       request: { session, density, showToolCalls, options, resolve, reject },
     })
   })
@@ -870,7 +870,7 @@ export function warmTranscriptAsync(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     warmQueue.push({
-      key: `warm:${cacheKey(session)}|${variantKey(density, showToolCalls, options)}`,
+      key: JSON.stringify(['warm', cacheKey(session), variantKey(density, showToolCalls, options)]),
       request: { session, density, showToolCalls, options, resolve, reject },
     })
   })
@@ -906,7 +906,7 @@ export function formatTranscriptCardsAsync(
       // other one's cards would render a different number of cards than it has
       // messages. Identity is minted per array rather than derived from its
       // contents: this runs on every density toggle, and the arrays are large.
-      key: `format:${key}|${variantKey(density, showToolCalls, options)}|${threadedIdentity(threaded)}`,
+      key: JSON.stringify(['format', key, variantKey(density, showToolCalls, options), threadedIdentity(threaded)]),
       request: { session, threaded, density, showToolCalls, options, resolve, reject },
     })
   })

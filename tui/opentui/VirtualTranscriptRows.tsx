@@ -114,7 +114,7 @@ export function VirtualTranscriptRows<Row>({ rows, rowKey, estimateHeight, geome
       sync()
     }
   }, [jumpKey, virtual, visible, model, viewport, sync])
-  if (!virtual) return <>{rows.map(renderRow)}</>
+  if (!virtual) return <>{rows.map((row, index) => <React.Fragment key={model.keys[index]}>{renderRow(row, index)}</React.Fragment>)}</>
   // A new document must not reuse another document's stale range bounds.
   const start = Math.min(range.start, rows.length)
   const end = Math.max(start, Math.min(range.end, rows.length))

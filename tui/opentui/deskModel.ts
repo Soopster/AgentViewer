@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 // The desk: a Bloomberg-Terminal-style workspace over the session list.
 //
 // Everything here is pure — the functions a panel can run, the launchpad
@@ -175,8 +176,8 @@ function deskSessionHaystack(session: Session): string {
 
 // ── Securities ───────────────────────────────────────────────────────────────
 
-export function deskSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+export function deskSessionKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return sessionIdentityKey(session)
 }
 
 const PROVIDER_CODE: Record<AgentProvider, string> = {
@@ -189,7 +190,7 @@ export function deskProviderCode(provider: AgentProvider | undefined): string {
 }
 
 /** `CLD 3F9A2C` — a session's ticker: provider code and the tail of its id. */
-export function deskTicker(session: Pick<Session, 'sessionId' | 'provider'>): string {
+export function deskTicker(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
   const tail = session.sessionId.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase()
   return `${deskProviderCode(session.provider)} ${tail}`
 }

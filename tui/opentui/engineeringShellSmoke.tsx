@@ -195,7 +195,21 @@ for (const [width, height] of sizes.filter(([width, height]) => `${width}x${heig
         act(() => { setup.mockInput.pressEnter() })
         await settle()
         const modeFrame = setup.captureCharFrame()
-        if (!(mode === 'stream' ? modeFrame.includes('STREAM') && modeFrame.includes('LIVE') : modeFrame.includes(`${mode.toUpperCase()} ·`))) {
+        // Stream deliberately gives its header rows back to the transcript.
+        // Verify its selected identity in the view menu rather than expecting
+        // the old STREAM/LIVE banner to consume two rows of the reader.
+        if (mode === 'stream') {
+          act(() => { setup.mockInput.pressKey('v') })
+          await settle()
+          if (!setup.captureCharFrame().includes('STREAM ✓')) {
+            throw new Error(`Stream was not selected in the view menu:\n${setup.captureCharFrame()}`)
+          }
+          act(() => { setup.mockInput.pressEscape() })
+          await settle()
+          if (modeFrame.includes('STREAM ·') || modeFrame.includes('Context usage')) {
+            throw new Error(`Stream reserved obsolete reader header rows:\n${modeFrame}`)
+          }
+        } else if (!modeFrame.includes(`${mode.toUpperCase()} ·`)) {
           throw new Error(`${mode} label missing from its own view header:\n${modeFrame}`)
         }
         const proseCard = node(`card:${PROSE_CARD.key}`)

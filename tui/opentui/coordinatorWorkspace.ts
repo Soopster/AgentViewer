@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import type { Session } from '../../lib/types'
 import { coordinatorAttention } from '../../lib/coordinatorAttention'
@@ -26,7 +27,7 @@ export function coordinatorWindowBadges(snapshot: ProtocolRunSnapshot): Map<stri
     if (item.kind === 'result') continue
     const agent = snapshot.agents.find(agent => agent.id === (item.agentId ?? snapshot.run.leadAgentId))
     if (!agent?.sessionId || agent.sessionId.startsWith('external:')) continue
-    const key = `${agent.provider ?? 'claude'}:${agent.sessionId}`
+    const key = sessionIdentityKey(agent)
     const badge = item.kind === 'plan' || item.kind === 'review' ? '? review' : '? reply'
     // Review is the more specific gate when an agent has several requests.
     if (!badges.has(key) || badge === '? review') badges.set(key, badge)

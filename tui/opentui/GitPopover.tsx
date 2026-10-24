@@ -864,7 +864,8 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   const contentKey = JSON.stringify([repoCwd, sourceKey, pane, pane === 3 ? branchIndex : null, pane === 4 ? commitIndex : null])
   const [loadedContentKey, setLoadedContentKey] = useState('')
   const loadedContentKeyRef = useRef('')
-  const review = useReview(localReviewTransport, repoCwd, sourceKey, 'TUI Git', pane === 2 && loadedContentKey === contentKey && rightContent !== 'Loading…' ? rightContent : undefined, pane === 2 && loadedContentKey === contentKey && rightContent !== 'Loading…')
+  const reviewReady = visible && pane === 2 && loadedContentKey === contentKey && rightContent !== 'Loading…'
+  const review = useReview(localReviewTransport, repoCwd, sourceKey, 'TUI Git', reviewReady ? rightContent : undefined, reviewReady)
   const diffNotes = review.notes as Map<string, DiffNote>
   const setDiffNotes = review.setNotes
   const navigateReview = useCallback((target: ReviewTarget) => { setFileFilter(''); setPane(2); setFileDiffMode('viewer'); setFocusSide('right'); setReviewBoardOpen(false); setReviewTarget(target) }, [])

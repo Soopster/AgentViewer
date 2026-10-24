@@ -15,11 +15,12 @@ const makeMessage = (i: number): SessionMessage => ({
   message: { role: i % 2 ? 'assistant' : 'user', content: `Message ${i}: ${'representative content '.repeat(24)}` },
 })
 let raw = Array.from({ length: 10000 }, (_, i) => makeMessage(i))
+const instanceSources = new Map<string, SessionMessage[]>()
 let holdNextSource = false
 const sourceGate: { release?: () => void } = {}
 mock.module('../../lib/tui/reads', () => ({
-  readTuiSessionDetailSource: async () => {
-    const result = { info: null, rawMessages: structuredClone(raw) }
+  readTuiSessionDetailSource: async (target: { providerInstanceId?: string }) => {
+    const result = { info: null, rawMessages: structuredClone(instanceSources.get(target.providerInstanceId ?? '') ?? raw) }
     if (!holdNextSource) return result
     holdNextSource = false
     return new Promise<typeof result>((resolve) => { sourceGate.release = () => resolve(result) })
@@ -319,4 +320,21 @@ for (const corrupt of ['token', 'index'] as const) {
   // request from the old token, recover full input, and restore exact output.
   assert.deepEqual(await formatTranscriptCardsAsync(corruptSession, [...formatThreaded], 'dense', true), formatTranscriptCards(formatThreaded, 'dense'))
 }
+for (const instance of ['work', 'personal']) instanceSources.set(instance, [{
+  ...makeMessage(0), provider: 'codex', providerInstanceId: instance,
+  message: { role: 'user', content: `Only ${instance} owns this transcript` },
+}])
+const work = { ...session, providerInstanceId: 'work' }
+const personal = { ...session, providerInstanceId: 'personal' }
+const workDetail = await readAndBuildTranscriptAsync(work, 'balanced', true)
+const personalDetail = await readAndBuildTranscriptAsync(personal, 'balanced', true)
+assert.ok(JSON.stringify(workDetail.transcriptCards).includes('Only work owns'))
+assert.ok(JSON.stringify(personalDetail.transcriptCards).includes('Only personal owns'))
+assert.equal(workDetail.threadedMessages[0]?.providerInstanceId, 'work')
+assert.equal(personalDetail.threadedMessages[0]?.providerInstanceId, 'personal')
+assert.equal(getTranscriptCardsSync(work, workDetail.threadedMessages, 'balanced', true), workDetail.transcriptCards)
+assert.equal(getTranscriptCardsSync(personal, personalDetail.threadedMessages, 'balanced', true), personalDetail.transcriptCards)
+const workAgain = await readAndBuildTranscriptAsync(work, 'balanced', true)
+assert.equal(workAgain.transcriptCards, workDetail.transcriptCards, 'sibling delivery must not replace the worker/client baseline')
+console.log('Worker delivery instance isolation passed: equal session IDs and UUIDs retain separate source, threading and card baselines')
 console.log(JSON.stringify({ benchmark: 'transcript-detail-delivery', messages: 10000, transfer, byteIdentical: true }))

@@ -95,6 +95,7 @@ export type ThreadedMessage = {
   origin?: { kind: string; subkind?: string }
   usage?: ApiMessage['usage']
   provider?: AgentProvider
+  providerInstanceId?: string
   taskDescription?: string
   requestId?: string
   /** See SessionMessage.resumeReason — marks a turn that is an automatic re-run. */
@@ -404,7 +405,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         sessionId: msg.session_id,
         timestamp: msg.timestamp,
         origin: msg.origin,
-        provider: msg.provider,
+        provider: msg.provider, providerInstanceId: msg.providerInstanceId,
         providerMessageId: msg.providerMessageId,
         blocks: [{
           type: 'claude_system',
@@ -419,7 +420,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
       const notif = parseTaskNotification(msg.message.content)
       if (notif) {
-        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, providerMessageId: msg.providerMessageId, blocks: [notif] })
+        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, provider: msg.provider, providerInstanceId: msg.providerInstanceId, providerMessageId: msg.providerMessageId, blocks: [notif] })
         continue
       }
     }
@@ -463,7 +464,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         timestamp: msg.timestamp,
         origin: msg.origin,
         usage: messageUsage(msg),
-        provider: msg.provider,
+        provider: msg.provider, providerInstanceId: msg.providerInstanceId,
         taskDescription: msg.taskDescription,
         requestId: msg.requestId,
         resumeReason: msg.resumeReason,

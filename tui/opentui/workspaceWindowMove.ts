@@ -1,10 +1,11 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { Session } from '../../lib/types'
 import type { SpacesController, WorkspaceRuntime } from './spacesStore'
 import { isSurfaceWindowKey, orderWindows, surfaceIdOfKey, surfaceWindowKey } from './windowOrder'
 import { isPopoverWindowKind, POPOVER_WINDOWS } from './popoverWindows'
 import { reconcileWindowSplitTree, validWindowSplitTree } from './windowSplitTree'
 
-const sessionKey = (session: Session) => `${session.provider ?? 'claude'}:${session.sessionId}`
+const sessionKey = sessionIdentityKey
 const read = <T>(runtime: WorkspaceRuntime, key: string, initial: T): T => runtime.get(key, initial, true)
 const write = (runtime: WorkspaceRuntime, key: string, value: unknown) => { runtime.persistent.add(key); runtime.set(key, value) }
 const keysOf = (runtime: WorkspaceRuntime) => orderWindows(read(runtime, 'windowOrder', [] as string[]), read(runtime, 'splitPinnedKeys', [] as string[]).slice(0, read(runtime, 'splitPaneCount', 0)), read(runtime, 'windowSurfaces', [] as string[]))

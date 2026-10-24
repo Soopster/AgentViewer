@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { sessionIdentityKey } from './sessionIdentity'
+import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
 import { hideScratchSessions } from './scratchSessions'
@@ -95,7 +97,7 @@ import {
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
-import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { pruneUnmountedCardData } from './readerCardCache'
 import { RowHeightIndex } from './rowHeightIndex'
 import { TranscriptDetailCache } from './transcriptDetailCache'
@@ -260,10 +262,13 @@ import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
 import { RetainedWindow, useWindowVisible } from './windowActivity'
 import { TranscriptViewportContext, TranscriptBlockRestoreContext, type TranscriptBlockRestore, VirtualTranscriptRows } from './VirtualTranscriptRows'
-import { parseMarkdownBlocksAsync } from './markdownBlocksWorkerClient'
-import type { MarkdownBlock } from './markdownBlocks'
 import { useStableEvent } from './useStableEvent'
-import { useTranscriptWindowChrome, type WindowChrome } from './windowChrome'
+import { useTranscriptWindowChrome, useTranscriptWindowChromeHost, type WindowChrome } from './windowChrome'
+import { transcriptWindowCommand } from './transcriptWindowInput'
+import { usePinnedSessionDetail } from './usePinnedSessionDetail'
+import { useTranscriptCards } from './useTranscriptCards'
+import { SelectableMarkdown } from './SelectableMarkdown'
+import { applySelectionColorsToTree, type SelectionColors } from './selectionTree'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
@@ -342,7 +347,6 @@ import {
   evenSplitReaderShare,
   groupItemsBySplitPaneKey,
   isComposerTargetReady,
-  preserveArrayIdentity,
   removeSplitPaneKey,
   resolveComposerTargetSession,
   resolveCoordinationTranscriptTarget,
@@ -2661,12 +2665,6 @@ function stringifyLiveValue(value: unknown): string {
   }
 }
 
-function upsertThreadedMessage(messages: ThreadedMessage[], nextMessage: ThreadedMessage): ThreadedMessage[] {
-  const existingIndex = messages.findIndex((message) => message.uuid === nextMessage.uuid)
-  if (existingIndex === -1) return [...messages, nextMessage]
-  return messages.map((message, index) => index === existingIndex ? nextMessage : message)
-}
-
 // Attach a tool's real result to its live card. Until this lands the card
 // keeps `result: null`, which the formatters render as a compact running
 // state — a streaming tool is genuinely still running once its input has
@@ -2910,11 +2908,6 @@ function completeCodexQuestionLiveMessage(
   })
 }
 
-function liveMessageSessionKey(message: ThreadedMessage): string | null {
-  if (!message.sessionId) return null
-  return `${message.provider ?? 'claude'}:${message.sessionId}`
-}
-
 function hasLiveAssistantMessage(messages: ThreadedMessage[], key: string): boolean {
   return messages.some((message) => liveMessageSessionKey(message) === key && message.role === 'assistant')
 }
@@ -2965,6 +2958,7 @@ function makeLiveUserMessage(session: Session, text: string, uuid = 'live-user')
     role: 'user',
     uuid,
     sessionId: session.sessionId,
+    providerInstanceId: session.providerInstanceId,
     provider: session.provider ?? 'claude',
     blocks: [{ type: 'text', text }],
   }
@@ -2975,6 +2969,7 @@ function makeLiveAssistantTextMessage(session: Session, text: string, uuid: stri
     role: 'assistant',
     uuid,
     sessionId: session.sessionId,
+    providerInstanceId: session.providerInstanceId,
     provider: session.provider ?? 'claude',
     timestamp,
     blocks: [{ type: 'text', text }],
@@ -3128,6 +3123,7 @@ function extractOpenCodeLiveToolThread(payload: unknown, session: Session): Thre
     role: 'assistant',
     uuid: `live-tool:${toolUseId}`,
     sessionId: session.sessionId,
+    providerInstanceId: session.providerInstanceId,
     provider: session.provider ?? 'opencode',
     blocks: [{
       type: 'tool_thread',
@@ -3187,9 +3183,7 @@ function compareSessionsByActivityDesc(a: Session, b: Session): number {
 // Which session (sessionId + provider) a read detail belongs to. The detail
 // itself carries no identity, and two sessions can hold identical transcripts.
 const sessionDetailOwnerKeys = new WeakMap<TuiSessionDetail, string>()
-function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
-}
+const sessionKey = sessionIdentityKey
 
 // Stable content-equality check for the sessions list. The sidebar refresh
 // fires every 5s and the running-session poll every 1.5s — returning the
@@ -3398,7 +3392,7 @@ function buildSidebarEntries(
         entries.push({ type: 'project', key: `project:${projectName}:${i}`, projectName, count: run })
         prevProject = projectName
       }
-      const sessionEntryKey = `session:${session.provider ?? 'claude'}:${session.sessionId}`
+      const sessionEntryKey = `session:${sessionKey(session)}`
       entries.push({
         type: 'session',
         key: sessionEntryKey,
@@ -3427,7 +3421,7 @@ function buildSidebarEntries(
     const members = groups.get(projectName)!
     entries.push({ type: 'project', key: `project:${projectName}`, projectName, count: members.length })
     for (const { session, absoluteIndex } of members) {
-      const sessionEntryKey = `session:${session.provider ?? 'claude'}:${session.sessionId}`
+      const sessionEntryKey = `session:${sessionKey(session)}`
       entries.push({
         type: 'session',
         key: sessionEntryKey,
@@ -3478,11 +3472,6 @@ function chooseSyntaxColor(theme: TuiThemePalette, preferred: string, fallbacks:
   ])
   if (!lowSignal.has(preferred.toLowerCase())) return preferred
   return fallbacks.find((color) => !lowSignal.has(color.toLowerCase())) ?? preferred
-}
-
-type SelectionColors = {
-  selectionBg: string
-  selectionFg: string
 }
 
 function parseHexRgb(color: string): { r: number; g: number; b: number } | null {
@@ -3544,28 +3533,6 @@ function continuousUserBackground(theme: TuiThemePalette): string {
 function streamUserBackground(theme: TuiThemePalette): string {
   const lightTheme = (relativeLuminance(theme.bg) ?? relativeLuminance(theme.surface) ?? 0) > 0.5
   return mixHexColor(theme.cyan, theme.surface, lightTheme ? 0.06 : 0.09) ?? theme.surface2
-}
-
-type SelectionColorTarget = BaseRenderable & {
-  selectionBg?: string
-  selectionFg?: string
-}
-
-function applySelectionColorsToTree(root: BaseRenderable | null, colors: SelectionColors): void {
-  if (!root) return
-  const stack: BaseRenderable[] = [root]
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node) continue
-    if ('selectionBg' in node) {
-      const target = node as SelectionColorTarget
-      target.selectionBg = colors.selectionBg
-      target.selectionFg = colors.selectionFg
-    }
-    for (const child of node.getChildren()) {
-      stack.push(child)
-    }
-  }
 }
 
 export function buildSyntaxStyle(theme: TuiThemePalette, owner: NativeResourceOwner): SyntaxStyle {
@@ -5126,7 +5093,10 @@ function sliceCodeBlockLines(content: string, maxLines: number): string {
 }
 
 function canRenderMarkdownWithSyntax(content: string): boolean {
+  // Structured blocks are partitioned off-thread, including documents beyond
+  // the old whole-native-buffer guard. Keep the guard for unstructured prose.
   return content.length <= MAX_MARKDOWN_SYNTAX_CHARS
+    || /(?:^|\n)[ \t]*(?:`{3,}|~{3,}|[-*+]\s|\d+[.)]\s|\|)|\|[^\n]*\|/.test(content)
 }
 
 function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
@@ -6078,66 +6048,6 @@ type TranscriptCardProps = {
   // because split panes can show two sessions rooted in different repositories,
   // and a path resolved against the wrong one is a link to nothing.
   linkCwd?: string
-}
-
-type SelectableMarkdownProps = {
-  content: string
-  documentKey?: string
-  syntaxStyle: SyntaxStyle
-  fg: string
-  width: number
-  selectionColors: SelectionColors
-  borderColor: string
-}
-
-function NativeSelectableMarkdown({
-  content,
-  syntaxStyle,
-  fg,
-  width,
-  selectionColors,
-  borderColor,
-}: SelectableMarkdownProps) {
-  const markdownRef = useRef<MarkdownRenderable | null>(null)
-
-  useLayoutEffect(() => {
-    applySelectionColorsToTree(markdownRef.current, selectionColors)
-  }, [content, syntaxStyle, selectionColors.selectionBg, selectionColors.selectionFg])
-
-  return (
-    <markdown
-      ref={markdownRef}
-      content={content}
-      syntaxStyle={syntaxStyle}
-      fg={fg}
-      streaming={false}
-      width={width}
-      tableOptions={{ widthMode: 'content', borders: true, borderColor, selectable: true }}
-    />
-  )
-}
-
-// Large documents are tokenized off-thread and virtualized within a card.
-// Short prose keeps the existing one-text/native Markdown path.
-function SelectableMarkdown(props: SelectableMarkdownProps) {
-  const visible = useWindowVisible()
-  const [parsed, setParsed] = useState<{ source: string; blocks: MarkdownBlock[] } | null>(null)
-  const large = props.content.length > 16_384
-  const viewport = React.useContext(TranscriptViewportContext)
-  useEffect(() => {
-    if (!large || !visible || !viewport) return
-    let cancelled = false
-    const abort = new AbortController()
-    void parseMarkdownBlocksAsync(props.content, abort.signal).then(blocks => {
-      if (!cancelled) setParsed({ source: props.content, blocks })
-    }).catch(() => { if (!cancelled) setParsed({ source: props.content, blocks: [] }) })
-    return () => { cancelled = true; abort.abort() }
-  }, [large, visible, viewport, props.content])
-  if (!large || !viewport || parsed?.source === props.content && parsed.blocks.length < 2) return <NativeSelectableMarkdown {...props} />
-  if (parsed?.source !== props.content) return <box id="transcript-block-loading" height={Math.max(1, Math.ceil(props.content.length / Math.max(props.width, 20)))}><text fg={props.fg}>Loading…</text></box>
-  return <VirtualTranscriptRows rows={parsed.blocks} threshold={1} rowKey={block => block.key}
-    documentKey={props.documentKey} geometryKey={`markdown:${props.width}`} estimateHeight={block => Math.max(block.estimatedRows, Math.ceil(block.content.length / Math.max(props.width, 20))) + block.marginBottom}
-    renderRow={block => <box key={block.key} marginBottom={block.marginBottom} flexDirection="column"><NativeSelectableMarkdown {...props} content={block.content} /></box>} />
 }
 
 // Shared block-markdown body for the Stream and Agents views. Mirrors the
@@ -7803,32 +7713,6 @@ const EMPTY_SEARCH_MATCHES: number[] = []
 const SPLIT_PANE_EMPTY_LIVE: ThreadedMessage[] = []
 const noopSelectCard = () => {}
 
-// Pinned tools keep their session identity while sharing payloads with transcript
-// windows. Poll only when its revision changes, yielding to foreground work.
-function usePinnedSessionDetail(session: Session | null, density: TuiDensity, showToolCalls: boolean, shouldYield: () => boolean) {
-  const loader = useTranscriptSessionLoader()
-  const visible = useWindowVisible()
-  const [detail, setDetail] = useState<TuiSessionDetail | null>(() => session ? loader.peek(session, density, showToolCalls)?.detail ?? null : null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'gone'>(session ? 'loading' : 'gone')
-  const key = session ? sessionKey(session) : null
-  const latest = useStableEvent(() => session)
-  useEffect(() => {
-    if (!session || !key) { setStatus('gone'); setDetail(null); return }
-    if (!visible) return
-    const cached = loader.peek(session, density, showToolCalls)
-    setDetail(cached?.detail ?? null)
-    setStatus(cached ? 'ready' : 'loading')
-    return loader.observe({
-      session, density, tools: showToolCalls,
-      revision: () => { const current = latest(); return current ? sessionTranscriptUpdatedAt(current) : undefined },
-      active: () => false, priority: () => 1, shouldYield,
-      onDetail: next => { setDetail(next); setStatus('ready') },
-      onError: () => setStatus('error'),
-    })
-  }, [key, density, showToolCalls, loader, visible, shouldYield, latest])
-  return { detail, status }
-}
-
 // Analytics in a window: the pinned session's numbers, whatever the reader shows.
 function PinnedAnalyticsWindow({ session, density, showToolCalls, shouldYield, theme, width, height, onClose, onKeyHandlerReady }: {
   session: Session | null
@@ -7882,14 +7766,6 @@ export function shouldPollSplitPaneDetail(
 // detaches from the live tail and G re-attaches — the root never has to know.
 // Keys the reader binds to its transcript (cursor, scroll, folds, marks,
 // jumps, search, the selected card's diff); a focused window keeps them.
-function isTranscriptLocalKey(key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean }, sequence: string): boolean {
-  if (key.meta) return false
-  if (key.ctrl) return key.name === 'd' || key.name === 'u'
-  if (key.name === 'up' || key.name === 'down' || key.name === 'pageup' || key.name === 'pagedown' || key.name === 'home' || key.name === 'end' || key.name === 'return') return true
-  // n/N step search matches only while there are some; otherwise they are
-  // the app's own keys (N: new session), so they are not the transcript's.
-  return sequence.length === 1 && 'jkgGefumbQyYs()[]{}/'.includes(sequence)
-}
 
 const subscribeNothing = (_listener: () => void) => () => {}
 const getNothing = () => null
@@ -8149,7 +8025,6 @@ function SplitTranscriptPaneInner({
   const key = sessionKey(session)
   const { header: selectedWindowHeader, footer: selectedWindowFooter } = useTranscriptWindowChrome()
   const positions = useTranscriptWindowPositions()
-  const loader = useTranscriptSessionLoader()
   const paneWorkspace = useWorkspaceContext()
   const [initialPosition] = useState(() => positions.current.get(key))
   const legacy = paneWorkspace?.runtime.values
@@ -8157,16 +8032,11 @@ function SplitTranscriptPaneInner({
   const titleClickRef = useRef<{ x: number; y: number; at: number } | null>(null)
   const promoteThisPane = useCallback(() => onPromotePane(session), [onPromotePane, session])
   const closeThisPane = useCallback(() => onClosePane(paneIndex), [onClosePane, paneIndex])
-  const [initialDetail] = useState(() => {
-    const entry = loader.peek(session, density, showToolCalls)
-    if (!entry) return null
-    const cards = attachedTranscriptCardsForVariant(entry.detail, density, showToolCalls)
-      ?? getTranscriptCardsSync(session, entry.detail.threadedMessages, density, showToolCalls)
-    return cards ? { ...entry, cards } : null
+  const { cards, status, error } = useTranscriptCards({
+    session, density, showToolCalls, focused,
+    active: running || liveMessages.length > 0 || Boolean(liveText),
+    shouldYield: shouldYieldToForeground,
   })
-  const [cards, setCards] = useState<TuiTranscriptCard[]>(() => initialDetail?.cards ?? [])
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(() => initialDetail ? 'ready' : 'loading')
-  const [error, setError] = useState<string | null>(null)
   const [followTail, setFollowTail] = useState(initialPosition?.state.followTail ?? (legacy?.get(`pane:${key}:followTail`) as boolean | undefined) ?? true)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const [initialScrollTop] = useState(() => initialPosition?.scrollTop ?? (legacy?.get(`ref:pane:${key}:scroll`) as { current: number | null } | undefined)?.current ?? null)
@@ -8177,40 +8047,6 @@ function SplitTranscriptPaneInner({
     return () => { capture(); paneWorkspace?.runtime.flushers.delete(capture) }
   }, [key, paneWorkspace?.runtime])
   const visible = useWindowVisible()
-  const currentRefresh = useStableEvent(() => ({
-    session, active: running || liveMessages.length > 0 || Boolean(liveText), focused,
-  }))
-  useEffect(() => {
-    if (!visible) return
-    let cancelled = false
-    let version = 0
-    if (!loader.peek(session, density, showToolCalls)) setStatus('loading')
-    const release = loader.observe({
-      session, density, tools: showToolCalls,
-      revision: () => sessionTranscriptUpdatedAt(currentRefresh().session),
-      active: () => currentRefresh().active,
-      priority: () => currentRefresh().focused ? 0 : 1,
-      shouldYield: shouldYieldToForeground,
-      onDetail: detail => {
-        const request = ++version
-        const accept = (next: TuiTranscriptCard[]) => {
-          if (cancelled || request !== version) return
-          setCards(previous => preserveArrayIdentity(previous, next))
-          setStatus('ready')
-          setError(null)
-        }
-        const cached = attachedTranscriptCardsForVariant(detail, density, showToolCalls)
-          ?? getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
-        if (cached) accept(cached)
-        else void formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls).then(accept).catch(error => {
-          if (!cancelled && request === version) { setStatus('error'); setError(String(error)) }
-        })
-      },
-      onError: error => { if (!cancelled) { setStatus('error'); setError(error instanceof Error ? error.message : 'Failed to load transcript') } },
-    })
-    return () => { cancelled = true; release() }
-  }, [visible, key, density, showToolCalls, loader, shouldYieldToForeground, currentRefresh])
-
   // The mounted card window slides like the reader's, from this window's own
   // store, starting where the transcript was last read.
   const [windowStore] = useState(() => {
@@ -9852,11 +9688,6 @@ export default function OpenTuiApp() {
 }
 
 function OpenTuiWorkspace() {
-  const { header: selectedWindowHeader, footer: selectedWindowFooter } = useTranscriptWindowChrome()
-  useLayoutEffect(() => () => {
-    selectedWindowHeader.set(null)
-    selectedWindowFooter.set(null)
-  }, [selectedWindowHeader, selectedWindowFooter])
   const workspaceContext = useWorkspaceContext()!
   const workspaceId = workspaceContext.runtime.workspace.id
   const workspaceCwd = workspaceContext.space.cwd
@@ -13738,7 +13569,7 @@ function OpenTuiWorkspace() {
   const focusedWindowSurface: WindowSurfaceId | null = windowSurfacePeek ?? (focusedWindowItem?.kind === 'surface' ? focusedWindowItem.surface : null) ?? (popoverTabFocused ? shownPopoverTab : null)
   const focusedWindowSurfaceKind: WindowSurfaceKind | null = focusedWindowSurface ? surfaceKindOf(focusedWindowSurface) : null
   const describeCoordinatorWindow = (target: WindowTarget): WindowTarget => {
-    const agent = watchedCoordinator?.agents.find(entry => entry.sessionId && `${entry.provider ?? 'claude'}:${entry.sessionId}` === target.key)
+    const agent = watchedCoordinator?.agents.find(entry => entry.sessionId && sessionKey({ ...entry, sessionId: entry.sessionId! }) === target.key)
     if (!agent) return target
     const task = watchedCoordinator?.tasks.find(entry => entry.ownerAgentId === agent.id && !['completed', 'failed', 'cancelled'].includes(entry.status))
     return { ...target, title: `${agent.name} · ${target.title}`, detail: `${agent.role}${task ? ` · ${task.title}` : ''} · ${target.detail}` }
@@ -13857,7 +13688,7 @@ function OpenTuiWorkspace() {
   const splitPaneRunningKeys = useMemo(() => {
     const keys = new Set<string>()
     for (const running of runningSessions) {
-      keys.add(`${running.provider ?? 'claude'}:${running.sessionId}`)
+      keys.add(sessionKey(running))
     }
     return keys
   }, [runningSessions])
@@ -17688,6 +17519,7 @@ function OpenTuiWorkspace() {
     setPermissionOptionIndex(0)
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
+      providerInstanceId: targetSession.providerInstanceId,
       provider: targetSession.provider ?? 'claude',
     }
     markSessionRunning(runningRef)
@@ -17897,6 +17729,7 @@ function OpenTuiWorkspace() {
             role: 'user',
             uuid: `live-bash:${sendStartedAt}`,
             sessionId: targetSession.sessionId,
+            providerInstanceId: targetSession.providerInstanceId,
             provider: targetSession.provider ?? 'claude',
             blocks: [
               { type: 'bash_input', command: typeof bash.command === 'string' ? bash.command : trimmed.slice(1).trim() },
@@ -17967,6 +17800,7 @@ function OpenTuiWorkspace() {
                 role: 'user',
                 uuid: `live-command-result:${sendStartedAt}`,
                 sessionId: targetSession.sessionId,
+                providerInstanceId: targetSession.providerInstanceId,
                 provider: targetSession.provider,
                 timestamp: new Date().toISOString(),
                 blocks: [{ type: 'local_command_stdout', stdout: message }],
@@ -18092,6 +17926,7 @@ function OpenTuiWorkspace() {
             role: 'assistant',
             uuid: `live-tool:${claudeToolUse.id}`,
             sessionId: targetSession.sessionId,
+            providerInstanceId: targetSession.providerInstanceId,
             provider: targetSession.provider ?? 'claude',
             blocks: [{
               type: 'tool_thread',
@@ -18163,6 +17998,7 @@ function OpenTuiWorkspace() {
             role: 'assistant',
             uuid: `live-subagent:${openCodeSubagent.agentId}`,
             sessionId: targetSession.sessionId,
+            providerInstanceId: targetSession.providerInstanceId,
             provider: targetSession.provider ?? 'opencode',
             blocks: [{ type: 'text', text: label }],
           }
@@ -18197,6 +18033,7 @@ function OpenTuiWorkspace() {
                 role: 'user',
                 uuid: `live-local-command:${typeof synthetic.id === 'string' ? synthetic.id : sendStartedAt}`,
                 sessionId: targetSession.sessionId,
+                providerInstanceId: targetSession.providerInstanceId,
                 provider: 'claude',
                 timestamp: new Date().toISOString(),
                 blocks: [{ type: 'local_command_stdout', stdout }],
@@ -18222,7 +18059,7 @@ function OpenTuiWorkspace() {
                 ? prev.filter((message) => message.uuid !== CODEX_LIVE_ASSISTANT_UUID)
                 : prev
               return threaded
-                ? upsertThreadedMessage(withoutStreamingText, threaded)
+                ? upsertThreadedMessage(withoutStreamingText, { ...threaded, providerInstanceId: targetSession.providerInstanceId })
                 : withoutStreamingText
             })
           }
@@ -18726,7 +18563,7 @@ function OpenTuiWorkspace() {
       setWaitingSessions((prev) => (sameJson(prev, activity.waiting) ? prev : activity.waiting))
       setViewerAttentionNotes((prev) => (sameJson(prev, activity.attention) ? prev : activity.attention))
       const runningByKey = new Map(entries.map((entry) => [
-        sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
+        sessionKey(entry),
         entry,
       ]))
       runningRegistryByKeyRef.current = runningByKey
@@ -18737,7 +18574,7 @@ function OpenTuiWorkspace() {
       // switch, or surviving a dead stream).
       for (const [key, entry] of runningByKey) {
         if (key === ownedKey || reattachMarksRef.current.has(key)) continue
-        const ref: RunningSessionRef = { sessionId: entry.sessionId, provider: entry.provider }
+        const ref: RunningSessionRef = { sessionId: entry.sessionId, provider: entry.provider, providerInstanceId: entry.providerInstanceId }
         reattachMarksRef.current.set(key, ref)
         markSessionRunning(ref)
       }
@@ -24863,129 +24700,63 @@ function OpenTuiWorkspace() {
         || (key.shift && (key.name === 'j' || key.name === 'k' || key.name === 'up' || key.name === 'down')))
     if (splitFocusIndex !== null && !diffCardKey) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
-      // A letter with Ctrl or Meta held is a chord, not the letter: under the
-      // kitty protocol ⌃E arrives with `e` as its sequence.
-      const letter = key.ctrl || key.meta ? '' : sequence
       const paneSession = paneHandle?.getSession() ?? null
-      const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
-      // The transcript search and the jumps (prompts, tools, bookmarks, the
-      // unread boundary, the resume marker) are the reader's, run against the
-      // selected transcript — the one this window shows — and land here.
-      // { } (Shift+[ ]) page the fleet strip while it has pages, as from the reader.
-      const fleetPageKey = fleetStripVisible && fleetPageCount > 1
-        && (letter === '{' || letter === '}' || isShifted('[') || isShifted(']'))
-      if (paneSession && sessionKey(paneSession) === selectedSessionKey && !fleetPageKey) {
-        if (letter === '/') { handled(() => setSearchMode(true)); return }
-        if (searchMatches.length > 0 && (letter === 'n' || letter === 'N')) { handled(() => jumpToSearchMatch(letter === 'n' ? 1 : -1)); return }
-        if (letter === '(' || letter === ')') { handled(() => jumpToMatchingCard(letter === '(' ? -1 : 1, (card) => card.category === 'conversation')); return }
-        if (letter === '{' || letter === '}') { handled(() => jumpToMatchingCard(letter === '{' ? -1 : 1, (card) => card.category !== 'conversation')); return }
-        if (letter === '[' || letter === ']') { handled(() => jumpToBookmark(letter === '[' ? -1 : 1)); return }
-        if (letter === 'u') { handled(jumpToUnreadBoundary); return }
-        if (letter === 'm') { handled(jumpToResumeMarker); return }
-      }
-      if (key.name === 'escape') { handled(focusReaderFromSplit); return }
-      // SCROLLBACK has no card cursor: the keys that move it elsewhere move the
-      // text here, by rows, and e / Enter fold or unfold the whole transcript.
-      if (paneHandle?.isScrollback() && !key.shift) {
-        const page = paneHandle.pageRows()
-        const rows = isCtrl('d') ? Math.ceil(page / 2)
-          : isCtrl('u') ? -Math.ceil(page / 2)
-          : letter === 'j' || key.name === 'down' ? velocityScrollStep(1)
-          : letter === 'k' || key.name === 'up' ? -velocityScrollStep(-1)
-          : key.name === 'pagedown' ? page
-          : key.name === 'pageup' ? -page
-          : 0
-        if (rows !== 0) { handled(() => paneHandle.scrollByRows(rows)); return }
-        if (key.name === 'return' || letter === 'e') { handled(() => paneHandle.toggleScrollbackAll()); return }
-      }
-      // Card navigation, not raw scrolling: the pane has a cursor, so j/k move
-      // between messages exactly like the reader.
-      if (letter === 'j' || key.name === 'down') { handled(() => paneHandle?.moveCursor(1)); return }
-      if (letter === 'k' || key.name === 'up') { handled(() => paneHandle?.moveCursor(-1)); return }
-      if (isCtrl('d') || key.name === 'pagedown') { handled(() => paneHandle?.moveCursor(pageRows)); return }
-      if (isCtrl('u') || key.name === 'pageup') { handled(() => paneHandle?.moveCursor(-pageRows)); return }
-      if (letter === 'G') { handled(() => paneHandle?.cursorToEdge('last')); return }
-      if (letter === 'g') { handled(() => paneHandle?.cursorToEdge('first')); return }
-      if (letter === 'e') { handled(() => paneHandle?.toggleExpandedAtCursor()); return }
-      if (letter === 'f') { handled(() => paneHandle?.cursorToEdge('last')); return }
-      // Card actions reuse the reader's implementations with the pane's own
-      // card, so clipboard/bookmark/reply behave identically in both readers.
-      if (letter === 'y') {
-        handled(() => { void copySelectedMessage(paneHandle?.getCursorCard() ?? undefined) })
-        return
-      }
-      if (letter === 'b') {
+      const command = transcriptWindowCommand(key, {
+        selected: Boolean(paneSession && sessionKey(paneSession) === selectedSessionKey),
+        hasSession: Boolean(paneSession), searchMatches: searchMatches.length > 0,
+        fleetPaging: fleetStripVisible && fleetPageCount > 1,
+        scrollback: paneHandle?.isScrollback() ?? false,
+        pageRows: paneHandle?.pageRows() ?? 1,
+        cardPageRows: Math.max(Math.floor(transcriptViewportRows * 0.8), 1),
+        primaryFrame: hasPrimaryFrame, scrollStep: velocityScrollStep,
+      })
+      if (command) {
         handled(() => {
-          void (async () => {
-            try {
-              const added = await paneHandle?.toggleBookmarkAtCursor()
-              showNotice('info', added ? 'Bookmarked message' : 'Removed bookmark')
-            } catch (err) {
-              showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
+          if (command.type === 'scroll') paneHandle?.scrollByRows(command.rows)
+          else if (command.type === 'moveCursor') paneHandle?.moveCursor(command.delta)
+          else if (command.type === 'edge') paneHandle?.cursorToEdge(command.edge)
+          else if (command.type === 'searchStep') jumpToSearchMatch(command.direction)
+          else if (command.type === 'conversationJump') jumpToMatchingCard(command.direction, card => card.category === 'conversation')
+          else if (command.type === 'technicalJump') jumpToMatchingCard(command.direction, card => card.category !== 'conversation')
+          else if (command.type === 'bookmarkJump') jumpToBookmark(command.direction)
+          else if (command.type === 'stripStep') {
+            const from = paneSession ? visibleTabSessions.findIndex(tab => sessionKey(tab) === sessionKey(paneSession)) : -1
+            selectStripIndex(Math.max(0, Math.min((from >= 0 ? from : activeStripIndex) + command.direction, tabStripLength - 1)))
+          } else if (command.type === 'action') {
+            switch (command.action) {
+              case 'search': setSearchMode(true); break
+              case 'unread': jumpToUnreadBoundary(); break
+              case 'resume': jumpToResumeMarker(); break
+              case 'focusReader': focusReaderFromSplit(); break
+              case 'toggleAll': paneHandle?.toggleScrollbackAll(); break
+              case 'toggleExpanded': paneHandle?.toggleExpandedAtCursor(); break
+              case 'copy': void copySelectedMessage(paneHandle?.getCursorCard() ?? undefined); break
+              case 'bookmark':
+                void paneHandle?.toggleBookmarkAtCursor().then(added => showNotice('info', added ? 'Bookmarked message' : 'Removed bookmark'))
+                  .catch(err => showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark'))
+                break
+              case 'reply': if (paneSession) composeToSplitPaneSession(paneSession); replySelectedMessage(paneHandle?.getCursorCard() ?? undefined); break
+              case 'compose': if (paneSession) composeToSplitPaneSession(paneSession); break
+              case 'thinking': setThinkingMode(current => { const next = !current; showToggleOutcome('Thinking mode', next); return next }); break
+              case 'open': openFocusedSplitPane(); break
+              case 'tab': tabFromSplitPane(); break
+              case 'close': if (paneSession) closeWindowSessionTab(paneSession); break
+              case 'git': openSplitPaneOverlay('git', paneSession); break
+              case 'diagnostics': openSplitPaneOverlay('diagnostics', paneSession); break
+              case 'coordination': openCoordinationBoard(); break
+              case 'interrupt':
+                if (paneSession && splitPaneRunningKeys.has(sessionKey(paneSession)) && !paneSession.isPending) {
+                  void interruptTuiSessionTurn(paneSession)
+                    .then(() => showNotice('info', `Interrupted ${formatSessionTitle(paneSession)}`))
+                    .catch(err => showNotice('error', err instanceof Error ? err.message : 'Failed to interrupt'))
+                } else requestExit()
+                break
+              case 'swallow': break
             }
-          })()
-        })
-        return
-      }
-      if (isShifted('q')) {
-        handled(() => {
-          if (paneSession) composeToSplitPaneSession(paneSession)
-          replySelectedMessage(paneHandle?.getCursorCard() ?? undefined)
-        })
-        return
-      }
-      // Composer aimed at THIS pane's agent — the point of a live split view.
-      if (letter === 'c') {
-        handled(() => { if (paneSession) composeToSplitPaneSession(paneSession) })
-        return
-      }
-      if (letter === 'i') {
-        handled(() => setThinkingMode((current) => {
-          const next = !current
-          showToggleOutcome('Thinking mode', next)
-          return next
-        }))
-        return
-      }
-      if (key.name === 'return') { handled(openFocusedSplitPane); return }
-      if (key.name === 'tab') { handled(tabFromSplitPane); return }
-      if (key.name === 'w' && !key.ctrl && !key.shift && !key.meta && paneSession) { handled(() => closeWindowSessionTab(paneSession)); return }
-      // With the reader closed nothing else can switch tabs, so ←/→ step the
-      // strip from this pane's session, as they do from the reader.
-      if (!hasPrimaryFrame && !key.ctrl && !key.shift && (key.name === 'left' || key.name === 'right')) {
-        handled(() => {
-          const from = paneSession ? visibleTabSessions.findIndex(tab => sessionKey(tab) === sessionKey(paneSession)) : -1
-          const at = from >= 0 ? from : activeStripIndex
-          selectStripIndex(key.name === 'left' ? Math.max(at - 1, 0) : Math.min(at + 1, tabStripLength - 1))
-        })
-        return
-      }
-      // Session-scoped overlays follow focus, so ⌃G/D inspect the window you
-      // are looking at. ⌃A needs nothing here: focusing a window selects its
-      // session, which is what the analytics popover reads.
-      if (isCtrl('g')) { handled(() => openSplitPaneOverlay('git', paneSession)); return }
-      if (letter === 'D') { handled(() => openSplitPaneOverlay('diagnostics', paneSession)); return }
-      if (isCtrlShift('a')) { handled(openCoordinationBoard); return }
-      // ⌃C means "stop what I'm watching" when the pane's agent is mid-turn —
-      // the same key that quits an idle app must not kill the whole TUI when
-      // the obvious intent is to interrupt this run.
-      if (isCtrl('c')) {
-        handled(() => {
-          if (paneSession && splitPaneRunningKeys.has(sessionKey(paneSession)) && !paneSession.isPending) {
-            void interruptTuiSessionTurn({ sessionId: paneSession.sessionId, provider: paneSession.provider })
-              .then(() => showNotice('info', `Interrupted ${formatSessionTitle(paneSession)}`))
-              .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Failed to interrupt'))
-            return
           }
-          requestExit()
         })
         return
       }
-      // Keys that act on a transcript are this window's: the root's own
-      // handlers for them act on the selected session's reader state, which
-      // is not what this window draws. Everything else — view, theme, panels,
-      // the composer — is the app's, and falls through to its handlers.
-      if (isTranscriptLocalKey(key, sequence) && !fleetPageKey) { handled(() => {}); return }
     }
 
     if (isCtrl('v')) {
@@ -26651,10 +26422,7 @@ function OpenTuiWorkspace() {
     ),
   }
   // A window drawing the selected transcript as a pane takes it from here.
-  useLayoutEffect(() => {
-    selectedWindowHeader.set(readerHeaderChrome.rows > 0 ? readerHeaderChrome : null)
-    selectedWindowFooter.set(readerFooterChrome.rows > 0 ? readerFooterChrome : null)
-  })
+  useTranscriptWindowChromeHost(readerHeaderChrome, readerFooterChrome)
 
   // The frame drawn outside the windows: a popover tab, when one is shown.
   const readerFrameNode = () => shownPopoverTab ? popoverTabFrameRef.current?.() ?? null : null

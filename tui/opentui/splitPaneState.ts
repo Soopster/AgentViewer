@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { Session } from '../../lib/types'
 
 export type SplitPaneLayout = {
@@ -242,8 +243,8 @@ export function removeSplitPaneKey(pinnedKeys: readonly string[], paneIndex: num
  */
 export const EXTERNAL_SESSION_PREFIX = 'external:'
 
-export function transcriptSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
+export function transcriptSessionKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return sessionIdentityKey(session)
 }
 
 export type CoordinationTranscriptTarget =
@@ -259,7 +260,7 @@ export type CoordinationTranscriptTarget =
  * must surface the reason instead of opening anything.
  */
 export function resolveCoordinationTranscriptTarget(
-  agent: Pick<ProtocolAgentLike, 'name' | 'role' | 'provider' | 'sessionId' | 'worktreePath'>,
+  agent: Pick<ProtocolAgentLike, 'name' | 'role' | 'provider' | 'providerInstanceId' | 'sessionId' | 'worktreePath'>,
   sessionsByKey: ReadonlyMap<string, Session>,
   now: number,
 ): CoordinationTranscriptTarget {
@@ -270,7 +271,7 @@ export function resolveCoordinationTranscriptTarget(
   if (sessionId.startsWith(EXTERNAL_SESSION_PREFIX)) {
     return { kind: 'unreadable', reason: `${agent.name} has no readable transcript: external MCP participant` }
   }
-  const key = transcriptSessionKey({ sessionId, provider: agent.provider })
+  const key = transcriptSessionKey({ sessionId, provider: agent.provider, providerInstanceId: agent.providerInstanceId })
   const indexed = sessionsByKey.get(key)
   if (indexed) return { kind: 'open', sessionKey: key, session: indexed, indexed: true }
   return {
@@ -279,6 +280,7 @@ export function resolveCoordinationTranscriptTarget(
     session: {
       sessionId,
       provider: agent.provider,
+      providerInstanceId: agent.providerInstanceId,
       cwd: agent.worktreePath || undefined,
       createdAt: now,
       lastModified: now,
@@ -292,6 +294,7 @@ type ProtocolAgentLike = {
   name: string
   role: string
   provider?: Session['provider']
+  providerInstanceId?: string
   sessionId?: string | null
   worktreePath?: string
 }
@@ -387,10 +390,10 @@ export function resolveComposerTargetSession({
   paneTargetKey: string | null
   preferredTargetKey: string | null
   selectedSession: Session | null
-  runningSessions: readonly Pick<Session, 'sessionId' | 'provider'>[]
+  runningSessions: readonly Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>[]
   sessions: readonly Session[]
   openTabSessions: readonly Session[]
-  keyOf: (session: Pick<Session, 'sessionId' | 'provider'>) => string
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>) => string
 }): Session | null {
   if (paneTargetKey) {
     // An explicit pane target must never fall through to the reader's session.
@@ -434,8 +437,8 @@ export function isComposerTargetReady({
   keyOf,
 }: {
   preparingTargetKey: string | null
-  targetSession: Pick<Session, 'sessionId' | 'provider'> | null
-  keyOf: (session: Pick<Session, 'sessionId' | 'provider'>) => string
+  targetSession: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'> | null
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>) => string
 }): boolean {
   if (!targetSession) return false
   return preparingTargetKey !== keyOf(targetSession)

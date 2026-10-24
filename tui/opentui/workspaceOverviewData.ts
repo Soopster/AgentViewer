@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { Session } from '../../lib/types'
 import { formatSessionTitle } from '../format'
 import { orderWindows, isSurfaceWindowKey, surfaceIdOfKey } from './windowOrder'
@@ -25,7 +26,7 @@ export function subscribeWorkspaceOverview(controller: SpacesController, listene
 export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWindow[] {
   const values = { ...runtime.snapshot(), ...Object.fromEntries(runtime.values) }
   const sessions = [...((values.openTabSessions ?? []) as Session[]), ...(values.readerSession ? [values.readerSession as Session] : [])]
-  const sessionByKey = new Map(sessions.map(session => [`${session.provider ?? 'claude'}:${session.sessionId}`, session]))
+  const sessionByKey = new Map(sessions.map(session => [sessionIdentityKey(session), session]))
   const cached = new Map<string, OverviewWindow>()
   for (const window of (runtime.values.get('windowOverviewWindows') ?? []) as OverviewWindow[]) {
     cached.set(window.key, window)

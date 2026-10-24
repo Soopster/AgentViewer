@@ -12,6 +12,10 @@ import { DARK_THEME } from '../theme'
 import { buildPierreDiffView, loadDiffHighlights } from './pierreDiffView'
 
 const cwd = await mkdtemp(join(tmpdir(), 'git-diff-viewport-'))
+const previousReviewDirectory = process.env.AGENT_VIEWER_REVIEW_DIR
+// Keep transactional review data inside the disposable fixture, including in
+// sandboxes where the real user review directory is intentionally read-only.
+process.env.AGENT_VIEWER_REVIEW_DIR = join(cwd, '.git', 'agent-viewer-reviews')
 const git = (...args: string[]) => execFileSync('git', args, { cwd })
 let key: ((event: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => void) | null = null
 const lines = (value: string) => Array.from({ length: 2400 }, (_, i) => `const row${String(i).padStart(4, '0')} = "${value}";`).join('\n') + '\n'
@@ -71,7 +75,7 @@ try {
     assert.equal(scroll.scrollHeight, fullHeight + 6, 'draft geometry matches rendered height')
     await press('Z')
     await press('return')
-    assert.equal(scroll.scrollHeight, fullHeight + 4, 'saved note geometry matches rendered height')
+    assert.equal(scroll.scrollHeight, fullHeight + 4, `saved note geometry matches rendered height:\n${setup.captureCharFrame()}`)
     assert(setup.captureCharFrame().includes('Note'), 'saved note remains visible')
     await act(async () => { scroll.scrollTo(0) })
     await flush()
@@ -94,4 +98,8 @@ try {
   assert(view.rows.some(row => row.spans?.some(span => span.bg)), 'unified changed words carry backgrounds')
   assert(view.splitRows.some(row => row.right?.spans?.some(span => span.bg)), 'split changed words carry backgrounds')
   console.log('Git diff viewport smoke passed: full extent, bounded rows, refresh/layout anchors, cache identity, word emphasis')
-} finally { await rm(cwd, { recursive: true, force: true }) }
+} finally {
+  if (previousReviewDirectory === undefined) delete process.env.AGENT_VIEWER_REVIEW_DIR
+  else process.env.AGENT_VIEWER_REVIEW_DIR = previousReviewDirectory
+  await rm(cwd, { recursive: true, force: true })
+}

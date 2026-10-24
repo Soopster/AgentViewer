@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentProvider } from './types'
+import { currentProviderInstance } from './providerInstances'
 
 export type ViewerAttentionNote = {
   id: string
   sessionId: string
   provider: AgentProvider
+  providerInstanceId?: string
   title: string
   detail?: string
   createdAt: number
@@ -37,13 +39,18 @@ function prune(now = Date.now()): void {
 export function postViewerAttention(input: {
   sessionId: string
   provider?: AgentProvider
+  providerInstanceId?: string
   title: string
   detail?: string
 }): ViewerAttentionNote {
+  const provider = input.provider ?? 'claude'
+  const active = currentProviderInstance()
+  const instance = input.providerInstanceId ?? (active?.provider === provider ? active.id : undefined)
   const note: ViewerAttentionNote = {
     id: randomUUID(),
     sessionId: input.sessionId,
-    provider: input.provider ?? 'claude',
+    provider,
+    ...(instance && instance !== provider ? { providerInstanceId: instance } : {}),
     title: input.title.trim().slice(0, 160),
     detail: input.detail?.trim().slice(0, 1000) || undefined,
     createdAt: Date.now(),

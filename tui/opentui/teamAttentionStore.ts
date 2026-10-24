@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 // Which conversations' teams need the user, for the session list — herdr's
 // state rollup, where the sidebar alone says which project needs a decision.
 // The Teammates badge only knew about conversations the TUI had observed, so a
@@ -39,7 +40,7 @@ export async function refreshTeamAttention(): Promise<void> {
   for (const summary of summaries) {
     const reviewed = summary.resultIds?.length ? readCoordinatorReviewed(coordinatorRequestScope(summary.provider, summary.sessionId)) : []
     const mark = teamAttentionMark(summary, reviewed)
-    if (mark) next.set(`${summary.provider}:${summary.sessionId}`, mark)
+    if (mark) next.set(sessionIdentityKey(summary), mark)
   }
   const nextSignature = [...next].map(([key, mark]) => `${key}=${mark.waiting}/${mark.finished}`).sort().join('|')
   if (nextSignature === signature) return

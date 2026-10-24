@@ -31,6 +31,7 @@
     "workers"
   ],
   "scripts": {
+    "tui:architecture:check": "node scripts/tuiArchitectureCheck.mjs",
     "dev": "node ./bin/agent-viewer.mjs web",
     "build": "tsc --noEmit && next build --webpack",
     "start": "node ./bin/agent-viewer.mjs web --production",

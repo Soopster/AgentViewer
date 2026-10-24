@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useLayoutEffect, useMemo } from 'react'
 import { useWorkspaceContext } from './workspaceContext'
 import type { ReactNode } from 'react'
 
@@ -45,4 +45,15 @@ export function useTranscriptWindowChrome() {
     const create = () => ({ header: createWindowChromeStore(), footer: createWindowChromeStore() })
     return runtime ? runtime.get('ref:transcriptWindowChrome', create, false) : create()
   }, [runtime])
+}
+
+/** The selected transcript's host publishes only after commit. Cleanup belongs
+ * to this workspace's stores, so a previous workspace cannot clear new chrome. */
+export function useTranscriptWindowChromeHost(header: WindowChrome, footer: WindowChrome) {
+  const stores = useTranscriptWindowChrome()
+  useLayoutEffect(() => () => { stores.header.set(null); stores.footer.set(null) }, [stores])
+  useLayoutEffect(() => {
+    stores.header.set(header.rows > 0 ? header : null)
+    stores.footer.set(footer.rows > 0 ? footer : null)
+  })
 }

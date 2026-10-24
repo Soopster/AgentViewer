@@ -1,3 +1,4 @@
+import { sessionIdentityKey } from './sessionIdentity'
 import type { SpacesController } from './spacesStore'
 import { readTuiRuntimeActivity, readTuiProtocolRun, readTuiSessions } from '../../lib/tui/service'
 import { coordinatorWindowBadges, planCoordinatorWorkspace } from './coordinatorWorkspace'
@@ -17,9 +18,9 @@ export function startSpacesBackground(controller: SpacesController): () => void 
     try {
       const activity = await readTuiRuntimeActivity()
       if (disposed) return
-      const running = new Set(activity.running.map(entry => `${entry.provider ?? 'claude'}:${entry.sessionId}`))
-      const needsInput = new Set(activity.attention.map(entry => `${entry.provider ?? 'claude'}:${entry.sessionId}`))
-      for (const entry of activity.running) if (entry.pendingPermissions?.length || entry.pendingPrompts?.length) needsInput.add(`${entry.provider ?? 'claude'}:${entry.sessionId}`)
+      const running = new Set(activity.running.map(entry => sessionIdentityKey(entry)))
+      const needsInput = new Set(activity.attention.map(entry => sessionIdentityKey(entry)))
+      for (const entry of activity.running) if (entry.pendingPermissions?.length || entry.pendingPrompts?.length) needsInput.add(sessionIdentityKey(entry))
       const active = controller.activeWorkspace()?.id
       const workspaces = controller.getSnapshot().spaces.flatMap(space => space.workspaces)
       const runs = new Map<string, Promise<Awaited<ReturnType<typeof readTuiProtocolRun>>>>()
@@ -46,7 +47,7 @@ export function startSpacesBackground(controller: SpacesController): () => void 
         const runtime = controller.runtime(workspace)
         const values = runtime.snapshot()
         const sessions = [...((values.openTabSessions ?? []) as Session[]), ...(values.readerSession ? [values.readerSession as Session] : [])]
-        const keys = new Set(sessions.map(session => `${session.provider ?? 'claude'}:${session.sessionId}`))
+        const keys = new Set(sessions.map(session => sessionIdentityKey(session)))
         if (values.workspaceHasSession !== false && typeof values.selectedSessionKeyState === 'string') keys.add(values.selectedSessionKeyState)
         let gate = [...keys].some(key => needsInput.has(key))
         const runId = runtime.values.get('coordinatorWorkspaceRunId')
@@ -57,7 +58,7 @@ export function startSpacesBackground(controller: SpacesController): () => void 
         if (snapshot && runtime.values.get('coordinatorWorkspaceRunId') === snapshot.run.id) {
           gate ||= coordinatorWindowBadges(snapshot).size > 0
           runtime.set('coordinatorWorkspace', snapshot)
-          const known = new Map(sessions.map(session => [`${session.provider ?? 'claude'}:${session.sessionId}`, session]))
+          const known = new Map(sessions.map(session => [sessionIdentityKey(session), session]))
           const plan = planCoordinatorWorkspace(snapshot, known)
           const roster = runtime.values.get('ref:watchedRoster') as { current: { runId: string; keys: Set<string> } | null } | undefined
           if (roster?.current?.runId === snapshot.run.id) {
