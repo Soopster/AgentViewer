@@ -5949,6 +5949,25 @@ function currentProjectName(session: Session | null): string {
   return session ? formatSessionProject(session) : 'no-project'
 }
 
+// A reset that keeps an already-empty value, so resetting what is empty
+// renders nothing. Session switches reset a dozen of these at once.
+function keepEmpty<Value extends { length: number } | { size: number }>(current: Value): Value {
+  return ('length' in current ? current.length : current.size) === 0 ? current : (Array.isArray(current) ? [] : new Set()) as unknown as Value
+}
+
+// A filter that returns the same array when it removes nothing, so a state
+// update that filters out what is not there renders nothing.
+function keepFiltered<Item>(list: Item[], keep: (item: Item, index: number) => boolean): Item[] {
+  const next = list.filter(keep)
+  return next.length === list.length ? list : next
+}
+
+// Whether a set already holds exactly these keys.
+function sameKeys(current: ReadonlySet<string>, keys: readonly string[] | undefined): boolean {
+  const list = keys ?? []
+  return current.size === list.length && list.every((key) => current.has(key))
+}
+
 function touchMapEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
   if (map.has(key)) map.delete(key)
   map.set(key, value)
@@ -10891,7 +10910,11 @@ function OpenTuiWorkspace() {
   // `sessions` — that's the case for freshly created pending provider sessions
   // (added to openTabSessions immediately, but only appears in `sessions` once
   // the SDK materialises it on first send).
-  const [workspaceReaderSession, setWorkspaceReaderSession] = useWorkspaceState<Session | null>('readerSession', null)
+  // Read from the workspace runtime each render rather than subscribed: it is
+  // written after every selection, which has rendered already, and as state
+  // that write cost the root a second render per switch.
+  const workspaceReaderSession = workspaceContext.runtime.get<Session | null>('readerSession', null, true)
+  const setWorkspaceReaderSession = useStableEvent((session: Session | null) => { workspaceContext.runtime.set('readerSession', session) })
   const selectedSession = useMemo<Session | null>(
     () => !workspaceHasSession ? null : resolveSelectedSession(
       selectedSessionKey,
@@ -11431,7 +11454,7 @@ function OpenTuiWorkspace() {
     if (canUseChannelBridge) return
     setChannelBridgeOpen(false)
     setRouteComposerToBridge(false)
-    setBridgeTranscriptEntries([])
+    setBridgeTranscriptEntries(keepEmpty)
     persistedBridgeCountRef.current = 0
     lastBridgeChatIdRef.current = undefined
   }, [canUseChannelBridge])
@@ -11473,7 +11496,7 @@ function OpenTuiWorkspace() {
   // Load persisted bridge messages when selected session changes
   useEffect(() => {
     if (!canUseChannelBridge || !selectedSessionTarget) {
-      setBridgeTranscriptEntries([])
+      setBridgeTranscriptEntries(keepEmpty)
       persistedBridgeCountRef.current = 0
       return
     }
@@ -11486,7 +11509,7 @@ function OpenTuiWorkspace() {
           text: msg.text,
           timestamp: msg.timestamp,
         }))
-        setBridgeTranscriptEntries(entries)
+        setBridgeTranscriptEntries((current) => current.length === 0 && entries.length === 0 ? current : entries)
         persistedBridgeCountRef.current = entries.length
       }
     })().catch(console.error)
@@ -11762,7 +11785,7 @@ function OpenTuiWorkspace() {
     }
 
     liveTranscriptBaselineRef.current.delete(key)
-    setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
+    setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== key))
     liveToolIndexesRef.current.clear()
     liveToolInputJsonRef.current.clear()
     setComposerLiveText('')
@@ -11778,7 +11801,7 @@ function OpenTuiWorkspace() {
       const key = composerActivitySessionKey
       if (key) {
         liveTranscriptBaselineRef.current.delete(key)
-        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
+        setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== key))
       }
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
@@ -12529,9 +12552,9 @@ function OpenTuiWorkspace() {
   useEffect(() => { committedSessionKeyRef.current = committedSessionKey }, [committedSessionKey])
   const composerAffordancesInFlightRef = useRef(new Set<string>())
   const clearComposerAffordances = useCallback(() => {
-    setComposerLiveSlashCommands([])
-    setComposerAgentOptions([])
-    setComposerMentionAgents([])
+    setComposerLiveSlashCommands(keepEmpty)
+    setComposerAgentOptions(keepEmpty)
+    setComposerMentionAgents(keepEmpty)
     setTuiOpenCodeAgent('')
   }, [])
   const applyComposerAffordances = useCallback((
@@ -12674,7 +12697,7 @@ function OpenTuiWorkspace() {
 
   useEffect(() => {
     if (!composerMention) {
-      setComposerMentionResults([])
+      setComposerMentionResults(keepEmpty)
       return
     }
     const agentMatches: TuiMentionResult[] = composerMentionProvider === 'opencode'
@@ -12939,7 +12962,7 @@ function OpenTuiWorkspace() {
       ]
     })
     setComposerMention(null)
-    setComposerMentionResults([])
+    setComposerMentionResults(keepEmpty)
   })
 
   const insertSlashAtCursor = useCallback((command: string) => {
@@ -12972,7 +12995,7 @@ function OpenTuiWorkspace() {
       setDraftBeforeHistory(makeComposerSnapshot())
     }
     setComposerMention(null)
-    setComposerMentionResults([])
+    setComposerMentionResults(keepEmpty)
     setComposerStashOpen(false)
     setComposerHistoryOpen(true)
     selectComposerHistoryEntry(displayIndex)
@@ -13693,14 +13716,17 @@ function OpenTuiWorkspace() {
           if (value !== before) replace(key, value)
         }
       }
+      // Open tabs keep theirs, unobserved and so unchanged: switching between
+      // tabs otherwise dropped and re-added an entry, a root render per switch.
+      const retained = new Set([...keys, ...openTabSessions.map((session) => sessionKey(session))])
       for (const key of previous.keys()) {
-        if (keys.has(key)) continue
+        if (retained.has(key)) continue
         if (next === previous) next = new Map(previous)
         next.delete(key)
       }
       return next
     })
-  }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey])
+  }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey, openTabSessions])
   const badgeForWindow = (key: string, compact = false) => [coordinatorBadges.get(key) ? (compact ? '?' : coordinatorBadges.get(key)) : null, windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)].filter(Boolean).join(' · ') || null
   // The window holding the transcript being read, whichever renderer draws it:
   // the reader's own chrome (composer bar, status widths) is sized to it.
@@ -14105,7 +14131,7 @@ function OpenTuiWorkspace() {
     } catch (err) {
       if (requestId !== sessionRequestRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load sessions')
-      setSessions([])
+      setSessions(keepEmpty)
       setSelectedSessionKey(null)
     } finally {
       if (refreshingIndicatorTimer) clearTimeout(refreshingIndicatorTimer)
@@ -14464,7 +14490,7 @@ function OpenTuiWorkspace() {
               }
             : () => {
                 liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
-                setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
+                setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
                 liveToolIndexesRef.current.clear()
                 liveToolInputJsonRef.current.clear()
                 setComposerLiveText('')
@@ -14975,8 +15001,8 @@ function OpenTuiWorkspace() {
     setModelPickerTarget(target)
     setModelPickerFocus('model')
     setModelPickerError(null)
-    setModelPickerOptions([])
-    setModelPickerPermissionOptions([])
+    setModelPickerOptions(keepEmpty)
+    setModelPickerPermissionOptions(keepEmpty)
     setModelPickerQuery('')
     setModelPickerIndex(0)
     setModelPickerPermissionIndex(0)
@@ -15010,7 +15036,7 @@ function OpenTuiWorkspace() {
         }))
       if (options.length === 0) {
         setModelPickerError('No models reported by provider')
-        setModelPickerOptions([])
+        setModelPickerOptions(keepEmpty)
         setModelPickerIndex(0)
         return
       }
@@ -15503,7 +15529,7 @@ function OpenTuiWorkspace() {
             const restoredLiveUuids = new Set(restoreEntries.map((entry) => entry.liveMessageUuid))
             steeredComposerSendsRef.current = steeredComposerSendsRef.current
               .filter((entry) => !restoredMessageUuids.has(entry.messageUuid))
-            setLiveTranscriptMessages((prev) => prev.filter((message) => !restoredLiveUuids.has(message.uuid)))
+            setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => !restoredLiveUuids.has(message.uuid)))
             const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
             const restored = [currentDraft.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
             composerTextareaRef.current?.setText(restored)
@@ -15554,7 +15580,7 @@ function OpenTuiWorkspace() {
       clearTimeout(interruptPressTimeoutRef.current)
       interruptPressTimeoutRef.current = null
     }
-    setPendingPermissions([])
+    setPendingPermissions(keepEmpty)
     setPermissionOptionIndex(0)
     // The user interrupted to change course — auto-firing queued follow-ups
     // would be a surprise-send. Pop their text back into the composer instead
@@ -15595,7 +15621,7 @@ function OpenTuiWorkspace() {
     // Nothing started yet — clear cleanly.
     if (targetKey) {
       liveTranscriptBaselineRef.current.delete(targetKey)
-      setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+      setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== targetKey))
     }
     liveToolIndexesRef.current.clear()
     liveToolInputJsonRef.current.clear()
@@ -15612,7 +15638,7 @@ function OpenTuiWorkspace() {
     setComposerThinkingTokens(0)
     setLiveStatus(null)
     setLiveSubagentText({})
-    setLiveToolActivities([])
+    setLiveToolActivities(keepEmpty)
   })
 
   const backgroundComposerTasks = useStableEvent(async () => {
@@ -15662,11 +15688,11 @@ function OpenTuiWorkspace() {
       if (permission.provider === 'codex' && permission.questions?.length) {
         setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, null))
       }
-      setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
       setPermissionOptionIndex(0)
     } catch (err) {
       if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+        setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
         setPermissionOptionIndex(0)
         showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
       } else {
@@ -15755,7 +15781,7 @@ function OpenTuiWorkspace() {
         { action: 'respondQuestion', permissionId: permission.id, answers, provider: target.provider },
       )
       setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, answers))
-      setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
       setQuestionSelections({})
       setQuestionFreeformAnswers({})
       setQuestionFreeformEditing(false)
@@ -15763,7 +15789,7 @@ function OpenTuiWorkspace() {
       setQuestionOptionIndex(0)
     } catch (err) {
       if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+        setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
         showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
       } else {
         showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
@@ -15824,12 +15850,12 @@ function OpenTuiWorkspace() {
         { sessionId: item.sessionId, provider: item.provider } as Session,
         { action: 'respondPermission', permissionId: permission.id, response, provider: item.provider },
       )
-      setPendingPermissions((prev) => prev.filter((p) => p.id !== permission.id))
-      setBackgroundPrompts((prev) => prev.filter((p) => p.id !== permission.id))
+      setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+      setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
     } catch (err) {
       if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => prev.filter((p) => p.id !== permission.id))
-        setBackgroundPrompts((prev) => prev.filter((p) => p.id !== permission.id))
+        setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+        setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
         showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
       } else {
         showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
@@ -15842,10 +15868,10 @@ function OpenTuiWorkspace() {
   const openAttentionSession = useStableEvent((item: AttentionItem) => {
     setAttentionOpen(false)
     if (item.kind === 'turn-done') {
-      setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+      setAttentionDone((prev) => keepFiltered(prev, (done) => done.key !== item.key))
     }
     if (item.kind === 'viewer-note' && item.attentionId) {
-      setViewerAttentionNotes((prev) => prev.filter((note) => note.id !== item.attentionId))
+      setViewerAttentionNotes((prev) => keepFiltered(prev, (note) => note.id !== item.attentionId))
       void dismissTuiViewerAttention(item.attentionId)
     }
     if (!item.sessionId) return
@@ -15861,9 +15887,9 @@ function OpenTuiWorkspace() {
 
   const dismissAttentionItem = useStableEvent((item: AttentionItem) => {
     if (item.kind === 'turn-done') {
-      setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+      setAttentionDone((prev) => keepFiltered(prev, (done) => done.key !== item.key))
     } else if (item.kind === 'viewer-note' && item.attentionId) {
-      setViewerAttentionNotes((prev) => prev.filter((note) => note.id !== item.attentionId))
+      setViewerAttentionNotes((prev) => keepFiltered(prev, (note) => note.id !== item.attentionId))
       void dismissTuiViewerAttention(item.attentionId)
     }
   })
@@ -16663,7 +16689,7 @@ function OpenTuiWorkspace() {
     setSplitPaneCount(keys.length)
     setWindowOrder(keys)
     setWindowSplitTree({ primary: false, keys, root: panes.length ? { axis: 'x', ratio: 0.55, first: { slot: 0 }, second: stack(1, panes.length) } : { slot: 0 } })
-    setWindowSurfaces([])
+    setWindowSurfaces(keepEmpty)
     setWindowZoom(null)
     setWindowSurfacePeek(null)
     setFullscreenMode(false)
@@ -16891,7 +16917,7 @@ function OpenTuiWorkspace() {
         const watch = coordWatchStateRef.current.get(runId)
         if (!snapshot || !watch) {
           coordWatchStateRef.current.delete(runId)
-          setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
+          setCoordWatchIds((prev) => keepFiltered(prev, (id) => id !== runId))
           continue
         }
         for (const agent of snapshot.agents) {
@@ -16909,7 +16935,7 @@ function OpenTuiWorkspace() {
             showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ⌃K a for the board`, 8000)
             notifyTeamEvent(`team run ${status}`, headline || snapshot.run.prompt.slice(0, 80))
             coordWatchStateRef.current.delete(runId)
-            setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
+            setCoordWatchIds((prev) => keepFiltered(prev, (id) => id !== runId))
           }
         }
       }
@@ -17323,8 +17349,8 @@ function OpenTuiWorkspace() {
         composerTextareaRef.current?.setText('')
         composerTextareaRef.current?.extmarks.clear()
         setComposerDraft('')
-        setComposerMentionAttachments([])
-        setComposerPromptParts([])
+        setComposerMentionAttachments(keepEmpty)
+        setComposerPromptParts(keepEmpty)
         commitQueuedComposerSends([...queuedComposerSendsRef.current, {
           id: createComposerQueueItemId(submissionTargetKey),
           targetKey: submissionTargetKey,
@@ -17343,8 +17369,8 @@ function OpenTuiWorkspace() {
     if (crossSessionCommand) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
@@ -17387,8 +17413,8 @@ function OpenTuiWorkspace() {
       composerTextareaRef.current?.setText('')
       composerTextareaRef.current?.extmarks.clear()
       setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
       return
@@ -17401,8 +17427,8 @@ function OpenTuiWorkspace() {
     if (!isRetry && canUseChannelBridge && selectedSessionTarget && routeComposerToBridgeRef.current && trimmed) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
@@ -17433,8 +17459,8 @@ function OpenTuiWorkspace() {
     if (!isRetry && canUseIdeBridge && routeComposerToIdeRef.current && trimmed) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
@@ -17461,8 +17487,8 @@ function OpenTuiWorkspace() {
     if (!isRetry && (composerSendState === 'sending' || reattachedRunningRef.current)) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
@@ -17534,12 +17560,12 @@ function OpenTuiWorkspace() {
       setComposerDraft('')
       if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, '')
       setComposerMention(null)
-      setComposerMentionResults([])
+      setComposerMentionResults(keepEmpty)
       setComposerMentionDismissedStart(null)
       composerMentionAttachmentsRef.current = []
       composerPromptPartsRef.current = []
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
+      setComposerMentionAttachments(keepEmpty)
+      setComposerPromptParts(keepEmpty)
       setComposerSlashIndex(0)
       setComposerSlashDismissed(false)
     }
@@ -17581,8 +17607,8 @@ function OpenTuiWorkspace() {
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveOutputTokens(0)
-    setLiveToolActivities([])
-    setPendingPermissions([])
+    setLiveToolActivities(keepEmpty)
+    setPendingPermissions(keepEmpty)
     setPermissionOptionIndex(0)
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
@@ -17891,7 +17917,7 @@ function OpenTuiWorkspace() {
         }
         const repliedPermissionId = extractPermissionReply(parsed)
         if (repliedPermissionId) {
-          setPendingPermissions((prev) => prev.filter((entry) => entry.id !== repliedPermissionId))
+          setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== repliedPermissionId))
         }
 
         if (parsedRecord.type === 'prompt_suggestion' && typeof parsedRecord.suggestion === 'string') {
@@ -17908,7 +17934,7 @@ function OpenTuiWorkspace() {
           if (tracked) {
             if (state === 'cancelled' || state === 'discarded') {
               steeredComposerSendsRef.current = steeredComposerSendsRef.current.filter((entry) => entry.messageUuid !== commandUuid)
-              setLiveTranscriptMessages((prev) => prev.filter((message) => message.uuid !== tracked.liveMessageUuid))
+              setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => message.uuid !== tracked.liveMessageUuid))
             } else {
               steeredComposerSendsRef.current = steeredComposerSendsRef.current.map((entry) =>
                 entry.messageUuid === commandUuid ? { ...entry, state } : entry)
@@ -17939,7 +17965,7 @@ function OpenTuiWorkspace() {
             : []
           if (uuids.length > 0) {
             const retracted = new Set(uuids)
-            setLiveTranscriptMessages((prev) => prev.filter((m) => !retracted.has(m.uuid)))
+            setLiveTranscriptMessages((prev) => keepFiltered(prev, (m) => !retracted.has(m.uuid)))
           }
           setComposerLiveText('')
           setComposerLiveReasoning('')
@@ -18327,7 +18353,7 @@ function OpenTuiWorkspace() {
       setComposerError(null)
       if (commandResultWithoutTranscript) {
         liveTranscriptBaselineRef.current.delete(targetKey)
-        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== targetKey))
         liveToolIndexesRef.current.clear()
         liveToolInputJsonRef.current.clear()
         setAwaitingPersistedTurn(false)
@@ -18395,7 +18421,7 @@ function OpenTuiWorkspace() {
           return
         }
         liveTranscriptBaselineRef.current.delete(targetKey)
-        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== targetKey))
         setAwaitingPersistedTurn(false)
         liveToolIndexesRef.current.clear()
         liveToolInputJsonRef.current.clear()
@@ -18424,9 +18450,9 @@ function OpenTuiWorkspace() {
         const retryAttachments = attachmentsOverride
         setLiveStatus('retrying')
         setComposerLiveText('')
-        setLiveToolActivities([])
+        setLiveToolActivities(keepEmpty)
         liveTranscriptBaselineRef.current.delete(targetKey)
-        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== targetKey))
         liveToolIndexesRef.current.clear()
         liveToolInputJsonRef.current.clear()
         if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
@@ -18459,7 +18485,7 @@ function OpenTuiWorkspace() {
         setComposerSendState('idle')
         setComposerError(null)
         setLiveStatus(null)
-        setLiveToolActivities([])
+        setLiveToolActivities(keepEmpty)
         if (selectedSessionKeyRef.current === targetKey) {
           reattachedRunningKeyRef.current = targetKey
           reattachedRunningRef.current = true
@@ -18473,7 +18499,7 @@ function OpenTuiWorkspace() {
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
       setLiveStatus(null)
-      setLiveToolActivities([])
+      setLiveToolActivities(keepEmpty)
       setAwaitingPersistedTurn(false)
       // Don't auto-fire queued follow-ups after a failed turn. Rebuild one
       // editable snapshot from the failed send, every queued follow-up, and the
@@ -18521,7 +18547,7 @@ function OpenTuiWorkspace() {
       if (composerRetryTimerRef.current == null) setLiveStatus(null)
       setLiveSubagentText({})
       setLiveOutputTokens(0)
-      setLiveToolActivities([])
+      setLiveToolActivities(keepEmpty)
       setComposerSendStartedAt(null)
       clearSessionRunning(runningRef)
       // Single stream at a time, so an unconditional clear is safe (targetKey
@@ -18949,7 +18975,7 @@ function OpenTuiWorkspace() {
       writeWorkspaceDraftParts(previousKey, composerPromptPartsRef.current)
       // Attachments are not persisted, so clear them rather than leaking them
       // into a different session's composer.
-      setComposerMentionAttachments([])
+      setComposerMentionAttachments(keepEmpty)
       composerTextareaRef.current?.extmarks.clear()
     }
     composerDraftStorageKeyRef.current = key
@@ -18959,7 +18985,7 @@ function OpenTuiWorkspace() {
     const savedParts = (readWorkspaceDraftParts(key) as ComposerPromptPart[])
       .filter((part) => part && typeof part.marker === 'string' && saved.includes(part.marker))
     composerPromptPartsRef.current = savedParts
-    setComposerPromptParts(savedParts)
+    setComposerPromptParts((current) => current.length === 0 && savedParts.length === 0 ? current : savedParts)
     if (saved !== composerDraftRef.current) {
       composerDraftRef.current = saved
       setComposerDraft(saved)
@@ -19044,8 +19070,8 @@ function OpenTuiWorkspace() {
     const saved = committedSessionKey ? tabReaderPositionsRef.current.get(committedSessionKey) : undefined
 
     setTranscriptCursorKey(saved?.state.cursorKey ?? null)
-    setExpandedCardKeys(new Set(saved?.state.expandedKeys))
-    setCollapsedCardKeys(new Set(saved?.state.collapsedKeys))
+    setExpandedCardKeys((current) => sameKeys(current, saved?.state.expandedKeys) ? current : new Set(saved?.state.expandedKeys))
+    setCollapsedCardKeys((current) => sameKeys(current, saved?.state.collapsedKeys) ? current : new Set(saved?.state.collapsedKeys))
     setFollowTail(saved?.state.followTail ?? true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
@@ -19080,8 +19106,8 @@ function OpenTuiWorkspace() {
           state,
         })
         if (state) {
-          setExpandedCardKeys(new Set(state.expandedKeys))
-          setCollapsedCardKeys(new Set(state.collapsedKeys))
+          setExpandedCardKeys((current) => sameKeys(current, state.expandedKeys) ? current : new Set(state.expandedKeys))
+          setCollapsedCardKeys((current) => sameKeys(current, state.collapsedKeys) ? current : new Set(state.collapsedKeys))
           if (state.followTail === false) {
             setTranscriptCursorKey(state.cursorKey)
             setFollowTail(false)
@@ -19158,7 +19184,7 @@ function OpenTuiWorkspace() {
         setResumeMarkerKey(restoredState.cursorKey)
       } else {
         setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
-    setComposerLiveTodos([])
+    setComposerLiveTodos(keepEmpty)
     setFollowTail(true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
@@ -19220,11 +19246,11 @@ function OpenTuiWorkspace() {
   // bookmarkKeys (a transcriptChildren dep) while an older transcript shows.
   useEffect(() => {
     const target = transcriptSession
-    if (!target) { setBookmarkKeys(new Set()); return }
+    if (!target) { setBookmarkKeys(keepEmpty); return }
     let cancelled = false
     void readTuiSessionBookmarkIds({ sessionId: target.sessionId, provider: target.provider } as Session)
-      .then((ids) => { if (!cancelled) setBookmarkKeys(new Set(ids)) })
-      .catch(() => { if (!cancelled) setBookmarkKeys(new Set()) })
+      .then((ids) => { if (!cancelled) setBookmarkKeys((current) => sameKeys(current, ids) ? current : new Set(ids)) })
+      .catch(() => { if (!cancelled) setBookmarkKeys(keepEmpty) })
     return () => { cancelled = true }
   }, [committedSessionKey])
 
@@ -20054,10 +20080,10 @@ function OpenTuiWorkspace() {
     composerTextareaRef.current?.setText('')
     composerTextareaRef.current?.extmarks.clear()
     setComposerDraft('')
-    setComposerMentionAttachments([])
-    setComposerPromptParts([])
+    setComposerMentionAttachments(keepEmpty)
+    setComposerPromptParts(keepEmpty)
     setComposerMention(null)
-    setComposerMentionResults([])
+    setComposerMentionResults(keepEmpty)
     setComposerMentionDismissedStart(null)
     setComposerSlashIndex(0)
     setComposerSlashDismissed(false)
@@ -20107,7 +20133,7 @@ function OpenTuiWorkspace() {
     }
     setComposerActive(true)
     setComposerMention(null)
-    setComposerMentionResults([])
+    setComposerMentionResults(keepEmpty)
     setComposerHistoryOpen(false)
     setComposerStashOpen(true)
     setComposerStashIndex(0)
@@ -20735,7 +20761,7 @@ function OpenTuiWorkspace() {
   const surfaceRestorable = (surface: string) => Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surface)) && (Boolean(gitRepoCwd) || !['diff', 'files', 'pull-request'].includes(surfaceKindOf(surface)))
   useEffect(() => {
     if (!windowPickerOpen) return
-    try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts([]) }
+    try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts(keepEmpty) }
   }, [windowLayoutProject, windowPickerOpen])
 
   const currentWindowLayoutContents = useStableEvent(() => ({
@@ -20905,7 +20931,7 @@ function OpenTuiWorkspace() {
     if (windowSurfacePeek === surface) setWindowSurfacePeek(null)
     if (!moving) rememberClosedWindow(surfaceWindowKey(surface))
     checkpointWindowLayout()
-    setWindowSurfaces((current) => current.filter((entry) => entry !== surface))
+    setWindowSurfaces((current) => keepFiltered(current, (entry) => entry !== surface))
     setWindowSurfaceMeta((current) => { if (!(surface in current)) return current; const next = { ...current }; delete next[surface]; return next })
     windowSurfaceKeysRef.current.delete(surface)
     windowSurfaceCaptureRef.current.delete(surface)
@@ -21043,7 +21069,7 @@ function OpenTuiWorkspace() {
       if (kind === 'teammates' && teammatesOpen) closeInteractiveCoordinator()
       if (kind === 'diagnostics' && diagnosticsOpen) closeDiagnostics()
     }
-    setPopoverTabs((current) => current.filter((entry) => entry !== id))
+    setPopoverTabs((current) => keepFiltered(current, (entry) => entry !== id))
     if (!keep) setWindowSurfaceMeta((current) => { if (!(id in current)) return current; const next = { ...current }; delete next[id]; return next })
     windowSurfaceKeysRef.current.delete(id)
     windowSurfaceCaptureRef.current.delete(id)
@@ -24404,7 +24430,7 @@ function OpenTuiWorkspace() {
           handled(() => {
             setComposerMentionDismissedStart(composerMention.start)
             setComposerMention(null)
-            setComposerMentionResults([])
+            setComposerMentionResults(keepEmpty)
           })
           return
         }
