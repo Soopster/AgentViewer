@@ -7710,6 +7710,17 @@ function isDoubleClick(last: { current: { x: number; y: number; at: number } | n
 }
 // Main + stack and the grid hold more: up to five panes beside the reader.
 const SPLIT_PANE_ARRANGED_MAX = 5
+// A frame's title buttons (≡ ⊞ layout ⤢ ×), which the session tabs stop short
+// of, with the window's state (badge, number, running, paused) beside them and
+// a few cells of bare title, so the window can still be dragged by its title.
+const TAB_TITLE_BUTTONS_WIDTH = 19
+const TAB_HOST_META_WIDTH = 18
+const TAB_TITLE_GRAB = 4
+/** The title's top-right border cell stays uncovered by tabs and controls,
+ * including the extra Dock button on floating windows. */
+export function freeTitleColumn(frame: { x: number; width: number }): number {
+  return frame.x + frame.width - 1
+}
 // Transcript refreshes are owned by TranscriptSessionLoader. Views acquire
 // one observer while visible; the broker orders foreground reads and shares
 // updates across transcript and pinned-tool views of the same variant.
@@ -7957,6 +7968,9 @@ type SplitTranscriptPaneProps = {
   onOpenLayout: () => void
   onContextMenu: (session: Session, source: 'pane', point: { x: number; y: number }, paneIndex: number) => void
   stickyHeaders: boolean
+  /** Set when the session tabs are drawn over this window's title row: it has
+   * no title then, and this is what the title said about the window's state. */
+  tabTitleMeta: string | null
   /** Lightweight windows: the current view drawn the old pane's way (see `lightView`). */
   lightweight: boolean
   /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). True when one was. */
@@ -8018,6 +8032,7 @@ function SplitTranscriptPaneInner({
   onOpenLayout,
   onContextMenu,
   stickyHeaders,
+  tabTitleMeta,
   lightweight,
   onTranscriptPress,
   onTranscriptRelease,
@@ -8636,7 +8651,7 @@ function SplitTranscriptPaneInner({
       // straight to a pane, and nothing else on screen says which is which.
       // The title carries what the pane's own header row used to: which
       // session, and the state worth knowing without focusing it.
-      title={frameless ? undefined : fitText(
+      title={frameless || tabTitleMeta !== null ? undefined : fitText(
         joinMeta([
           attentionBadge,
           coordinatorLabel,
@@ -8669,6 +8684,15 @@ function SplitTranscriptPaneInner({
       onMouseDrag={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.move(event) : sessionDrag.move(event))}
       onMouseUp={(event) => (paneIndex === FLOATING_PANE_INDEX ? floatGesture.end(event) : sessionDrag.release(event))}
     >
+      {tabTitleMeta && !frameless ? (
+        // The title gives its row to the session tabs; what it said about the
+        // window's state stays, beside the buttons.
+        <box position="absolute" top={-1} right={1 + TAB_TITLE_BUTTONS_WIDTH} height={1} zIndex={3} backgroundColor={theme.surface} paddingX={1}>
+          <text fg={attentionBadge?.includes('?') ? theme.amber : attentionBadge?.includes('! error') ? theme.red : attentionBadge ? theme.cyan : running ? theme.green : theme.dim} wrapMode="none" selectable={false}>
+            {tabTitleMeta}
+          </text>
+        </box>
+      ) : null}
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3} visible={!frameless}>
         <WindowButton id={selected ? 'reader-window-menu' : `split-pane-menu:${paneIndex}`} label=" ≡ " theme={theme} onPress={point => onContextMenu(session, 'pane', point, paneIndex)} />
         <WindowButton id={selected ? 'reader-window-layout' : `split-pane-layout:${paneIndex}`} label=" ⊞ layout " theme={theme} onPress={onOpenLayout} />
@@ -13334,7 +13358,7 @@ function OpenTuiWorkspace() {
   // the strip cannot make the next measurement oscillate across a fit boundary.
   const windowBudgetHeight = measuredWindowAreaHeight > 0
     ? measuredWindowAreaHeight
-    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 1)
+    : Math.max(mainContentHeight, 1)
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
   const pinnedWindowKeys = pinnedWindowSessions.map(sessionKey)
@@ -13779,9 +13803,36 @@ function OpenTuiWorkspace() {
       : openTabSessions
   ), [isPreviewMode, openTabSessions, selectedSession])
   const showTabs = !fullscreenMode && tabsEnabled && (visibleTabSessions.length > 0 || popoverTabs.length > 0)
+  // The tabs sit in the top border of the window a tab opens in, in place of
+  // its title, rather than on a row of their own above every window: the
+  // popover tab's frame while one is shown, else the selected session's window,
+  // else the first session window. A surface window keeps its own title, and
+  // with no session window shown the strip falls back to its own row.
+  const tabHostIndex: number | null | undefined = shownPopoverTab ? null
+    : selectedWindowIndex !== -1 ? selectedWindowIndex
+    : (() => { const index = windowItems.findIndex((item) => item.kind === 'session'); return index >= 0 ? index : undefined })()
+  const tabHostFloating = tabHostIndex === FLOATING_PANE_INDEX && Boolean(floatingWindow) && !windowSurfacePeek
+  const tabHostRect = !showTabs || tabHostIndex === undefined ? null
+    // Zoomed, only the zoomed window is drawn: it carries the tabs if it is the host.
+    : windowZoom !== null ? (windowZoom === (tabHostIndex ?? 'reader') ? { x: 0, y: 0, width: readerAreaWidth, height: windowAreaHeight } : null)
+    : tabHostFloating ? clampFloatingRect(floatingWindow!.rect, { width: readerAreaWidth, height: windowAreaHeight })
+    : treeGeometry?.rects.get(tabHostIndex ?? -1) ?? null
+  const tabHostSession = tabHostIndex == null ? null
+    : tabHostIndex === FLOATING_PANE_INDEX ? (floatingItem?.kind === 'session' ? floatingItem.session : null)
+    : (() => { const item = windowItems[tabHostIndex]; return item?.kind === 'session' ? item.session : null })()
+  // What the host's title said about the window, kept beside its buttons.
+  const tabHostMeta = tabHostRect && tabHostSession ? fitText(joinMeta([
+    badgeForWindow(sessionKey(tabHostSession)),
+    watchedCoordinator?.agents.find((agent) => agent.sessionId === tabHostSession.sessionId && (agent.provider ?? 'claude') === (tabHostSession.provider ?? 'claude'))?.name,
+    visibleSplitPaneCount + (primaryLeaf ? 1 : 0) + (floatingKey ? 1 : 0) > 1
+      ? String(tabHostIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + windowNumberOffset : tabHostIndex! + windowNumberOffset) : null,
+    splitPaneRunningKeys.has(sessionKey(tabHostSession)) ? 'running' : null,
+    sessionKey(tabHostSession) === selectedSessionKey && !followTail ? 'paused' : null,
+  ]), TAB_HOST_META_WIDTH).trim() : ''
+  const tabStripWidth = tabHostRect
+    ? Math.max(8, tabHostRect.width - 1 - TAB_TITLE_BUTTONS_WIDTH - 1 - (tabHostMeta ? tabHostMeta.length + 1 : 0) - TAB_TITLE_GRAB)
+    : readerAreaWidth - 2
 
-  const showPreviewBar = false
-  const TAB_BAR_HEIGHT = 1
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
   // already in the status bar.
   const streamActionFooterRows = isChatLikeView && !isScrollbackView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
@@ -13800,7 +13851,6 @@ function OpenTuiWorkspace() {
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
     - (fullscreenMode && !presentationFocusMode && isCopilotView ? 1 : 0)
-    - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
     - streamActionFooterRows
@@ -13859,12 +13909,11 @@ function OpenTuiWorkspace() {
     if (visibleTabSessions.length === 0) return 16
     // Fill available width proportionally so tabs look natural at any count,
     // capped to avoid very wide tabs when only a few sessions are open.
-    // The strip spans the reader area (reader box plus any split panes), so
-    // tabs get the full width instead of being squeezed into the reader column.
-    const available = Math.max(readerAreaWidth - 6, 20)
+    // The strip is the host window's title row, left of its buttons.
+    const available = Math.max(tabStripWidth - 2, 20)
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
-  }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length])
+  }, [tabStripWidth, visibleTabSessions.length, popoverTabs.length])
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
       // Every open session can be on screen, so the strip marks none of them;
@@ -26646,6 +26695,7 @@ function OpenTuiWorkspace() {
         onContextMenu={splitPaneActions.sessionMenu}
         stickyHeaders={stickyHeaders}
         lightweight={lightweightWindows}
+        tabTitleMeta={tabHostRect && splitIndex === tabHostIndex ? tabHostMeta : null}
         onTranscriptPress={noteTranscriptLinkPress}
         onTranscriptRelease={openTranscriptLinkAt}
         onOpenAsyncQuestions={openCardAsyncQuestions}
@@ -26654,7 +26704,7 @@ function OpenTuiWorkspace() {
         shouldYieldToForeground={splitPaneShouldYield}
       />
       </RetainedWindow>
-      {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
+      {tabHostRect && splitIndex === tabHostIndex ? null : renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
     </box>
   )
 
@@ -27253,7 +27303,7 @@ function OpenTuiWorkspace() {
         return (
           <box id="popover-tab-frame" flexGrow={1} width={tabWidthCells} height={tabHeightCells} flexShrink={0} flexDirection="column"
             border borderStyle="single" borderColor={popoverTabFocused ? theme.cyan : theme.border}
-            backgroundColor={theme.surface} title={` ${windowSurfaceTitle(shownPopoverTab)} `} titleColor={popoverTabFocused ? theme.cyan : theme.dim}
+            backgroundColor={theme.surface} title={tabHostRect ? undefined : ` ${windowSurfaceTitle(shownPopoverTab)} `} titleColor={popoverTabFocused ? theme.cyan : theme.dim}
             onMouseDrag={(event) => sessionDragHandlers.move(event)}
             onMouseUp={(event) => sessionDragHandlers.release(event)}
             onMouseDown={(event) => {
@@ -27339,6 +27389,62 @@ function OpenTuiWorkspace() {
     />
   ) : null
 
+  // The session tabs, drawn on the host window's title row (see tabHostRect).
+  const renderSessionTabs = (place: { left: number; top: number; zIndex: number } | null) => (
+    <box id="session-tabs-host" {...(place ? { position: 'absolute' as const, left: place.left, top: place.top, zIndex: place.zIndex, width: tabStripWidth } : { paddingX: 1, flexShrink: 0 })} height={1} overflow="hidden" backgroundColor={theme.surface2}>
+      <tab-select
+          id="session-tabs"
+          ref={tabSelectRef}
+          options={tabOptions}
+          width={tabStripWidth}
+          tabWidth={tabWidth}
+          backgroundColor={theme.surface2}
+          focusedBackgroundColor={theme.surface3}
+          textColor={theme.muted}
+          focusedTextColor={theme.text}
+          selectedBackgroundColor={theme.surface3}
+          selectedTextColor={theme.cyan}
+          selectedDescriptionColor={theme.dim}
+          showDescription={false}
+          showUnderline={false}
+          showScrollArrows={true}
+          wrapSelection={false}
+          // A tab opens on release, and a press that moves drags it onto the
+          // window area, as a rail row does.
+          onMouseDown={(event) => {
+            const popoverTab = popoverTabAt(event.x)
+            if (popoverTab) {
+              event.stopPropagation()
+              if (event.button === 2) openPopoverTabMenu(popoverTab, event)
+              else if (event.button === 0 && tabCloseHit(event.x)) closePopoverTab(popoverTab)
+              else if (event.button === 0) showPopoverTab(popoverTab)
+              return
+            }
+            if (event.button === 2) {
+              const tab = tabAt(event.x)
+              if (tab) splitPaneActions.sessionMenu(tab, 'tab', event)
+              return
+            }
+            if (event.button !== 0) return
+            const tab = tabAt(event.x)
+            if (tab && tabCloseHit(event.x)) {
+              event.stopPropagation()
+              event.preventDefault()
+              closeSessionTab(tab)
+              return
+            }
+            if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
+          }}
+          onMouseDrag={(event) => sessionDragHandlers.move(event)}
+          onMouseUp={(event) => {
+            if (event.button !== 0) return
+            sessionDragHandlers.release(event)
+          }}
+          onChange={(index) => selectStripIndex(index)}
+        />
+    </box>
+  )
+
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
   const fullScreenPopoverOpen = editorOpen || gitOpen || pullRequestOpen || fileViewerOpen || deskOpen
   return (
@@ -27349,7 +27455,7 @@ function OpenTuiWorkspace() {
             const rect = clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
             return (
-              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
+              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth) + rect.x} top={(windowAreaRef.current?.y ?? 1) + rect.y} width={rect.width} height={rect.height}
                 // Over a floating surface (drawn by the surface layer at 41) it is
                 // only its controls; over a session it is the window and opaque —
                 // an unpainted cell would show the windows underneath through it.
@@ -27357,13 +27463,19 @@ function OpenTuiWorkspace() {
                 backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
                 onMouseDown={(event) => {
                   const frame = rectOf('floating-window')
-                  if (floatingItem.kind === 'surface' && event.button === 0 && frame && event.y === frame.y) startFloatGesture('move', event)
+                  // The outer border can receive the hit before the inner
+                  // transcript frame. Keep its uncovered corner draggable.
+                  if (event.button === 0 && frame && event.y === frame.y && (floatingItem.kind === 'surface' || event.x === frame.x || event.x === frame.x + frame.width - 1)) {
+                    event.preventDefault()
+                    startFloatGesture('move', event)
+                  }
                 }}
                 onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
                 onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
               >
                 {floatingItem.kind === 'session' ? <text position="absolute" left={0} top={0} width={rect.width} height={rect.height} fg={theme.bg} bg={theme.bg} selectable={false} wrapMode="none">{Array(rect.height).fill(' '.repeat(rect.width)).join('\n')}</text> : null}
                 {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
+                {tabHostRect && tabHostFloating ? renderSessionTabs({ left: 1, top: 0, zIndex: 4 }) : null}
                 <box position="absolute" top={0} right={20} height={1} flexDirection="row" zIndex={46}>
                   <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
                 </box>
@@ -27485,68 +27597,6 @@ function OpenTuiWorkspace() {
         ) : null}
 
         <box width={readerAreaWidth} flexDirection="column">
-          {showTabs ? (
-            <box
-              paddingX={1}
-              overflow="hidden"
-              backgroundColor={theme.surface2}
-            >
-              <tab-select
-                id="session-tabs"
-                ref={tabSelectRef}
-                options={tabOptions}
-                width={readerAreaWidth - 2}
-                tabWidth={tabWidth}
-                backgroundColor={theme.surface2}
-                focusedBackgroundColor={theme.surface3}
-                textColor={theme.muted}
-                focusedTextColor={theme.text}
-                selectedBackgroundColor={theme.surface3}
-                selectedTextColor={theme.cyan}
-                selectedDescriptionColor={theme.dim}
-                showDescription={false}
-                showUnderline={false}
-                showScrollArrows={true}
-                wrapSelection={false}
-                // A tab opens on release, and a press that moves drags it onto the
-                // window area, as a rail row does.
-                onMouseDown={(event) => {
-                  const popoverTab = popoverTabAt(event.x)
-                  if (popoverTab) {
-                    event.stopPropagation()
-                    if (event.button === 2) openPopoverTabMenu(popoverTab, event)
-                    else if (event.button === 0 && tabCloseHit(event.x)) closePopoverTab(popoverTab)
-                    else if (event.button === 0) showPopoverTab(popoverTab)
-                    return
-                  }
-                  if (event.button === 2) {
-                    const tab = tabAt(event.x)
-                    if (tab) splitPaneActions.sessionMenu(tab, 'tab', event)
-                    return
-                  }
-                  if (event.button !== 0) return
-                  const tab = tabAt(event.x)
-                  if (tab && tabCloseHit(event.x)) {
-                    event.stopPropagation()
-                    event.preventDefault()
-                    closeSessionTab(tab)
-                    return
-                  }
-                  if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
-                }}
-                onMouseDrag={(event) => sessionDragHandlers.move(event)}
-                onMouseUp={(event) => {
-                  if (event.button !== 0) return
-                  sessionDragHandlers.release(event)
-                }}
-                onChange={(index) => selectStripIndex(index)}
-              />
-            </box>
-          ) : showPreviewBar && selectedSession ? (
-            <box paddingX={1} backgroundColor={theme.surface2}>
-              <text fg={theme.cyan} wrapMode="none">{previewBarText}</text>
-            </box>
-          ) : null}
 
           {/* Reader + split panes share one frame area. Side-by-side lays it
               out as columns; stacked as rows, which is the only shape a split
@@ -27555,6 +27605,8 @@ function OpenTuiWorkspace() {
               window arrangement: along one axis (the tmux-style split, which
               is the only shape a narrow terminal can take), the reader beside
               a stack, or a grid. */}
+          {/* No session window to carry them: the tabs keep a row of their own. */}
+          {showTabs && !tabHostRect ? renderSessionTabs(null) : null}
           {windowOverflowRows > 0 ? (
             <box id="window-overflow" ref={windowOverflowRef} height={1} flexShrink={0} flexDirection="row" overflow="hidden" backgroundColor={theme.surface2}>
               <text fg={theme.amber} width={` +${overflowWindowItems.length} hidden · `.length} flexShrink={0} wrapMode="none">{` +${overflowWindowItems.length} hidden · `}</text>
@@ -27633,6 +27685,7 @@ function OpenTuiWorkspace() {
             readerFrameNode()
           )}
           {renderSurfaceLayer()}
+          {tabHostRect && !tabHostFloating ? renderSessionTabs({ left: tabHostRect.x + 1, top: tabHostRect.y, zIndex: 40 }) : null}
 
           </box>
         </box>

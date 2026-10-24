@@ -59,7 +59,7 @@ mock.module('../../lib/tui/service', () => ({
 const spacesStore = await import('./spacesStore')
 let controller: InstanceType<typeof spacesStore.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...spacesStore, SpacesController: class extends spacesStore.SpacesController { constructor() { super(); controller = this } } }))
-const { default: OpenTuiApp } = await import('./App')
+const { default: OpenTuiApp, freeTitleColumn } = await import('./App')
 const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: true })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
@@ -223,7 +223,7 @@ const stackFirst = paneFrame(0)!, stackDivider = frame('tree-divider:1')!
 await drag({ x: stackDivider.x + 5, y: stackDivider.y }, { x: stackDivider.x + 5, y: stackDivider.y - 2 })
 check(paneFrame(0)!.height <= stackFirst.height - 1, 'stack divider did not resize its first pane')
 reader = windowWith('alpha')!
-const oldNeighbour = windowWith('charlie')!, tab = locate('Win bravo', frame('session-tabs')!)
+const oldNeighbour = windowWith('charlie')!, tab = locate('Win b', frame('session-tabs')!)
 await drag({ x: tab.x + 2, y: tab.y }, { x: reader.x + 2, y: reader.y + Math.floor(reader.height / 2) })
 await waitFor('strip tab moves beside the target frame', () => windowWith('bravo')!.x < windowWith('alpha')!.x)
 check(windowWith('charlie')!.x === oldNeighbour.x && windowWith('charlie')!.width === oldNeighbour.width, 'moving a tab rearranged an unrelated column')
@@ -248,35 +248,48 @@ await waitFor('title zoom fills the workspace', () => windowCount() === 1 && win
 await chord('m'); await settle(450)
 check(windowCount() === count - 1 && !!windowWith('alpha'), 'title zoom replaced another session')
 const pane = paneFrame(0)!, zoomedPaneIndex = paneIndex(0)
-await click(pane.x + 6, pane.y); await click(pane.x + 6, pane.y)
+// The bare part of the title row: the selected window's carries the session tabs.
+await click(freeTitleColumn(pane), pane.y); await click(freeTitleColumn(pane), pane.y)
 check(runtime().values.get('windowZoom') === zoomedPaneIndex, 'double-click did not zoom its own frame')
 await chord('m'); await settle(450)
 reader = frame('transcript-reader')!
-await click(reader.x + 4, reader.y); await click(reader.x + 4, reader.y)
+await click(freeTitleColumn(reader), reader.y); await click(freeTitleColumn(reader), reader.y)
 // The selected session's window zooms like any other: by its index.
 check(typeof runtime().values.get('windowZoom') === 'number', 'double-click on the original frame behaves differently')
 await chord('m')
-const bravoTab = locate('Win bravo', frame('session-tabs')!)
+const bravoTab = locate('Win b', frame('session-tabs')!)
 const bravoBefore = windowWith('bravo')!
 await click(bravoTab.x + 2, bravoTab.y)
 check(runtime().values.get('selectedSessionKey') === 'claude:win-bravo' && sameFrame(windowWith('bravo'), bravoBefore) && !!windowWith('alpha'),
   'clicking a tab replaced another visible frame instead of focusing its own')
-const tabRow = () => setup.captureCharFrame().split('\n')[frame('session-tabs')!.y] ?? ''
+const tabRow = () => {
+  const strip = frame('session-tabs')!
+  return (setup.captureCharFrame().split('\n')[strip.y] ?? '').slice(strip.x, strip.x + strip.width)
+}
 const closeTab = async (name: string) => {
-  const at = tabRow().indexOf(`Win ${name}`), x = tabRow().indexOf('×', at)
+  const label = `Win ${name[0]}`
+  let at = tabRow().indexOf(label), x = at < 0 ? -1 : tabRow().indexOf('×', at)
+  // A narrow title row may scroll this tab's close control out of view.
+  // Zoom the host to expose it; other windows' titles are not strip tabs.
+  const expanded = at < 0 || x < 0
+  if (expanded) {
+    await chord('m'); await settle(450)
+    at = tabRow().indexOf(label); x = at < 0 ? -1 : tabRow().indexOf('×', at)
+  }
   check(at >= 0 && x > at, `no close control for ${name}`)
-  await click(x, frame('session-tabs')!.y)
-  await waitFor(`${name} closes from the strip`, () => !tabRow().includes(`Win ${name}`))
+  await click(frame('session-tabs')!.x + x, frame('session-tabs')!.y)
+  await waitFor(`${name} closes from the strip`, () => !tabRow().includes(label))
+  if (expanded) { await chord('m'); await settle(450) }
 }
 await closeTab('delta')
 check(!!windowWith('bravo') && !!windowWith('alpha'), 'closing another tab changed the surviving views')
 await closeTab('alpha')
 check(!windowWith('alpha') && !!windowWith('bravo') && windowCount() === 1, 'closing the original tab opened an unrelated session')
-const bravo = locate('Win bravo', frame('session-tabs')!)
+const bravo = locate('Win b', frame('session-tabs')!)
 await act(async () => { await setup.mockMouse.pressDown(bravo.x + 2, bravo.y, 2 as never); await setup.mockMouse.release(bravo.x + 2, bravo.y, 2 as never) }); await settle(100)
 const menuClose = locate('Close tab', frame('context-menu')!)
 await click(menuClose.x + 1, menuClose.y)
-check(!tabRow().includes('Win bravo') && windowCount() === 0, 'closing the last visible tab did not leave an empty layout')
+check(!tabRow().includes('Win b') && windowCount() === 0, 'closing the last visible tab did not leave an empty layout')
 console.log('Title controls, double-clicks, strip selection and closing use shared frame semantics.')
 console.log('Windowing smoke passed')
 act(() => setup.renderer.destroy())

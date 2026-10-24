@@ -73,7 +73,7 @@ mock.module('../../lib/tui/service', () => ({
 const spacesStore = await import('./spacesStore')
 let spacesController: InstanceType<typeof spacesStore.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...spacesStore, SpacesController: class extends spacesStore.SpacesController { constructor() { super(); spacesController = this } } }))
-const { default: OpenTuiApp } = await import('./App')
+const { default: OpenTuiApp, freeTitleColumn } = await import('./App')
 const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: true })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
@@ -130,6 +130,7 @@ const windowName = (i: number) => {
   return NAMES.find((name) => rows.some((line) => line.includes(marker(`win-${name}`)))) ?? null
 }
 // Whether any window, the reader's included, shows a session.
+const shareStack = (...keys: string[]) => ((spacesController!.runtime(spacesController!.activeWorkspace()!).values.get('windowStacks') ?? []) as string[][]).some(stack => keys.every(key => stack.includes(key)))
 const shownAnywhere = (name: string) => windowFrames().some((box) => box !== null
   && setup.captureCharFrame().split('\n').slice(box.y, box.y + box.height).some((line) => line.slice(box.x, box.x + box.width).includes(marker(`win-${name}`))))
 const locate = (needle: string, within?: Frame): { x: number; y: number } => {
@@ -770,18 +771,35 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the tab strip', () => !!frame('window-tab:claude:win-' + anchorName) && !!frame('window-tab:claude:win-' + movingName))
   // More windows than fit: the freed frame goes to a hidden one, so count where each name shows.
   const framesShowing = (name: string) => allWindows().filter((_, index) => windowName(index) === name).length
+  // The global strip replaces a focused host's local tab controls. Focus a
+  // neighbour when exercising the stack's own controls below.
+  const focusOutsideStack = async () => {
+    const other = allWindows().findIndex((_, index) => {
+      const name = windowName(index)
+      return name !== null && name !== anchorName && name !== movingName
+    })
+    check(other >= 0, 'no neighbour for the tabbed window')
+    await chordKey(String(other))
+  }
   check(framesShowing(movingName) === 1 && framesShowing(anchorName) === 0, `the two tabs are not one frame: ${movingName}=${framesShowing(movingName)} ${anchorName}=${framesShowing(anchorName)} (${framesBefore} frames)`)
   // Closing some other pane's tab leaves a pin to refill: a background tab must not be what fills it.
   const others = allWindows().map((_, index) => index).filter((index) => windowName(index) !== null && windowName(index) !== movingName)
   if (others.length > 0) {
     const victim = windowName(others[others.length - 1]!)!
-    const tabBarEntry = locate(`Win ${victim}`, frame('session-tabs')!)
+    // Expose all strip entries when the tab host is one narrow grid cell.
+    const host = allWindows().findIndex((_, index) => windowName(index) === movingName)
+    await chordKey(String(host))
+    await chordKey('m')
+    // A tab's name can be cut short in a narrow window; its first letter is unique.
+    const tabBarEntry = locate(`Win ${victim[0]}`, frame('session-tabs')!)
     await rightClick(tabBarEntry.x + 1, tabBarEntry.y)
     await waitFor('the tab menu', () => !!frame('context-menu'))
     const closeTab = locate('Close tab', frame('context-menu')!)
     await click(closeTab.x + 1, closeTab.y)
+    await chordKey('m')
     await waitFor('the tab closed', () => framesShowing(victim) === 0)
     await settle(300)
+    await focusOutsideStack()
     check(framesShowing(anchorName) === 0 && !!frame('window-tab:claude:win-' + anchorName), `a background tab was pulled into a pane: ${anchorName}`)
   }
   const tabFrame = allWindows().findIndex((_, index) => windowName(index) === movingName)
@@ -795,6 +813,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey('.')
   await waitFor('⌃B . to step to the next tab', () => windowName(tabFrame) === movingName)
   // Closing a tab leaves the frame showing the other.
+  await focusOutsideStack()
   const close = frame('window-tab-close:claude:win-' + movingName)!
   await click(close.x, close.y)
   await waitFor('closing a tab to show the other', () => windowName(tabFrame) === anchorName && !frame('window-tabs:' + tabFrame))
@@ -805,19 +824,20 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const secondName = windowName(second)!
   await chordKey(String(second))
   await chordKey('t')
-  await waitFor('⌃B t to make a tab', () => !!frame('window-tab:claude:win-' + secondName))
+  await waitFor('⌃B t to make a tab', () => shareStack('claude:win-' + secondName))
   const shownAt = allWindows().findIndex((_, index) => windowName(index) === secondName)
   await chordKey(String(shownAt))
   await chordKey('!')
-  await waitFor('⌃B ! to break the tab out', () => !frame('window-tab:claude:win-' + secondName))
+  await waitFor('⌃B ! to break the tab out', () => !shareStack('claude:win-' + secondName))
   check(allWindows().some((_, index) => windowName(index) === secondName) || !!frame('floating-window'), 'the broken-out tab has no visible window')
   // A tab dragged out of its strip onto empty space is its own window.
   await chordKey(String(allWindows().findIndex((_, index) => windowName(index) === secondName)))
   await chordKey('t')
-  await waitFor('tabbed again', () => !!frame('window-tab:claude:win-' + secondName))
+  await waitFor('tabbed again', () => shareStack('claude:win-' + secondName))
+  await focusOutsideStack()
   const tab = frame('window-tab:claude:win-' + secondName)!
   await drag({ x: tab.x + 2, y: tab.y }, { x: 2, y: tab.y + 3 })
-  await waitFor('a tab dragged out to be a window', () => !frame('window-tab:claude:win-' + secondName) && (framesShowing(secondName) === 1 || !!frame('floating-window')))
+  await waitFor('a tab dragged out to be a window', () => !shareStack('claude:win-' + secondName) && (framesShowing(secondName) === 1 || !!frame('floating-window')))
   console.log('Windows share a frame as tabs: drag onto a title, click, ⌃B . steps, × closes one, ⌃B t / ⌃B ! join and leave.')
 }
 
@@ -850,9 +870,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   checkOpaque('once loaded')
   // Its title moves it; ◢ resizes it.
   const start = floating()
-  await click(start.x + 10, start.y)
+  await click(freeTitleColumn(start), start.y)
   check(!!frame('floating-window') && JSON.stringify(floating()) === JSON.stringify(start), 'clicking a floating title moved or docked the window')
-  await drag({ x: start.x + 10, y: start.y }, { x: start.x + 4, y: start.y + 2 })
+  await drag({ x: freeTitleColumn(start), y: start.y }, { x: freeTitleColumn(start) - 6, y: start.y + 2 })
   await waitFor('the floating window to move', () => floating().x === start.x - 6 && floating().y === start.y + 2)
   const handle = frame('floating-resize')!
   await drag({ x: handle.x, y: handle.y }, { x: handle.x - 10, y: handle.y - 3 })
@@ -964,20 +984,20 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('mixed frames for drag checks', () => readerShows('alpha') && bravoVisible() && !!frame('surface-window-close:terminal'))
   let reader = frame('transcript-reader')!
   let pane = windowFrame(1)!
-  await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) })
-  await waitFor('original frame joins the same tab model', () => !!frame('window-tab:claude:win-alpha') && !!frame('window-tab:claude:win-bravo'))
+  await drag({ x: freeTitleColumn(reader), y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) })
+  await waitFor('original frame joins the same tab model', () => shareStack('claude:win-alpha', 'claude:win-bravo'))
   await chordKey('u')
   await waitFor('undo restores original and ordinary frames', () => readerShows('alpha') && bravoVisible())
   reader = frame('transcript-reader')!; pane = windowFrame(1)!
   const beforeCancel = JSON.stringify(runtime.values.get('windowSplitTree'))
-  await drag({ x: reader.x + 6, y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) }, async () => {
+  await drag({ x: freeTitleColumn(reader), y: reader.y }, { x: pane.x + Math.floor(pane.width / 2), y: pane.y + Math.floor(pane.height / 2) }, async () => {
     await act(async () => { setup.mockInput.pressEscape() }); await settle(100)
     check(!frame('window-drag-ghost'), 'Escape did not cancel the drag')
   })
   check(readerShows('alpha') && JSON.stringify(runtime.values.get('windowSplitTree')) === beforeCancel, 'a cancelled drag changed the layout')
   reader = frame('transcript-reader')!
   const originalX = reader.x
-  await drag({ x: reader.x + 6, y: reader.y }, { x: reader.x + reader.width - 2, y: reader.y + Math.floor(reader.height / 2) })
+  await drag({ x: freeTitleColumn(reader), y: reader.y }, { x: reader.x + reader.width - 2, y: reader.y + Math.floor(reader.height / 2) })
   await waitFor('original frame moves right without changing its session', () => frame('transcript-reader')!.x > originalX && readerShows('alpha'))
   await chordKey('u')
   await waitFor('undo restores original frame geometry', () => frame('transcript-reader')!.x === originalX)
@@ -986,7 +1006,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await drag({ x: surfaceSlot.x + 4, y: surfaceSlot.y }, { x: reader.x + Math.floor(reader.width / 2), y: reader.y + Math.floor(reader.height / 2) }, () => {
     check(setup.captureCharFrame().includes('Add as a tab of window 1'), 'surface-to-original drag describes the wrong action')
   })
-  await waitFor('surface and original session become tabs', () => !!frame('window-tab:surface:terminal') && !!frame('window-tab:claude:win-alpha'))
+  await waitFor('surface and original session become tabs', () => shareStack('surface:terminal', 'claude:win-alpha'))
   // The live shell owns Ctrl+B for nested tmux; release capture before undo.
   await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
   await chordKey('u')
@@ -998,8 +1018,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('surface floats', () => !!frame('floating-window'))
   const floated = frame('floating-window')!
   const target = windowFrame(0)!
-  await drag({ x: floated.x + 6, y: floated.y }, { x: target.x + Math.floor(target.width / 2), y: target.y })
-  await waitFor('floating surface becomes a tab', () => !frame('floating-window') && !!frame('window-tab:surface:terminal'))
+  await drag({ x: freeTitleColumn(floated), y: floated.y }, { x: target.x + Math.floor(target.width / 2), y: target.y })
+  await waitFor('floating surface becomes a tab', () => !frame('floating-window') && shareStack('surface:terminal', 'claude:win-alpha'))
   await act(async () => { setup.mockInput.pressKey(']', { ctrl: true }) }); await settle(100)
   await chordKey('1'); await chordKey('!')
   await settle(200)
@@ -1010,7 +1030,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   }
   await waitFor('detached surface floats again', () => !!frame('floating-window'))
   const area = frame('window-area')!, again = frame('floating-window')!
-  await drag({ x: again.x + 6, y: again.y }, { x: area.x + area.width - 1, y: again.y + 3 })
+  await drag({ x: freeTitleColumn(again), y: again.y }, { x: area.x + area.width - 1, y: again.y + 3 })
   await waitFor('floating window docks by drag', () => !frame('floating-window'))
   console.log('Original, session and surface frames share tabs and movement; Escape cancels; floating windows tab and dock by drag.')
 }

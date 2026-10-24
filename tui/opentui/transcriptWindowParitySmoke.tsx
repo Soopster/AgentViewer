@@ -63,7 +63,7 @@ mock.module('../../lib/tui/service', () => ({
 const store = await import('./spacesStore')
 let controller: InstanceType<typeof store.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...store, SpacesController: class extends store.SpacesController { constructor() { super(); controller = this } } }))
-const { default: OpenTuiApp } = await import('./App')
+const { default: OpenTuiApp, freeTitleColumn } = await import('./App')
 const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
@@ -150,8 +150,10 @@ try {
   check(runtime.values.get('transcriptCursorKey') === `${SESSIONS[1]!.sessionId}-card-79`, 'floating window could not jump to the newest message')
   // Native title drag and resize still work when the full transcript owns the frame.
   const initial = frame('floating-window')!
-  await act(async () => { await setup.mockMouse.pressDown(initial.x + 4, initial.y) }); await settle(50)
-  await act(async () => { await setup.mockMouse.emitMouseEvent('drag', initial.x + 7, initial.y + 2) }); await settle(100)
+  // By the bare part of the title row: the session tabs sit on the rest of it.
+  const grab = freeTitleColumn(initial)
+  await act(async () => { await setup.mockMouse.pressDown(grab, initial.y) }); await settle(50)
+  await act(async () => { await setup.mockMouse.emitMouseEvent('drag', grab + 3, initial.y + 2) }); await settle(100)
   const duringMove = frame('floating-window')!
   check(duringMove && (duringMove.x !== initial.x || duringMove.y !== initial.y), 'shared transcript title no longer moves its floating window')
   await escape()
