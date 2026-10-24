@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
+import { SessionTabConnection } from './SessionTabConnection'
 import { sessionIdentityKey } from './sessionIdentity'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
@@ -7775,6 +7776,7 @@ const subscribeNothing = (_listener: () => void) => () => {}
 const getNothing = () => null
 
 type SplitPaneHandle = {
+  frame: () => BoxRenderable | null
   scrollByRows: (rows: number) => void
   scrollToTop: () => void
   scrollToBottom: () => void
@@ -8199,6 +8201,7 @@ function SplitTranscriptPaneInner({
       if (lightRef.current.light && lightRef.current.start > 0) setLoadedCount((count) => count + SPLIT_PANE_CARD_WINDOW)
     }
     const handle: SplitPaneHandle = {
+      frame: () => paneFrameRef.current,
       search: (rawQuery, direction) => {
         const query = rawQuery.trim().toLowerCase()
         if (!query) return 'none'
@@ -27501,7 +27504,7 @@ function OpenTuiWorkspace() {
                 focusedBackgroundColor={theme.surface3}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
-                selectedBackgroundColor={theme.surface3}
+                selectedBackgroundColor={theme.surface}
                 selectedTextColor={theme.cyan}
                 selectedDescriptionColor={theme.dim}
                 showDescription={false}
@@ -27633,6 +27636,9 @@ function OpenTuiWorkspace() {
             readerFrameNode()
           )}
           {renderSurfaceLayer()}
+          <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
+            ownerKey={selectedSessionKey} enabled={showTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
+            foreground={theme.cyan} background={theme.surface} />
 
           </box>
         </box>
