@@ -166,6 +166,25 @@ try {
   check(contains(frame('floating-window')!, frame('transcript-scroll')!), 'resized transcript viewport escaped its frame')
   await chordKey('1')
   await search('Tiled window beside floating window')
+  // Full screen from a tiled window: no window is laid out then, and the keys
+  // must still reach the one full screen draws. From the newest message, k
+  // scrolls it back and g goes to the top.
+  const fullscreenScrollTop = () => (setup.renderer.root.findDescendantById('transcript-scroll') as unknown as { scrollTop: number }).scrollTop
+  await press('Z')
+  check(runtime.values.get('fullscreenMode') === true, 'a tiled transcript could not enter full screen')
+  await press('G')
+  await settle(300)
+  const atBottom = fullscreenScrollTop()
+  for (let step = 0; step < 6; step++) await press('k')
+  await settle(300)
+  check(fullscreenScrollTop() < atBottom, `full screen did not take k: scrollTop ${fullscreenScrollTop()} from ${atBottom}`)
+  await press('g')
+  await settle(300)
+  check(fullscreenScrollTop() === 0, `full screen did not take g: scrollTop ${fullscreenScrollTop()}`)
+  await press('Z')
+  check(runtime.values.get('fullscreenMode') === false, 'a tiled transcript could not leave full screen')
+  await settle(300)
+  check(runtime.values.get('splitFocusIndex') === 0, `leaving full screen did not hand the keys back to the window: ${runtime.values.get('splitFocusIndex')}`)
   await chordKey('2')
   await search('Refocused floating window')
   await press('Z')

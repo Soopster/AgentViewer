@@ -7691,6 +7691,9 @@ type WindowSurfaceId = string
 // The pane index a floating window registers its handle and focus under: past
 // any laid-out window, so no window index can collide with it.
 const FLOATING_PANE_INDEX = 64
+// The window full screen draws (⇧Z). No window is laid out then, and every key
+// goes to the focused window's handle, so full screen focuses this one.
+const FULLSCREEN_PANE_INDEX = 65
 const MULTI_INSTANCE_SURFACES: ReadonlySet<WindowSurfaceKind> = new Set(['terminal', 'browser', 'files'])
 // Surface kinds that are also full-screen popovers (Git, Files, pull requests).
 const SURFACE_POPOVER_KINDS: ReadonlySet<WindowSurfaceKind> = new Set(['diff', 'files', 'pull-request'])
@@ -13469,12 +13472,15 @@ function OpenTuiWorkspace() {
   // pipeline (card window, view modes, every reader key); the rest are drawn
   // as panes. Selection follows focus, so that is the window in use.
   const lastFocusedSplitPaneRef = useRef(0)
-  const selectedWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
+  const selectedWindowIndex = fullscreenMode && selectedSession ? FULLSCREEN_PANE_INDEX
+    : floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
     : windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
   // The window showing the selected session, if any.
   selectedWindowHandleRef.current = () => (selectedWindowIndex !== -1 ? splitPaneHandlesRef.current.get(selectedWindowIndex) : undefined)
   const focusedWindowItem = splitFocusIndex === null ? null
-    : splitFocusIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[splitFocusIndex] ?? null
+    : splitFocusIndex === FLOATING_PANE_INDEX ? floatingItem
+    : splitFocusIndex === FULLSCREEN_PANE_INDEX ? (fullscreenMode && selectedSession ? { kind: 'session' as const, session: selectedSession } : null)
+    : windowItems[splitFocusIndex] ?? null
   const focusedSessionPaneKey = focusedWindowItem?.kind === 'session' ? sessionKey(focusedWindowItem.session) : null
   // The selection follows the focused window, however focus got there — but
   // a selection made in the same commit wins (returning a pinned popover
@@ -19304,9 +19310,12 @@ function OpenTuiWorkspace() {
   // pane left "focused" would only be a lie in the frame.
   useEffect(() => {
     if (splitFocusIndex === null) return
+    // Leaving full screen hands the keys to the selected session's window.
+    if (splitFocusIndex === FULLSCREEN_PANE_INDEX && !fullscreenMode) { focusReaderFromSplit(); return }
     const floatingFocused = splitFocusIndex === FLOATING_PANE_INDEX && floatingKey !== null
-    if (composerActive || (splitFocusIndex >= visibleSplitPaneCount && !floatingFocused)) setSplitFocusIndex(null)
-  }, [composerActive, floatingKey, splitFocusIndex, visibleSplitPaneCount])
+    const fullscreenFocused = splitFocusIndex === FULLSCREEN_PANE_INDEX && fullscreenMode
+    if (composerActive || (splitFocusIndex >= visibleSplitPaneCount && !floatingFocused && !fullscreenFocused)) setSplitFocusIndex(null)
+  }, [composerActive, floatingKey, splitFocusIndex, visibleSplitPaneCount, fullscreenMode])
 
   // Track the window area's real height. Reads after every commit (cheap
   // property read) and only setStates when it actually changed, so a resize
@@ -19769,10 +19778,9 @@ function OpenTuiWorkspace() {
     setFullscreenMode(next)
     showToggleOutcome('Fullscreen transcript', next)
     if (next) {
-      // Hidden panes keep their state, but keyboard ownership belongs to the
-      // visible reader while fullscreen is active.
+      // Hidden windows keep their state; the keys go to the one full screen draws.
       setFocusedPane('messages')
-      setSplitFocusIndex(null)
+      setSplitFocusIndex(FULLSCREEN_PANE_INDEX)
       setSplitChordPending(false)
       setCommandChordPending(false)
       setSessionSearchMode(false)
@@ -27594,7 +27602,7 @@ function OpenTuiWorkspace() {
                   <text fg={theme.dim} wrapMode="none" selectable={false}>FULLSCREEN  Shift+Z restore</text>
                 </box>
               </box>
-              {renderSplitPane(selectedSession, Math.max(selectedWindowIndex, 0), { width: readerAreaWidth, height: Math.max(windowAreaHeight - 1, 3), boxHeight: Math.max(windowAreaHeight - 1, 3) })}
+              {renderSplitPane(selectedSession, FULLSCREEN_PANE_INDEX, { width: readerAreaWidth, height: Math.max(windowAreaHeight - 1, 3), boxHeight: Math.max(windowAreaHeight - 1, 3) })}
             </box>
           ) : !hasPrimaryFrame && orderedWindowKeys.length === 0 ? (
             <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
