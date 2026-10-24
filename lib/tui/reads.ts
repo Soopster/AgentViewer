@@ -17,6 +17,7 @@
 // service.ts re-exports these three, so its callers are unaffected.
 
 import {
+  getClaudeSubagentSummaries,
   listViewSessionMessageWindow,
   listViewSessions,
   readViewSessionComposerOptions,
@@ -35,6 +36,7 @@ import type {
   SessionInfo,
   SessionMessage,
   SessionModelInfo,
+  SubagentSummary,
 } from '../types'
 
 const DEFAULT_SESSION_LIMIT = 200
@@ -155,6 +157,15 @@ export async function readTuiRunningSessions(): Promise<ReturnType<typeof listVi
 export async function readTuiRuntimeActivityState(): Promise<TuiRuntimeActivity> {
   if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
   return readViewRuntimeActivity()
+}
+
+/** Subagents a provider records inside a session rather than as sessions of their own. */
+export async function readTuiSubagentSummaries(sessionId: string, provider?: AgentProvider): Promise<SubagentSummary[]> {
+  if (isRemoteAttached()) {
+    const { subagents } = await remoteJson<{ subagents?: SubagentSummary[] }>(encodeSessionPath(sessionId, `/subagents${providerQuery(provider)}`))
+    return subagents ?? []
+  }
+  return getClaudeSubagentSummaries(sessionId, provider)
 }
 
 export async function readTuiSlashCommands(

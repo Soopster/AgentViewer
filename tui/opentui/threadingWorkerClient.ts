@@ -1,7 +1,7 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import { deferTranscriptCardSearchText, withTranscriptCardPreview, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage, SubagentSummary } from '../../lib/types'
 import { readTuiComposerOptions, readTuiSessionMetadata, readTuiSlashCommands } from '../../lib/tui/reads'
 import { createKeyedWorkerQueue } from './latestWorkerQueue'
 import { threadedMessageFingerprint } from './messageFingerprint'
@@ -79,6 +79,11 @@ type Pending =
       resolve: (affordances: TuiComposerAffordances) => void
       reject: (error: Error) => void
     }
+  | {
+      kind: 'subagents'
+      resolve: (subagents: SubagentSummary[]) => void
+      reject: (error: Error) => void
+    }
 
 type WorkerResponse =
   | {
@@ -122,6 +127,7 @@ type WorkerResponse =
   | { id: number; ok: true; warmed: true }
   | { id: number; ok: true; metadata: TuiSessionMetadataResult }
   | { id: number; ok: true; affordances: TuiComposerAffordances }
+  | { id: number; ok: true; subagents: SubagentSummary[] }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -303,6 +309,9 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
 function ensureWorker(): Worker {
   if (worker) return worker
   const w = new Worker(tuiWorkerUrl('threadingWorker', import.meta.url), { type: 'module' })
+  // The renderer keeps the TUI alive; the worker on its own must not, or a
+  // process that is done (a smoke, a harness) waits on it forever.
+  ;(w as unknown as { unref(): void }).unref()
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const data = event.data
     const entry = pending.get(data.id)
@@ -422,6 +431,8 @@ function ensureWorker(): Worker {
       entry.resolve(data.metadata)
     } else if (entry.kind === 'affordances' && 'affordances' in data) {
       entry.resolve(data.affordances)
+    } else if (entry.kind === 'subagents' && 'subagents' in data) {
+      entry.resolve(data.subagents)
     }
   }
   w.onerror = (event) => {
@@ -477,6 +488,16 @@ function readTuiSessionMetadataInWorker(session: Session): Promise<TuiSessionMet
   return new Promise<TuiSessionMetadataResult>((resolve, reject) => {
     pending.set(id, { kind: 'metadata', resolve, reject })
     w.postMessage({ kind: 'metadata', id, session })
+  })
+}
+
+/** A session's provider-recorded subagents, read where the provider graph already lives. */
+export function readTuiSubagentSummariesAsync(session: Session): Promise<SubagentSummary[]> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<SubagentSummary[]>((resolve, reject) => {
+    pending.set(id, { kind: 'subagents', resolve, reject })
+    w.postMessage({ kind: 'subagents', id, session })
   })
 }
 

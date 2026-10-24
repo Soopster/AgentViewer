@@ -28,6 +28,7 @@ mock.module('../../lib/tui/reads', () => ({
   readTuiSessions: async () => [],
   readTuiSlashCommands: async () => [],
   readTuiComposerOptions: async () => ({}),
+  readTuiSubagentSummaries: async () => [],
 }))
 
 // Exercise the real worker handler and client together, including actual clone
@@ -63,6 +64,7 @@ class LocalWorker {
     if (stripFormatToken) delete request.previousFormatToken
     void workerScope.onmessage!({ data: request } as MessageEvent)
   }
+  unref() {}
   terminate() {}
 }
 Object.assign(globalThis, { Worker: LocalWorker })

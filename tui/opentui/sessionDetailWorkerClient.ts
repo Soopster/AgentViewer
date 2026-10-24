@@ -46,5 +46,5 @@ export function attachedTranscriptCardsForVariant(
     : null
 }
 
-export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, turnDurationLabelsForCards, warmTranscriptAsync } from './threadingWorkerClient'
+export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiComposerAffordancesAsync, readTuiSessionsAsync, readTuiSubagentSummariesAsync, turnDurationLabelsForCards, warmTranscriptAsync } from './threadingWorkerClient'
 export type { TranscriptCardOptions, TurnDurationLabels } from './threadingWorkerClient'

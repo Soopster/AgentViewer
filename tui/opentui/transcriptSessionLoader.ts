@@ -11,7 +11,7 @@ const variant = (session: Session, density: TuiDensity, tools: boolean) => JSON.
 export class TranscriptSessionLoader {
   private entries = new Map<string, Entry>()
   private flights = new Map<string, { owner: string; revision: number | undefined; promise: Promise<TuiSessionDetail>; token: object }>()
-  constructor(private fetch: Read, private capacity = 48) {}
+  constructor(private fetch: Read, private capacity = 8) {}
   peek(session: Session, density: TuiDensity, tools: boolean): Entry | undefined {
     const key = variant(session, density, tools)
     const entry = this.entries.get(key)

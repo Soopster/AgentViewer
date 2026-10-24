@@ -23,6 +23,7 @@
 //   INPUT_REAL_SESSIONS=1 bun tui/opentui/inputPerf.tsx # field diagnostic
 //   INPUT_MEMORY=1 bun tui/opentui/inputPerf.tsx # forced-GC heap/RSS outside timing
 //   INPUT_JSON=1 bun tui/opentui/inputPerf.tsx   # one JSON line per scenario too
+//   INPUT_REACT_TRACKS=1 keeps React's development performance tracks (off: production has none)
 //   INPUT_COUNT_NODES=1 INPUT_CHILD=1 INPUT_SCENARIO=card-page bun tui/opentui/inputPerf.tsx
 //       renderables per mounted card by type; INPUT_DUMP_CARD=3,4 also prints those cards' trees
 //   INPUT_FOCUS_TRACE=1 INPUT_CHILD=1 INPUT_SCENARIO=focus-toggle bun tui/opentui/inputPerf.tsx
@@ -158,6 +159,9 @@ const SCENARIOS: Scenario[] = [
   { name: 'conversation-jump', setup: [TAB], press: [{ key: '(' }], thenPress: [{ key: ')' }], reader: true, scrolls: true },
   { name: 'technical-jump', setup: [TAB], press: [{ key: '{' }], thenPress: [{ key: '}' }], reader: true, scrolls: true },
   { name: 'focus-toggle', press: [TAB] },
+  // Opens a session every 700ms: with INPUT_FIXTURE_DISTINCT=1 and
+  // INPUT_MEMORY=1, what browsing leaves retained.
+  { name: 'sidebar-walk', press: [{ key: 'j' }], intervalMs: 700, seconds: 30 },
   { name: 'view-cycle', press: [{ key: 'v' }] },
   { name: 'transcript-search', setup: [TAB, { key: '/' }], press: keys('session'), expect: 'SEARCH' },
   { name: 'sidebar-search', setup: [{ key: '/' }], press: keys('agent') },
@@ -332,6 +336,84 @@ if (!process.env.INPUT_CHILD) {
 const { mkdtempSync, readFileSync } = await import('fs')
 const { tmpdir } = await import('os')
 const path = await import('path')
+// React's development build logs every component render to the performance
+// timeline, diffing each changed prop object by walking it. Production never
+// does, and it was about half the samples of a scenario's profile, so it hid
+// the app's own cost. The check runs once, when the reconciler loads.
+// INPUT_REACT_TRACKS=1 keeps it.
+if (process.env.INPUT_REACT_TRACKS !== '1') (console as { timeStamp?: unknown }).timeStamp = undefined
+// INPUT_COUNT_RENDERS=1: which components render during the timed window, and
+// which state hooks of the components named in INPUT_COUNT_HOOKS changed. A
+// fiber rendered in a commit when it was visited after the previous commit and
+// its props or hooks are new objects.
+type CountFiber = {
+  tag: number; type: unknown; child: CountFiber | null; sibling: CountFiber | null; alternate: CountFiber | null
+  memoizedProps: unknown; memoizedState: unknown; actualStartTime?: number; _debugHookTypes?: string[] | null
+}
+const renderCounts = new Map<string, number>()
+const hookCounts = new Map<string, number>()
+let countRendersNow = false
+let countedCommits = 0
+if (process.env.INPUT_COUNT_RENDERS === '1') {
+  const hookNames = new Set((process.env.INPUT_COUNT_HOOKS ?? '').split(',').filter(Boolean))
+  let lastCommitAt = -1
+  let traceCommits = Number(process.env.INPUT_COUNT_TRACE ?? 0)
+  let traceLine: string[] = []
+  const nameOf = (type: unknown): string | null => {
+    const t = type as { displayName?: string; name?: string; type?: unknown; render?: unknown } | null
+    if (typeof type === 'function') return (t?.displayName ?? t?.name) || null
+    if (t && typeof t === 'object') return nameOf(t.type ?? t.render)
+    return null
+  }
+  const countHooks = (name: string, fiber: CountFiber) => {
+    type Hook = { memoizedState: unknown; queue: unknown; next: Hook | null } | null
+    let hook = fiber.memoizedState as Hook
+    let previous = fiber.alternate?.memoizedState as Hook
+    for (let index = 0; hook; index += 1) {
+      if (hook.queue && previous && hook.memoizedState !== previous.memoizedState) {
+        const value = hook.memoizedState
+        const shape = Array.isArray(value) ? `array(${value.length})`
+          : value instanceof Set ? `set(${value.size})`
+          : value instanceof Map ? `map(${value.size})`
+          : typeof value === 'object' && value && 'runtime' in value && 'key' in value ? `ws:${String((value as { key: unknown }).key)}`
+          : typeof value === 'object' && value ? `{${Object.keys(value).slice(0, 4).join(',')}}`
+          : String(JSON.stringify(value)).slice(0, 40)
+        const key = `${name}#${index} ${fiber._debugHookTypes?.[index] ?? ''} ${shape}`
+        hookCounts.set(key, (hookCounts.get(key) ?? 0) + 1)
+        if (traceCommits > 0) traceLine.push(key.replace(`${name}#`, '#'))
+      }
+      hook = hook.next
+      previous = previous?.next ?? null
+    }
+  }
+  const walk = (fiber: CountFiber | null) => {
+    for (let node = fiber; node; node = node.sibling) {
+      const visited = (node.actualStartTime ?? -1) >= lastCommitAt
+      if (visited && (node.tag === 0 || node.tag === 11 || node.tag === 14 || node.tag === 15)) {
+        const alt = node.alternate
+        if (!alt || alt.memoizedProps !== node.memoizedProps || alt.memoizedState !== node.memoizedState) {
+          const name = nameOf(node.type) ?? '(anonymous)'
+          renderCounts.set(name, (renderCounts.get(name) ?? 0) + 1)
+          if (alt && hookNames.has(name)) countHooks(name, node)
+        }
+      }
+      if (visited) walk(node.child)
+    }
+  }
+  ;(globalThis as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true, renderers: new Map(), inject: () => 1, checkDCE() {},
+    onScheduleFiberRoot() {}, onCommitFiberUnmount() {}, onPostCommitFiberRoot() {},
+    onCommitFiberRoot(_id: number, root: { current: CountFiber }) {
+      if (countRendersNow) {
+        countedCommits += 1
+        traceLine = []
+        walk(root.current)
+        if (traceCommits > 0) { traceCommits -= 1; console.log(`TRACE commit ${countedCommits}: ${traceLine.join(' | ') || '(no root state changed)'}`) }
+      }
+      lastCommitAt = performance.now()
+    },
+  }
+}
 const React = (await import('react')).default
 const { act } = await import('react')
 const { testRender } = await import('./testRender')
@@ -412,11 +494,27 @@ if (useRealSessions) {
   // the reader keeps its transcript unmounted while the displayed detail
   // belongs to a session other than the selected one (isScrubbing). A detail
   // that always claimed to be session 0 left every reader scenario timing "…".
+  // INPUT_FIXTURE_DISTINCT=1: every read builds that session's own transcript,
+  // and the harness keeps none of them, so what stays in memory afterwards is
+  // what the app retained. Shared objects would make every cache look free.
+  const distinct = process.env.INPUT_FIXTURE_DISTINCT === '1'
+  const distinctCards = new WeakMap<object, Map<TuiDensity, TuiTranscriptCard[]>>()
+  const cardsOf = (threaded: object, density: TuiDensity) => {
+    let byDensity = distinctCards.get(threaded)
+    if (!byDensity) distinctCards.set(threaded, byDensity = new Map())
+    let cards = byDensity.get(density)
+    if (!cards) byDensity.set(density, cards = formatTranscriptCards(threaded as typeof threadedMessages, density))
+    return cards
+  }
+  const ownTranscript = (session: Session, density: TuiDensity) => {
+    if (!distinct) return { rawMessages, threadedMessages, transcriptCards: cardsFor(density) }
+    const own = buildInputPerfMessages(fixtureKind, fixtureMessageCount, session.sessionId)
+    const threaded = buildThreadedMessages(own)
+    return { rawMessages: own, threadedMessages: threaded, transcriptCards: cardsOf(threaded, density) }
+  }
   const detailFor = (session: Session, density: TuiDensity = 'balanced', showToolCalls = true) => ({
     info: sessions.find((candidate) => candidate.sessionId === session.sessionId) ?? sessions[0],
-    rawMessages,
-    threadedMessages,
-    transcriptCards: cardsFor(density),
+    ...ownTranscript(session, density),
     transcriptCardsDensity: density,
     transcriptCardsShowToolCalls: showToolCalls,
     contextUsage: null,
@@ -428,9 +526,10 @@ if (useRealSessions) {
     readTuiSessionDetailAsync: async (session: Session, density: TuiDensity, showToolCalls: boolean) => (
       detailFor(session, density, showToolCalls)
     ),
-    formatTranscriptCardsAsync: async (_session: Session, _threaded: unknown, density: TuiDensity) => cardsFor(density),
-    getTranscriptCardsSync: (_session: Session, _threaded: unknown, density: TuiDensity) => cardsFor(density),
+    formatTranscriptCardsAsync: async (_session: Session, threaded: object, density: TuiDensity) => distinct ? cardsOf(threaded, density) : cardsFor(density),
+    getTranscriptCardsSync: (_session: Session, threaded: object, density: TuiDensity) => distinct ? cardsOf(threaded, density) : cardsFor(density),
     warmTranscriptAsync: async () => {},
+    readTuiSubagentSummariesAsync: async () => [],
   }))
   const metadataClient = await import('./metadataWorkerClient')
   mock.module('./metadataWorkerClient', () => ({
@@ -702,10 +801,12 @@ if (process.env.INPUT_FOCUS_TRACE === '1') {
   console.log('FOCUS TRACE distance-from-bottom per frame:', samples.join(','))
 }
 profileWindowOpen = true
+countRendersNow = true
+let pressesSent = 0
 while (monotonicNow() < until) {
   const presses = scenario.thenPress && monotonicNow() - startedAt > seconds * 500 ? scenario.thenPress : scenario.press
   await act(async () => {
-    for (let n = 0; n < burst; n += 1) await send(presses[i++ % presses.length])
+    for (let n = 0; n < burst; n += 1) { await send(presses[i++ % presses.length]); pressesSent += 1 }
   })
   await settle(intervalMs)
   // Read between frames, outside both clocks.
@@ -730,6 +831,12 @@ while (monotonicNow() < until) {
   }
 }
 profileWindowOpen = false
+countRendersNow = false
+if (process.env.INPUT_COUNT_RENDERS === '1') {
+  console.log(`RENDERS ${countedCommits} commits for ${pressesSent} presses (${(countedCommits / Math.max(pressesSent, 1)).toFixed(2)}/press)`)
+  for (const [name, count] of [...renderCounts].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.INPUT_COUNT_TOP ?? 30))) console.log(`  ${String(count).padStart(7)}  ${name}`)
+  for (const [key, count] of [...hookCounts].sort((a, b) => b[1] - a[1])) console.log(`  hook ${String(count).padStart(6)}  ${key}`)
+}
 if (scenario.scrolls && moved === 0) skip('the transcript never moved during the timed window')
 const cardsCrossed = Number.isFinite(minCardIndex) ? maxCardIndex - minCardIndex : 0
 if (!useRealSessions && scenario.minCardsCrossed && cardsCrossed < scenario.minCardsCrossed) {
@@ -738,6 +845,11 @@ if (!useRealSessions && scenario.minCardsCrossed && cardsCrossed < scenario.minC
 // Let the last metrics sample and any asynchronous logging flush.
 await settle(1500)
 const memoryAfter = await sampleRetainedMemory()
+// INPUT_HEAP_SNAPSHOT=<file>: a V8-format heap snapshot after the run, for retainer paths.
+if (process.env.INPUT_HEAP_SNAPSHOT) {
+  const { writeFileSync } = await import('fs')
+  writeFileSync(process.env.INPUT_HEAP_SNAPSHOT, (globalThis as unknown as { Bun: { generateHeapSnapshot(format: 'v8'): string } }).Bun.generateHeapSnapshot('v8'))
+}
 
 let cards = 0
 try {

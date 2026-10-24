@@ -28,6 +28,7 @@ import {
   readTuiSessionMetadata,
   readTuiSessions,
   readTuiSlashCommands,
+  readTuiSubagentSummaries,
 } from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
@@ -101,7 +102,13 @@ type AffordancesRequest = {
   id: number
   session: Session
 }
-type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest
+// A session's provider-recorded subagents, for the sidebar's nesting.
+type SubagentsRequest = {
+  kind: 'subagents'
+  id: number
+  session: Session
+}
+type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest | SubagentsRequest
 
 type WorkerResponse =
   | {
@@ -149,6 +156,7 @@ type WorkerResponse =
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
   | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
+  | { id: number; ok: true; subagents: Awaited<ReturnType<typeof readTuiSubagentSummaries>> }
   | { id: number; ok: true; affordances: {
       commands: Awaited<ReturnType<typeof readTuiSlashCommands>>
       options: Awaited<ReturnType<typeof readTuiComposerOptions>>
@@ -521,6 +529,11 @@ self.onmessage = async (event) => {
         ok: true,
         metadata: { currentModel: metadata.currentModel, contextUsage: metadata.contextUsage },
       })
+      return
+    }
+    if (data.kind === 'subagents') {
+      const subagents = await readTuiSubagentSummaries(data.session.sessionId, data.session.provider)
+      self.postMessage({ id: data.id, ok: true, subagents })
       return
     }
     if (data.kind === 'affordances') {

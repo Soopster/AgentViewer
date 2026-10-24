@@ -96,6 +96,7 @@ import {
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import { pruneUnmountedCardData } from './readerCardCache'
 import { createReaderWindowStore, deriveReaderWindow, stepReaderWindow } from './readerWindowStore'
 import type { ReaderWindow, ReaderWindowStore } from './readerWindowStore'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
@@ -254,6 +255,7 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
+import { useStableEvent } from './useStableEvent'
 import { selectedWindowFooter, selectedWindowHeader, type WindowChrome } from './windowChrome'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
@@ -261,6 +263,7 @@ import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
 import {
   attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
+  readTuiSubagentSummariesAsync,
   formatTranscriptCardsAsync,
   readTuiComposerAffordancesAsync,
   getTranscriptCardsSync,
@@ -366,16 +369,6 @@ import {
   isShiftedKey,
   PORTABLE_COMMAND_CHORDS,
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
-
-// Stable-reference event handler — reads the latest closure on every call
-// without appearing in any deps array. Mirrors React's upcoming useEffectEvent
-// (RFC #220) and the implementation already used internally by @opentui/react.
-function useEffectEvent<T extends (...args: never[]) => unknown>(handler: T): T {
-  const handlerRef = React.useRef(handler)
-  React.useLayoutEffect(() => { handlerRef.current = handler })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return React.useCallback((...args: Parameters<T>) => (handlerRef.current as T)(...args), []) as T
-}
 
 type SteeredComposerSend = {
   text: string
@@ -876,11 +869,14 @@ const DETAIL_OPEN_CACHED_DELAY_MS = 0
 // the cursor nears an edge, and a scroll poll slides it when the user
 // wheels/drags near the top or bottom of the mounted content. Sessions at or
 // under the window size behave exactly as before (full mount, no sliding).
+// Keep the default at 120: scene layout still visits every mounted card,
+// even when viewport culling skips painting it. Sliding preserves access to
+// the full transcript without paying for 240 cards on every scroll frame.
 // Env override is a test hook (lets a harness exercise sliding against a
 // modest session) and an escape hatch for very tall terminals.
 const READER_CARD_WINDOW = Math.max(
   40,
-  Number.parseInt(process.env.AGENT_VIEWER_READER_WINDOW ?? '', 10) || 240,
+  Number.parseInt(process.env.AGENT_VIEWER_READER_WINDOW ?? '', 10) || 120,
 )
 // Cards the window shifts per slide. A slide's cost is the cards it mounts and
 // destroys, not the root render: profiled on a sustained wheel scroll, a
@@ -1030,6 +1026,8 @@ const SURFACE_PANEL_ROW_STEP = 2
 // THREADING_CACHE_LIMIT (10) in threadingWorkerClient.ts, which already holds
 // threaded messages + cards for the same neighbourhood.
 const SESSION_CACHE_LIMIT = 8
+// Sessions whose provider-recorded subagents have been read for the sidebar.
+const SUBAGENT_SUMMARY_CACHE_LIMIT = 64
 const WORKTREE_TASK_CWD_SEGMENT = `${sep}.agent-viewer-worktrees${sep}`
 // After a settle, warm the threading worker's caches for the sessions adjacent
 // to the current one in sidebar order, so the *first* visit to a neighbour is
@@ -9020,7 +9018,7 @@ function useReaderWindowSliding({
   // tall card could land the viewport inside the opposite threshold and slide
   // straight back.
   const seenRef = useRef<{ top: number; direction: -1 | 0 | 1 }>({ top: -1, direction: 0 })
-  const requestSlide = useEffectEvent((direction: -1 | 1) => {
+  const requestSlide = useStableEvent((direction: -1 | 1) => {
     const start = gaugeRef.current.start
     const nextStart = direction < 0
       ? Math.max(0, start - READER_WINDOW_SLIDE)
@@ -9089,7 +9087,7 @@ function useReaderWindowSliding({
   //    paints. The anchor moved by exactly the rows added or removed above it;
   //    scrollTop moves by the same, applied to wherever the user has scrolled
   //    to since the commit.
-  const onScrolledEvent = useEffectEvent((top: number) => { onScrolled?.(top) })
+  const onScrolledEvent = useStableEvent((top: number) => { onScrolled?.(top) })
   useEffect(() => {
     const root = renderer.root
     const onLayout = () => {
@@ -9643,6 +9641,18 @@ function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInputs }) {
     setTranscriptDiffRowCursorForCard,
     transcriptLinkCwd,
   ])
+  // Delete only departed cards after the window commits. Overlap keeps its
+  // identities and ordinary selection/typing renders do no cache bookkeeping.
+  const cachedWindowRef = useRef<readonly TuiTranscriptCard[]>([])
+  useLayoutEffect(() => {
+    pruneUnmountedCardData(cachedWindowRef.current, renderedTranscriptCards, [
+      stableCardCacheRef.current,
+      landmarksByCardRef.current,
+      cardDisplayCacheRef.current,
+      transcriptCardVariantCacheRef.current,
+    ])
+    cachedWindowRef.current = renderedTranscriptCards
+  }, [renderedTranscriptCards])
   const transcriptChildren = useMemo(() => {
     const cards: React.ReactNode[] = selectTranscriptCardVariants(
       transcriptCardVariants,
@@ -10086,7 +10096,7 @@ function OpenTuiWorkspace() {
     [],
   )
   const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
-  const registerSplitPaneHandle = useEffectEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
+  const registerSplitPaneHandle = useStableEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
     else splitPaneHandlesRef.current.delete(paneIndex)
   })
@@ -10326,7 +10336,16 @@ function OpenTuiWorkspace() {
   const [sessionSearchMode, setSessionSearchMode] = useState(false)
   const [sessionSearchQuery, setSessionSearchQuery] = useWorkspaceState('sessionSearchQuery', '')
 
-  const [transcriptCursorKey, setTranscriptCursorKey] = useWorkspaceState<string | null>('transcriptCursorKey', null)
+  // The selected window's cursor, for the root's key handlers and the saved
+  // reader position. It lives in the workspace runtime and the root does not
+  // subscribe to it: a window reports every j/k here, and as root state each
+  // report re-rendered the whole app with nothing on screen depending on it.
+  const cursorRuntime = workspaceContext.runtime
+  const readTranscriptCursorKey = () => cursorRuntime.get<string | null>('transcriptCursorKey', null, true)
+  const setTranscriptCursorKey = useStableEvent((action: string | null | ((previous: string | null) => string | null)) => {
+    readTranscriptCursorKey()
+    cursorRuntime.set('transcriptCursorKey', action)
+  })
   const [expandedCardKeys, setExpandedCardKeys] = useWorkspaceState<Set<string>>('expandedCardKeys', () => new Set())
   const [collapsedCardKeys, setCollapsedCardKeys] = useWorkspaceState<Set<string>>('collapsedCardKeys', () => new Set())
   // Bookmarked message uuids (== card keys) for the active session. The ref
@@ -10423,15 +10442,15 @@ function OpenTuiWorkspace() {
   // the owner instead means an index only counts as the user's choice while the
   // card it was made on is still the one on screen.
   const permissionOptionOwnerRef = useRef<string | null>(null)
-  const resolvePermissionOptionIndex = useCallback((permission: PendingPermission, options: PermissionOption[]): number => {
+  const resolvePermissionOptionIndex = useStableEvent((permission: PendingPermission, options: PermissionOption[]): number => {
     if (permissionOptionOwnerRef.current !== permission.id) return defaultPermissionOptionIndex(permission, options)
     return Math.min(permissionOptionIndex, options.length - 1)
-  }, [permissionOptionIndex])
-  const movePermissionOptionIndex = useCallback((permission: PendingPermission, options: PermissionOption[], delta: number) => {
+  })
+  const movePermissionOptionIndex = useStableEvent((permission: PendingPermission, options: PermissionOption[], delta: number) => {
     const from = resolvePermissionOptionIndex(permission, options)
     permissionOptionOwnerRef.current = permission.id
     setPermissionOptionIndex(Math.max(0, Math.min(options.length - 1, from + delta)))
-  }, [resolvePermissionOptionIndex])
+  })
   // A turn is running for the selected session that this composer does not own
   // a stream for — the send stream died but the turn survived (turns are
   // decoupled from their stream), or a turn from another view is still
@@ -10482,7 +10501,7 @@ function OpenTuiWorkspace() {
   // the transient ref and atomic queue file in lockstep in the originating
   // interaction; relying only on effects leaves immediate-exit windows where
   // the newest enqueue/cancel state can be lost or replayed.
-  const commitQueuedComposerSends = useEffectEvent((next: QueuedComposerSend[]) => {
+  const commitQueuedComposerSends = useStableEvent((next: QueuedComposerSend[]) => {
     queuedComposerSendsRef.current = next
     setQueuedComposerSends(next)
     try { workspaceContext.controller.flush(); setComposerQueueDurable(true) } catch { setComposerQueueDurable(false) }
@@ -10944,7 +10963,7 @@ function OpenTuiWorkspace() {
   // Sidebar selection changes on every scrub keypress. Read the latest note
   // state when invoked without invalidating all mounted card variants just
   // because the sidebar moved; this handler is passed to every transcript card.
-  const openScopedTranscriptDiffNote = useEffectEvent((namespace: string, selection: SelectedLineRange, cardKey?: string) => {
+  const openScopedTranscriptDiffNote = useStableEvent((namespace: string, selection: SelectedLineRange, cardKey?: string) => {
     const key = transcriptDiffSelectionKey(cardKey ? transcriptDiffCardNamespace(namespace, cardKey) : namespace, selection)
     const legacyKey = transcriptDiffSelectionKey(namespace, selection)
     const legacyAnchor = !transcriptDiffNotes.has(key) && transcriptDiffNotes.has(legacyKey) ? legacyKey : undefined
@@ -10955,7 +10974,7 @@ function OpenTuiWorkspace() {
       text: (transcriptDiffNotes.get(key) ?? transcriptDiffNotes.get(legacyKey))?.text ?? '',
     })
   })
-  const openTranscriptDiffNote = useEffectEvent((selection: SelectedLineRange, cardKey?: string) => {
+  const openTranscriptDiffNote = useStableEvent((selection: SelectedLineRange, cardKey?: string) => {
     openScopedTranscriptDiffNote(committedSessionKey ?? 'no-session', selection, cardKey)
   })
   const deleteTranscriptDiffNote = useCallback((selectionKey: string) => {
@@ -11220,6 +11239,7 @@ function OpenTuiWorkspace() {
   }, [recentlyWrittenSessions])
   const recentlyWrittenKeys = recentlyWrittenSessions.keys
 
+  const sidebarSessionActivityRef = useRef(new Map<string, 'needs-input' | 'running' | 'waiting'>())
   const sidebarSessionActivity = useMemo(() => {
     const needsInputKeys = new Set(
       attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
@@ -11237,6 +11257,12 @@ function OpenTuiWorkspace() {
       const key = sessionKey(note)
       if (!activity.has(key)) activity.set(key, 'needs-input')
     }
+    // The same map when nothing changed: the attention items are rebuilt on
+    // every selection (they name the composer's target), and a new map here
+    // rebuilt every sidebar row.
+    const previous = sidebarSessionActivityRef.current
+    if (previous.size === activity.size && [...activity].every(([key, value]) => previous.get(key) === value)) return previous
+    sidebarSessionActivityRef.current = activity
     return activity
   }, [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
 
@@ -11839,7 +11865,7 @@ function OpenTuiWorkspace() {
   const reportSelectedWindowCursor = useCallback((cardKey: string | null) => {
     if (cardKey) setTranscriptCursorKey((current) => (current === cardKey ? current : cardKey))
   }, [])
-  const jumpToTranscriptIndex = useCallback((index: number) => {
+  const jumpToTranscriptIndex = useStableEvent((index: number) => {
     if (visibleTranscriptCards.length === 0) return
     const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
     const nextCard = visibleTranscriptCards[nextIndex]
@@ -11856,10 +11882,10 @@ function OpenTuiWorkspace() {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
-  }, [visibleTranscriptCards])
+  })
 
 
-  const selectSidebarSession = useEffectEvent((session: Session) => {
+  const selectSidebarSession = useStableEvent((session: Session) => {
     const existing = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === sessionKey(session))
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === sessionKey(session)) { focusSplitPane(FLOATING_PANE_INDEX); return }
@@ -11940,13 +11966,14 @@ function OpenTuiWorkspace() {
     return matches
   }, [deferredSearchQuery, visibleTranscriptCards])
 
-  const cursorIndex = useMemo(() => {
+  const readCursorIndex = () => {
     if (visibleTranscriptCards.length === 0) return -1
     if (followTail) return visibleTranscriptCards.length - 1
-    const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) ?? -1 : -1
+    const cursorKey = readTranscriptCursorKey()
+    const index = cursorKey ? transcriptIndexByKey.get(cursorKey) ?? -1 : -1
     if (index >= 0) return index
     return 0
-  }, [followTail, visibleTranscriptCards.length, transcriptCursorKey, transcriptIndexByKey])
+  }
 
   const unreadBoundaryIndex = useMemo(
     () => unreadBoundaryKey ? (transcriptIndexByKey.get(unreadBoundaryKey) ?? -1) : -1,
@@ -12051,29 +12078,31 @@ function OpenTuiWorkspace() {
   // durable child sessions. Fetch their lightweight summaries lazily for the
   // currently open session. Providers with real children (OpenCode/Codex) are
   // already represented through parentSessionId and return no summaries here.
-  // The cache is additive, so revisiting a parent does not reread its history.
+  // Read in the transcript worker, which already holds the provider graph. A
+  // session that turns out to have none is remembered outside state: most have
+  // none, and a new map per selection rebuilt every sidebar row.
   const [providerSubagentSummaries, setProviderSubagentSummaries] = useState<Map<string, SubagentSummary[]>>(new Map())
+  const subagentSummariesReadRef = useRef(new Set<string>())
   useEffect(() => {
     const target = selectedSessionTarget
     if (!target) return
     const cacheKey = sessionKey(target)
-    if (providerSubagentSummaries.has(cacheKey)) return
+    const read = subagentSummariesReadRef.current
+    if (read.has(cacheKey)) return
     let cancelled = false
-    fetch(`/api/sessions/${target.sessionId}/subagents?provider=${target.provider ?? 'claude'}`)
-      .then((res) => (res.ok ? res.json() : { subagents: [] }))
-      .then((data: { subagents?: SubagentSummary[] }) => {
-        if (cancelled) return
-        setProviderSubagentSummaries((prev) => {
-          const next = new Map(prev)
-          next.set(cacheKey, data.subagents ?? [])
-          return next
-        })
+    void readTuiSubagentSummariesAsync(target).then((subagents) => {
+      if (cancelled) return
+      read.add(cacheKey)
+      if (read.size > SUBAGENT_SUMMARY_CACHE_LIMIT) read.delete(read.values().next().value!)
+      if (subagents.length === 0) return
+      setProviderSubagentSummaries((previous) => {
+        const next = new Map(previous).set(cacheKey, subagents)
+        for (const key of next.keys()) if (next.size > SUBAGENT_SUMMARY_CACHE_LIMIT && key !== cacheKey) next.delete(key)
+        return next
       })
-      .catch(() => {
-        if (!cancelled) setProviderSubagentSummaries((prev) => new Map(prev).set(cacheKey, []))
-      })
+    }).catch(() => {})
     return () => { cancelled = true }
-  }, [selectedSessionTarget, providerSubagentSummaries])
+  }, [selectedSessionTarget])
 
   const childrenByParentId = useMemo(() => {
     const map = new Map<string, SidebarSubagentEntry[]>()
@@ -12155,19 +12184,19 @@ function OpenTuiWorkspace() {
     },
     () => '0/0/all/0/0/0',
   )
-  const moveCoordinatorSelection = useEffectEvent((delta: number) => {
+  const moveCoordinatorSelection = useStableEvent((delta: number) => {
     const { agentEntries, selectedKey } = getCoordinatorState()
     if (agentEntries.length === 0) return
     const currentPos = agentEntries.findIndex((entry) => entry.key === selectedKey)
     const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, agentEntries.length - 1)
     setCoordinatorSelectedKey(agentEntries[nextPos]?.key ?? null)
   })
-  const jumpCoordinatorSelection = useEffectEvent((edge: 'first' | 'last') => {
+  const jumpCoordinatorSelection = useStableEvent((edge: 'first' | 'last') => {
     const { agentEntries } = getCoordinatorState()
     const target = edge === 'first' ? agentEntries[0] : agentEntries.at(-1)
     if (target) setCoordinatorSelectedKey(target.key)
   })
-  const openSelectedCoordinatorAgent = useEffectEvent(() => {
+  const openSelectedCoordinatorAgent = useStableEvent(() => {
     const { agentEntries, selectedKey: coordinatorSelectedKey } = getCoordinatorState()
     const selected = agentEntries.find((entry) => entry.key === coordinatorSelectedKey)
     if (selected?.machine) {
@@ -12709,7 +12738,7 @@ function OpenTuiWorkspace() {
     }
   }, [composerMention, composerMentionAgents, composerMentionCwd, composerMentionProvider])
 
-  const ensureComposerPastePartTypeId = useEffectEvent((renderable: TextareaRenderable): number => {
+  const ensureComposerPastePartTypeId = useStableEvent((renderable: TextareaRenderable): number => {
     let typeId = composerPastePartTypeIdRef.current
     if (typeId == null) {
       typeId = renderable.extmarks.registerType('composer-paste')
@@ -12718,7 +12747,7 @@ function OpenTuiWorkspace() {
     return typeId
   })
 
-  const restoreComposerPromptPartExtmarks = useEffectEvent((parts: ComposerPromptPart[], text: string) => {
+  const restoreComposerPromptPartExtmarks = useStableEvent((parts: ComposerPromptPart[], text: string) => {
     const renderable = composerTextareaRef.current
     if (!renderable) return
     renderable.extmarks.clear()
@@ -12742,14 +12771,14 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const makeComposerSnapshot = useEffectEvent((): ComposerDraftSnapshot => ({
+  const makeComposerSnapshot = useStableEvent((): ComposerDraftSnapshot => ({
     text: composerTextareaRef.current?.plainText ?? composerDraft,
     attachments: [...composerMentionAttachments],
     promptParts: [...composerPromptParts],
     cursorOffset: composerTextareaRef.current?.cursorOffset,
   }))
 
-  const applyComposerSnapshot = useEffectEvent((snapshot: ComposerDraftSnapshot) => {
+  const applyComposerSnapshot = useStableEvent((snapshot: ComposerDraftSnapshot) => {
     const text = snapshot.text
     composerTextareaRef.current?.setText(text)
     if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = snapshot.cursorOffset ?? text.length
@@ -12761,7 +12790,7 @@ function OpenTuiWorkspace() {
 
   // `trailing` follows the prompt, and the cursor lands after it: a prompt that
   // ends on the line the user is meant to finish passes ''.
-  const appendDiffCommentPromptToComposer = useEffectEvent((prompt: string, trailing = '\n\n') => {
+  const appendDiffCommentPromptToComposer = useStableEvent((prompt: string, trailing = '\n\n') => {
     const trimmed = trailing ? prompt.trim() : prompt.trimStart()
     if (!trimmed.trim()) return
     const existing = composerTextareaRef.current?.plainText ?? composerDraft
@@ -12778,7 +12807,7 @@ function OpenTuiWorkspace() {
 
   // A "why" with no history of its own asks the provenance index and git
   // blame who wrote the lines; every other intent goes straight in.
-  const askAgentAboutSelection = useEffectEvent(async (input: SelectionAskInput) => {
+  const askAgentAboutSelection = useStableEvent(async (input: SelectionAskInput) => {
     let request = input
     if (input.intent === 'why' && !input.history && gitRepoCwd) {
       showNotice('info', 'Looking up who wrote these lines…')
@@ -12789,7 +12818,7 @@ function OpenTuiWorkspace() {
     showNotice('info', `${request.filePath.split('/').pop()} ${request.startLine === request.endLine ? `L${request.startLine}` : `L${request.startLine}-${request.endLine}`} added to composer`)
   })
 
-  const sendTranscriptDiffNoteToComposer = useEffectEvent((
+  const sendTranscriptDiffNoteToComposer = useStableEvent((
     card: TuiTranscriptCard,
     note: TranscriptDiffNote,
     label: string,
@@ -12798,7 +12827,7 @@ function OpenTuiWorkspace() {
     if (committedSessionKey) sendScopedTranscriptDiffNote(committedSessionKey, card, note, label, diffText)
   })
 
-  const sendScopedTranscriptDiffNote = useEffectEvent((namespace: string, card: TuiTranscriptCard, note: TranscriptDiffNote, label: string, diffText: string | null) => {
+  const sendScopedTranscriptDiffNote = useStableEvent((namespace: string, card: TuiTranscriptCard, note: TranscriptDiffNote, label: string, diffText: string | null) => {
     setPendingTranscriptDiffPrompt({ target: namespace, prompt: buildDiffCommentComposerPrompt({
       filePath: filePathFromDiffText(diffText, card.label), range: note.range, comment: note.text,
       context: diffText ?? cardClipboardText(card), source: `Transcript diff card ${label}`,
@@ -12806,7 +12835,7 @@ function OpenTuiWorkspace() {
     setComposerPaneTargetKey(namespace)
   })
 
-  const activeComposerPromptPartRanges = useEffectEvent((text: string, parts: ComposerPromptPart[]): ComposerPromptPartRange[] => {
+  const activeComposerPromptPartRanges = useStableEvent((text: string, parts: ComposerPromptPart[]): ComposerPromptPartRange[] => {
     const renderable = composerTextareaRef.current
     const typeId = composerPastePartTypeIdRef.current
     const byId = new Map(parts.map((part) => [part.id, part]))
@@ -12835,7 +12864,7 @@ function OpenTuiWorkspace() {
     return ranges
   })
 
-  const prepareComposerSubmission = useEffectEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]): ComposerSubmission => {
+  const prepareComposerSubmission = useStableEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]): ComposerSubmission => {
     // The ordinary typing path has no pasted prompt parts or attachments. Do
     // not walk extmarks, build maps, or sort ranges until the composer actually
     // contains one of those richer inputs.
@@ -12867,7 +12896,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const insertMentionAtCursor = useEffectEvent((entry: TuiMentionResult) => {
+  const insertMentionAtCursor = useStableEvent((entry: TuiMentionResult) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !composerMention) return
     const text = renderable.plainText
@@ -12927,7 +12956,7 @@ function OpenTuiWorkspace() {
     setComposerSlashIndex(0)
   }, [])
 
-  const selectComposerHistoryEntry = useEffectEvent((displayIndex: number) => {
+  const selectComposerHistoryEntry = useStableEvent((displayIndex: number) => {
     if (sentHistory.length === 0) return
     const nextDisplayIndex = clamp(displayIndex, 0, sentHistory.length - 1)
     const sourceIndex = sentHistory.length - 1 - nextDisplayIndex
@@ -12937,7 +12966,7 @@ function OpenTuiWorkspace() {
     applyComposerSnapshot(replacement)
   })
 
-  const openComposerHistory = useEffectEvent((displayIndex = 0) => {
+  const openComposerHistory = useStableEvent((displayIndex = 0) => {
     if (sentHistory.length === 0) return
     if (!composerHistoryOpen && historyIndex === -1) {
       setDraftBeforeHistory(makeComposerSnapshot())
@@ -12951,7 +12980,7 @@ function OpenTuiWorkspace() {
 
   // ⌃R, as in the native CLIs: the newest earlier prompt containing what was
   // typed; pressed again, the next older match.
-  const searchComposerHistory = useEffectEvent(() => {
+  const searchComposerHistory = useStableEvent(() => {
     const query = (composerHistoryOpen ? composerSnapshotText(draftBeforeHistory) : composerDraft).trim().toLowerCase()
     for (let display = composerHistoryOpen ? composerHistoryIndex + 1 : 0; display < sentHistory.length; display += 1) {
       const entry = sentHistory[sentHistory.length - 1 - display]
@@ -12964,7 +12993,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃G, as in Claude Code and Codex: write the prompt in $VISUAL/$EDITOR.
-  const editComposerInExternalEditor = useEffectEvent(() => {
+  const editComposerInExternalEditor = useStableEvent(() => {
     const current = composerTextareaRef.current?.plainText ?? composerDraft
     void editTextInEditor(renderer, current).then((result) => {
       if (!result.ok) {
@@ -12983,14 +13012,14 @@ function OpenTuiWorkspace() {
     setComposerHistoryIndex(0)
   }, [])
 
-  const cancelComposerHistory = useEffectEvent(() => {
+  const cancelComposerHistory = useStableEvent(() => {
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
     applyComposerSnapshot(draftBeforeHistory)
     setHistoryIndex(-1)
   })
 
-  const moveComposerHistory = useEffectEvent((delta: number) => {
+  const moveComposerHistory = useStableEvent((delta: number) => {
     if (sentHistory.length === 0) return
     if (!composerHistoryOpen) {
       if (delta > 0) {
@@ -13017,7 +13046,7 @@ function OpenTuiWorkspace() {
     selectComposerHistoryEntry(nextDisplayIndex)
   })
 
-  const handleComposerContentChange = useEffectEvent(() => {
+  const handleComposerContentChange = useStableEvent(() => {
     const renderable = composerTextareaRef.current
     const text = renderable?.plainText ?? ''
     const cursor = renderable?.cursorOffset ?? text.length
@@ -13531,7 +13560,7 @@ function OpenTuiWorkspace() {
   }, [focusedSessionPaneKey, selectedSessionKey])
   // `w` closes a window's tab and shows the next one there — the nearest tab
   // no other window shows — or closes the window when every tab is on screen.
-  const closeWindowSessionTab = useEffectEvent((session: Session) => {
+  const closeWindowSessionTab = useStableEvent((session: Session) => {
     const key = sessionKey(session)
     const index = openTabSessions.findIndex(tab => sessionKey(tab) === key)
     const rest = openTabSessions.filter(tab => sessionKey(tab) !== key)
@@ -13573,7 +13602,7 @@ function OpenTuiWorkspace() {
   // The selected session is always on screen: in the focused session window,
   // else the one focused last, else a new window. Browsing the rail is
   // debounced, or every j would remount a window.
-  const showSelectedSessionInWindow = useEffectEvent(() => {
+  const showSelectedSessionInWindow = useStableEvent(() => {
     if (!selectedSession || !selectedSessionKey || shownPopoverTab) return
     const key = selectedSessionKey
     if (laidOutWindowKeys.has(key) || floatingKey === key || windowStackFor(key)) return
@@ -14536,16 +14565,16 @@ function OpenTuiWorkspace() {
     }
   }, [])
 
-  const jumpToTranscriptTail = useCallback(() => {
+  const jumpToTranscriptTail = useStableEvent(() => {
     if (visibleTranscriptCards.length === 0) return
     const lastIndex = visibleTranscriptCards.length - 1
     jumpToTranscriptIndex(lastIndex)
     setFollowTail(true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
-  }, [jumpToTranscriptIndex, visibleTranscriptCards])
+  })
 
-  const jumpToUnreadBoundary = useEffectEvent(() => {
+  const jumpToUnreadBoundary = useStableEvent(() => {
     if (unreadBoundaryIndex >= 0) {
       jumpToTranscriptIndex(unreadBoundaryIndex)
       return
@@ -14553,12 +14582,12 @@ function OpenTuiWorkspace() {
     jumpToTranscriptTail()
   })
 
-  const jumpToResumeMarker = useEffectEvent(() => {
+  const jumpToResumeMarker = useStableEvent(() => {
     const index = resumeMarkerKey ? (transcriptIndexByKey.get(resumeMarkerKey) ?? -1) : -1
     if (index >= 0) jumpToTranscriptIndex(index)
   })
 
-  const moveSelection = useEffectEvent((delta: number) => {
+  const moveSelection = useStableEvent((delta: number) => {
     if (sessions.length === 0) return
     // Navigate in sidebar visual order (grouped by project), not raw time-sort order.
     const sessionEntries = sidebarSessionEntries
@@ -14575,8 +14604,9 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const moveCursor = useEffectEvent((delta: number) => {
+  const moveCursor = useStableEvent((delta: number) => {
     if (visibleTranscriptCards.length === 0) return
+    const cursorIndex = readCursorIndex()
     const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, visibleTranscriptCards.length - 1)
     setTranscriptCursorKey(visibleTranscriptCards[nextIndex].key)
     const atTail = nextIndex === visibleTranscriptCards.length - 1
@@ -14588,8 +14618,9 @@ function OpenTuiWorkspace() {
   })
 
 
-  const moveAgentToolCursor = useEffectEvent((delta: -1 | 1): boolean => {
+  const moveAgentToolCursor = useStableEvent((delta: -1 | 1): boolean => {
     if (!groupedToolView) return false
+    const cursorIndex = readCursorIndex()
     const groupCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!groupCard || !resolvedExpandedKeys.has(groupCard.key)) return false
     const toolCards = agentToolCardsFor(groupCard)
@@ -14618,7 +14649,7 @@ function OpenTuiWorkspace() {
   // keeps repeating, the step eases from 1 up to VELOCITY_SCROLL_MAX_STEP over
   // VELOCITY_SCROLL_RAMP_MS — a quadratic ease-in so the ramp feels gradual
   // rather than snapping straight to top speed.
-  const velocityScrollStep = useEffectEvent((direction: -1 | 1): number => {
+  const velocityScrollStep = useStableEvent((direction: -1 | 1): number => {
     if (!velocityScrollEnabled) return 1
     const now = performance.now()
     const state = velocityScrollStateRef.current
@@ -14632,13 +14663,14 @@ function OpenTuiWorkspace() {
     return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * eased))
   })
 
-  const moveViewport = useEffectEvent((direction: -1 | 1) => {
+  const moveViewport = useStableEvent((direction: -1 | 1) => {
     const step = Math.max(Math.floor((height - (focusMode ? 5 : 7)) / 3), 1)
     moveCursor(direction * step)
   })
 
-  const jumpToMatchingCard = useEffectEvent((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
+  const jumpToMatchingCard = useStableEvent((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
     if (visibleTranscriptCards.length === 0) return
+    const cursorIndex = readCursorIndex()
     let index = cursorIndex >= 0 ? cursorIndex + direction : direction > 0 ? 0 : visibleTranscriptCards.length - 1
     while (index >= 0 && index < visibleTranscriptCards.length) {
       if (predicate(visibleTranscriptCards[index])) {
@@ -14649,14 +14681,15 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const jumpToSearchMatch = useEffectEvent((matchOffset: number) => {
+  const jumpToSearchMatch = useStableEvent((matchOffset: number) => {
     if (searchMatches.length === 0) return
     const nextMatchIndex = (searchMatchIndex + matchOffset + searchMatches.length) % searchMatches.length
     setSearchMatchIndex(nextMatchIndex)
     jumpToTranscriptIndex(searchMatches[nextMatchIndex] ?? 0)
   })
 
-  const toggleExpansion = useEffectEvent((scope: 'selected' | 'parent' = 'selected') => {
+  const toggleExpansion = useStableEvent((scope: 'selected' | 'parent' = 'selected') => {
+    const cursorIndex = readCursorIndex()
     const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) return
     const agentToolCards = groupedToolView && resolvedExpandedKeys.has(card.key)
@@ -14720,7 +14753,7 @@ function OpenTuiWorkspace() {
 
   // The instance list is re-read on open: one added to provider-instances.json
   // while the TUI runs is offered without a restart.
-  const openProviderMenu = useEffectEvent(() => {
+  const openProviderMenu = useStableEvent(() => {
     setProviderMenuIndex(providerOptionIndex(providerSelectOptions(providerInstances), provider, providerInstanceId))
     setProviderMenuOpen(true)
     void readTuiProviderInstances().then(({ choices }) => {
@@ -14733,7 +14766,7 @@ function OpenTuiWorkspace() {
     setProviderMenuOpen(false)
   }, [])
 
-  const openThemeMenu = useEffectEvent(() => {
+  const openThemeMenu = useStableEvent(() => {
     themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
     setThemeMenuGroup(
@@ -14743,7 +14776,7 @@ function OpenTuiWorkspace() {
     setThemeMenuOpen(true)
   })
 
-  const closeThemeMenu = useEffectEvent(() => {
+  const closeThemeMenu = useStableEvent(() => {
     const originTheme = themeMenuOriginRef.current
     setThemeMenuOpen(false)
     setThemeMenuQuery('')
@@ -14778,7 +14811,7 @@ function OpenTuiWorkspace() {
   // The terminal reports its background as light or dark, and reports again
   // when the OS appearance flips. A terminal that never answers leaves the
   // theme where it was.
-  const applyTerminalThemeMode = useEffectEvent((mode: 'light' | 'dark' | null) => {
+  const applyTerminalThemeMode = useStableEvent((mode: 'light' | 'dark' | null) => {
     if (!mode || !themeFollowsTerminalRef.current) return
     const target = themeSlotsRef.current[mode]
     // Mid-preview, closing the menu restores its origin: move that too.
@@ -14819,7 +14852,7 @@ function OpenTuiWorkspace() {
     })
   }, [renderer, themeMode])
 
-  const toggleThemeFollowsTerminal = useEffectEvent(() => {
+  const toggleThemeFollowsTerminal = useStableEvent(() => {
     const next = !themeFollowsTerminalRef.current
     themeFollowsTerminalRef.current = next
     setThemeFollowsTerminal(next)
@@ -14835,13 +14868,13 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openTranscriptViewMenu = useEffectEvent(() => {
+  const openTranscriptViewMenu = useStableEvent(() => {
     transcriptViewMenuOriginRef.current = transcriptView
     setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
     setTranscriptViewMenuOpen(true)
   })
 
-  const closeTranscriptViewMenu = useEffectEvent(() => {
+  const closeTranscriptViewMenu = useStableEvent(() => {
     const originView = transcriptViewMenuOriginRef.current
     setTranscriptViewMenuOpen(false)
     if (originView) {
@@ -14864,7 +14897,7 @@ function OpenTuiWorkspace() {
   }, [])
 
   // Lightweight windows apply to whichever view is chosen, like the old pane did.
-  const toggleLightweightWindows = useEffectEvent(() => {
+  const toggleLightweightWindows = useStableEvent(() => {
     const next = !lightweightWindows
     setLightweightWindows(next)
     showToggleOutcome('Lightweight windows', next)
@@ -14877,7 +14910,7 @@ function OpenTuiWorkspace() {
     try { writeTuiThemeSync(currentThemeRef.current, themeFollowsTerminalRef.current) } catch { /* best-effort */ }
   }, [])
 
-  const confirmExit = useCallback(() => {
+  const confirmExit = useStableEvent(() => {
     if (exitInProgressRef.current) return
     exitInProgressRef.current = true
     setExitCleanupInProgress(true)
@@ -14919,7 +14952,7 @@ function OpenTuiWorkspace() {
       renderer.destroy()
       process.exit(0)
     })()
-  }, [persistTheme, renderer])
+  })
 
   const requestExit = useCallback(() => {
     setExitConfirmOpen(true)
@@ -14933,7 +14966,7 @@ function OpenTuiWorkspace() {
   // Open the composer settings overlay. Model metadata stays provider-owned;
   // the TUI only filters the reported effort levels to values each backend
   // accepts, then applies both settings to the next send.
-  const openModelPicker = useEffectEvent(async () => {
+  const openModelPicker = useStableEvent(async () => {
     const target = composerTargetSession ?? selectedSession
     if (!target) {
       showNotice('info', 'Pick a session first')
@@ -14999,7 +15032,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const applyModelPickerOption = useEffectEvent((selectedOption?: ModelPickerOption) => {
+  const applyModelPickerOption = useStableEvent((selectedOption?: ModelPickerOption) => {
     const option = selectedOption ?? filteredModelPickerOptions[modelPickerIndex]
     const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
     const value = typeof option?.value === 'string' ? option.value : ''
@@ -15017,7 +15050,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const switchComposerModel = useEffectEvent(async (target: Session, requested: string) => {
+  const switchComposerModel = useStableEvent(async (target: Session, requested: string) => {
     let models: Array<{ value?: unknown; displayName?: string }> = []
     try {
       models = (await readTuiSessionMetadata(target)).models
@@ -15039,13 +15072,13 @@ function OpenTuiWorkspace() {
     showNotice('info', `Model set to ${found?.displayName || value}`, 4000)
   })
 
-  const applyModelPickerEffort = useEffectEvent((value: string | undefined) => {
+  const applyModelPickerEffort = useStableEvent((value: string | undefined) => {
     if (value) setTuiEffort(value as TuiEffort)
     if (modelPickerPermissionOptions.length > 0) setModelPickerFocus('permissions')
     else setModelPickerOpen(false)
   })
 
-  const applyModelPickerPermission = useEffectEvent((value: string | undefined) => {
+  const applyModelPickerPermission = useStableEvent((value: string | undefined) => {
     const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
     if (!target || !value) return
     if (target.provider === 'claude' && CLAUDE_PERMISSION_MODE_ORDER.includes(value as TuiPermissionMode)) {
@@ -15136,7 +15169,7 @@ function OpenTuiWorkspace() {
     mainContentHeight - commandPaletteTopOffset - 8,
   ))
 
-  const chooseProvider = useCallback(async (
+  const chooseProvider = useStableEvent(async (
     nextProvider: ProviderSelection,
     targetSession: Session | null = null,
     nextInstanceId: string | null = null,
@@ -15175,14 +15208,14 @@ function OpenTuiWorkspace() {
     } finally {
       providerSwitchRef.current = false
     }
-  }, [closeProviderMenu, provider, refreshSessions])
+  })
 
   // Select a session that is already an open tab. If the tab belongs to a
   // different provider than the one currently active, transparently switch
   // providers first (carrying the target session through) so cross-provider
   // tab navigation works without losing the tab's context.
   // Close a tab in the strip, and its window if it has one.
-  const closeSessionTab = useEffectEvent((session: Session) => {
+  const closeSessionTab = useStableEvent((session: Session) => {
     const key = sessionKey(session)
     const pane = windowItems.findIndex(item => windowItemKey(item) === key)
     if (windowStackFor(key)) closeWindowTab(key)
@@ -15193,7 +15226,7 @@ function OpenTuiWorkspace() {
     if (key === selectedSessionKey) { setWorkspaceHasSession(false); setWorkspaceReaderSession(null) }
   })
 
-  const selectTabSession = useEffectEvent((session: Session) => {
+  const selectTabSession = useStableEvent((session: Session) => {
     setActivePopoverTab(null)
     const key = sessionKey(session)
     const existing = windowItems.findIndex(item => windowItemKey(item) === key)
@@ -15212,7 +15245,7 @@ function OpenTuiWorkspace() {
     setSelectedSessionKey(sessionKey(session))
   })
 
-  const refreshDiagnostics = useEffectEvent(async (sessionOverride?: Session) => {
+  const refreshDiagnostics = useStableEvent(async (sessionOverride?: Session) => {
     const target = sessionOverride ?? selectedSession
     if (!target) return
     setDiagnosticsLoading(true)
@@ -15227,7 +15260,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openDiagnostics = useEffectEvent((sessionOverride?: Session) => {
+  const openDiagnostics = useStableEvent((sessionOverride?: Session) => {
     setDiagnosticsOpen(true)
     setDiagnosticsMcpIndex(0)
     void refreshDiagnostics(sessionOverride)
@@ -15241,7 +15274,7 @@ function OpenTuiWorkspace() {
   }, [])
 
   // Diagnostics' keys, for its modal and for its window alike.
-  const diagnosticsKey = useEffectEvent((key: ShortcutKeyEvent) => {
+  const diagnosticsKey = useStableEvent((key: ShortcutKeyEvent) => {
       if (key.name === 'escape' || isShiftedKey(key, 'D') || isCtrlKey(key, 'c')) {
         closeDiagnostics()
         return
@@ -15357,7 +15390,7 @@ function OpenTuiWorkspace() {
       }
   })
 
-  const runDiagnosticsAction = useEffectEvent(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
+  const runDiagnosticsAction = useStableEvent(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
     if (!selectedSession || selectedSession.provider !== 'claude') return null
     setDiagnosticsBusy(busyKey)
     setDiagnosticsError(null)
@@ -15425,7 +15458,7 @@ function OpenTuiWorkspace() {
     void runTuiSessionAction(target, body).catch(() => { /* swallow */ })
   }, [])
 
-  const setClaudeComposerPermissionMode = useEffectEvent((target: Session | null | undefined, nextMode: TuiPermissionMode) => {
+  const setClaudeComposerPermissionMode = useStableEvent((target: Session | null | undefined, nextMode: TuiPermissionMode) => {
     if (!target || target.provider !== 'claude') return
     const targetKey = sessionKey(target)
     const current = tuiPermissionModeByKeyRef.current
@@ -15435,7 +15468,7 @@ function OpenTuiWorkspace() {
     pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: nextMode })
   })
 
-  const cycleClaudeComposerPermissionMode = useEffectEvent((target: Session | null | undefined) => {
+  const cycleClaudeComposerPermissionMode = useStableEvent((target: Session | null | undefined) => {
     if (!target || target.provider !== 'claude') return
     const current = tuiPermissionModeByKeyRef.current[sessionKey(target)] ?? 'default'
     const currentIndex = CLAUDE_PERMISSION_MODE_ORDER.indexOf(current)
@@ -15444,7 +15477,7 @@ function OpenTuiWorkspace() {
     setClaudeComposerPermissionMode(target, next)
   })
 
-  const cancelComposerSend = useEffectEvent(() => {
+  const cancelComposerSend = useStableEvent(() => {
     const target = composerTargetSession
     // Turns are decoupled from the client connection (they survive disconnect),
     // so aborting the local fetch alone leaves the agent running on the server —
@@ -15582,7 +15615,7 @@ function OpenTuiWorkspace() {
     setLiveToolActivities([])
   })
 
-  const backgroundComposerTasks = useEffectEvent(async () => {
+  const backgroundComposerTasks = useStableEvent(async () => {
     const target = composerTargetSession
     if (!target || target.provider !== 'claude' || target.isPending || backgroundingTasks) return
     setBackgroundingTasks(true)
@@ -15601,7 +15634,7 @@ function OpenTuiWorkspace() {
   // the live warm pool entry (a fresh control query wouldn't know the task), so
   // it only works while the session is warm — the backend reports stopped:false
   // otherwise.
-  const stopComposerTask = useEffectEvent(async (taskId: string) => {
+  const stopComposerTask = useStableEvent(async (taskId: string) => {
     const target = composerTargetSession
     if (!target || target.provider !== 'claude' || target.isPending) return
     try {
@@ -15613,7 +15646,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => {
+  const respondToTuiPermission = useStableEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => {
     if (permission.asyncQuestion) { setAsyncQuestionPrompt(null); return }
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
@@ -15647,7 +15680,7 @@ function OpenTuiWorkspace() {
   // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
   // exits plan mode for this turn) and switches the composer + warm query to the
   // chosen mode so subsequent turns aren't back in plan mode. Reject keeps planning.
-  const respondToTuiPlan = useEffectEvent(async (permission: PendingPermission, decision: 'acceptEdits' | 'default' | 'reject') => {
+  const respondToTuiPlan = useStableEvent(async (permission: PendingPermission, decision: 'acceptEdits' | 'default' | 'reject') => {
     if (decision === 'reject') {
       await respondToTuiPermission(permission, 'reject')
       return
@@ -15661,7 +15694,7 @@ function OpenTuiWorkspace() {
 
   // Toggle an AskUserQuestion option for the focused question. Single-select
   // replaces; multi-select adds/removes.
-  const toggleTuiQuestionOption = useEffectEvent((qi: number, multiSelect: boolean, label: string) => {
+  const toggleTuiQuestionOption = useStableEvent((qi: number, multiSelect: boolean, label: string) => {
     if (!multiSelect) {
       setQuestionFreeformAnswers((prev) => prev[qi] ? { ...prev, [qi]: '' } : prev)
     }
@@ -15676,7 +15709,7 @@ function OpenTuiWorkspace() {
 
   // Submit the AskUserQuestion answers back into the running turn (allows the
   // tool with the user's selections merged into its input).
-  const submitTuiQuestion = useEffectEvent(async (permission: PendingPermission) => {
+  const submitTuiQuestion = useStableEvent(async (permission: PendingPermission) => {
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
     const questions = permission.questions ?? []
@@ -15742,7 +15775,7 @@ function OpenTuiWorkspace() {
 
   // Desktop-notify that a background turn is blocked on a prompt the user
   // can't see (mirrors the slow-send OSC notification; BMP-sanitized).
-  const notifyAttention = useEffectEvent((title: string, sessionId: string, sessionProvider: AgentProvider) => {
+  const notifyAttention = useStableEvent((title: string, sessionId: string, sessionProvider: AgentProvider) => {
     const key = sessionKey({ sessionId, provider: sessionProvider })
     const session = sessionsByKeyRef.current.get(key)
     const sessionTitle = session ? formatSessionTitle(session) : sessionId.slice(-8)
@@ -15760,7 +15793,7 @@ function OpenTuiWorkspace() {
 
   // A turn finished on a session the user wasn't viewing — record it in the
   // attention inbox (one entry per session, newest first) and notify.
-  const recordAttentionTurnDone = useEffectEvent((ref: RunningSessionRef) => {
+  const recordAttentionTurnDone = useStableEvent((ref: RunningSessionRef) => {
     const key = sessionKey({ sessionId: ref.sessionId, provider: ref.provider })
     const session = sessionsByKeyRef.current.get(key)
     const title = session ? formatSessionTitle(session) : ref.sessionId.slice(-8)
@@ -15782,7 +15815,7 @@ function OpenTuiWorkspace() {
 
   // Answer a plain tool permission straight from the inbox. Questions and plan
   // approvals need their full pickers — those route through openAttentionSession.
-  const respondToAttentionItem = useEffectEvent(async (item: AttentionItem, response: PermissionResponse) => {
+  const respondToAttentionItem = useStableEvent(async (item: AttentionItem, response: PermissionResponse) => {
     const permission = item.permission
     if (!permission || attentionRespondingId) return
     setAttentionRespondingId(permission.id)
@@ -15806,7 +15839,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openAttentionSession = useEffectEvent((item: AttentionItem) => {
+  const openAttentionSession = useStableEvent((item: AttentionItem) => {
     setAttentionOpen(false)
     if (item.kind === 'turn-done') {
       setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
@@ -15826,7 +15859,7 @@ function OpenTuiWorkspace() {
     setFocusedPane('messages')
   })
 
-  const dismissAttentionItem = useEffectEvent((item: AttentionItem) => {
+  const dismissAttentionItem = useStableEvent((item: AttentionItem) => {
     if (item.kind === 'turn-done') {
       setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
     } else if (item.kind === 'viewer-note' && item.attentionId) {
@@ -15837,7 +15870,7 @@ function OpenTuiWorkspace() {
 
   // ⌃N: jump straight to whatever needs a human next — prefer prompts over
   // completions, and another session over the one already on screen.
-  const jumpToNextAttention = useEffectEvent(() => {
+  const jumpToNextAttention = useStableEvent(() => {
     const needing = attentionItems.filter(attentionItemNeedsInput)
     const pool = needing.length > 0 ? needing : attentionItems
     if (pool.length === 0) {
@@ -15848,7 +15881,7 @@ function OpenTuiWorkspace() {
     openAttentionSession(target)
   })
 
-  const reuseLastPrompt = useEffectEvent(() => {
+  const reuseLastPrompt = useStableEvent(() => {
     const messages = sessionDetail?.threadedMessages
     if (!messages || messages.length === 0) return
     let lastUserText = ''
@@ -15875,7 +15908,7 @@ function OpenTuiWorkspace() {
   })
 
   // Digits 1-9 jump straight to a fleet cell on the visible page.
-  const jumpToFleetEntry = useEffectEvent((index: number) => {
+  const jumpToFleetEntry = useStableEvent((index: number) => {
     const entry = visibleFleetEntries[index]
     if (!entry || entry.key === selectedSessionKeyRef.current) return
     const session = sessionsByKeyRef.current.get(entry.key)
@@ -15912,7 +15945,7 @@ function OpenTuiWorkspace() {
   // Name → isolated worktree + branch + fresh session cwd'd into it, composer
   // focused for the first prompt. The task then runs without touching the main
   // checkout until the user merges it back.
-  const submitWorktreeTask = useEffectEvent(async () => {
+  const submitWorktreeTask = useStableEvent(async () => {
     const name = worktreeDraft.trim()
     // Ref-guarded: Enter can arrive via both the input's onSubmit and the
     // keyboard branch in the same tick, before worktreeBusy state lands.
@@ -15951,7 +15984,7 @@ function OpenTuiWorkspace() {
 
   // Adopt the task's work: commit whatever the agent left uncommitted, then
   // squash-merge into the main checkout, leaving the result STAGED for review.
-  const mergeSelectedWorktreeTask = useEffectEvent(async () => {
+  const mergeSelectedWorktreeTask = useStableEvent(async () => {
     const task = selectedWorktreeTask
     if (!task || worktreeBusy) return
     setWorktreeBusy(true)
@@ -15974,7 +16007,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const discardSelectedWorktreeTask = useEffectEvent(async () => {
+  const discardSelectedWorktreeTask = useStableEvent(async () => {
     const task = selectedWorktreeTask
     if (!task || worktreeBusy) return
     setWorktreeBusy(true)
@@ -15990,13 +16023,13 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openCoordinationBoard = useEffectEvent(() => {
+  const openCoordinationBoard = useStableEvent(() => {
     // The popover loads and polls its own data; null run id = latest.
     setCoordBoardRunId(null)
     setCoordBoardOpen(true)
   })
 
-  const openSelectedTranscriptInPager = useEffectEvent(() => {
+  const openSelectedTranscriptInPager = useStableEvent(() => {
     const persisted = sessionDetail?.threadedMessages ?? []
     if (!selectedSession || persisted.length + liveTranscriptMessagesForSession.length === 0) {
       showNotice('info', 'Open a conversation to page its transcript', 3500)
@@ -16011,7 +16044,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const openTeammatesPanel = useEffectEvent(() => {
+  const openTeammatesPanel = useStableEvent(() => {
     const session = selectedSession
     if (!session) {
       showNotice('info', 'Open a conversation before giving it teammates', 3500)
@@ -16031,7 +16064,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const selectCoordPlaybook = useEffectEvent((name: string | null, available = coordPlaybooks) => {
+  const selectCoordPlaybook = useStableEvent((name: string | null, available = coordPlaybooks) => {
     setCoordPlaybookName(name)
     setCoordPlaybookArgsDraft('')
     if (!name) return
@@ -16046,7 +16079,7 @@ function OpenTuiWorkspace() {
     if (selected.budget?.maxDurationMinutes !== undefined) setCoordMaxDurationMinutes(String(selected.budget.maxDurationMinutes))
   })
 
-  const loadCoordPlaybooks = useEffectEvent(async (cwd: string, preferredName?: string) => {
+  const loadCoordPlaybooks = useStableEvent(async (cwd: string, preferredName?: string) => {
     try {
       const listing = await listTuiRunPlaybooks(cwd)
       setCoordPlaybooks(listing.playbooks)
@@ -16061,7 +16094,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const handleCoordPlaybooksChanged = useEffectEvent((playbooks: PlaybookSummary[], preferredName?: string) => {
+  const handleCoordPlaybooksChanged = useStableEvent((playbooks: PlaybookSummary[], preferredName?: string) => {
     setCoordPlaybooks(playbooks)
     if (preferredName && playbooks.some((entry) => entry.name === preferredName)) {
       selectCoordPlaybook(preferredName, playbooks)
@@ -16070,7 +16103,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openNewWorkflowModal = useEffectEvent(() => {
+  const openNewWorkflowModal = useStableEvent(() => {
     const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
     setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
     setCoordAcceptanceDraft('')
@@ -16091,7 +16124,7 @@ function OpenTuiWorkspace() {
     void loadCoordPlaybooks(baseCwd)
   })
 
-  const openNewSessionModal = useEffectEvent(() => {
+  const openNewSessionModal = useStableEvent(() => {
     const defaultProvider: AgentProvider = provider === 'all'
       ? (selectedSession?.provider ?? 'claude')
       : provider
@@ -16102,7 +16135,7 @@ function OpenTuiWorkspace() {
     setNewSessionModalOpen(true)
   })
 
-  const cycleNewSessionProvider = useEffectEvent((direction: 1 | -1) => {
+  const cycleNewSessionProvider = useStableEvent((direction: 1 | -1) => {
     setNewSessionProvider((current) => {
       const index = Math.max(0, NEW_SESSION_PROVIDERS.indexOf(current))
       const next = (index + direction + NEW_SESSION_PROVIDERS.length) % NEW_SESSION_PROVIDERS.length
@@ -16110,18 +16143,18 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const openNewSessionFolderPicker = useEffectEvent(() => {
+  const openNewSessionFolderPicker = useStableEvent(() => {
     setFolderPickerForNewSession(true)
     setFileViewerOpen(true)
   })
 
-  const handleNewSessionFolderSelected = useEffectEvent((path: string) => {
+  const handleNewSessionFolderSelected = useStableEvent((path: string) => {
     setNewSessionCwd(path)
     setFileViewerOpen(false)
     setFolderPickerForNewSession(false)
   })
 
-  const prepareCreatedSessionForComposer = useEffectEvent(async (draft: Session) => {
+  const prepareCreatedSessionForComposer = useStableEvent(async (draft: Session) => {
     const key = sessionKey(draft)
     composerPreparingTargetKeyRef.current = key
     setComposerPreparingTargetKey(key)
@@ -16148,13 +16181,13 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const submitNewSession = useEffectEvent(() => {
+  const submitNewSession = useStableEvent(() => {
     if (newSessionBusy) return
     void startFreshSession(newSessionProvider, newSessionCwd.trim() || workspaceCwd)
   })
 
   const pendingForkSendRef = useRef<{ key: string; text: string } | null>(null)
-  const openCreatedSession = useEffectEvent(async (draft: Session) => {
+  const openCreatedSession = useStableEvent(async (draft: Session) => {
     setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
     setSelectedSessionKey(sessionKey(draft))
     setComposerPreferredTargetKey(sessionKey(draft))
@@ -16167,7 +16200,7 @@ function OpenTuiWorkspace() {
   // backtrack do. Codex and OpenCode rewind in place; the Claude SDK has no
   // in-place conversation rewind, so Claude continues in a fork taken just
   // before the prompt. Files are left as they are — ⇧U's checkpoints restore code.
-  const rewindConversationToPrompt = useEffectEvent(async (chosen: RewindCandidate): Promise<boolean> => {
+  const rewindConversationToPrompt = useStableEvent(async (chosen: RewindCandidate): Promise<boolean> => {
     const target = composerTargetSession
     const raw = sessionDetail?.rawMessages ?? []
     if (!target) return false
@@ -16225,7 +16258,7 @@ function OpenTuiWorkspace() {
 
   // Rewind the conversation, and with `restoreFiles` the working tree too: the
   // checkpoint taken as that prompt's turn began is the file state to return to.
-  const rewindToPrompt = useEffectEvent(async (chosen: RewindCandidate, options?: { restoreFiles?: boolean }) => {
+  const rewindToPrompt = useStableEvent(async (chosen: RewindCandidate, options?: { restoreFiles?: boolean }) => {
     const target = composerTargetSession
     const checkpoints = options?.restoreFiles && target?.cwd
       ? await listTuiCheckpoints(target.cwd).catch(() => [])
@@ -16247,7 +16280,7 @@ function OpenTuiWorkspace() {
   })
 
   // /fork: continue in a copy of this conversation, leaving the original as it is.
-  const forkIntoNewSession = useEffectEvent(async (target: Session, sendInFork?: string) => {
+  const forkIntoNewSession = useStableEvent(async (target: Session, sendInFork?: string) => {
     if (target.isPending) {
       showNotice('info', 'Nothing to fork yet — send a first message')
       return
@@ -16276,7 +16309,7 @@ function OpenTuiWorkspace() {
 
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.
-  const startFreshSession = useEffectEvent(async (targetProvider: AgentProvider, cwd: string) => {
+  const startFreshSession = useStableEvent(async (targetProvider: AgentProvider, cwd: string) => {
     setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     if (newSessionBusy) return
     setNewSessionBusy(true)
@@ -16313,7 +16346,7 @@ function OpenTuiWorkspace() {
   // /handoff <provider>: continue this conversation on another provider. A new
   // session opens in the same folder with the handoff — the brief plus the recent
   // exchange — as its draft, so the user reads it (and edits it) before it is sent.
-  const handoffToProvider = useEffectEvent(async (target: Session, providerName: string) => {
+  const handoffToProvider = useStableEvent(async (target: Session, providerName: string) => {
     const nextProvider = providerName.trim().toLowerCase()
     if (!isAgentProvider(nextProvider)) {
       showNotice('info', 'Usage: /handoff <claude|codex|opencode|copilot|pi>', 5000)
@@ -16361,7 +16394,7 @@ function OpenTuiWorkspace() {
   // CLI built-ins that are TUI views rather than agent requests. The Claude SDK
   // answers these "isn't available in this environment" (or, for /todos, not at
   // all — it went to the model as prompt text); the native CLIs show them.
-  const runTuiLocalCommand = useEffectEvent((target: Session, text: string): boolean => {
+  const runTuiLocalCommand = useStableEvent((target: Session, text: string): boolean => {
     const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text.trim())
     if (!match) return false
     const command = match[1]!.toLowerCase()
@@ -16575,7 +16608,7 @@ function OpenTuiWorkspace() {
     return false
   })
 
-  const copyCoordinationJoinCommand = useEffectEvent((runId: string) => {
+  const copyCoordinationJoinCommand = useStableEvent((runId: string) => {
     const attachUrl = process.env.AGENT_VIEWER_ATTACH?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3000'
     const command = `agent-viewer coord worker --join ${runId} --name <name> --provider codex --attach ${attachUrl}`
     if (NATIVE_OSC_ENABLED && renderer.capabilities?.osc52 !== false) {
@@ -16593,7 +16626,7 @@ function OpenTuiWorkspace() {
   // sidebar has not indexed yet (other provider, or not materialised) are
   // pinned as open tabs BEFORE selecting, so resolveSelectedSession can never
   // fall through to sessions[0] and open the wrong agent's transcript.
-  const openCoordinationAgentSession = useEffectEvent((agent: ProtocolAgent) => {
+  const openCoordinationAgentSession = useStableEvent((agent: ProtocolAgent) => {
     const target = resolveCoordinationTranscriptTarget(agent, sessionsByKeyRef.current, Date.now())
     if (target.kind === 'unreadable') {
       showNotice('info', target.reason, 5000)
@@ -16608,7 +16641,7 @@ function OpenTuiWorkspace() {
     else { selectTabSession(target.session); setFocusedPane('messages') }
   })
 
-  const watchCoordinatorRun = useEffectEvent((snapshot: ProtocolRunSnapshot) => {
+  const watchCoordinatorRun = useStableEvent((snapshot: ProtocolRunSnapshot) => {
     const plan = planCoordinatorWorkspace(snapshot, sessionsByKeyRef.current)
     if (!plan.lead) { showNotice('info', 'This run has no readable lead transcript', 5000); return }
     checkpointWindowLayout()
@@ -16644,7 +16677,7 @@ function OpenTuiWorkspace() {
   // pane, first in the order given (the panel passes attention order), so the
   // teammate that needs the user is the one that gets a pane when there are
   // more teammates than panes.
-  const watchCoordinationAgentSessions = useEffectEvent((agents: ProtocolAgent[]) => {
+  const watchCoordinationAgentSessions = useStableEvent((agents: ProtocolAgent[]) => {
     const targets: Array<{ sessionKey: string; session: Session; name: string }> = []
     let refusal: string | null = null
     for (const agent of agents) {
@@ -16696,12 +16729,12 @@ function OpenTuiWorkspace() {
       : `Opened ${plan.watched.map((entry) => entry.name).join(', ')} as tabs · no room for a pane (${stacked ? 'taller terminal' : '⌃B " to stack'})`, 5000)
   })
 
-  const handleCoordContentChange = useEffectEvent(() => {
+  const handleCoordContentChange = useStableEvent(() => {
     setCoordDraft(coordTextareaRef.current?.plainText ?? '')
     if (coordError) setCoordError(null)
   })
 
-  const submitCoordinatedRun = useEffectEvent(async () => {
+  const submitCoordinatedRun = useStableEvent(async () => {
     // The textarea is the source of truth — onContentChange can lag onSubmit.
     const prompt = (coordTextareaRef.current?.plainText ?? coordDraft).trim()
     const selectedPlaybook = coordPlaybookName
@@ -16812,7 +16845,7 @@ function OpenTuiWorkspace() {
 
   // Desktop-notify a team event (run finished, teammate blocked) — the whole
   // point of a team is walking away while it works.
-  const notifyTeamEvent = useEffectEvent((title: string, body: string) => {
+  const notifyTeamEvent = useStableEvent((title: string, body: string) => {
     if (NATIVE_OSC_ENABLED && renderer.capabilities?.notifications !== false) {
       try {
         renderer.triggerNotification(toBmpSafe(body), toBmpSafe(`agent-viewer · ${title}`))
@@ -16888,7 +16921,7 @@ function OpenTuiWorkspace() {
 
   // Palette actions resolve the latest run on demand — the interactive board
   // (CoordinationPopover) has its own run-scoped stop/cleanup keys.
-  const stopActiveCoordinatedRun = useEffectEvent(async () => {
+  const stopActiveCoordinatedRun = useStableEvent(async () => {
     if (coordBusy) return
     setCoordBusy(true)
     try {
@@ -16907,7 +16940,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const cleanupCompletedCoordinatedRunWorktrees = useEffectEvent(async () => {
+  const cleanupCompletedCoordinatedRunWorktrees = useStableEvent(async () => {
     if (coordBusy) return
     setCoordBusy(true)
     try {
@@ -16950,7 +16983,7 @@ function OpenTuiWorkspace() {
     renameDraftRef.current = renameDraft
   }, [renameDraft])
 
-  const commitRename = useEffectEvent(async () => {
+  const commitRename = useStableEvent(async () => {
     if (!renameSessionKey || !selectedSession) return
     const trimmed = renameDraftRef.current.trim()
     setRenameSessionKey(null)
@@ -17243,13 +17276,13 @@ function OpenTuiWorkspace() {
     setComposerLiveReasoning(pendingLiveReasoningRef.current)
   }, [])
 
-  const sendComposerMessage = useCallback(async (
+  const sendComposerMessage = useStableEvent(async (
     draftOverride?: string,
     attachmentsOverride?: SendAttachment[],
     isRetry?: boolean,
     promptPartsOverride?: ComposerPromptPart[],
     retryTurnRequestId?: string,
-  ) => {
+  ): Promise<void> => {
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
       ? {
@@ -18499,33 +18532,7 @@ function OpenTuiWorkspace() {
       }
       resolveTurnCleanup()
     }
-  }, [
-    canUseChannelBridge,
-    canUseIdeBridge,
-    composerTargetSession,
-    composerDraft,
-    composerSendState,
-    provider,
-    refreshSessions,
-    refreshSelectedSessionDetail,
-    markSessionRunning,
-    clearSessionRunning,
-    renderer,
-    taskBudgetTokens,
-    composerEnableWorkflow,
-    tuiEffort,
-    tuiCopilotMode,
-    composerCopilotPermissionMode,
-    composerCopilotContextTier,
-    composerCodexApproval,
-    tuiOpenCodeAgent,
-    composerPermissionMode,
-    tuiModelOverride,
-    composerMentionAttachments,
-    composerPromptParts,
-    prepareComposerSubmission,
-    sessionDetail,
-  ])
+  })
 
   // Flush queued prompt once the active turn lands (CLI-style queueing).
   // Gate on === 'idle' (not !== 'sending'): the prior turn can settle into
@@ -18689,7 +18696,7 @@ function OpenTuiWorkspace() {
   // Pull the most-recently queued message back into the composer to edit it
   // (cancels that one send). Any current draft is preserved by prepending it,
   // mirroring the interrupt-restore ordering. Attachments restore too.
-  const popNewestQueuedComposerSend = useEffectEvent(() => {
+  const popNewestQueuedComposerSend = useStableEvent(() => {
     const targetKey = composerTargetSessionIdentity
     const queue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
     if (queue.length === 0) return
@@ -18710,7 +18717,7 @@ function OpenTuiWorkspace() {
   })
 
   // Cancel every queued message at once without firing any of them.
-  const clearQueuedComposerSends = useEffectEvent(() => {
+  const clearQueuedComposerSends = useStableEvent(() => {
     const targetKey = composerTargetSessionIdentity
     if (!targetKey || !queuedComposerSendsRef.current.some((entry) => entry.targetKey === targetKey)) return
     commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
@@ -19189,7 +19196,7 @@ function OpenTuiWorkspace() {
 
     setTranscriptCursorKey((current) => {
       if (current && transcriptCards.some((card) => card.key === current)) return current
-      return visibleTranscriptCards[Math.max(cursorIndex, 0)]?.key ?? visibleTranscriptCards[0].key
+      return visibleTranscriptCards[Math.max(readCursorIndex(), 0)]?.key ?? visibleTranscriptCards[0].key
     })
     previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
     // cursorIndex is intentionally omitted from deps: the effect reconciles
@@ -19236,12 +19243,17 @@ function OpenTuiWorkspace() {
   }, [selectedSessionKey, visibleTranscriptCards, transcriptIndexByKey])
 
 
-  useEffect(() => {
+  // Saves the reader position, debounced. Run when its inputs change, and when
+  // the cursor moves (the cursor is not root state, so it is subscribed to).
+  const persistReaderState = useStableEvent(() => {
+    if (readerStateWriteTimeoutRef.current) {
+      clearTimeout(readerStateWriteTimeoutRef.current)
+      readerStateWriteTimeoutRef.current = null
+    }
     if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
       return
     }
-
-    if (readerStateWriteTimeoutRef.current) clearTimeout(readerStateWriteTimeoutRef.current)
+    const transcriptCursorKey = readTranscriptCursorKey()
 
     const persistSignature = [
       selectedSessionKey,
@@ -19270,22 +19282,22 @@ function OpenTuiWorkspace() {
         setError(err instanceof Error ? err.message : 'Failed to store reader position')
       })
     }, 150)
-
-    return () => {
-      if (readerStateWriteTimeoutRef.current) {
-        clearTimeout(readerStateWriteTimeoutRef.current)
-        readerStateWriteTimeoutRef.current = null
-      }
-    }
-  }, [
+  })
+  useEffect(() => { persistReaderState() }, [
     collapsedCardKeys,
     expandedCardKeys,
     followTail,
     restoredReaderState,
     selectedSessionKey,
     transcriptCards,
-    transcriptCursorKey,
   ])
+  useEffect(() => {
+    const unsubscribe = cursorRuntime.subscribe('transcriptCursorKey', persistReaderState)
+    return () => {
+      unsubscribe()
+      if (readerStateWriteTimeoutRef.current) clearTimeout(readerStateWriteTimeoutRef.current)
+    }
+  }, [cursorRuntime])
 
   useEffect(() => {
     if (searchMatches.length === 0) {
@@ -19298,7 +19310,7 @@ function OpenTuiWorkspace() {
   // Promote the currently-previewed session to a real open tab.
   // We use the full `selectedSession` object so tabs retain provider context
   // even when the user later switches to a different provider.
-  const promotePreviewToTab = useEffectEvent(() => {
+  const promotePreviewToTab = useStableEvent(() => {
     if (!selectedSession) return
     const key = sessionKey(selectedSession)
     setOpenTabSessions((current) => {
@@ -19419,7 +19431,7 @@ function OpenTuiWorkspace() {
 
   // New participants append once; gates/status polls never reorder or focus.
   // Explicitly closed panes stay closed on subsequent refreshes.
-  const updateWatchedRoster = useEffectEvent((watchedCoordinator: ProtocolRunSnapshot | null) => {
+  const updateWatchedRoster = useStableEvent((watchedCoordinator: ProtocolRunSnapshot | null) => {
     if (!watchedCoordinator) { watchedRosterRef.current = null; return }
     const previous = watchedRosterRef.current
     if (!previous || previous.runId !== watchedCoordinator.run.id) {
@@ -19521,8 +19533,9 @@ function OpenTuiWorkspace() {
   useEffect(() => {
     if (transcriptView !== 'continue' && !isStreamView && transcriptView !== 'agents') return
     if (visibleTranscriptCards.length === 0) return
-    const isVisible = transcriptCursorKey
-      ? visibleTranscriptCards.some((c) => c.key === transcriptCursorKey)
+    const cursorKey = readTranscriptCursorKey()
+    const isVisible = cursorKey
+      ? visibleTranscriptCards.some((c) => c.key === cursorKey)
       : false
     if (!isVisible) {
       setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
@@ -19654,7 +19667,7 @@ function OpenTuiWorkspace() {
     [composerConfig.footerHintIdle, sentHistory.length],
   )
 
-  const resizeSidebar = useEffectEvent((delta: number) => {
+  const resizeSidebar = useStableEvent((delta: number) => {
     const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
     if (nextWidth === sidebarWidth) return
     setSidebarWidthPreference(nextWidth)
@@ -19663,7 +19676,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const resizeTaskPanel = useEffectEvent((delta: number) => {
+  const resizeTaskPanel = useStableEvent((delta: number) => {
     const nextWidth = taskPanelOpen
       ? clamp(taskPanelWidth + delta, TASK_PANEL_MIN_WIDTH, maxTaskPanelWidth)
       : TASK_PANEL_DEFAULT_WIDTH + delta
@@ -19682,7 +19695,7 @@ function OpenTuiWorkspace() {
 
   // `x` in the rail: settle the selected session, or reopen a settled one.
   // Optimistic — the row changes now and the next listing confirms it.
-  const toggleSelectedSessionSettled = useEffectEvent(() => {
+  const toggleSelectedSessionSettled = useStableEvent(() => {
     const target = selectedSession
     if (!target) return
     const action = target.inbox?.settledAt ? 'reopen' : 'settle'
@@ -19708,7 +19721,7 @@ function OpenTuiWorkspace() {
   })
 
   // A turn summary's click: the checkpoint popover, opened on that turn.
-  const openTurnCheckpoint = useEffectEvent((promptKey: string) => {
+  const openTurnCheckpoint = useStableEvent((promptKey: string) => {
     if (!gitRepoCwd) {
       showNotice('info', 'Turn diffs need a git repository')
       return
@@ -19736,15 +19749,15 @@ function OpenTuiWorkspace() {
   // happens to begin on a URL, and selecting a line containing a path is a far
   // more common thing to want than following it.
   const linkPressRef = useRef<{ x: number; y: number } | null>(null)
-  const noteTranscriptLinkPress = useEffectEvent((event: MouseEvent) => {
+  const noteTranscriptLinkPress = useStableEvent((event: MouseEvent) => {
     linkPressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
   })
-  const openCardAsyncQuestions = useEffectEvent((session: Session, card: TuiTranscriptCard) => {
+  const openCardAsyncQuestions = useStableEvent((session: Session, card: TuiTranscriptCard) => {
     if (!card.asyncQuestions?.length) return
     setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: session.sessionId,
       provider: session.provider, providerInstanceId: session.providerInstanceId, asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
   })
-  const openTranscriptLinkAt = useEffectEvent((event: MouseEvent): boolean => {
+  const openTranscriptLinkAt = useStableEvent((event: MouseEvent): boolean => {
     const press = linkPressRef.current
     linkPressRef.current = null
     if (event.button !== 0 || !press) return false
@@ -19772,8 +19785,9 @@ function OpenTuiWorkspace() {
   // expands it. Like a link it acts on mouse UP with the pointer unmoved, so a
   // drag is still a text selection. Folding again takes a click on the item's
   // first row only — an expanded diff has its own click targets below it.
-  const openSelectedAsyncQuestionsOrFold = useEffectEvent(() => {
-    const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) : undefined
+  const openSelectedAsyncQuestionsOrFold = useStableEvent(() => {
+    const cursorKey = readTranscriptCursorKey()
+    const index = cursorKey ? transcriptIndexByKey.get(cursorKey) : undefined
     const card = index == null ? null : visibleTranscriptCards[index]
     if (card?.asyncQuestions?.length && selectedSession) {
       setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: selectedSession.sessionId,
@@ -19783,7 +19797,7 @@ function OpenTuiWorkspace() {
   })
 
 
-  const toggleSurfacePanelPlacement = useEffectEvent(() => {
+  const toggleSurfacePanelPlacement = useStableEvent(() => {
     const next = surfacePanelPlacement === 'right' ? 'bottom' : 'right'
     setSurfacePanelPlacement(next)
     showNotice('info', next === 'bottom' ? 'Panel under the panes · | moves it back beside' : 'Panel beside the panes · | moves it under')
@@ -19805,12 +19819,12 @@ function OpenTuiWorkspace() {
     return () => { cancelled = true }
   }, [])
 
-  const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
+  const showToggleOutcome = useStableEvent((label: string, outcome: string | boolean) => {
     const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
     showNotice('info', `${label} ${state}`)
   })
 
-  const toggleFullscreenMode = useEffectEvent((forced?: boolean) => {
+  const toggleFullscreenMode = useStableEvent((forced?: boolean) => {
     const next = forced ?? !fullscreenMode
     setFullscreenMode(next)
     showToggleOutcome('Fullscreen transcript', next)
@@ -19829,26 +19843,26 @@ function OpenTuiWorkspace() {
     composerCursorOffsetRef.current = composerTextareaRef.current?.cursorOffset ?? null
   }, [])
 
-  const openComposerWindow = useEffectEvent(() => {
+  const openComposerWindow = useStableEvent(() => {
     rememberComposerCursor()
     setComposerActive(true)
     setComposerWindowOpen(true)
   })
 
-  const toggleComposerWindow = useEffectEvent(() => {
+  const toggleComposerWindow = useStableEvent(() => {
     rememberComposerCursor()
     setComposerActive(true)
     setComposerWindowOpen((open) => !open)
   })
 
-  const toggleComposerHidden = useEffectEvent(() => {
+  const toggleComposerHidden = useStableEvent(() => {
     const next = !composerHidden
     setComposerHidden(next)
     if (next) setComposerActive(false)
     showToggleOutcome('Composer', next ? 'hidden' : 'shown')
   })
 
-  const insertComposerPasteMarker = useEffectEvent((marker: string, partId: string) => {
+  const insertComposerPasteMarker = useStableEvent((marker: string, partId: string) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !marker || !partId) return
     const textToInsert = `${marker} `
@@ -19872,7 +19886,7 @@ function OpenTuiWorkspace() {
     setComposerHistoryIndex(0)
   })
 
-  const attachComposerAttachment = useEffectEvent((attachment: SendAttachment, marker: string, noticeText: string) => {
+  const attachComposerAttachment = useStableEvent((attachment: SendAttachment, marker: string, noticeText: string) => {
     const id = attachment.id || `paste-${Date.now()}-${composerPromptParts.length}`
     const nextAttachment = { ...attachment, id, text: marker }
     insertComposerPasteMarker(marker, id)
@@ -19886,7 +19900,7 @@ function OpenTuiWorkspace() {
     showNotice('info', noticeText)
   })
 
-  const attachComposerImage = useEffectEvent((image: ClipboardImage) => {
+  const attachComposerImage = useStableEvent((image: ClipboardImage) => {
     const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
     const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
     const marker = `[Image ${imageAttachmentCount(activeAttachments) + 1}]`
@@ -19899,7 +19913,7 @@ function OpenTuiWorkspace() {
     }, marker, `Attached ${image.displayName}`)
   })
 
-  const insertCompactPastedText = useEffectEvent((text: string, marker: string) => {
+  const insertCompactPastedText = useStableEvent((text: string, marker: string) => {
     const id = `paste-text-${Date.now()}-${composerPromptParts.length}`
     insertComposerPasteMarker(marker, id)
     setComposerPromptParts((prev) => [...prev, {
@@ -19910,7 +19924,7 @@ function OpenTuiWorkspace() {
     }])
   })
 
-  const pasteFilePathToComposer = useEffectEvent(async (text: string): Promise<boolean> => {
+  const pasteFilePathToComposer = useStableEvent(async (text: string): Promise<boolean> => {
     const cwd = composerTargetSession?.cwd ?? selectedSession?.cwd ?? null
     const filePath = normalizePastedFilePath(text, cwd)
     if (!filePath) return false
@@ -19958,7 +19972,7 @@ function OpenTuiWorkspace() {
     return false
   })
 
-  const insertComposerTextAtCursor = useEffectEvent((textToInsert: string) => {
+  const insertComposerTextAtCursor = useStableEvent((textToInsert: string) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !textToInsert) return
     const text = renderable.plainText
@@ -19980,7 +19994,7 @@ function OpenTuiWorkspace() {
     setVoiceStatus('')
   }, [composerTargetSession?.provider, composerTargetSession?.sessionId])
 
-  const toggleVoice = useEffectEvent(() => {
+  const toggleVoice = useStableEvent(() => {
     if (voiceJob.current) {
       if (voiceJob.current.stop) voiceJob.current.stop()
       else { voiceJob.current.controller.abort(); voiceJob.current = null; setVoiceStatus('Voice input cancelled') }
@@ -20005,7 +20019,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const pasteTextToComposer = useEffectEvent(async (textToInsert: string) => {
+  const pasteTextToComposer = useStableEvent(async (textToInsert: string) => {
     const normalizedText = textToInsert.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     if (!normalizedText) return
     if (await pasteFilePathToComposer(normalizedText)) return
@@ -20018,7 +20032,7 @@ function OpenTuiWorkspace() {
     insertComposerTextAtCursor(normalizedText)
   })
 
-  const pasteSystemClipboardToComposer = useEffectEvent(async () => {
+  const pasteSystemClipboardToComposer = useStableEvent(async () => {
     try {
       const image = await readClipboardImage()
       if (image) {
@@ -20036,7 +20050,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const clearComposerDraft = useEffectEvent(() => {
+  const clearComposerDraft = useStableEvent(() => {
     composerTextareaRef.current?.setText('')
     composerTextareaRef.current?.extmarks.clear()
     setComposerDraft('')
@@ -20057,13 +20071,13 @@ function OpenTuiWorkspace() {
   // The stash file is written the way the follow-up queue is: in the
   // originating interaction and flushed immediately, not from an effect. A
   // stash exists to survive leaving, and leaving includes an immediate exit.
-  const commitComposerStash = useEffectEvent((next: ComposerDraftSnapshot[]) => {
+  const commitComposerStash = useStableEvent((next: ComposerDraftSnapshot[]) => {
     scheduleWriteComposerStash(next)
     flushComposerStashWrites()
     setComposerStash(next)
   })
 
-  const stashComposerPrompt = useEffectEvent(() => {
+  const stashComposerPrompt = useStableEvent(() => {
     const snapshot = makeComposerSnapshot()
     if (!snapshot.text.trim() && snapshot.attachments.length === 0 && snapshot.promptParts.length === 0) {
       showNotice('info', 'Composer is empty')
@@ -20074,7 +20088,7 @@ function OpenTuiWorkspace() {
     showNotice('info', 'Stashed composer prompt')
   })
 
-  const popComposerStash = useEffectEvent(() => {
+  const popComposerStash = useStableEvent(() => {
     const popped = composerStash[composerStash.length - 1] ?? null
     if (!popped) {
       showNotice('info', 'Composer stash is empty')
@@ -20086,7 +20100,7 @@ function OpenTuiWorkspace() {
     showNotice('info', 'Restored composer stash')
   })
 
-  const openComposerStashList = useEffectEvent(() => {
+  const openComposerStashList = useStableEvent(() => {
     if (composerStash.length === 0) {
       showNotice('info', 'Composer stash is empty')
       return
@@ -20099,12 +20113,12 @@ function OpenTuiWorkspace() {
     setComposerStashIndex(0)
   })
 
-  const selectComposerStashEntry = useEffectEvent((displayIndex: number) => {
+  const selectComposerStashEntry = useStableEvent((displayIndex: number) => {
     if (composerStash.length === 0) return
     setComposerStashIndex(clamp(displayIndex, 0, composerStash.length - 1))
   })
 
-  const commitComposerStashEntry = useEffectEvent(() => {
+  const commitComposerStashEntry = useStableEvent(() => {
     const sourceIndex = composerStash.length - 1 - composerStashIndex
     const entry = composerStash[sourceIndex]
     if (!entry) return
@@ -20202,7 +20216,7 @@ function OpenTuiWorkspace() {
     void pasteTextToComposer(text)
   })
 
-  const copySelectedMessage = useEffectEvent(async (cardOverride?: TuiTranscriptCard) => {
+  const copySelectedMessage = useStableEvent(async (cardOverride?: TuiTranscriptCard) => {
     const terminalSelection = terminalSelectionRef.current
     if (
       terminalSelection
@@ -20219,6 +20233,7 @@ function OpenTuiWorkspace() {
       return
     }
 
+    const cursorIndex = readCursorIndex()
     const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
     if (!card) {
       showNotice('error', 'No message selected')
@@ -20237,7 +20252,8 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const replySelectedMessage = useEffectEvent((cardOverride?: TuiTranscriptCard) => {
+  const replySelectedMessage = useStableEvent((cardOverride?: TuiTranscriptCard) => {
+    const cursorIndex = readCursorIndex()
     const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
     if (!card) {
       showNotice('error', 'No message selected')
@@ -20267,9 +20283,10 @@ function OpenTuiWorkspace() {
   })
 
   // Toggle a bookmark on the card under the transcript cursor.
-  const toggleBookmarkForCursor = useEffectEvent(async () => {
+  const toggleBookmarkForCursor = useStableEvent(async () => {
     const target = selectedSessionTarget
     if (!target) { showNotice('error', 'No session selected'); return }
+    const cursorIndex = readCursorIndex()
     const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) { showNotice('error', 'No message selected'); return }
     if (card.key.startsWith('live-')) { showNotice('error', 'Cannot bookmark a streaming message'); return }
@@ -20311,10 +20328,11 @@ function OpenTuiWorkspace() {
   })
 
   // Jump to the next/previous bookmarked card in the active session.
-  const jumpToBookmark = useEffectEvent((direction: 1 | -1) => {
+  const jumpToBookmark = useStableEvent((direction: 1 | -1) => {
     if (visibleTranscriptCards.length === 0) return
     const marks = bookmarkKeysRef.current
     if (marks.size === 0) { showNotice('info', 'No bookmarks in this session'); return }
+    const cursorIndex = readCursorIndex()
     const start = cursorIndex >= 0 ? cursorIndex : 0
     const count = visibleTranscriptCards.length
     for (let step = 1; step <= count; step += 1) {
@@ -20327,7 +20345,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openBookmarksOverlay = useEffectEvent(async () => {
+  const openBookmarksOverlay = useStableEvent(async () => {
     setBookmarksOverlayOpen(true)
     setBookmarksOverlayIndex(0)
     try {
@@ -20338,7 +20356,7 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openHandoffBrief = useEffectEvent(() => {
+  const openHandoffBrief = useStableEvent(() => {
     if (!selectedSessionTarget) {
       showNotice('error', 'No session selected')
       return
@@ -20346,7 +20364,7 @@ function OpenTuiWorkspace() {
     setHandoffBriefOpen(true)
   })
 
-  const openPromptLibrary = useEffectEvent(() => {
+  const openPromptLibrary = useStableEvent(() => {
     if (!selectedSessionTarget) {
       showNotice('error', 'No session selected')
       return
@@ -20356,7 +20374,7 @@ function OpenTuiWorkspace() {
     setPromptLibraryOpen(true)
   })
 
-  const openChannelBridge = useEffectEvent(() => {
+  const openChannelBridge = useStableEvent(() => {
     if (!canUseChannelBridge) {
       showNotice('error', 'Select a Claude session to use the channel bridge')
       return
@@ -20364,7 +20382,7 @@ function OpenTuiWorkspace() {
     setChannelBridgeOpen(true)
   })
 
-  const toggleComposerBridgeRoute = useEffectEvent(() => {
+  const toggleComposerBridgeRoute = useStableEvent(() => {
     if (!canUseChannelBridge) {
       showNotice('error', 'Select a Claude session to route the composer through the channel bridge')
       return
@@ -20376,7 +20394,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const openIdeBridge = useEffectEvent(() => {
+  const openIdeBridge = useStableEvent(() => {
     if (!canUseIdeBridge) {
       showNotice('error', 'Select a Claude session to use the IDE bridge')
       return
@@ -20384,7 +20402,7 @@ function OpenTuiWorkspace() {
     setIdeBridgeOpen(true)
   })
 
-  const toggleComposerIdeRoute = useEffectEvent(() => {
+  const toggleComposerIdeRoute = useStableEvent(() => {
     if (!canUseIdeBridge) {
       showNotice('error', 'Select a Claude session to route the composer through the IDE bridge')
       return
@@ -20396,7 +20414,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const insertComposerPromptText = useEffectEvent((text: string) => {
+  const insertComposerPromptText = useStableEvent((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
     const renderable = composerTextareaRef.current
@@ -20410,7 +20428,7 @@ function OpenTuiWorkspace() {
 
   // Navigate to a bookmark from the global overlay — switching session (and
   // provider) when needed, then landing on the message once it has loaded.
-  const openBookmarkRecord = useEffectEvent((record: MessageBookmark) => {
+  const openBookmarkRecord = useStableEvent((record: MessageBookmark) => {
     setBookmarksOverlayOpen(false)
     const targetSession = { sessionId: record.sessionId, provider: record.provider } as Session
     const targetKey = sessionKey(targetSession)
@@ -20426,7 +20444,7 @@ function OpenTuiWorkspace() {
     setFocusedPane('messages')
   })
 
-  const copyCliCommand = useEffectEvent(async () => {
+  const copyCliCommand = useStableEvent(async () => {
     const session = selectedSession
     if (!session) { showNotice('error', 'No session selected'); return }
     const cwd = sessionDetail?.info?.cwd ?? session.cwd
@@ -20442,7 +20460,7 @@ function OpenTuiWorkspace() {
 
   // Checkpoint user operations rather than renders: polling, focus changes,
   // startup hydration and terminal resizes must never fill the undo stack.
-  const captureWindowLayout = useEffectEvent(() => ({
+  const captureWindowLayout = useStableEvent(() => ({
     layout: {
       arrangement: splitArrangement, orientation: splitOrientation,
       readerLast: splitReaderLast, readerShare: splitReaderShare,
@@ -20464,14 +20482,14 @@ function OpenTuiWorkspace() {
   const [windowHistory] = useWorkspaceState('windowHistory', () => new WindowHistory<ReturnType<typeof captureWindowLayout>>(
     (snapshot) => JSON.stringify(snapshot.layout),
   ), false)
-  const checkpointWindowLayout = useEffectEvent(() => {
+  const checkpointWindowLayout = useStableEvent(() => {
     if (windowResizeGroupRef.current) {
       if (windowResizeCheckpointRef.current) return
       windowResizeCheckpointRef.current = true
     } else windowResizeCheckpointRef.current = false
     windowHistory.checkpoint(captureWindowLayout())
   })
-  const restoreWindowSnapshot = useEffectEvent((previous: ReturnType<typeof captureWindowLayout>) => {
+  const restoreWindowSnapshot = useStableEvent((previous: ReturnType<typeof captureWindowLayout>) => {
     const layout = previous.layout
     setCoordinatorWorkspace(previous.workspace)
     setCoordinatorWorkspaceRunId(previous.workspaceRunId)
@@ -20523,13 +20541,13 @@ function OpenTuiWorkspace() {
       writeTuiWindowArrangement({ arrangement: layout.arrangement, readerLast: layout.readerLast, secondaryShare: layout.secondaryShare, bottomShare: layout.bottomShare, weights: layout.weights ?? {} }),
     ]).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store restored layout'))
   })
-  const undoWindowLayout = useEffectEvent(() => {
+  const undoWindowLayout = useStableEvent(() => {
     const previous = windowHistory.undo(captureWindowLayout())
     if (!previous) { showNotice('info', 'No window changes to undo'); return }
     restoreWindowSnapshot(previous)
     showNotice('info', 'Window change undone · Ctrl+B U to redo')
   })
-  const redoWindowLayout = useEffectEvent(() => {
+  const redoWindowLayout = useStableEvent(() => {
     const next = windowHistory.redo(captureWindowLayout())
     if (!next) { showNotice('info', 'No window changes to redo'); return }
     restoreWindowSnapshot(next)
@@ -20540,10 +20558,10 @@ function OpenTuiWorkspace() {
     root: splitTreeFromRects(windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast }).map((rect, index) => ({ ...rect, slot: index - 1 }))),
   }
   const [closedWindows, setClosedWindows] = useWorkspaceState<Array<{ key: string; snapshot: ReturnType<typeof captureWindowLayout> }>>('closedWindows', [], false)
-  const rememberClosedWindow = useEffectEvent((key: string) => {
+  const rememberClosedWindow = useStableEvent((key: string) => {
     setClosedWindows(previous => [...previous.slice(-19), { key, snapshot: captureWindowLayout() }])
   })
-  const reopenClosedWindow = useEffectEvent(() => {
+  const reopenClosedWindow = useStableEvent(() => {
     const closed = closedWindows.at(-1)
     if (!closed) { showNotice('info', 'No closed panes to reopen'); return }
     const saved = closed.snapshot, key = closed.key
@@ -20584,7 +20602,7 @@ function OpenTuiWorkspace() {
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the
   // one writer of the count — it persists and narrates every change.
-  const applySplitPaneCount = useEffectEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => {
+  const applySplitPaneCount = useStableEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => {
     checkpointWindowLayout()
     setSplitPaneCount(next)
     void writeTuiSplitPanes(next).catch((err) => {
@@ -20632,9 +20650,9 @@ function OpenTuiWorkspace() {
 
   // tmux shape: % splits the focused frame right; " splits it below.
   // Existing branches retain their orientation, allowing mixed layouts.
-  const addSplitPane = useEffectEvent((orientation: SplitPaneOrientation) => splitFocusedWindow(orientation))
+  const addSplitPane = useStableEvent((orientation: SplitPaneOrientation) => splitFocusedWindow(orientation))
 
-  const closeSplitPane = useEffectEvent((paneIndex?: number) => {
+  const closeSplitPane = useStableEvent((paneIndex?: number) => {
     const closeIndex = paneIndex ?? splitFocusIndex ?? null
     if (closeIndex === FLOATING_PANE_INDEX) { closeFloatingWindow(); return }
     checkpointWindowLayout()
@@ -20661,7 +20679,7 @@ function OpenTuiWorkspace() {
   })
 
   // ── Window layouts ─────────────────────────────────────────────────────────
-  const setWindowArrangement = useEffectEvent((arrangement: WindowArrangement, readerLast: boolean) => {
+  const setWindowArrangement = useStableEvent((arrangement: WindowArrangement, readerLast: boolean) => {
     checkpointWindowLayout()
     setWindowSplitTree(null)
     setSplitArrangement(arrangement)
@@ -20670,7 +20688,7 @@ function OpenTuiWorkspace() {
   })
 
   // Ask for `wanted` panes from the open tabs; say so when there are not enough.
-  const requestWindowPanes = useEffectEvent((wanted: number, label: string) => {
+  const requestWindowPanes = useStableEvent((wanted: number, label: string) => {
     let available = splitCandidateSessions.length
     // Short of tabs, the layout fills from the rail's most recent sessions, as
     // a window manager tiles the windows it has rather than leaving holes.
@@ -20695,7 +20713,7 @@ function OpenTuiWorkspace() {
   })
 
   // What a right-click on a session offers, depending on where it is now.
-  const openSessionMenu = useEffectEvent((session: Session, source: 'rail' | 'tab' | 'pane', point: { x: number; y: number }, paneIndex?: number) => {
+  const openSessionMenu = useStableEvent((session: Session, source: 'rail' | 'tab' | 'pane', point: { x: number; y: number }, paneIndex?: number) => {
     const key = sessionKey(session)
     if (source === 'pane') { openWindowControlMenu(paneIndex === undefined ? 'reader' : key, point); return }
     const title = fitText(formatSessionTitle(session), 34).trimEnd()
@@ -20708,7 +20726,7 @@ function OpenTuiWorkspace() {
     if (source === 'tab') items.push({ label: 'Close tab', hint: '×', danger: true, run: () => closeSessionTab(session) })
     setContextMenu({ ...point, title, items })
   })
-  const openSurfaceWindowMenu = useEffectEvent((surface: WindowSurfaceId, _index: number, point: { x: number; y: number }) => {
+  const openSurfaceWindowMenu = useStableEvent((surface: WindowSurfaceId, _index: number, point: { x: number; y: number }) => {
     openWindowControlMenu(surfaceWindowKey(surface), point)
   })
 
@@ -20720,7 +20738,7 @@ function OpenTuiWorkspace() {
     try { setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject)) } catch { setSavedWindowLayouts([]) }
   }, [windowLayoutProject, windowPickerOpen])
 
-  const currentWindowLayoutContents = useEffectEvent(() => ({
+  const currentWindowLayoutContents = useStableEvent(() => ({
     primaryOpen: false,
     splitTree: reconciledSplitTree ?? undefined,
     arrangement: splitArrangement, orientation: splitOrientation,
@@ -20736,7 +20754,7 @@ function OpenTuiWorkspace() {
     stacks: liveWindowStacks,
     surfaceMeta: windowSurfaceMeta,
   }))
-  const saveCurrentWindowLayout = useEffectEvent((name?: string) => {
+  const saveCurrentWindowLayout = useStableEvent((name?: string) => {
     try {
       const saved = saveWindowLayout(windowLayoutProject, currentWindowLayoutContents(), name)
       setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
@@ -20745,7 +20763,7 @@ function OpenTuiWorkspace() {
       showNotice('error', err instanceof Error ? err.message : 'Could not save the layout')
     }
   })
-  const editSavedWindowLayout = useEffectEvent((id: string, name?: string) => {
+  const editSavedWindowLayout = useStableEvent((id: string, name?: string) => {
     try {
       const saved = updateWindowLayout(windowLayoutProject, id, name === undefined
         ? { layout: currentWindowLayoutContents() } : { name })
@@ -20757,7 +20775,7 @@ function OpenTuiWorkspace() {
   })
 
   // Put a saved layout back. Sessions that no longer exist are skipped and said so.
-  const restoreWindowLayout = useEffectEvent(async (id: string) => {
+  const restoreWindowLayout = useStableEvent(async (id: string) => {
     const saved = savedWindowLayouts.find(entry => entry.id === id)
     if (!saved) return
     const request = ++windowLayoutRestoreRequestRef.current
@@ -20768,7 +20786,7 @@ function OpenTuiWorkspace() {
     }
     applySavedWindowLayout(id, snapshot, request, project)
   })
-  const applySavedWindowLayout = useEffectEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => {
+  const applySavedWindowLayout = useStableEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => {
     if (request !== windowLayoutRestoreRequestRef.current || project !== windowLayoutProject || !windowPickerOpen) return
     setWindowSurfacePeek(null)
     checkpointWindowLayout()
@@ -20831,7 +20849,7 @@ function OpenTuiWorkspace() {
     showNotice('info', `${saved.name} restored${missing > 0 ? ` · ${missing} session${missing === 1 ? '' : 's'} no longer here` : ''}`)
   })
 
-  const deleteSavedWindowLayout = useEffectEvent((id: string) => {
+  const deleteSavedWindowLayout = useStableEvent((id: string) => {
     try {
       deleteWindowLayout(windowLayoutProject, id)
       setSavedWindowLayouts(listSavedWindowLayouts(windowLayoutProject))
@@ -20841,7 +20859,7 @@ function OpenTuiWorkspace() {
   // A surface into the layout: out of the side panel, into a window, focused.
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
-  const openSurfaceWindow = useEffectEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => {
+  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => {
     const activePanel = activeSurface(surfacePanel)
     const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
     const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
@@ -20877,7 +20895,7 @@ function OpenTuiWorkspace() {
     showNotice('info', `${surfaceTitle(surface)} in a window · ⇥ panel puts it back`)
   })
   const returningPopoverRef = useRef(false)
-  const closeSurfaceWindow = useEffectEvent((surface: WindowSurfaceId, moving = false) => {
+  const closeSurfaceWindow = useStableEvent((surface: WindowSurfaceId, moving = false) => {
     if (!moving && !returningPopoverRef.current) {
       if (surfaceKindOf(surface) === 'teammates' && teammatesOpen) closeInteractiveCoordinator()
       if (surfaceKindOf(surface) === 'diagnostics' && diagnosticsOpen) closeDiagnostics()
@@ -20949,7 +20967,7 @@ function OpenTuiWorkspace() {
   // `placement`: beside the reader (a window in the layout), filling this tab's
   // window area (that window zoomed; ⌃B m restores the layout), or a new
   // workspace tab of its own.
-  const openPopoverWindow = useEffectEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
+  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
     // Store-backed panels stay open while windowed: opened as a window straight
     // from the palette, they must be opened first or their window closes at once.
     if (kind === 'diagnostics' && !diagnosticsOpen) openDiagnostics()
@@ -20977,7 +20995,7 @@ function OpenTuiWorkspace() {
   })
   // A popover in a new workspace tab: the tab's layout is that one window,
   // filling the area — split, tab or float it there like any other.
-  const openPopoverInNewTab = useEffectEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
+  const openPopoverInNewTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
     const controller = workspaceContext.controller
     const pinned = pin.session ? openTabByKey.get(pin.session) ?? sessions.find((entry) => sessionKey(entry) === pin.session) ?? null : null
     const workspace = controller.addWorkspace(workspaceContext.space.id)
@@ -20997,7 +21015,7 @@ function OpenTuiWorkspace() {
     controller.rename(workspace.id, WINDOW_SURFACE_TITLES[kind].slice(2))
   })
   // A popover as a tab of this workspace's tab strip, shown in the reader's place.
-  const showPopoverTab = useEffectEvent((id: WindowSurfaceId) => {
+  const showPopoverTab = useStableEvent((id: WindowSurfaceId) => {
     const focused = splitFocusIndex !== null && splitFocusIndex >= 0 ? windowItems[splitFocusIndex] : null
     setPopoverTabHostKey(focused?.kind === 'session' ? sessionKey(focused.session) : selectedSessionKey ?? null)
     setActivePopoverTab(id)
@@ -21005,7 +21023,7 @@ function OpenTuiWorkspace() {
     setWindowSurfacePeek(null)
     setFocusedPane('messages')
   })
-  const openPopoverTab = useEffectEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
+  const openPopoverTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
     setPopoverOpen(kind, false)
     const existing = isPopoverWindowKind(kind)
       ? findPopoverWindow(popoverTabs, windowSurfaceMeta, kind, pin)
@@ -21018,7 +21036,7 @@ function OpenTuiWorkspace() {
     showPopoverTab(id)
   })
   // `keep` leaves a store-backed popover open (it is moving, not closing).
-  const closePopoverTab = useEffectEvent((id: WindowSurfaceId, keep = false) => {
+  const closePopoverTab = useStableEvent((id: WindowSurfaceId, keep = false) => {
     if (!keep) { checkpointWindowLayout(); rememberClosedWindow(surfaceWindowKey(id)) }
     const kind = surfaceKindOf(id)
     if (!keep) {
@@ -21032,7 +21050,7 @@ function OpenTuiWorkspace() {
     if (activePopoverTab === id) setActivePopoverTab(null)
   })
   // A popover tab back to full screen, or out into a window.
-  const popoverTabToFullScreen = useEffectEvent((id: WindowSurfaceId) => {
+  const popoverTabToFullScreen = useStableEvent((id: WindowSurfaceId) => {
     const kind = surfaceKindOf(id)
     if (!isPopoverWindowKind(kind) && !SURFACE_POPOVER_KINDS.has(kind)) return
     const meta = windowSurfaceMeta[id]
@@ -21044,14 +21062,14 @@ function OpenTuiWorkspace() {
     }
     setPopoverOpen(kind, true, meta)
   })
-  const popoverTabToWindow = useEffectEvent((id: WindowSurfaceId) => {
+  const popoverTabToWindow = useStableEvent((id: WindowSurfaceId) => {
     const kind = surfaceKindOf(id)
     const meta = windowSurfaceMeta[id] ?? {}
     closePopoverTab(id, true)
     if (isPopoverWindowKind(kind)) openPopoverWindow(kind, meta)
     else openSurfaceWindow(kind as RightPanelSurfaceKind)
   })
-  const openPopoverTabMenu = useEffectEvent((id: WindowSurfaceId, point: { x: number; y: number }) => {
+  const openPopoverTabMenu = useStableEvent((id: WindowSurfaceId, point: { x: number; y: number }) => {
     setContextMenu({ ...point, title: windowSurfaceTitle(id), items: [
       { label: 'Open as a window', run: () => popoverTabToWindow(id) },
       { label: 'Open full screen', hint: '⌃⇧W', run: () => popoverTabToFullScreen(id) },
@@ -21059,12 +21077,12 @@ function OpenTuiWorkspace() {
     ] })
   })
   // A popover tab into another workspace, as a window of its layout.
-  const openPopoverTabMoveMenu = useEffectEvent((id: WindowSurfaceId) => {
+  const openPopoverTabMoveMenu = useStableEvent((id: WindowSurfaceId) => {
     openMoveWorkspaceMenu(workspaceId, surfaceWindowKey(id), true)
   })
 
   // The strip's entry at `index`: a session tab or a popover tab.
-  const selectStripIndex = useEffectEvent((index: number) => {
+  const selectStripIndex = useStableEvent((index: number) => {
     if (syncingTabSelectionRef.current) return
     if (index < visibleTabSessions.length) { const tab = visibleTabSessions[index]; if (tab) selectTabSession(tab); return }
     const id = popoverTabs[index - visibleTabSessions.length]
@@ -21073,7 +21091,7 @@ function OpenTuiWorkspace() {
 
   // Where the ⧉ button puts a popover: one menu for every popover — Git, Files
   // and pull requests included, which are side-panel surface kinds as well.
-  const offerPopoverPlacement = useEffectEvent((kind: PopoverWindowKind | 'diff' | 'files' | 'pull-request') => {
+  const offerPopoverPlacement = useStableEvent((kind: PopoverWindowKind | 'diff' | 'files' | 'pull-request') => {
     const beside = () => {
       if (isPopoverWindowKind(kind)) { openPopoverWindow(kind); return }
       setPopoverOpen(kind, false)
@@ -21086,7 +21104,7 @@ function OpenTuiWorkspace() {
     ] })
   })
   // A popover window back to full screen: on its pinned session, in the reader.
-  const returnPopoverWindow = useEffectEvent((surface: WindowSurfaceId) => {
+  const returnPopoverWindow = useStableEvent((surface: WindowSurfaceId) => {
     const kind = surfaceKindOf(surface)
     if (!isPopoverWindowKind(kind)) return
     const pinned = pinnedSessionOf(surface)
@@ -21103,7 +21121,7 @@ function OpenTuiWorkspace() {
     }
     setPopoverOpen(kind, true, meta)
   })
-  const moveSurfaceToPanel = useEffectEvent((surface: WindowSurfaceId) => {
+  const moveSurfaceToPanel = useStableEvent((surface: WindowSurfaceId) => {
     const kind = surfaceKindOf(surface)
     if (isPopoverWindowKind(kind)) { returnPopoverWindow(surface); return }
     const opened = openSurfaceIn(surfacePanel, kind)
@@ -21137,7 +21155,7 @@ function OpenTuiWorkspace() {
     }
     return arrangePaneTree(keys, false, action === 'main-stack' ? 'stack' : action === 'grid' || action === 'grid-six' ? 'grid' : 'columns', focused)
   }
-  const applyWindowLayout = useEffectEvent((action: WindowLayoutAction) => {
+  const applyWindowLayout = useStableEvent((action: WindowLayoutAction) => {
     setWindowSurfacePeek(null)
     setWindowPickerOpen(false)
     if (action === 'fullscreen') { toggleWindowZoom(); return }
@@ -21151,7 +21169,7 @@ function OpenTuiWorkspace() {
     commitWindowKeys(next.keys, next)
   })
 
-  const applyWindowSessionDrop = useEffectEvent((session: Session, drop: WindowSessionDrop) => {
+  const applyWindowSessionDrop = useStableEvent((session: Session, drop: WindowSessionDrop) => {
     const key = sessionKey(session)
     const plan = planWindowSessionDrop({
       arrangement: splitArrangement, orientation: splitOrientation,
@@ -21170,11 +21188,11 @@ function OpenTuiWorkspace() {
 
   // Replace window `index` with `session`; a session already in another pane swaps with it.
   // Drop plans work on the pins, so a window index becomes its session's pin index.
-  const dropSessionOnPane = useEffectEvent((session: Session, index: number, fromPane: number | null) => {
+  const dropSessionOnPane = useStableEvent((session: Session, index: number, fromPane: number | null) => {
     const pin = pinIndexOfWindow(index)
     if (fromPane !== index && pin >= 0) applyWindowSessionDrop(session, { kind: 'replace', index: pin })
   })
-  const insertSessionBesidePane = useEffectEvent((session: Session, index: number, edge: WindowDropZone) => {
+  const insertSessionBesidePane = useStableEvent((session: Session, index: number, edge: WindowDropZone) => {
     const pin = pinIndexOfWindow(index)
     if (pin >= 0) applyWindowSessionDrop(session, { kind: 'insert', index: pin, edge })
   })
@@ -21182,7 +21200,7 @@ function OpenTuiWorkspace() {
   // Lay out exactly `keys` (every window in display order): the pins, the
   // surface windows and the slot order all follow from it. Tabs and floating
   // windows are moved by handing this a list with them in or out.
-  const commitWindowKeys = useEffectEvent((keys: string[], tree?: WindowSplitTree) => {
+  const commitWindowKeys = useStableEvent((keys: string[], tree?: WindowSplitTree) => {
     const sessionKeys = keys.filter((key) => !isSurfaceWindowKey(key))
     setWindowOrder(keys)
     setWindowSurfaces(keys.filter(isSurfaceWindowKey).map(surfaceIdOfKey))
@@ -21196,7 +21214,7 @@ function OpenTuiWorkspace() {
     ? surfaceTitle(surfaceIdOfKey(key))
     : (() => { const session = openTabByKey.get(key) ?? sessions.find((entry) => sessionKey(entry) === key); return session ? formatSessionTitle(session) : key })())
   // `key` becomes a tab of `anchor`'s frame, and the frame shows it.
-  const tabWindowOnto = useEffectEvent((key: string, anchor: string, session?: Session) => {
+  const tabWindowOnto = useStableEvent((key: string, anchor: string, session?: Session) => {
     if (key === anchor) return
     const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
     if (primaryKey && key === primaryKey) {
@@ -21234,14 +21252,14 @@ function OpenTuiWorkspace() {
     showNotice('info', `${fitText(windowKeyTitle(key), 40).trimEnd()} · a tab of ${fitText(windowKeyTitle(anchor), 30).trimEnd()}`)
   })
   // Show tab `key` in its frame.
-  const activateWindowTab = useEffectEvent((key: string) => {
+  const activateWindowTab = useStableEvent((key: string) => {
     const stack = windowStackFor(key)
     const frame = stack?.find((member) => laidOutWindowKeys.has(member))
     if (!stack || !frame || frame === key) return
     checkpointWindowLayout()
     commitWindowKeys(replaceWindowKey(shownFirstWindowKeys(), frame, key))
   })
-  const stepWindowTab = useEffectEvent((delta: number) => {
+  const stepWindowTab = useStableEvent((delta: number) => {
     const item = focusedWindowItem
     const key = item ? windowItemKey(item) : null
     const stack = key ? windowStackFor(key) : null
@@ -21255,7 +21273,7 @@ function OpenTuiWorkspace() {
     windowSurfaceCaptureRef.current.delete(surfaceIdOfKey(key))
   }
   // Close one tab: the frame goes on showing the next one.
-  const closeWindowTab = useEffectEvent((key: string, remember = true) => {
+  const closeWindowTab = useStableEvent((key: string, remember = true) => {
     const stack = windowStackFor(key)
     if (!stack) return
     if (remember) rememberClosedWindow(key)
@@ -21268,7 +21286,7 @@ function OpenTuiWorkspace() {
     dropWindowSurfaceState(key)
   })
   // ⌃B ! — the tab leaves its frame and becomes a window of its own beside it.
-  const breakOutWindowTab = useEffectEvent((key: string) => {
+  const breakOutWindowTab = useStableEvent((key: string) => {
     const stack = windowStackFor(key)
     if (!stack) { showNotice('info', 'This window is not one of several tabs'); return }
     const frame = stack.find((member) => laidOutWindowKeys.has(member))!
@@ -21294,7 +21312,7 @@ function OpenTuiWorkspace() {
     showNotice('info', 'Detached into a floating window · no room beside this pane')
   })
   // ⌃B t — the focused window becomes a tab of the window before it.
-  const tabFocusedWindow = useEffectEvent((target: number | null = splitFocusIndex) => {
+  const tabFocusedWindow = useStableEvent((target: number | null = splitFocusIndex) => {
     if (target === null && shownPopoverTab && windowItems[0]) {
       const id = shownPopoverTab
       checkpointWindowLayout(); closePopoverTab(id, true)
@@ -21314,7 +21332,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B f — the focused window floats over the layout; again, it docks back.
-  const floatWindowKey = useEffectEvent((key: string, session?: Session) => {
+  const floatWindowKey = useStableEvent((key: string, session?: Session) => {
     checkpointWindowLayout()
     const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
     let keys = shownFirstWindowKeys()
@@ -21334,7 +21352,7 @@ function OpenTuiWorkspace() {
     setSplitFocusIndex(FLOATING_PANE_INDEX)
     showNotice('info', `${fitText(windowKeyTitle(key), 40).trimEnd()} floats · drag its title, ◢ resizes · ⌃B f docks it`)
   })
-  const dockFloatingWindow = useEffectEvent(() => {
+  const dockFloatingWindow = useStableEvent(() => {
     if (!floatingKey) return
     checkpointWindowLayout()
     // Back in its old slot, and among the windows shown: past them it would dock out of sight.
@@ -21346,7 +21364,7 @@ function OpenTuiWorkspace() {
     else setSplitFocusIndex(null)
     setOverviewPendingTarget(floatingKey)
   })
-  const closeFloatingWindow = useEffectEvent((remember = true) => {
+  const closeFloatingWindow = useStableEvent((remember = true) => {
     if (!floatingKey) return
     if (remember) rememberClosedWindow(floatingKey)
     checkpointWindowLayout()
@@ -21354,7 +21372,7 @@ function OpenTuiWorkspace() {
     setFloatingWindow(null)
     if (splitFocusIndex === FLOATING_PANE_INDEX) setSplitFocusIndex(hasPrimaryFrame ? null : windowItems.length ? 0 : null)
   })
-  const toggleFloatingFocused = useEffectEvent((target: number | null = splitFocusIndex) => {
+  const toggleFloatingFocused = useStableEvent((target: number | null = splitFocusIndex) => {
     if (target === null && shownPopoverTab) {
       const id = shownPopoverTab
       checkpointWindowLayout(); closePopoverTab(id, true); floatWindowKey(surfaceWindowKey(id)); return
@@ -21369,7 +21387,7 @@ function OpenTuiWorkspace() {
     floatWindowKey(windowItemKey(item))
   })
   // A shell straight into a floating window, like tmux's popup.
-  const floatNewShell = useEffectEvent(() => {
+  const floatNewShell = useStableEvent(() => {
     let surface: WindowSurfaceId = 'terminal'
     const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
     for (let instance = 2; taken.has(surface); instance += 1) surface = `terminal#${instance}`
@@ -21487,7 +21505,7 @@ function OpenTuiWorkspace() {
   // their slots in pin order, so a pin order that disagreed would undo the move.
   // Visible sessions lead the pins, so a move among them never changes which
   // sessions fit; the hidden ones keep their pin order behind them.
-  const applyWindowOrder = useEffectEvent((next: string[]) => {
+  const applyWindowOrder = useStableEvent((next: string[]) => {
     setWindowOrder(next)
     const shown = new Set(fittedWindowKeys)
     const sessionsInOrder = next.filter((key) => !isSurfaceWindowKey(key) && shown.has(key))
@@ -21498,7 +21516,7 @@ function OpenTuiWorkspace() {
   // visible session into the place another window was moved to.
   const shownFirstWindowKeys = () => [...fittedWindowKeys, ...orderedWindowKeys.filter((key) => !fittedWindowKeys.includes(key))]
   // Exchange two windows (by window index); either may be a surface.
-  const swapWindows = useEffectEvent((a: number, b: number) => {
+  const swapWindows = useStableEvent((a: number, b: number) => {
     const keyA = windowItems[a] ? windowItemKey(windowItems[a]!) : null
     const keyB = windowItems[b] ? windowItemKey(windowItems[b]!) : null
     if (!keyA || !keyB || keyA === keyB) return
@@ -21508,7 +21526,7 @@ function OpenTuiWorkspace() {
   })
   // A surface window dragged by its title: the middle of another window swaps
   // the two, an edge puts it beside that window, the reader cannot take it.
-  const dropSurfaceWindow = useEffectEvent((fromPane: number, target: { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null }, point?: { x: number; y: number }) => {
+  const dropSurfaceWindow = useStableEvent((fromPane: number, target: { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null }, point?: { x: number; y: number }) => {
     if (target.pane === null) {
       // Only a session can be in the reader; a surface let go over it floats there.
       const moving = windowItems[fromPane]
@@ -21527,7 +21545,7 @@ function OpenTuiWorkspace() {
   })
   // A session dropped on a surface window: a session already in a pane trades
   // places with it; one from the rail or a tab becomes a pane beside it.
-  const dropSessionOnSurfaceWindow = useEffectEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => {
+  const dropSessionOnSurfaceWindow = useStableEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => {
     const key = sessionKey(session)
     const surface = windowItems[index]
     if (!surface || surface.kind !== 'surface') return
@@ -21595,7 +21613,7 @@ function OpenTuiWorkspace() {
 
   // A session dropped on the window area: an edge makes it a pane on that
   // side, the middle opens it in the reader.
-  const dropSessionInWindow = useEffectEvent((session: Session, zone: WindowDropZone, fromPane: number | null) => {
+  const dropSessionInWindow = useStableEvent((session: Session, zone: WindowDropZone, fromPane: number | null) => {
     if (zone === 'center') {
       checkpointWindowLayout()
       if (fromPane !== null) selectTabSession(session)
@@ -21607,7 +21625,7 @@ function OpenTuiWorkspace() {
   })
 
   // A surface window dropped on the reader floats where it was let go.
-  const floatSurfaceAt = useEffectEvent((surface: WindowSurfaceId, point: { x: number; y: number }) => {
+  const floatSurfaceAt = useStableEvent((surface: WindowSurfaceId, point: { x: number; y: number }) => {
     const area = windowAreaRect()
     floatWindowKey(surfaceWindowKey(surface))
     if (!area) return
@@ -21646,7 +21664,7 @@ function OpenTuiWorkspace() {
     }
     return { tree: next, geometry, key: movingKey }
   }
-  const applyNestedDrop = useEffectEvent((movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }, session?: Session) => {
+  const applyNestedDrop = useStableEvent((movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }, session?: Session) => {
     const plan = nestedDropPlan(movingKey, target)
     if (!plan) { showNotice('info', 'That split does not fit · enlarge the target pane first'); return }
     checkpointWindowLayout()
@@ -21848,7 +21866,7 @@ function OpenTuiWorkspace() {
   }
 
   // The divider between the reader and its panes, dragged to a new share.
-  const dragSplitDivider = useEffectEvent((event: { x: number; y: number }) => {
+  const dragSplitDivider = useStableEvent((event: { x: number; y: number }) => {
     if (splitDividerPoint === null) checkpointWindowLayout()
     const area = windowAreaRect()
     if (!area) return
@@ -21882,7 +21900,7 @@ function OpenTuiWorkspace() {
     const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
     if (next !== splitReaderShare) setSplitReaderShare(next)
   })
-  const endSplitDividerDrag = useEffectEvent(() => {
+  const endSplitDividerDrag = useStableEvent(() => {
     const kind = splitDividerDragging
     setSplitDividerDragging(null)
     setSplitDividerPoint(null)
@@ -21896,7 +21914,7 @@ function OpenTuiWorkspace() {
   // ⌃B z is the quick on/off: it restores the pane count you last had open
   // rather than always coming back with a single pane.
   const lastSplitPaneCountRef = useRef(1)
-  const toggleSplitPanes = useEffectEvent(() => {
+  const toggleSplitPanes = useStableEvent(() => {
     if (splitPaneCount > 0) {
       lastSplitPaneCountRef.current = splitPaneCount
       applySplitPaneCount(0)
@@ -21913,7 +21931,7 @@ function OpenTuiWorkspace() {
   // Orientation and the reader/pane ratio are layout preferences, not per-pane
   // state: every pane shares them, and both persist so a split comes back the
   // shape you left it.
-  const applySplitOrientation = useEffectEvent((next: SplitPaneOrientation, quiet?: boolean) => {
+  const applySplitOrientation = useStableEvent((next: SplitPaneOrientation, quiet?: boolean) => {
     checkpointWindowLayout()
     if (next === splitOrientation) {
       if (!quiet) showNotice('info', next === 'rows' ? 'Split panes already stacked' : 'Split panes already side-by-side')
@@ -21926,7 +21944,7 @@ function OpenTuiWorkspace() {
     if (!quiet) showNotice('info', next === 'rows' ? 'Split panes: stacked' : 'Split panes: side-by-side')
   })
 
-  const rotateSplitOrientation = useEffectEvent(() => {
+  const rotateSplitOrientation = useStableEvent(() => {
     if (reconciledSplitTree) {
       checkpointWindowLayout()
       const path = splitPath(reconciledSplitTree.root, splitFocusIndex ?? -1)
@@ -21936,7 +21954,7 @@ function OpenTuiWorkspace() {
     applySplitOrientation(splitOrientation === 'rows' ? 'columns' : 'rows')
   })
 
-  const resizeSplitReader = useEffectEvent((direction: 1 | -1 | 0) => {
+  const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => {
     if (reconciledSplitTree) {
       if (direction === 0) { checkpointWindowLayout(); setWindowSplitTree({ ...reconciledSplitTree, root: evenWindowSplitTree(reconciledSplitTree.root) }) }
       else resizeTreeWindow(-1, direction)
@@ -21973,7 +21991,7 @@ function OpenTuiWorkspace() {
   // Focus is a third keyboard owner alongside the sidebar and the reader. It is
   // an index rather than a session key so a pane keeps focus when its pinned
   // session changes under it (⌃B n).
-  const focusSplitPane = useEffectEvent((paneIndex: number) => {
+  const focusSplitPane = useStableEvent((paneIndex: number) => {
     // The window a popover tab took shows the tab: focusing it focuses the tab.
     if (paneIndex >= 0 && paneIndex === popoverHostSlot) { setWindowSurfacePeek(null); setSplitFocusIndex(null); setFocusedPane('messages'); return }
     if (paneIndex < 0 || (paneIndex >= visibleSplitPaneCount && !(paneIndex === FLOATING_PANE_INDEX && floatingKey))) return
@@ -21991,7 +22009,7 @@ function OpenTuiWorkspace() {
     setFocusedPane('messages')
   })
 
-  const focusReaderFromSplit = useEffectEvent(() => {
+  const focusReaderFromSplit = useStableEvent(() => {
     setWindowSurfacePeek(null)
     if (!hasPrimaryFrame && selectedWindowIndex === FLOATING_PANE_INDEX) { focusSplitPane(FLOATING_PANE_INDEX); return }
     if (!hasPrimaryFrame && windowItems.length) { focusSplitPane(Math.max(selectedWindowIndex, 0)); return }
@@ -21999,7 +22017,7 @@ function OpenTuiWorkspace() {
   })
 
   // Every visible window participates, including a floating window and a tool tab.
-  const cycleSplitFocus = useEffectEvent((direction: 1 | -1) => {
+  const cycleSplitFocus = useStableEvent((direction: 1 | -1) => {
     const stops: Array<number | null> = [
       ...(hasPrimaryFrame ? [null] : []),
       ...Array.from({ length: visibleSplitPaneCount }, (_, index) => index).filter((index) => index !== popoverHostSlot),
@@ -22017,7 +22035,7 @@ function OpenTuiWorkspace() {
   })
   // Tab moves between the rail and the transcript, as it always did from the
   // reader; ⌃B o cycles windows. Without a rail it cycles windows.
-  const tabFromSplitPane = useEffectEvent(() => {
+  const tabFromSplitPane = useStableEvent(() => {
     if (showRail) {
       setSplitFocusIndex(null)
       setFocusedPane('sessions')
@@ -22026,7 +22044,7 @@ function OpenTuiWorkspace() {
     cycleSplitFocus(1)
   })
   // The rail's Tab returns to the reader, or to a pane when it is closed.
-  const tabFromRail = useEffectEvent(() => {
+  const tabFromRail = useStableEvent(() => {
     if (floatingKey && (lastFocusedSplitPaneRef.current === FLOATING_PANE_INDEX || (!hasPrimaryFrame && !windowItems.length))) {
       focusSplitPane(FLOATING_PANE_INDEX)
       return
@@ -22083,7 +22101,7 @@ function OpenTuiWorkspace() {
     if (windowZoom === 'reader' ? !hasPrimaryFrame : windowZoom >= windowItems.length) setWindowZoom(null)
   }, [hasPrimaryFrame, windowItems.length, windowZoom])
 
-  const toggleWindowZoom = useEffectEvent((target: number | null = splitFocusIndex) => {
+  const toggleWindowZoom = useStableEvent((target: number | null = splitFocusIndex) => {
     if (windowSurfacePeek) { setWindowSurfacePeek(null); setWindowZoom(null); setSplitFocusIndex(null); return }
     checkpointWindowLayout()
     if (windowZoom !== null) {
@@ -22101,7 +22119,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B +/-: the second divider, from the keyboard.
-  const resizeSecondaryDivider = useEffectEvent((direction: 1 | -1) => {
+  const resizeSecondaryDivider = useStableEvent((direction: 1 | -1) => {
     if (reconciledSplitTree && treeGeometry) {
       const divider = treeGeometry.dividers.find(entry => entry.axis === 'y')
       if (!divider) { showNotice('info', 'This layout has no horizontal divider'); return }
@@ -22125,7 +22143,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B [ ]: shrink or grow the focused pane within its row or column, against its neighbour.
-  const resizeFocusedWindow = useEffectEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => {
+  const resizeFocusedWindow = useStableEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => {
     if (reconciledSplitTree) { resizeTreeWindow(focus ?? -1, direction); return }
     const group = focus === null ? undefined : fittedWindows.groups.find((entry) => entry.members.includes(focus))
     if (focus === null || !group) {
@@ -22153,7 +22171,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
-  const swapWindowInDirection = useEffectEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => {
+  const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => {
     checkpointWindowLayout()
     if (visibleSplitPaneCount === 0) {
       showNotice('error', 'No split panes open (⌃B % to split)')
@@ -22178,7 +22196,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B arrows: the window in that direction, by where the frames actually are.
-  const focusWindowInDirection = useEffectEvent((direction: WindowDirection) => {
+  const focusWindowInDirection = useStableEvent((direction: WindowDirection) => {
     if (visibleSplitPaneCount === 0) {
       showNotice('error', 'No split panes open (⌃B % to split)')
       return
@@ -22202,7 +22220,7 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B ; — flip between the reader and the pane you were last in.
-  const toggleSplitFocus = useEffectEvent(() => {
+  const toggleSplitFocus = useStableEvent(() => {
     if (splitFocusIndex !== null) {
       focusReaderFromSplit()
       return
@@ -22217,7 +22235,7 @@ function OpenTuiWorkspace() {
   // Aim the composer at a pane's session. The override is explicit (not implied
   // by focus) so a send can never be misdirected by where the cursor happens to
   // be; it clears when the composer closes.
-  const composeToSplitPaneSession = useEffectEvent((target: Session) => {
+  const composeToSplitPaneSession = useStableEvent((target: Session) => {
     const retargeted = sessionKey(target) !== composerTargetSessionIdentity
     setComposerPaneTargetKey(sessionKey(target))
     setComposerActive(true)
@@ -22227,7 +22245,7 @@ function OpenTuiWorkspace() {
 
   // Session-scoped overlays, opened for a pane. Git is cwd-scoped and
   // diagnostics takes a target.
-  const openSplitPaneOverlay = useEffectEvent((kind: 'git' | 'diagnostics', target: Session | null) => {
+  const openSplitPaneOverlay = useStableEvent((kind: 'git' | 'diagnostics', target: Session | null) => {
     if (!target) return
     if (kind === 'git') { setGitOpen(true); return }
     openDiagnostics(target)
@@ -22236,7 +22254,7 @@ function OpenTuiWorkspace() {
   // Promote the focused pane's session to the active tab. The pin reconciler
   // then hands that pane the session the reader just left, so the pair swaps
   // rather than both showing the same transcript.
-  const openFocusedSplitPane = useEffectEvent(() => {
+  const openFocusedSplitPane = useStableEvent(() => {
     toggleWindowZoom(splitFocusIndex)
   })
 
@@ -22244,7 +22262,7 @@ function OpenTuiWorkspace() {
   // pane is already showing. Only that pane moves — the others keep their
   // pinned sessions, so cycling reads as "flip through the rest" instead of
   // scrambling every pane.
-  const cycleSplitPaneSession = useEffectEvent(() => {
+  const cycleSplitPaneSession = useStableEvent(() => {
     checkpointWindowLayout()
     if (splitPaneCount === 0) {
       showNotice('error', 'Split transcript view is off (⌃B % to split)')
@@ -22272,14 +22290,14 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const jumpToNextWindowAttention = useEffectEvent(() => {
+  const jumpToNextWindowAttention = useStableEvent(() => {
     const order = [...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys]
     const target = nextWindowNeedingAttention(order, focusedWindowKey, (key) => Boolean(badgeForWindow(key)))
     if (!target) { showNotice('info', 'No windows need attention'); return }
     pickWindowTarget(target)
   })
 
-  const pickWindowTarget = useEffectEvent((key: string) => {
+  const pickWindowTarget = useStableEvent((key: string) => {
     const target = windowTargets.find((entry) => entry.key === key)
     if (!target) { showNotice('info', 'That window is no longer open'); return }
     if (key === floatingKey) { setWindowSwitcherOpen(false); setFocusedPane('messages'); setSplitFocusIndex(FLOATING_PANE_INDEX); return }
@@ -22342,7 +22360,7 @@ function OpenTuiWorkspace() {
       }
     }
   })
-  const sendBroadcastPrompt = useEffectEvent(async (session: Session, text: string, requestId: string): Promise<BroadcastDelivery> => {
+  const sendBroadcastPrompt = useStableEvent(async (session: Session, text: string, requestId: string): Promise<BroadcastDelivery> => {
     const key = sessionKey(session)
     const permissionMode = session.provider === 'claude' ? tuiPermissionModeByKey[key] ?? 'auto'
       : session.provider === 'copilot' ? tuiCopilotPermissionModeByKey[key] ?? 'off' : undefined
@@ -22361,7 +22379,7 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const executeCommandPalette = useEffectEvent((id: string) => {
+  const executeCommandPalette = useStableEvent((id: string) => {
     const focusedSession = focusedWindowItem?.kind === 'session' ? focusedWindowItem.session : composerTargetSession
     closeCommandPalette()
     // Popover windows, one palette entry per kind of the registry.
@@ -22975,12 +22993,12 @@ function OpenTuiWorkspace() {
     setWindowFocusTrail(previous => previous[0] === currentVisitKey ? previous : [currentVisitKey, ...previous.filter(key => key !== currentVisitKey)].slice(0, 32))
     setRecentWindowVisits(previous => previous[0]?.workspaceId === workspaceId && previous[0]?.target === currentVisitKey ? previous : [{ workspaceId, target: currentVisitKey }, ...previous.filter(visit => visit.workspaceId !== workspaceId || visit.target !== currentVisitKey)].slice(0, 50))
   }, [currentVisitKey, workspaceId])
-  const focusPreviousWindow = useEffectEvent(() => {
+  const focusPreviousWindow = useStableEvent(() => {
     const previous = windowFocusTrail.find(key => key !== currentVisitKey && controlWindowIndex(key) !== undefined)
     if (previous) focusControlWindow(previous)
     else showNotice('info', 'No previous visible pane')
   })
-  const openRecentWindows = useEffectEvent(() => { setRecentWindowsOnly(true); setWindowSwitcherOpen(true) })
+  const openRecentWindows = useStableEvent(() => { setRecentWindowsOnly(true); setWindowSwitcherOpen(true) })
 
   const overviewTargets = new Map(windowTargets.map(target => [target.key, target]))
   const describeOverviewWindow = (key: string, tab = false): OverviewWindow => {
@@ -23000,7 +23018,7 @@ function OpenTuiWorkspace() {
     ...(floatingKey ? [describeOverviewWindow(floatingKey)] : []),
   ])
   useEffect(() => { workspaceContext.runtime.set('windowOverviewWindows', JSON.parse(overviewSignature)) }, [workspaceContext.runtime, overviewSignature])
-  const pickOverviewNode = useEffectEvent((node: OverviewNode) => {
+  const pickOverviewNode = useStableEvent((node: OverviewNode) => {
     setWindowSwitcherOpen(false)
     const space = workspaceContext.controller.getSnapshot().spaces.find(space => space.id === node.spaceId)
     const workspace = space?.workspaces.find(workspace => workspace.id === node.workspaceId)
@@ -23012,7 +23030,7 @@ function OpenTuiWorkspace() {
     if (overviewTargets.has(overviewPendingTarget)) { pickWindowTarget(overviewPendingTarget); setOverviewPendingTarget(null) }
   }, [overviewPendingTarget, overviewSignature, workspaceId])
 
-  const openMoveWorkspaceMenu = useEffectEvent((sourceId: string, target: string, singleTab = false, point = { x: Math.floor(width / 3), y: 3 }) => {
+  const openMoveWorkspaceMenu = useStableEvent((sourceId: string, target: string, singleTab = false, point = { x: Math.floor(width / 3), y: 3 }) => {
     leaveWindowControls()
     setWindowSwitcherOpen(false)
     const controller = workspaceContext.controller
@@ -23031,7 +23049,7 @@ function OpenTuiWorkspace() {
     setContextMenu({ ...point, title: 'Move to workspace…', items })
   })
 
-  const splitFocusedWindow = useEffectEvent((orientation: SplitPaneOrientation, target: number | null = splitFocusIndex) => {
+  const splitFocusedWindow = useStableEvent((orientation: SplitPaneOrientation, target: number | null = splitFocusIndex) => {
     if (target === FLOATING_PANE_INDEX) { showNotice('info', 'Dock the floating window before splitting it'); return }
     if (orderedWindowKeys.length >= 31) { showNotice('info', 'This workspace has reached its 32-window limit'); return }
     if (windowZoom !== null || fullscreenMode) { showNotice('info', 'Restore the layout before splitting a window'); return }
@@ -23070,7 +23088,7 @@ function OpenTuiWorkspace() {
     setSplitFocusIndex(orderedWindowKeys.length)
     showNotice('info', `${orientation === 'columns' ? 'Split right' : 'Split below'} · ${candidate ? formatSessionTitle(candidate) : 'new shell window'}`)
   })
-  const resizeTreeWindow = useEffectEvent((slot: number, direction: 1 | -1) => {
+  const resizeTreeWindow = useStableEvent((slot: number, direction: 1 | -1) => {
     if (!reconciledSplitTree || !treeGeometry) return
     const path = splitPath(reconciledSplitTree.root, slot)
     if (!path) { showNotice('info', 'That window has no split divider'); return }
@@ -23084,7 +23102,7 @@ function OpenTuiWorkspace() {
     checkpointWindowLayout()
     setWindowSplitTree({ ...reconciledSplitTree, root: updateSplitRatio(reconciledSplitTree.root, parent, first / extent) })
   })
-  const dragTreeDivider = useEffectEvent((path: string, point: { x: number; y: number }) => {
+  const dragTreeDivider = useStableEvent((path: string, point: { x: number; y: number }) => {
     if (treeDividerActivePathRef.current !== path || !reconciledSplitTree || !treeGeometry) return
     const divider = treeGeometry.dividers.find(divider => divider.path === path)
     const area = rectOf('window-area')
@@ -23118,7 +23136,7 @@ function OpenTuiWorkspace() {
     windowResizeGroupRef.current = false
     windowResizeCheckpointRef.current = false
   }
-  const leaveWindowControls = useEffectEvent(() => {
+  const leaveWindowControls = useStableEvent(() => {
     setWindowControlMode(null)
     endWindowResizeGroup()
   })
@@ -23149,7 +23167,7 @@ function OpenTuiWorkspace() {
   }
   const focusedControlKey = () => splitFocusIndex === null ? (shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : selectedSessionKey ?? 'empty')
     : focusedWindowItem ? windowItemKey(focusedWindowItem) : 'reader'
-  const readControlWindows = useEffectEvent((): ControlWindow[] => {
+  const readControlWindows = useStableEvent((): ControlWindow[] => {
     const windows: ControlWindow[] = []
     const add = (key: string, number: number, title: string, id: string) => {
       const node = renderer.root.findDescendantById(id)
@@ -23171,7 +23189,7 @@ function OpenTuiWorkspace() {
     if (floatingItem && !fullscreenMode && !windowSurfacePeek) add(windowItemKey(floatingItem), visibleSplitPaneCount + windowNumberOffset, windowKeyTitle(windowItemKey(floatingItem)), 'floating-window')
     return windows
   })
-  const focusControlWindow = useEffectEvent((key: string) => {
+  const focusControlWindow = useStableEvent((key: string) => {
     const index = controlWindowIndex(key)
     if (index === undefined) return false
     setSurfacePanelFocused(false)
@@ -23180,13 +23198,13 @@ function OpenTuiWorkspace() {
     else focusSplitPane(index)
     return true
   })
-  const pickControlWindow = useEffectEvent((key: string) => {
+  const pickControlWindow = useStableEvent((key: string) => {
     endWindowResizeGroup()
     if (!readControlWindows().some(window => window.key === key)) return
     focusControlWindow(key)
     if (windowControlMode === 'identify') leaveWindowControls()
   })
-  const enterWindowControls = useEffectEvent((mode: 'identify' | 'manage') => {
+  const enterWindowControls = useStableEvent((mode: 'identify' | 'manage') => {
     if (pendingPermissions.length || (windowControlsBlocked && !contextMenu && !commandPaletteOpen)) return
     setContextMenu(null)
     setControlMenuTarget(null)
@@ -23198,7 +23216,7 @@ function OpenTuiWorkspace() {
     if (!visible.some(window => window.focused) && visible[0]) focusControlWindow(visible[0].key)
     setWindowControlMode(mode)
   })
-  const runWindowControlAction = useEffectEvent((key: string, action: WindowControlAction, direction?: WindowDirection) => {
+  const runWindowControlAction = useStableEvent((key: string, action: WindowControlAction, direction?: WindowDirection) => {
     const index = controlWindowIndex(key)
     if (index === undefined) { setContextMenu(null); return }
     const spec = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === action)!
@@ -23260,7 +23278,7 @@ function OpenTuiWorkspace() {
       }
     } finally { windowResizeGroupRef.current = false }
   })
-  const openWindowControlMenu = useEffectEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => {
+  const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => {
     const index = controlWindowIndex(key)
     if (index === undefined) return
     leaveWindowControls()
@@ -23485,6 +23503,7 @@ function OpenTuiWorkspace() {
       handled(() => toggleVoice())
       return
     }
+    const cursorIndex = readCursorIndex()
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     // cardDisplayData is window-relative (preview cap while browsing, sliding
     // window while reading); shift the absolute cursor index into window space.
@@ -25748,34 +25767,6 @@ function OpenTuiWorkspace() {
 
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
   const readerMode = followTail ? null : pendingNewCount > 0 ? 'new content' : 'reading'
-  const headerStatusRight = useMemo(
-    () => {
-      // Solid dot = live; hollow = a fetch is in flight (syncing/refreshing).
-      const statusGlyph = statusLabel === 'live' ? '●' : '◌'
-      // Primary group: the live/reader state that actually changes as you work.
-      const livePart = joinMeta([
-        `${statusGlyph} ${statusLabel.toUpperCase()}`,
-        // A position among cards means nothing where no card has the cursor.
-        isScrollbackView ? null
-          : visibleTranscriptCards.length === 0 ? '0/0' : `${Math.max(cursorIndex, 0) + 1}/${visibleTranscriptCards.length}`,
-        readerMode?.toUpperCase() ?? null,
-        pendingNewCount > 0 ? `+${pendingNewCount} NEW` : null,
-      ])
-      // Secondary group: display config, split off with the same ` │ ` divider
-      // the footer uses so it stops competing with live status. Density/width
-      // are intentionally omitted — the footer already shows their live values
-      // (d/⇧W), so repeating them here was pure duplication.
-      // The theme's name is not among them: it is on screen as the theme.
-      const settingsPart = joinMeta([
-        !railVisible ? 'h show rail' : null,
-      ])
-      return fitText(
-        settingsPart ? `${livePart} │ ${settingsPart}` : livePart,
-        Math.max(Math.floor(width * 0.45), 20),
-      ).trimEnd()
-    },
-    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, isScrollbackView, pendingNewCount, railVisible, width],
-  )
   const readerContextMeta = useMemo(
     () => fitText(
       joinMeta([
