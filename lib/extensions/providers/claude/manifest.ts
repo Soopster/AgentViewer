@@ -8,6 +8,7 @@ export const manifest = {
   assistantLabel: 'CLAUDE',
   composer,
   supportsInstances: true,
+  fileRestoreHook: true,
   newSession: true,
   attachments: { types: ['image', 'blob'], remotePaths: false, imageBlobsOnly: true },
   capabilities: {

@@ -1,8 +1,8 @@
 # Composable application core and feature plugins
 
-Status: implementation underway, 24 October 2026. Provider contributions now have
-an extension contract, lazy registry and contributor scaffold; see
-[Provider extensions](provider-extensions.md). Feature surface hosting and the
+Status: implementation underway, 25 October 2026. Provider contributions have an
+extension contract, lazy registry and contributor scaffold, and every SDK runtime
+has moved into its extension; see [Provider extensions](provider-extensions.md). Feature surface hosting and the
 Analytics vertical slice described below remain planned.
 
 ## Objective

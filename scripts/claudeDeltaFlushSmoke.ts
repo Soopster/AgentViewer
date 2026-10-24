@@ -2,7 +2,7 @@
 // coalescer must flush on a timer, or a reply under the spill size appears only
 // when its block ends — i.e. it does not stream at all.
 import assert from 'node:assert/strict'
-import { createClaudeDeltaCoalescer } from '../lib/sessionBackend'
+import { createClaudeDeltaCoalescer } from '../lib/extensions/providers/claude/helpers'
 
 const frames: string[] = []
 const coalescer = createClaudeDeltaCoalescer((chunk) => frames.push(chunk))

@@ -1,3 +1,6 @@
+import { forModel, callJson, bindingKey, registry, piRegistry, copilotRegistry, jsonSchemaParams } from './coordinatorProviderBindings'
+export { resolveCoordinatorToolCall } from './coordinatorProviderBindings'
+export { getCoordinatorMcpServers, unregisterCoordinatorMcpServer, getCoordinatorPiTools, unregisterCoordinatorPiTools, getCoordinatorCopilotTools, unregisterCoordinatorCopilotTools, getCoordinatorCodexIdentity, registerCoordinatorCodexTools, unregisterCoordinatorCodexTools, dispatchCoordinatorCodexToolCall, getCoordinatorOpenCodeToolMask, registerCoordinatorOpenCodeTools, unregisterCoordinatorOpenCodeTools, dispatchCoordinatorOpenCodeToolCall, getCoordinatorAcpMcpServers, registerCoordinatorAcpTools, unregisterCoordinatorAcpTools, unregisterCoordinatorRunTools } from './coordinatorProviderBindings'
 /**
  * In-process Coordinator tools for internally-hosted (pooled) agent sessions
  * — the SDK-tool counterpart to bin/agent-viewer-mcp.mjs's stdio tool set.
@@ -20,41 +23,31 @@
  * provider's client looks the binding up by session id at the point it
  * actually starts/resumes that session.
  */
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
-import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
-import { randomUUID } from 'node:crypto'
-import { currentProviderInstanceId } from './providerInstances'
-import type { AgentProvider } from './types'
-import { z } from 'zod'
-import { Type, type TSchema } from 'typebox'
-import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent'
-import type { DynamicToolSpec } from './codex-schema/v2'
-import type { JsonValue } from './codex-schema/serde_json/JsonValue'
-import type { ExternalProtocolIdentity } from './agentProtocol'
-
-import { coordinatorModelResult } from './coordinatorModelResult.mjs'
-import { COORD_TOOL_SPECS, coordinatorToolSpecsForRole, type FieldSpec } from './coordinatorToolContract.mjs'
-export { COORD_FINDING_DETAIL_MAX_CHARS } from './coordinatorToolContract.mjs'
-
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import { randomUUID } from 'node:crypto';
+import { currentProviderInstanceId } from './providerInstances';
+import type { AgentProvider } from './types';
+import { z } from 'zod';
+import { Type, type TSchema } from 'typebox';
+import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { DynamicToolSpec } from './codex-schema/v2';
+import type { JsonValue } from './codex-schema/serde_json/JsonValue';
+import type { ExternalProtocolIdentity } from './agentProtocol';
+import { coordinatorModelResult } from './coordinatorModelResult.mjs';
+import { COORD_TOOL_SPECS, coordinatorToolSpecsForRole, type FieldSpec } from './coordinatorToolContract.mjs';
+export { COORD_FINDING_DETAIL_MAX_CHARS } from './coordinatorToolContract.mjs';
 function textResult(value: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(value) }],
-  }
+    return {
+        content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+    };
 }
-
 function errorResult(error: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: error instanceof Error ? error.message : String(error) }],
-    isError: true as const,
-  }
+    return {
+        content: [{ type: 'text' as const, text: error instanceof Error ? error.message : String(error) }],
+        isError: true as const,
+    };
 }
-
-// A wait already answers with the events since the cursor and the actionable
-// digest; the whole board rides along for the supervisor that schedules on it.
-// The stdio bridge drops it before a model sees it, and so must this path —
-// it was about half of a 90KB result.
-const forModel = coordinatorModelResult
-
 // Deferred: agentCoordinationExternal.ts pulls in agentCoordination.ts, which
 // pulls in sessionBackend.ts/claudePool.ts/piClient.ts/copilotClient.ts/codexClient.ts,
 // which import this module at their top level to look up registered tools —
@@ -63,97 +56,71 @@ const forModel = coordinatorModelResult
 // evaluating, so this stays a leaf module for bundling purposes while still
 // reaching the real dispatcher when called.
 async function call(identity: ExternalProtocolIdentity, action: string, args: Record<string, unknown> = {}) {
-  try {
-    const { executeExternalCoordinatorAction } = await import('./agentCoordinationExternal')
-    const result = await executeExternalCoordinatorAction({
-      action,
-      runId: identity.runId,
-      agentId: identity.agentId,
-      token: identity.token,
-      requestId: randomUUID(),
-      ...args,
-    })
-    return textResult(forModel(action, result))
-  } catch (error) {
-    return errorResult(error)
-  }
+    try {
+        const { executeExternalCoordinatorAction } = await import('./agentCoordinationExternal');
+        const result = await executeExternalCoordinatorAction({
+            action,
+            runId: identity.runId,
+            agentId: identity.agentId,
+            token: identity.token,
+            requestId: randomUUID(),
+            ...args,
+        });
+        return textResult(forModel(action, result));
+    }
+    catch (error) {
+        return errorResult(error);
+    }
 }
-
-async function callJson(identity: ExternalProtocolIdentity, action: string, args: Record<string, unknown> = {}): Promise<{ text: string; isError: boolean }> {
-  try {
-    const { executeExternalCoordinatorAction } = await import('./agentCoordinationExternal')
-    const result = await executeExternalCoordinatorAction({
-      action,
-      runId: identity.runId,
-      agentId: identity.agentId,
-      token: identity.token,
-      requestId: randomUUID(),
-      ...args,
-    })
-    return { text: JSON.stringify(forModel(action, result)), isError: false }
-  } catch (error) {
-    return { text: error instanceof Error ? error.message : String(error), isError: true }
-  }
-}
-
 // ---- Shared coord_* tool contract -----------------------------------------
-
 function zodField(f: FieldSpec): z.ZodTypeAny {
-  let base: z.ZodTypeAny
-  switch (f.t) {
-    case 'string': {
-      let s = z.string()
-      if (f.min !== undefined) s = s.min(f.min)
-      if (f.max !== undefined) s = s.max(f.max)
-      base = s
-      break
+    let base: z.ZodTypeAny;
+    switch (f.t) {
+        case 'string': {
+            let s = z.string();
+            if (f.min !== undefined)
+                s = s.min(f.min);
+            if (f.max !== undefined)
+                s = s.max(f.max);
+            base = s;
+            break;
+        }
+        case 'enum':
+            base = z.enum(f.values);
+            break;
+        case 'number': {
+            let n = z.number();
+            if (f.int)
+                n = n.int();
+            if (f.min !== undefined)
+                n = n.min(f.min);
+            if (f.max !== undefined)
+                n = n.max(f.max);
+            base = n;
+            break;
+        }
+        case 'boolean':
+            base = z.boolean();
+            break;
+        case 'stringArray': {
+            let arr = z.array(z.string().min(1));
+            if (f.min !== undefined)
+                arr = arr.min(f.min);
+            if (f.max !== undefined)
+                arr = arr.max(f.max);
+            base = arr;
+            break;
+        }
     }
-    case 'enum':
-      base = z.enum(f.values)
-      break
-    case 'number': {
-      let n = z.number()
-      if (f.int) n = n.int()
-      if (f.min !== undefined) n = n.min(f.min)
-      if (f.max !== undefined) n = n.max(f.max)
-      base = n
-      break
-    }
-    case 'boolean':
-      base = z.boolean()
-      break
-    case 'stringArray': {
-      let arr = z.array(z.string().min(1))
-      if (f.min !== undefined) arr = arr.min(f.min)
-      if (f.max !== undefined) arr = arr.max(f.max)
-      base = arr
-      break
-    }
-  }
-  return f.optional ? base.optional() : base
+    return f.optional ? base.optional() : base;
 }
-
 function zodShape(fields: Record<string, FieldSpec>): Record<string, z.ZodTypeAny> {
-  return Object.fromEntries(Object.entries(fields).map(([key, spec]) => [key, zodField(spec)]))
+    return Object.fromEntries(Object.entries(fields).map(([key, spec]) => [key, zodField(spec)]));
 }
-
 /** Build the coord_* tool set bound to one participant identity (Claude Agent SDK). */
 export function buildCoordinatorSdkTools(identity: ExternalProtocolIdentity) {
-  return coordinatorToolSpecsForRole(identity.role).map((spec) => tool(
-    spec.name,
-    spec.description,
-    zodShape(spec.fields),
-    async (args: Record<string, any>) => call(identity, spec.action, spec.mapArgs(args)),
-  ))
+    return coordinatorToolSpecsForRole(identity.role).map((spec) => tool(spec.name, spec.description, zodShape(spec.fields), async (args: Record<string, any>) => call(identity, spec.action, spec.mapArgs(args))));
 }
-
-/** Never infer a binding from another account when no scoped binding exists. */
-function bindingKey(provider: AgentProvider, sessionId: string, instanceId = currentProviderInstanceId(provider)): string {
-  return JSON.stringify([provider, instanceId, sessionId])
-}
-
-const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: Record<string, McpServerConfig> }>()
-
 /**
  * Bind a session id to a Coordinator identity's tool set for its whole lifetime.
  * Re-registering the same identity keeps the existing record: the Claude pool
@@ -161,281 +128,93 @@ const registry = new Map<string, { identity: ExternalProtocolIdentity; servers: 
  * carries the right binding, and a fresh object per turn would respawn it every turn.
  */
 export function registerCoordinatorMcpServer(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  const current = registry.get(bindingKey('claude', sessionId, providerInstanceId))?.identity
-  if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token && current.role === identity.role) return
-  registry.set(bindingKey('claude', sessionId, providerInstanceId), {
-    identity,
-    servers: {
-      'agent-viewer': createSdkMcpServer({
-        name: 'agent-viewer',
-        tools: buildCoordinatorSdkTools(identity),
-      }),
-    },
-  })
+    const current = registry.get(bindingKey('claude', sessionId, providerInstanceId))?.identity;
+    if (current && current.runId === identity.runId && current.agentId === identity.agentId && current.token === identity.token && current.role === identity.role)
+        return;
+    registry.set(bindingKey('claude', sessionId, providerInstanceId), {
+        identity,
+        servers: {
+            'agent-viewer': createSdkMcpServer({
+                name: 'agent-viewer',
+                tools: buildCoordinatorSdkTools(identity),
+            }),
+        },
+    });
 }
-
-export function getCoordinatorMcpServers(sessionId: string, providerInstanceId?: string): Record<string, McpServerConfig> | undefined {
-  return registry.get(bindingKey('claude', sessionId, providerInstanceId))?.servers
-}
-
-export function unregisterCoordinatorMcpServer(sessionId: string, providerInstanceId?: string): void {
-  registry.delete(bindingKey('claude', sessionId, providerInstanceId))
-}
-
 // ---- Pi (TypeBox customTools) ----------------------------------------------
-
 function typeboxField(f: FieldSpec): TSchema {
-  let base: TSchema
-  switch (f.t) {
-    case 'string':
-      base = Type.String(f.min !== undefined || f.max !== undefined ? { minLength: f.min, maxLength: f.max } : undefined)
-      break
-    case 'enum':
-      base = Type.Union(f.values.map((value) => Type.Literal(value)))
-      break
-    case 'number':
-      base = f.int
-        ? Type.Integer(f.min !== undefined || f.max !== undefined ? { minimum: f.min, maximum: f.max } : undefined)
-        : Type.Number(f.min !== undefined || f.max !== undefined ? { minimum: f.min, maximum: f.max } : undefined)
-      break
-    case 'boolean':
-      base = Type.Boolean()
-      break
-    case 'stringArray':
-      base = Type.Array(Type.String({ minLength: 1 }), f.min !== undefined || f.max !== undefined ? { minItems: f.min, maxItems: f.max } : undefined)
-      break
-  }
-  return f.optional ? Type.Optional(base) : base
+    let base: TSchema;
+    switch (f.t) {
+        case 'string':
+            base = Type.String(f.min !== undefined || f.max !== undefined ? { minLength: f.min, maxLength: f.max } : undefined);
+            break;
+        case 'enum':
+            base = Type.Union(f.values.map((value) => Type.Literal(value)));
+            break;
+        case 'number':
+            base = f.int
+                ? Type.Integer(f.min !== undefined || f.max !== undefined ? { minimum: f.min, maximum: f.max } : undefined)
+                : Type.Number(f.min !== undefined || f.max !== undefined ? { minimum: f.min, maximum: f.max } : undefined);
+            break;
+        case 'boolean':
+            base = Type.Boolean();
+            break;
+        case 'stringArray':
+            base = Type.Array(Type.String({ minLength: 1 }), f.min !== undefined || f.max !== undefined ? { minItems: f.min, maxItems: f.max } : undefined);
+            break;
+    }
+    return f.optional ? Type.Optional(base) : base;
 }
-
 function typeboxParams(fields: Record<string, FieldSpec>): TSchema {
-  return Type.Object(Object.fromEntries(Object.entries(fields).map(([key, spec]) => [key, typeboxField(spec)])))
+    return Type.Object(Object.fromEntries(Object.entries(fields).map(([key, spec]) => [key, typeboxField(spec)])));
 }
-
 /** Build the coord_* tool set bound to one participant identity (Pi's customTools). */
 export function buildCoordinatorPiTools(identity: ExternalProtocolIdentity): PiToolDefinition[] {
-  return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
-    name: spec.name,
-    label: spec.name,
-    description: spec.description,
-    parameters: typeboxParams(spec.fields),
-    async execute(_toolCallId: string, params: Record<string, any>) {
-      const { text, isError } = await callJson(identity, spec.action, spec.mapArgs(params))
-      return {
-        content: [{ type: 'text' as const, text }],
-        details: isError ? { error: text } : undefined,
-      }
-    },
-  }))
+    return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
+        name: spec.name,
+        label: spec.name,
+        description: spec.description,
+        parameters: typeboxParams(spec.fields),
+        async execute(_toolCallId: string, params: Record<string, any>) {
+            const { text, isError } = await callJson(identity, spec.action, spec.mapArgs(params));
+            return {
+                content: [{ type: 'text' as const, text }],
+                details: isError ? { error: text } : undefined,
+            };
+        },
+    }));
 }
-
-const piRegistry = new Map<string, ExternalProtocolIdentity>()
-
 export function registerCoordinatorPiTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  piRegistry.set(bindingKey('pi', sessionId, providerInstanceId), identity)
+    piRegistry.set(bindingKey('pi', sessionId, providerInstanceId), { identity, tools: buildCoordinatorPiTools(identity) });
 }
-
-/** Pi's createAgentSession/customTools option needs the built tool array, not just the identity. */
-export function getCoordinatorPiTools(sessionId: string, providerInstanceId?: string): PiToolDefinition[] | undefined {
-  const identity = piRegistry.get(bindingKey('pi', sessionId, providerInstanceId))
-  return identity ? buildCoordinatorPiTools(identity) : undefined
-}
-
-export function unregisterCoordinatorPiTools(sessionId: string, providerInstanceId?: string): void {
-  piRegistry.delete(bindingKey('pi', sessionId, providerInstanceId))
-}
-
 // ---- Copilot (zod-schema Tool[]) -------------------------------------------
-
 /** Build the coord_* tool set bound to one participant identity (Copilot SDK's Tool[]). */
 export function buildCoordinatorCopilotTools(identity: ExternalProtocolIdentity): unknown[] {
-  return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
-    name: spec.name,
-    description: spec.description,
-    parameters: z.object(zodShape(spec.fields)),
-    skipPermission: true,
-    async handler(args: Record<string, any>) {
-      const { text, isError } = await callJson(identity, spec.action, spec.mapArgs(args))
-      if (isError) throw new Error(text)
-      return text
-    },
-  }))
+    return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
+        name: spec.name,
+        description: spec.description,
+        parameters: z.object(zodShape(spec.fields)),
+        skipPermission: true,
+        async handler(args: Record<string, any>) {
+            const { text, isError } = await callJson(identity, spec.action, spec.mapArgs(args));
+            if (isError)
+                throw new Error(text);
+            return text;
+        },
+    }));
 }
-
-const copilotRegistry = new Map<string, ExternalProtocolIdentity>()
-
 export function registerCoordinatorCopilotTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  copilotRegistry.set(bindingKey('copilot', sessionId, providerInstanceId), identity)
+    copilotRegistry.set(bindingKey('copilot', sessionId, providerInstanceId), { identity, tools: buildCoordinatorCopilotTools(identity) });
 }
-
-export function getCoordinatorCopilotTools(sessionId: string, providerInstanceId?: string): unknown[] | undefined {
-  const identity = copilotRegistry.get(bindingKey('copilot', sessionId, providerInstanceId))
-  return identity ? buildCoordinatorCopilotTools(identity) : undefined
-}
-
-export function unregisterCoordinatorCopilotTools(sessionId: string, providerInstanceId?: string): void {
-  copilotRegistry.delete(bindingKey('copilot', sessionId, providerInstanceId))
-}
-
-// ---- Codex (JSON-schema dynamicTools + item/tool/call) --------------------
-
-function jsonSchemaField(f: FieldSpec): Record<string, unknown> {
-  switch (f.t) {
-    case 'string':
-      return { type: 'string', ...(f.min !== undefined ? { minLength: f.min } : {}), ...(f.max !== undefined ? { maxLength: f.max } : {}) }
-    case 'enum':
-      return { type: 'string', enum: [...f.values] }
-    case 'number':
-      return { type: f.int ? 'integer' : 'number', ...(f.min !== undefined ? { minimum: f.min } : {}), ...(f.max !== undefined ? { maximum: f.max } : {}) }
-    case 'boolean':
-      return { type: 'boolean' }
-    case 'stringArray':
-      return { type: 'array', items: { type: 'string', minLength: 1 }, ...(f.min !== undefined ? { minItems: f.min } : {}), ...(f.max !== undefined ? { maxItems: f.max } : {}) }
-  }
-}
-
-function jsonSchemaParams(fields: Record<string, FieldSpec>): Record<string, unknown> {
-  const properties: Record<string, unknown> = {}
-  const required: string[] = []
-  for (const [key, spec] of Object.entries(fields)) {
-    properties[key] = jsonSchemaField(spec)
-    if (!spec.optional) required.push(key)
-  }
-  return { type: 'object', properties, ...(required.length ? { required } : {}), additionalProperties: false }
-}
-
 /** Codex's ThreadStartParams.dynamicTools shape — {type:'function', name, description, inputSchema}. */
 export function buildCoordinatorCodexDynamicTools(role?: ExternalProtocolIdentity['role']): DynamicToolSpec[] {
-  return coordinatorToolSpecsForRole(role).map((spec) => ({
-    type: 'function' as const,
-    name: spec.name,
-    description: spec.description,
-    // jsonSchemaParams only ever nests string/number/boolean/array/plain-object
-    // literals we control above — structurally a JsonValue, just not provably
-    // so to a Record<string, unknown> return type.
-    inputSchema: jsonSchemaParams(spec.fields) as unknown as JsonValue,
-  }))
-}
-
-const codexRegistry = new Map<string, ExternalProtocolIdentity>()
-
-/** Bind a Codex thread id to a Coordinator identity so the item/tool/call server-request handler (lib/codexClient.ts) can dispatch by name. */
-export function registerCoordinatorCodexTools(threadId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  codexRegistry.set(bindingKey('codex', threadId, providerInstanceId), identity)
-}
-
-export function getCoordinatorCodexIdentity(threadId: string, providerInstanceId?: string): ExternalProtocolIdentity | undefined {
-  return codexRegistry.get(bindingKey('codex', threadId, providerInstanceId))
-}
-
-export function unregisterCoordinatorCodexTools(threadId: string, providerInstanceId?: string): void {
-  codexRegistry.delete(bindingKey('codex', threadId, providerInstanceId))
-}
-
-async function dispatchByRegistry(
-  registry: Map<string, ExternalProtocolIdentity>,
-  sessionId: string,
-  toolName: string,
-  args: Record<string, unknown>,
-): Promise<{ text: string; isError: boolean } | null> {
-  const identity = registry.get(sessionId)
-  const invocation = resolveCoordinatorToolCall(toolName, args)
-  if (!identity || !invocation) return null
-  return callJson(identity, invocation.action, invocation.args)
-}
-
-/** Resolve the shared provider-facing tool contract into a Coordinator action. */
-export function resolveCoordinatorToolCall(
-  toolName: string,
-  args: Record<string, unknown>,
-): { action: string; args: Record<string, unknown> } | null {
-  const spec = COORD_TOOL_SPECS.find((entry) => entry.name === toolName)
-  return spec ? { action: spec.action, args: spec.mapArgs(args) } : null
-}
-
-/** Dispatch a codex item/tool/call for a registered thread. Returns null if the tool name isn't one of ours. */
-export function dispatchCoordinatorCodexToolCall(
-  threadId: string,
-  toolName: string,
-  args: Record<string, unknown>,
-  providerInstanceId?: string,
-): Promise<{ text: string; isError: boolean } | null> {
-  return dispatchByRegistry(codexRegistry, bindingKey('codex', threadId, providerInstanceId), toolName, args)
-}
-
-// ---- OpenCode (plugin file + local HTTP bridge) ----------------------------
-
-// OpenCode's server is a genuinely separate OS process (createOpencodeServer
-// shells out via cross-spawn — lib/opencodeClient.ts), and its plugin API has
-// no per-session tool registration hook (Hooks.tool is one static map for the
-// whole server) — so identity resolution has to happen here, keyed by
-// sessionID, when the plugin's HTTP bridge call for a tool arrives (see
-// lib/coordinatorBridgeServer.ts and lib/opencodePlugin/agentViewerCoordinator.mjs).
-const opencodeRegistry = new Map<string, ExternalProtocolIdentity>()
-
-export function registerCoordinatorOpenCodeTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  opencodeRegistry.set(bindingKey('opencode', sessionId, providerInstanceId), identity)
-}
-
-/** OpenCode's plugin catalog is server-wide; filter only this session's model tools. */
-export function getCoordinatorOpenCodeToolMask(sessionId: string, providerInstanceId?: string): Record<string, boolean> | undefined {
-  const identity = opencodeRegistry.get(bindingKey('opencode', sessionId, providerInstanceId))
-  if (!identity?.role) return undefined
-  const allowed = new Set(coordinatorToolSpecsForRole(identity.role).map(spec => spec.name))
-  return Object.fromEntries(COORD_TOOL_SPECS.map(spec => [spec.name, allowed.has(spec.name)]))
-}
-
-export function unregisterCoordinatorOpenCodeTools(sessionId: string, providerInstanceId?: string): void {
-  opencodeRegistry.delete(bindingKey('opencode', sessionId, providerInstanceId))
-}
-
-/** Dispatch an OpenCode coordinator-plugin tool call for a registered session. Returns null if the session isn't a coordinator participant or the tool name isn't one of ours. */
-export function dispatchCoordinatorOpenCodeToolCall(
-  sessionId: string,
-  toolName: string,
-  args: Record<string, unknown>,
-): Promise<{ text: string; isError: boolean } | null> {
-  return dispatchByRegistry(opencodeRegistry, bindingKey('opencode', sessionId), toolName, args)
-}
-
-// ---- ACP agents (a stdio MCP server the agent spawns) -----------------------
-
-// An ACP agent is its own process and takes tools only as MCP servers named in
-// `session/new`, so binding is two steps: remember the identity here, then the
-// send path asks for the server entry when it starts the session.
-const acpRegistry = new Map<string, ExternalProtocolIdentity>()
-
-export function registerCoordinatorAcpTools(sessionId: string, identity: ExternalProtocolIdentity, providerInstanceId?: string): void {
-  acpRegistry.set(bindingKey('acp', sessionId, providerInstanceId), identity)
-}
-
-export function unregisterCoordinatorAcpTools(sessionId: string, providerInstanceId?: string): void {
-  acpRegistry.delete(bindingKey('acp', sessionId, providerInstanceId))
-}
-
-/** The MCP servers to declare for this session, or none when it is not a Coordinator participant. */
-export async function getCoordinatorAcpMcpServers(sessionId: string, directory: string, providerInstanceId?: string) {
-  const identity = acpRegistry.get(bindingKey('acp', sessionId, providerInstanceId))
-  if (!identity) return undefined
-  const [{ writeCoordinatorAcpMcpServer }, { getCoordinatorBridgeUrl }] = await Promise.all([
-    import('./coordinatorAcpMcp'),
-    import('./coordinatorBridgeServer'),
-  ])
-  const tools = coordinatorToolSpecsForRole(identity.role).map((spec) => ({ name: spec.name, description: spec.description, inputSchema: jsonSchemaParams(spec.fields) }))
-  return [await writeCoordinatorAcpMcpServer(directory, await getCoordinatorBridgeUrl(), identity, tools)]
-}
-
-/** Teardown all aliases for this run, including bindings restored without a controller. */
-export function unregisterCoordinatorRunTools(runId: string, sessionId?: string, providerInstanceId?: string): void {
-  function remove<T>(bindings: Map<string, T>, identityFor: (value: T) => ExternalProtocolIdentity) {
-    for (const [key, value] of bindings) {
-      if (identityFor(value).runId !== runId) continue
-      const [, instance, nativeSession] = JSON.parse(key) as string[]
-      if (sessionId !== undefined && nativeSession !== sessionId) continue
-      if (providerInstanceId !== undefined && instance !== providerInstanceId) continue
-      bindings.delete(key)
-    }
-  }
-  remove(registry, value => value.identity)
-  for (const bindings of [piRegistry, copilotRegistry, codexRegistry, opencodeRegistry, acpRegistry]) remove(bindings, value => value)
+    return coordinatorToolSpecsForRole(role).map((spec) => ({
+        type: 'function' as const,
+        name: spec.name,
+        description: spec.description,
+        // jsonSchemaParams only ever nests string/number/boolean/array/plain-object
+        // literals we control above — structurally a JsonValue, just not provably
+        // so to a Record<string, unknown> return type.
+        inputSchema: jsonSchemaParams(spec.fields) as unknown as JsonValue,
+    }));
 }

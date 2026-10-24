@@ -1,3 +1,4 @@
+import { registerProviderDiagnostics } from './providerDiagnostics'
 import type {
   SessionManager,
   SessionInfo as PiSessionInfo,
@@ -6,7 +7,7 @@ import type {
   SettingsManager,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
-import { getCoordinatorPiTools } from './agentCoordinationSdkTools'
+import { getCoordinatorPiTools } from './coordinatorProviderBindings'
 import { appendPiActivity, beginPiActivity, completePiActivity, failPiActivity, updatePiActivity } from './piActivity'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 
@@ -729,3 +730,5 @@ export async function deletePiSession(sessionId: string): Promise<void> {
     release()
   }
 }
+
+registerProviderDiagnostics('pi:client', () => ({ piPool: piPoolSize(), piOperations: piSessionOperationCount(), piEntryCacheSessions: piSessionEntryCacheDiagnostics().sessions, piEntryCacheEntries: piSessionEntryCacheDiagnostics().entries }))

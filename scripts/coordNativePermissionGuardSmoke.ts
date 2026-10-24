@@ -7,6 +7,9 @@ const { mock } = await (0, eval)('import("bun:test")')
 const responses: { id: number; result: unknown }[] = []
 mock.module('../lib/codexClient', () => ({ getCodexClient: () => ({ respond: (id: number, result: unknown) => { responses.push({ id, result }) }, respondError: () => { throw new Error('Unexpected unsupported approval') } }) }))
 const backend = await import('../lib/sessionBackend')
+// Seed the selected provider's approval bridge as a real turn does. Merely
+// importing the facade deliberately no longer evaluates any SDK runtime.
+await (await import('../lib/extensions/providers/registry')).getProviderRuntime('codex')
 const { setRunningSession, clearRunningSession } = await import('../lib/sessionRuntime')
 const { extractPendingPermissions } = await import('../lib/permissions')
 const { coordinatorPermissionToken } = await import('../lib/coordinatorNativePermission')

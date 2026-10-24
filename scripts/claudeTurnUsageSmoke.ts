@@ -4,7 +4,7 @@
 // that turns those cumulative per-message counts into one turn total — the
 // number the composer status line shows next to the elapsed clock.
 import assert from 'node:assert/strict'
-import { createClaudeTurnUsageTracker } from '../lib/sessionBackend'
+import { createClaudeTurnUsageTracker } from '../lib/extensions/providers/claude/helpers'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
 const totals = (frames: string[]): number[] => frames.map((frame) => {

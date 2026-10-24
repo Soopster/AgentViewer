@@ -4,6 +4,5 @@ import type { ProviderExtension } from '../types'
 export const extension = {
   manifest,
   loadAdapter: async () => (await import('../../../adapters/acp')).codexAcpAdapter,
-  // Compatibility bridge; never loaded by a transcript reader.
-  loadRuntime: async () => (await import('../builtinRuntime')).builtinRuntime,
+  loadRuntime: async () => (await import('../transports/acpRuntime')).createAcpRuntime('codex-acp'),
 } satisfies ProviderExtension

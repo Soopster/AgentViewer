@@ -13,7 +13,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { getCoordinatorMcpServers } from './agentCoordinationSdkTools'
+import { getCoordinatorMcpServers } from './coordinatorProviderBindings'
 
 /**
  * Coordinator-owned Claude sessions must not inherit the user's ordinary MCP

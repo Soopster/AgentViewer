@@ -16215,7 +16215,7 @@ function OpenTuiWorkspace() {
       return
     }
     try {
-      const result = await restoreTuiCheckpoint(target.cwd, checkpoint.sha, undefined, { sessionId: target.sessionId, provider: target.provider })
+      const result = await restoreTuiCheckpoint(target.cwd, checkpoint.sha, undefined, { sessionId: target.sessionId, provider: target.provider, providerInstanceId: target.providerInstanceId })
       showNotice('info', `Rewound conversation and files — ${result.restored} restored, ${result.deleted} removed`, 7000)
     } catch (err) {
       showNotice('error', `Rewound the conversation, but restoring files failed: ${err instanceof Error ? err.message : String(err)}`, 8000)

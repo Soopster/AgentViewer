@@ -82,19 +82,20 @@ requires its own integration; these are not inferred from a provider name.
   Release listeners, streams, handles and session resources idempotently.
   Hiding a view does not close a provider session.
 
-## Compatibility migration
+## Migration status
 
-All nine current provider IDs now contribute manifests and separate lazy read
-and runtime entry points. Existing read adapters are reused. Their existing SDK
-turn implementations remain behind `builtinRuntime.ts`, a compatibility bridge
-to the current backend implementations. New providers implement `ProviderRuntime`
-directly and never add to those legacy branches.
+All nine provider IDs contribute manifests and separate lazy read and runtime
+entry points, and every SDK turn implementation now lives in its extension's
+`runtime.ts` (the three ACP IDs share `transports/acpRuntime.ts`). The
+`builtinRuntime.ts` compatibility bridge is gone; `lib/sessionBackend.ts` is the
+host facade and contains no provider branches. Shared, provider-neutral turn
+plumbing (usage reporting, watchdogs) is in `runtimeCore.ts`; host services the
+runtimes call back into (steering, the control plane, subagent summaries, index
+operations, diagnostics) are separate `lib/session*.ts` modules so no runtime
+imports the facade.
 
-This deliberately preserves the existing send machinery while establishing the
-extension seam. It does not claim the large legacy SDK implementation has been
-physically split per provider, nor that the existing backend import graph is
-fully lazy. Metadata and read-only activation remain independent of that graph.
-Moving each legacy runtime into its own extension is a subsequent migration.
+`providerRuntimeBoundarySmoke.mjs` loads each runtime in a cold isolate and
+asserts it loads only its own SDK, and that the facade loads none.
 
 ## Verify
 

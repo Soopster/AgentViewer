@@ -16,6 +16,7 @@ export interface ProviderManifest {
   readonly newSession: boolean
   /** True only when SDK state/pools isolate configured instances. */
   readonly supportsInstances: boolean
+  readonly fileRestoreHook?: boolean
   readonly composer?: ProviderComposerConfig
   readonly attachments?: {
     readonly types: readonly SendAttachment['type'][]
@@ -72,6 +73,9 @@ export interface ProviderRuntime {
   closeSession(sessionId: string, provider: AgentProvider, providerInstanceId: string): Promise<void>
   /** Normalized pending permission/question payloads for the core attention path. */
   listPendingPermissions?(sessionId: string, provider: AgentProvider): Record<string, unknown>[]
+  listPendingPrompts?(sessionId: string): Record<string, unknown>[]
+  getMemoryDiagnostics?(): Record<string, number>
+  afterFileRestore?(params: ProviderRuntimeTarget & { sessionId: string; cwd: string; paths?: string[] }): Promise<void>
 }
 
 /** Server-only contribution. Loading reads must never load the turn runtime. */

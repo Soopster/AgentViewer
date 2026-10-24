@@ -1,3 +1,4 @@
+import { registerProviderDiagnostics } from './providerDiagnostics'
 // Persistent ACP (Agent Client Protocol) subprocess pool for the main
 // session backend — the viewer-facing counterpart to lib/claudePool.ts.
 //
@@ -795,3 +796,5 @@ export function isAcpSessionAlive(sessionId: string): boolean {
 export function acpPoolSize(): number {
   return getPool().size
 }
+
+registerProviderDiagnostics('acp:client', () => ({ acpPool: acpPoolSize() }))

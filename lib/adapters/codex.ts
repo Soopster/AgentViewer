@@ -62,6 +62,9 @@ const SESSION_LIST_SOURCE_KINDS: ThreadSourceKind[] = [
 export const codexAdapter: SessionAdapter = {
   provider: 'codex',
 
+  // Child agents are durable sessions, not transcript-local sidebar entries.
+  async readSubagentSummaries() { return [] },
+
   async listSessions({ limit, offset, dir }) {
     const client = getCodexClient()
     const response = await client.request('thread/list', {

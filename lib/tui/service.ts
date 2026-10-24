@@ -1,4 +1,6 @@
 import { beginProviderLoading } from '../providerLoading'
+import { isAgentProvider } from '../provider'
+import { getProviderManifest } from '../extensions/providers/catalog'
 import {
   buildThreadedMessages,
   buildThreadedMessagesIncremental,
@@ -7,7 +9,6 @@ import {
 } from '../threading'
 import { withSessionInstance } from '../sessionInstances'
 import { getConfiguredProvider, getConfiguredProviderTarget, setConfiguredProviderTarget } from '../providerState'
-import { ensureClaudePool } from '../claudePoolHandle'
 import { peekClaudePlanLimits, readClaudePlanLimits, type ClaudePlanLimits } from '../claudePlanLimits'
 import { updateSessionInboxState } from '../sessionInbox'
 import type { SessionInboxState } from '../types'
@@ -766,16 +767,19 @@ export async function restoreTuiCheckpoint(
   cwd: string,
   sha: string,
   paths?: string[],
-  context?: { sessionId?: string; provider?: string },
+  context?: { sessionId?: string; provider?: string; providerInstanceId?: string },
 ): Promise<{ restored: number; deleted: number }> {
   const result = await restoreCheckpoint(cwd, sha, paths)
-  if (context?.provider === 'claude' && context.sessionId) {
-    const observedPaths = await (await sendPath()).readClaudeObservedFilePaths(context.sessionId, cwd).catch(() => [])
-    // Loaded here rather than imported: this module is the TUI's entry to the
-    // provider layer and is evaluated in the transcript Worker too, which never
-    // sends a turn and would otherwise pay ~30MB for the send-path pool.
-    const { queueClaudeReadStateSeeds } = await ensureClaudePool()
-    await queueClaudeReadStateSeeds(context.sessionId, cwd, observedPaths)
+  if (context?.sessionId && isAgentProvider(context.provider) && getProviderManifest(context.provider).fileRestoreHook) {
+    const provider = context.provider
+    const sessionId = context.sessionId
+    const { currentProviderInstanceId, withProviderInstance } = await import('../providerInstances')
+    const run = async () => {
+      const runtime = await (await import('../extensions/providers/registry')).getProviderRuntime(provider)
+      await runtime.afterFileRestore?.({ sessionId, cwd, paths, provider, providerInstanceId: currentProviderInstanceId(provider) })
+    }
+    if (context.providerInstanceId) await withProviderInstance(context.providerInstanceId, provider, run)
+    else await withSessionInstance(provider, sessionId, run)
   }
   return result
 }

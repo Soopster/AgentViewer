@@ -1,3 +1,4 @@
+import { registerProviderDiagnostics } from './providerDiagnostics'
 // Claude transcript and session-metadata reads, shared by the Claude adapter
 // (lib/adapters/claude.ts) and the restore/send paths in lib/sessionBackend.ts.
 //
@@ -203,3 +204,5 @@ export async function readClaudeSessionMessages(sessionId: string): Promise<Sess
   const messages = sortMessagesChronologically([...deduped.values()])
   return writeMappedMessagesCache(cacheKey, signature, messages)
 }
+
+registerProviderDiagnostics('claude:reads', () => ({ sessionInfoCache: sessionInfoCache.size }))

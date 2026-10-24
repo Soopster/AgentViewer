@@ -70,7 +70,7 @@ Two rules make this safe to extend:
 
 Adapters must stay stateless — they are resolved per *provider instance* (`lib/providerRequest.ts`), so two Claude instances with different `CLAUDE_CONFIG_DIR`s cannot share state. Warm resources belong in the existing per-instance pools. Keep each adapter file under ~800 lines; split by concern before it grows past that.
 
-**Send path — still a provider switch in `sessionBackend.ts`.** Turn streaming, prewarm, fork, rewind/rollback, and interrupt have not moved behind the interface yet; that is where the remaining `provider === '…'` branches live.
+**Send path — `ProviderRuntime` per extension.** Turn streaming, creation, prewarm, actions, fork, rewind/rollback and close live in `lib/extensions/providers/<id>/runtime.ts` (ACP transports share `transports/acpRuntime.ts`; shared turn plumbing is `runtimeCore.ts`). `lib/sessionBackend.ts` is a ~160-line host facade: it resolves the provider once, starts the checkpoint, checks permission tokens, and dispatches to `getProviderRuntime(provider)`. It has no `provider === '…'` branches — do not add any. `npm run providers:extensions:smoke` asserts each runtime loads only its own SDK in a cold isolate and that the facade loads none.
 
 Supporting modules split out of `sessionBackend.ts` so both paths can share them without an import cycle through the registry: `lib/mappedMessagesCache.ts` (LRU transcript cache), `lib/liveTranscripts.ts` (Copilot/Pi in-flight turn buffers), `lib/codexThreads.ts` (thread read/resume/error classification), `lib/opencodeSessions.ts`, `lib/claudeSessionReads.ts`, `lib/claudeModels.ts`, `lib/withTimeout.ts`, and the composer vocabularies in `lib/adapters/shared.ts` / `lib/copilotComposer.ts` / `lib/piComposer.ts`.
 
@@ -274,8 +274,8 @@ instance the list is narrowed to, else the selected session's. The choice is sav
   listing and creation — in a file, because the transcript worker is another isolate that never ran
   the listing — and from any session row that carries its instance (`noteTuiSessionInstance`),
   which covers a session no listing has seen yet. The read path consults it in
-  `lib/sessionReads.ts`; the send path is still a provider switch, so `lib/tui/service.ts` scopes
-  it (`asSessionInstance`). **An instance the caller named is never overridden**, and the key
+  `lib/sessionReads.ts`; the send path takes no instance from its callers, so `lib/tui/service.ts`
+  scopes it (`asSessionInstance`). **An instance the caller named is never overridden**, and the key
   carries the provider, since an id is only unique within one provider's stores.
 - **Claude's store reads run under the instance's environment, not just its listing.** The SDK
   finds the store from `process.env.CLAUDE_CONFIG_DIR` at call time. Only `listSessions` used to
@@ -2693,7 +2693,7 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `components/MessageView.tsx` | ~10460 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
 | `components/MessageItem.tsx` | ~6750 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
 | `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
-| `lib/sessionBackend.ts` | ~6900 | Send/turn path per-provider switch, plus the router that dispatches read ops to `lib/adapters/` |
+| `lib/extensions/providers/claude/runtime.ts` | ~2230 | Claude send path (pool turns, actions, fork/rewind); codex/copilot/opencode/pi runtimes sit beside it |
 | `components/SessionList.tsx` | ~2330 | Sidebar: project grouping, search, tag filters, collapsible groups |
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
 | `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
@@ -2708,7 +2708,7 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 Recommended access patterns:
 
 - Tool card rendering for tool `X` → `Grep "X" components/MessageItem.tsx` then read the matched range.
-- Provider X behavior in the backend → `Grep "provider === 'X'" lib/sessionBackend.ts` to jump to the relevant branch.
+- Provider X behavior in the backend → `lib/extensions/providers/X/runtime.ts` (send) and `lib/adapters/X.ts` (read).
 - A theme variable → `Grep "--<var>" app/globals.css`; each theme block is contiguous.
 - OpenTUI key handling, scrollbox, or memos → `Grep` for the keyword in `tui/opentui/App.tsx` (`useKeyboard`, `cardDisplayData`, `scrollbox`, `followTail`, `setSessionDetail`).
 - `Explore` agent is worth it for cross-file searches that would otherwise need 3+ Greps; for a single known symbol, just Grep directly.
@@ -2720,11 +2720,11 @@ Also: never `Read` `package-lock.json` (~573 KB), `pnpm-lock.yaml` (~360 KB), or
 Concrete recipes for typical asks. Each lists every file you usually need to touch.
 
 - **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
-- **Add a provider** → new `lib/<provider>Client.ts` + `<provider>Mapper.ts`; extend the `AgentProvider` union and `isAgentProvider` in `lib/types.ts`/`lib/provider.ts`; add a `<PROVIDER>_CAPABILITIES` constant + branch in `getProviderCapabilities`; write `lib/adapters/<provider>.ts` and register it in `lib/adapters/registry.ts` (that covers the whole read path — do **not** add read branches to `sessionBackend.ts`); add send-path branches in `lib/sessionBackend.ts` for the turn/fork/rewind ops; add an entry to `PROVIDER_SELECT_OPTIONS` in `components/CommandPalette.tsx`. Verify with `npm run adapters:smoke`.
+- **Add a provider** → `npm run providers:scaffold -- <id> "<Name>"`, then implement its `manifest.ts`, `adapter.ts` (read path) and `runtime.ts` (send path) under `lib/extensions/providers/<id>/` — see `docs/provider-extensions.md`. `AgentProvider` is inferred from the catalog; no root, palette or backend switch needs an entry. Verify with `npm run providers:extensions:smoke` and `npm run adapters:smoke`.
 - **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
 - **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
 - **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).
-- **Add a session-level API action** → new folder under `app/api/sessions/[sessionId]/<action>/route.ts`; implement the backend method on `lib/sessionBackend.ts` (per-provider switch); reflect via a `SessionCapabilities` flag in `lib/provider.ts` if the UI gates it; thread it through `lib/tui/service.ts` if the TUIs need it too.
+- **Add a session-level API action** → new folder under `app/api/sessions/[sessionId]/<action>/route.ts`; add a host entry point on `lib/sessionBackend.ts` that dispatches to a `ProviderRuntime` method (`lib/extensions/providers/types.ts`), implemented per extension; reflect via a `SessionCapabilities` flag in `lib/provider.ts` if the UI gates it; thread it through `lib/tui/service.ts` if the TUIs need it too.
 - **Touch persistent search behavior** → `lib/sessionPersistence.ts` (SQL + aggregation), then the routes under `app/api/session-index/`. Don't import `node:sqlite` statically — use the existing `(0, eval)('import("node:sqlite")')` indirection.
 - **Add an OpenTUI keybinding or modal** → `tui/opentui/App.tsx`; grep for `useKeyboard`. Heavy work belongs in a new `tui/opentui/<thing>Worker.ts` + `<thing>WorkerClient.ts` pair, not on the render thread.
 

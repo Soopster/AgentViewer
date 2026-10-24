@@ -24,11 +24,26 @@ export type PendingTurnPayloadReader = {
   listPendingPermissions(sessionId: string, provider?: AgentProvider): Record<string, unknown>[]
 }
 
-let pendingReader: PendingTurnPayloadReader | null = null
+declare global {
+  // Keep callbacks for live turns across server module reloads.
+  // eslint-disable-next-line no-var
+  var __agentViewerProviderPayloadReaders: Map<AgentProvider, PendingTurnPayloadReader> | undefined
+}
+const pendingReaders = globalThis.__agentViewerProviderPayloadReaders ??= new Map()
 
-/** Called by lib/sessionBackend.ts at module scope. */
-export function registerPendingTurnPayloadReader(reader: PendingTurnPayloadReader): void {
-  pendingReader = reader
+/** Activation registers only that provider's control-plane reader. */
+export function registerProviderPendingTurnPayloadReader(provider: AgentProvider, reader: PendingTurnPayloadReader): void {
+  pendingReaders.set(provider, reader)
+}
+
+export function readPendingTurnPrompts(sessionId: string, provider?: AgentProvider): Record<string, unknown>[] {
+  if (provider) return pendingReaders.get(provider)?.listPendingPrompts(sessionId) ?? []
+  return [...pendingReaders.values()].flatMap(reader => reader.listPendingPrompts(sessionId))
+}
+
+export function readPendingTurnPermissions(sessionId: string, provider?: AgentProvider): Record<string, unknown>[] {
+  if (provider) return pendingReaders.get(provider)?.listPendingPermissions(sessionId, provider) ?? []
+  return [...pendingReaders.values()].flatMap(reader => reader.listPendingPermissions(sessionId))
 }
 
 export function listViewRunningSessions(): Array<{
@@ -40,8 +55,8 @@ export function listViewRunningSessions(): Array<{
 }> {
   return listRunningSessionRefs().map((ref) => ({
     ...ref,
-    pendingPrompts: pendingReader?.listPendingPrompts(ref.sessionId) ?? [],
-    pendingPermissions: pendingReader?.listPendingPermissions(ref.sessionId, ref.provider) ?? [],
+    pendingPrompts: readPendingTurnPrompts(ref.sessionId, ref.provider),
+    pendingPermissions: readPendingTurnPermissions(ref.sessionId, ref.provider),
   }))
 }
 

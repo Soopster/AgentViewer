@@ -1,3 +1,5 @@
+import { isCodexMissingRolloutError, isCodexActiveWriterError } from './codexErrors'
+export { isCodexMissingRolloutError, isCodexActiveWriterError } from './codexErrors'
 // Codex thread reads, resume bookkeeping, and error classification — shared by
 // the Codex adapter (lib/adapters/codex.ts) and the send path still in
 // lib/sessionBackend.ts. It lives in its own module so the adapter can reach
@@ -59,21 +61,6 @@ export async function readCodexThreadWithFullTurns(sessionId: string): Promise<C
     // `itemsView: "full"` above because it matches live Codex CLI state.
     return readCodexThread(sessionId, true)
   }
-}
-
-export function isCodexMissingRolloutError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return (
-    /no rollout found for thread id/i.test(message) ||
-    /thread not found:/i.test(message) ||
-    /thread .+ is not materialized yet/i.test(message) ||
-    /includeTurns is unavailable before first user message/i.test(message)
-  )
-}
-
-export function isCodexActiveWriterError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /thread .+ already has an active writer/i.test(message)
 }
 
 export function pendingCodexSessionInfo(sessionId: string, tag: string | null): SessionInfo {

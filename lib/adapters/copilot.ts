@@ -1,3 +1,4 @@
+import { copilotSubagentSummaries } from '../extensions/providers/copilot/subagents'
 // GitHub Copilot, via @github/copilot-sdk over a pooled per-session RPC
 // connection (lib/copilotClient.ts).
 //
@@ -137,6 +138,12 @@ async function readSessionEvents(sessionId: string): Promise<CopilotSessionEvent
 
 export const copilotAdapter: SessionAdapter = {
   provider: 'copilot',
+
+  async readSubagentSummaries(sessionId) {
+    const persisted = await readSessionEvents(sessionId)
+    const live = filterCopilotLiveEvents(persisted, getCopilotLiveTranscriptEvents(sessionId))
+    return copilotSubagentSummaries(mergeCopilotSessionEvents(persisted, live))
+  },
 
   async listSessions({ limit, offset, dir, includeWorktrees }) {
     const client = await getCopilotClient()

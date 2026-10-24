@@ -1,9 +1,9 @@
+import { runViewSessionAction } from '../lib/sessionBackend'
 import assert from 'node:assert/strict'
 import {
   createClaudeUserDialogBridge,
   claudeResultErrorMessage,
-  runViewSessionAction,
-} from '../lib/sessionBackend'
+} from '../lib/extensions/providers/claude/helpers'
 import { classifyProviderTurnFailure } from '../lib/agentCoordination'
 
 const budgetError = claudeResultErrorMessage({ type: 'result', subtype: 'error_max_budget_usd' })

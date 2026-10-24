@@ -36,7 +36,7 @@ import { getProviderCapabilities, type AcpProvider } from '../provider'
 import type { AgentProvider, Session } from '../types'
 import type { SessionAdapter } from './types'
 
-function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
+export function makeAcpAdapter(provider: AcpProvider): SessionAdapter {
   const agentKind = acpAgentKindOf(provider)
 
   return {

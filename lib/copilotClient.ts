@@ -1,3 +1,4 @@
+import { registerProviderDiagnostics } from './providerDiagnostics'
 import {
   CopilotClient,
   RuntimeConnection,
@@ -12,7 +13,7 @@ import {
   type ElicitationHandler,
   type AutoTier,
 } from '@github/copilot-sdk'
-import { getCoordinatorCopilotTools } from './agentCoordinationSdkTools'
+import { getCoordinatorCopilotTools } from './coordinatorProviderBindings'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 import { clearWaitingSession, getRunningSession, setWaitingSession } from './sessionRuntime'
 
@@ -580,3 +581,5 @@ export async function evictCopilotSession(sessionId: string): Promise<void> {
   copilotLastStopReason.delete(sessionId)
   await entry.session.disconnect().catch(() => {})
 }
+
+registerProviderDiagnostics('copilot:client', () => ({ copilotPool: copilotPoolSize() }))

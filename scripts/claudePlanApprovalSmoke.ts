@@ -3,7 +3,7 @@
 // which overwrote a separately sent setPermissionMode — "approve · auto-accept
 // edits" then went on asking for every edit.
 import assert from 'node:assert/strict'
-import { claudePermissionDecision } from '../lib/sessionBackend'
+import { claudePermissionDecision } from '../lib/extensions/providers/claude/helpers'
 
 const pending = { input: { plan: 'do it' }, suggestions: undefined }
 const withMode = claudePermissionDecision('once', pending, 'acceptEdits')

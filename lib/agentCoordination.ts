@@ -108,22 +108,8 @@ import {
 import { permissionModeEscalation } from './claudeRuntimePolicy'
 import { recordContextTransfer } from './contextTransfers'
 import { computeRunRollup, describeRunRollup } from './coordinatorRollup'
-import {
-  unregisterCoordinatorRunTools,
-  registerCoordinatorMcpServer,
-  unregisterCoordinatorMcpServer,
-  registerCoordinatorPiTools,
-  unregisterCoordinatorPiTools,
-  registerCoordinatorCopilotTools,
-  unregisterCoordinatorCopilotTools,
-  registerCoordinatorCodexTools,
-  unregisterCoordinatorCodexTools,
-  buildCoordinatorCodexDynamicTools,
-  registerCoordinatorOpenCodeTools,
-  unregisterCoordinatorOpenCodeTools,
-  registerCoordinatorAcpTools,
-  unregisterCoordinatorAcpTools,
-} from './agentCoordinationSdkTools'
+import { unregisterCoordinatorRunTools, unregisterCoordinatorMcpServer, unregisterCoordinatorPiTools, unregisterCoordinatorCopilotTools, registerCoordinatorCodexTools, unregisterCoordinatorCodexTools, registerCoordinatorOpenCodeTools, unregisterCoordinatorOpenCodeTools, registerCoordinatorAcpTools, unregisterCoordinatorAcpTools } from './coordinatorProviderBindings'
+import { registerCoordinatorMcpServer, registerCoordinatorPiTools, registerCoordinatorCopilotTools, buildCoordinatorCodexDynamicTools } from './agentCoordinationSdkTools'
 
 // Providers whose SDK supports registering real in-process tools for a
 // pooled session (see lib/agentCoordinationSdkTools.ts) — presence in

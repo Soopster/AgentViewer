@@ -4,6 +4,8 @@ import type { SessionAdapter } from '../../adapters/types'
 import type { ProviderExtension, ProviderRuntime } from './types'
 import { getProviderManifest, PROVIDER_IDS } from './catalog'
 import { createLazyRegistry } from '../lazyRegistry'
+import { registerProviderPendingTurnPayloadReader } from '../../sessionActivity'
+import { registerProviderDiagnostics } from '../../providerDiagnostics'
 
 // Static import specifiers let both Next and Bun discover bundled extensions.
 const loaders = {
@@ -52,6 +54,11 @@ const runtimes = createLazyRegistry<AgentProvider, ProviderRuntime>(
     if (capabilities.messageFork && !runtime.forkSession) throw new Error(`Provider runtime is missing forkSession: ${id}`)
     if ((capabilities.fileRewind || capabilities.rollback) && !runtime.rewindSession) throw new Error(`Provider runtime is missing rewindSession: ${id}`)
     if (capabilities.respondToPermission && !runtime.runAction) throw new Error(`Provider runtime is missing runAction: ${id}`)
+    registerProviderPendingTurnPayloadReader(id, {
+      listPendingPrompts: sessionId => runtime.listPendingPrompts?.(sessionId) ?? [],
+      listPendingPermissions: (sessionId, provider) => runtime.listPendingPermissions?.(sessionId, provider ?? id) ?? [],
+    })
+    if (runtime.getMemoryDiagnostics) registerProviderDiagnostics(`${id}:runtime`, runtime.getMemoryDiagnostics)
   },
 )
 

@@ -83,6 +83,9 @@ function lastUserAgent(messages: OpenCodeMessageBundle[]): string | null {
 export const opencodeAdapter: SessionAdapter = {
   provider: 'opencode',
 
+  // Child agents are durable sessions, not transcript-local sidebar entries.
+  async readSubagentSummaries() { return [] },
+
   async listSessions({ dir, limit, offset }) {
     const client = await getOpenCodeV2Client()
     // The compatibility client bundled at the package root still omits the

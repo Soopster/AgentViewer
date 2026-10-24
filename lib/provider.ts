@@ -12,10 +12,10 @@ export const CODEX_ACP_CAPABILITIES: SessionCapabilities = getProviderManifest('
 export const CUSTOM_ACP_CAPABILITIES: SessionCapabilities = getProviderManifest('acp').capabilities
 
 /** Every provider id driven through lib/acpClientPool.ts. */
-export type AcpProvider = Extract<AgentProvider, 'claude-acp' | 'codex-acp' | 'acp'>
+export type AcpProvider = { [Id in AgentProvider]: typeof PROVIDER_EXTENSIONS[Id]['transport'] extends 'acp' ? Id : never }[AgentProvider]
 
 export function isAcpProvider(provider: unknown): provider is AcpProvider {
-  return provider === 'claude-acp' || provider === 'codex-acp' || provider === 'acp'
+  return isAgentProvider(provider) && getProviderManifest(provider).transport === 'acp'
 }
 
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
