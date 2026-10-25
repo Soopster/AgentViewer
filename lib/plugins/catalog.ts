@@ -7,7 +7,6 @@ import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
 import { manifest as editor } from '../../plugins/editor/manifest'
-import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
 export const PLUGIN_MANIFESTS = [analytics, git, files, editor] as const satisfies readonly PluginManifest[]
@@ -23,9 +22,7 @@ export type PluginPanelSurfaceId = BundledSurface extends infer S
   : never
 /** Surfaces that are popover kinds only (overlay and window). */
 export type PluginPopoverSurfaceId = Exclude<PluginSurfaceId, PluginPanelSurfaceId>
-// A panel surface's id is a saved-layout kind; a new one joins RIGHT_PANEL_SURFACE_KINDS first.
-type PanelKindsAreHostKinds<T extends RightPanelSurfaceKind> = T
-export type CheckedPanelSurfaceIds = PanelKindsAreHostKinds<PluginPanelSurfaceId>
+export type CheckedPanelSurfaceIds = PluginPanelSurfaceId
 
 export type ResolvedPluginSurface = PluginSurfaceSpec & { readonly pluginId: PluginId; readonly stateVersion: number }
 export type ResolvedPluginCommand = PluginCommandSpec & { readonly pluginId: PluginId }

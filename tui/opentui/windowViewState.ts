@@ -1,4 +1,9 @@
+import { createPluginStateStore } from '../../lib/plugins/scopedState'
 import type { WorkspaceRuntime } from './spacesStore'
+
+export function workspacePluginState(runtime: WorkspaceRuntime) {
+  return runtime.get('ref:pluginState', () => createPluginStateStore(), false)
+}
 
 /** A panel tab and a window each own a view, even when their content kind matches. */
 export function surfaceViewNamespace(kind: string, windowId?: string, panelId?: string): string {
@@ -6,8 +11,9 @@ export function surfaceViewNamespace(kind: string, windowId?: string, panelId?: 
 }
 
 /** Relocation preserves live UI state; the old copy remains available for layout undo. */
-export function copySurfaceViewState(runtime: WorkspaceRuntime, from: string, to: string): void {
+export function copySurfaceViewState(runtime: WorkspaceRuntime, from: string, to: string, pluginId?: string): void {
   if (from === to) return
+  workspacePluginState(runtime).copyOwner(from, to, pluginId)
   const source = `${from}:`, destination = `${to}:`
   const fields = [...runtime.values].filter(([key]) => key.startsWith(source))
   for (const key of [...runtime.values.keys()]) if (key.startsWith(destination)) {

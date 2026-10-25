@@ -66,6 +66,8 @@ mock.module(fileURLToPath(new URL('../../plugins/analytics/tui/index.tsx', impor
   moduleEvaluations += 1
   function FixtureAnalytics({ theme, placement, useState, registerKeys, close }: TuiPluginViewProps) {
     const [visits, setVisits] = useState('visits', 0)
+    const [filters] = useState<string[]>('filters', [])
+    check(filters.length === 0, 'object defaults changed unexpectedly')
     React.useEffect(() => { setVisits((value) => value + 1) }, [])
     React.useEffect(() => { registerKeys((key) => { if (key.name === 'escape') close() }) }, [registerKeys, close])
     if (failing) throw new Error('fixture render failure')
@@ -278,4 +280,25 @@ await act(async () => { hostKeys!({ name: 'escape', ctrl: false, shift: false, s
 check(closed === 1, 'Escape on a view without its own keys did not close it')
 check(pluginInstanceId('analytics', 'claude:a') !== pluginInstanceId('analytics', 'claude@work:a'), 'two instances of one native id share plugin state')
 console.log('A failed module load shows Retry/Close and reloads on r; pinned instances are keyed per provider instance.')
+
+// Reusing a host for a different surface must replace the cached component.
+let changeSurface: (id: 'analytics' | 'files') => void = () => {}
+const cache = {
+  analytics: { apiVersion: 1 as const, pluginId: 'analytics', views: { analytics: () => <text>SWITCH ANALYTICS</text> } },
+  files: { apiVersion: 1 as const, pluginId: 'files', views: { files: () => <text>SWITCH FILES</text> } },
+}
+const switchingRegistry = { peek: (id: string) => cache[id as keyof typeof cache], load: async (id: string) => cache[id as keyof typeof cache] }
+function SwitchingHost() {
+  const [surfaceId, setSurface] = React.useState<'analytics' | 'files'>('analytics')
+  changeSurface = setSurface
+  return <PluginSurfaceHost surfaceId={surfaceId} placement="window" theme={theme} width={60} height={6} focused onClose={() => {}} onKeyHandlerReady={() => {}} registry={switchingRegistry} />
+}
+const switching = await testRender(<SwitchingHost />, { width: 60, height: 6 })
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+check(switching.captureCharFrame().includes('SWITCH ANALYTICS'), 'initial cached view did not mount')
+await act(async () => { changeSurface('files'); await new Promise(resolve => setTimeout(resolve, 30)) })
+check(switching.captureCharFrame().includes('SWITCH FILES') && !switching.captureCharFrame().includes('SWITCH ANALYTICS'), 'changing surface retained the previous component')
+switching.renderer.destroy()
+console.log('Switching a mounted host replaces its cached plugin component')
+
 process.exit(0)

@@ -47,3 +47,11 @@ export function validatePluginViewModule<View>(renderer: PluginRenderer, manifes
 export function pluginStateVersions(manifests: readonly PluginManifest[] = PLUGIN_MANIFESTS): Record<string, number> {
   return Object.fromEntries(manifests.map(manifest => [manifest.id, manifest.stateVersion]))
 }
+
+/** Resolve the capabilities actually offered to one mounted view. Optional services stay optional. */
+export function resolvePluginServices<T extends object>(surface: { id: string; services: readonly PluginServiceId[]; optionalServices?: readonly PluginServiceId[] }, offered: T): { services: T; error: Error | null } {
+  const declared = new Set<string>([...surface.services, ...(surface.optionalServices ?? [])])
+  const services = Object.fromEntries(Object.entries(offered).filter(([id, value]) => declared.has(id) && value != null)) as T
+  const missing = surface.services.filter(id => !(id in services))
+  return { services, error: missing.length ? new Error(`Surface ${surface.id} needs services this view lacks: ${missing.join(', ')}`) : null }
+}

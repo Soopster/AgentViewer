@@ -248,7 +248,7 @@ is the point to review the API before migrating Git and the remaining families.
 
 **Resolved** (API version stays 1; every addition is optional for existing
 plugins): `panel` placement and `isPluginPanelSurfaceId` (a panel surface is a
-side-panel kind, checked against `RIGHT_PANEL_SURFACE_KINDS` at type level and
+side-panel kind derived from the metadata catalog, checked
 in the smoke, and is not also a popover-window kind); `pin: 'cwd'` with
 `PluginTarget.cwd`; `repository`, `composer`, `clipboard` services, plus
 `optionalServices` for what a view uses only when the host has it (the Web Git
@@ -281,3 +281,31 @@ captures keys mid-precedence. Before moving it, decide:
 6. **Cross-surface commands** — `p` in Git switches to pull requests. Either PR
    joins the Git plugin, or plugins may dispatch another plugin's command id
    through the shared dispatcher (never import it).
+
+## Host hardening after the architecture audit
+
+Provider runtime control keys include provider kind, configured instance and native
+session ID, including waiting observations, queued interrupts and steering receipts.
+Unscoped legacy calls may resolve a unique session; ambiguous IDs require instance
+context instead of choosing an account implicitly.
+
+TUI plugin state is owned by the workspace runtime and the existing view namespace.
+Separate windows and panel tabs do not share state just because their targets match.
+Layout relocation explicitly copies values into the destination owner; resource
+cleanups are never copied. Web hosts allocate a local owner, with an optional stable
+`ownerId` for an intentional handoff. Surface changes remount the active host so a
+cached component or error cannot belong to the previous plugin.
+
+Disposal cancels its timer, and release callbacks and timers check instance generation.
+Object and array defaults in scoped hooks remain stable across renders. Required
+services are checked against the values supplied to each view before loading or
+mounting it; both renderers filter out undeclared services. Optional services remain
+optional.
+
+Panel contributions are derived from manifests. Labels, descriptions, availability
+and fallback icons no longer require a new entry in a core kind union. Optional
+`panelOrder` preserves existing launcher order. A contributor
+adds the manifest and renderer loaders; renderer-specific services remain explicit.
+The source-only `npm run plugins:contributor:smoke` fixture adds a new panel
+manifest and loaders and type-checks both apps without editing their roots.
+Run `npm run plugins:smoke`, `npm run tui:check` and `npx tsc --noEmit` after changes.

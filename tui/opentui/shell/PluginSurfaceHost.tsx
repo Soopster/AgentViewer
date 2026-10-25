@@ -4,10 +4,11 @@
 // target it was opened on, holding its scoped state, routing its keys, and
 // containing its failures. A view that throws, or a module that fails to load,
 // leaves a local Retry/Close view; the transcript and composer keep working.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { RGBA } from '@opentui/core'
 import type { Session } from '../../../lib/types'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
+import { resolvePluginServices } from '../../../lib/plugins/activation'
 import { getPluginSurface, type PluginSurfaceId } from '../../../lib/plugins/catalog'
 import { pluginState, useScopedPluginState, type PluginStateStore } from '../../../lib/plugins/scopedState'
 import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
@@ -16,6 +17,8 @@ import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { usePinnedSessionDetail } from '../usePinnedSessionDetail'
 import type { SyntaxStyle } from '@opentui/core'
 import type { TuiPluginKeyHandler, TuiProvidedPluginServices, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
+import { WorkspaceViewContext, useWorkspaceContext } from '../workspaceContext'
+import { workspacePluginState } from '../windowViewState'
 import { tuiPluginViews } from './pluginViews'
 
 type KeyHandler = TuiPluginKeyHandler
@@ -82,7 +85,7 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   const disabled = useDisabledPlugins().has(getPluginSurface(props.surfaceId).pluginId)
   if (disabled) return <DisabledPluginSurface {...props} />
-  return <ActivePluginSurface {...props} />
+  return <ActivePluginSurface key={props.surfaceId} {...props} />
 }
 
 // A window, panel tab or saved layout can outlive the choice to turn its plugin
@@ -109,51 +112,55 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const sessionKey = props.sessionKey ?? null
   const selected = props.selected ?? NO_SELECTION
   const registry = props.registry ?? tuiPluginViews
-  const store = props.store ?? pluginState
+  const workspace = useWorkspaceContext()
+  const owner = useContext(WorkspaceViewContext)
+  const store = props.store ?? (workspace ? workspacePluginState(workspace.runtime) : pluginState)
   const surface = getPluginSurface(surfaceId)
   const cwd = props.cwd ?? null
-  const instanceId = pluginInstanceId(surfaceId, sessionKey, cwd)
+  const instanceId = workspace ? `${owner}:${pluginInstanceId(surfaceId, sessionKey, cwd)}` : pluginInstanceId(surfaceId, sessionKey, cwd)
   const zIndex = props.zIndex ?? PLUGIN_OVERLAY_Z_INDEX
 
   const [attempt, setAttempt] = useState(0)
-  const [failure, setFailure] = useState<Error | null>(null)
+  const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<TuiPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
-  useEffect(() => {
-    if (View) return undefined
-    let live = true
-    registry.load(surface.pluginId).then(
-      (module) => { if (live) setView(() => module.views[surfaceId]!) },
-      (error: unknown) => { if (live) setFailure(error instanceof Error ? error : new Error(String(error))) },
-    )
-    return () => { live = false }
-  }, [View, attempt, registry, surface.pluginId, surfaceId])
 
   useEffect(() => store.hold(surface.pluginId, instanceId), [store, surface.pluginId, instanceId])
 
   // Services are resolved for the target, never for whatever is selected now.
   const wantsTranscript = surface.services.includes('session-transcript')
   const useSelectedDetail = wantsTranscript && Boolean(sessionKey && sessionKey === selected.key && selected.detail)
-  const pinned = usePinnedSessionDetail(wantsTranscript && !useSelectedDetail ? session : null, props.density ?? 'balanced', props.showToolCalls ?? true, props.shouldYield ?? NEVER_YIELD)
+  const pinned = usePinnedSessionDetail(wantsTranscript && !loadFailure && !useSelectedDetail ? session : null, props.density ?? 'balanced', props.showToolCalls ?? true, props.shouldYield ?? NEVER_YIELD)
   const transcript = useSelectedDetail ? selected.detail : pinned.detail
   const transcriptStatus = useSelectedDetail ? 'ready' : pinned.status
   const wants = (service: PluginServiceId) => surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
   const repositoryCwd = cwd ?? process.cwd()
   const { repositorySessionId = null, repositoryLabel, provided } = props
-  const services = useMemo<TuiPluginServices>(() => {
+  const resolved = useMemo(() => {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
-    return {
+    return resolvePluginServices<TuiPluginServices>(surface, {
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
-    }
+    })
   // `wants` reads only the surface, which `surfaceId` names.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided])
 
+  const { services } = resolved
+  const failure = loadFailure ?? resolved.error
+  useEffect(() => {
+    if (View || resolved.error) return undefined
+    let live = true
+    registry.load(surface.pluginId).then(
+      (module) => { if (live) setView(() => module.views[surfaceId]!) },
+      (error: unknown) => { if (live) setFailure(error instanceof Error ? error : new Error(String(error))) },
+    )
+    return () => { live = false }
+  }, [View, attempt, registry, surface.pluginId, surfaceId, resolved.error])
   const viewKeys = useRef<KeyHandler | null>(null)
   const retry = useCallback(() => { setFailure(null); setView(null); setAttempt(value => value + 1) }, [])
   const failed = useRef(false)
-  failed.current = failure !== null
+  useLayoutEffect(() => { failed.current = failure !== null }, [failure])
   useEffect(() => {
     onKeyHandlerReady((key) => {
       if (failed.current) {

@@ -6,7 +6,7 @@
 // An instance is disposed when nothing has held it for a tick, so a move that
 // unmounts and remounts in one commit keeps it, while a closed view releases it
 // and its cleanups (timers, subscriptions a view registered) run then.
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 
 type Instance = {
   values: Map<string, unknown>
@@ -47,6 +47,7 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
   const dispose = (key: string) => {
     const instance = instances.get(key)
     if (!instance) return
+    if (instance.disposeTimer) clearTimeout(instance.disposeTimer)
     instances.delete(key)
     for (const cleanup of instance.cleanups) {
       try { cleanup() } catch (error) { console.error('Plugin cleanup failed:', error) }
@@ -89,12 +90,12 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
         if (released) return
         released = true
         const current = instances.get(key)
-        if (!current) return
+        if (current !== instance) return
         current.holds -= 1
         if (current.holds > 0) return
         current.disposeTimer = setTimeout(() => {
           current.disposeTimer = null
-          if (current.holds === 0) dispose(key)
+          if (instances.get(key) === current && current.holds === 0) dispose(key)
         }, delay)
       }
     },
@@ -103,6 +104,21 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
     },
     disposeNow(pluginId: string, instanceId: string): void {
       dispose(keyOf(pluginId, instanceId))
+    },
+    /** Copy values only during an explicit layout relocation, never resource ownership. */
+    copyOwner(from: string, to: string, onlyPluginId?: string): void {
+      const source = `${from}:`, destination = `${to}:`
+      const values = new Map<string, Map<string, unknown>>()
+      for (const [key, instance] of instances) values.set(key, instance.values)
+      for (const [key, pending] of restored) if (!values.has(key)) values.set(key, pending)
+      for (const [key, fields] of values) {
+        const [pluginId, instanceId] = key.split('\u0000') as [string, string]
+        if ((!onlyPluginId || pluginId === onlyPluginId) && instanceId.startsWith(source)) {
+          const target = ensure(pluginId, destination + instanceId.slice(source.length))
+          target.values = new Map(fields)
+          for (const listener of target.listeners) listener()
+        }
+      }
     },
     snapshot(stateVersions: Readonly<Record<string, number>>): PluginStateSnapshot {
       const plugins: PluginStateSnapshot['plugins'] = structuredClone(retained)
@@ -157,10 +173,12 @@ export const pluginState = createPluginStateStore()
 /** React binding: `[value, setValue]` for one named value of one view instance. */
 export function useScopedPluginState<T>(store: PluginStateStore, pluginId: string, instanceId: string, name: string, initial: T): [T, (next: T | ((previous: T) => T)) => void] {
   const subscribe = useCallback((listener: () => void) => store.subscribe(pluginId, instanceId, listener), [store, pluginId, instanceId])
-  const read = () => store.get(pluginId, instanceId, name, initial)
+  // Defaults have React state semantics, including object and array literals.
+  const defaultValue = useMemo(() => initial, [store, pluginId, instanceId, name])
+  const read = () => store.get(pluginId, instanceId, name, defaultValue)
   const value = useSyncExternalStore(subscribe, read, read)
   const set = useCallback((next: T | ((previous: T) => T)) => {
-    const previous = store.get(pluginId, instanceId, name, initial)
+    const previous = store.get(pluginId, instanceId, name, defaultValue)
     store.set(pluginId, instanceId, name, typeof next === 'function' ? (next as (previous: T) => T)(previous) : next)
     // `initial` is a default, not a dependency: a fresh literal per render must
     // not rebuild the setter.

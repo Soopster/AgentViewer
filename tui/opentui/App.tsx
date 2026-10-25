@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { SessionTabConnection } from './SessionTabConnection'
 import { sessionIdentityKey } from './sessionIdentity'
@@ -20816,6 +20817,7 @@ function OpenTuiWorkspace() {
     const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
     for (let instance = 2; taken.has(surface); instance += 1) surface = `${kind}#${instance}`
     checkpointWindowLayout()
+    if (!movingPanel && pluginOverlay === kind) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
     const remaining = surfacePanel.surfaces.filter((entry) => entry.id !== movingPanel?.id)
     if (movingPanel) {
       copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, undefined, movingPanel.id), surfaceViewNamespace(kind, surface))
@@ -20925,6 +20927,7 @@ function OpenTuiWorkspace() {
     }
     const surface = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked]))
     checkpointWindowLayout()
+    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
     setWindowSurfaceMeta((current) => ({ ...current, [surface]: pin }))
     setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
     if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
@@ -20970,6 +20973,7 @@ function OpenTuiWorkspace() {
     if (existing) { showPopoverTab(existing); return }
     const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
     const id = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked, ...popoverTabs]))
+    if (isPluginSurfaceId(kind) && (!isPopoverWindowKind(kind) || !POPOVER_WINDOWS[kind].single)) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, id), getPluginSurface(kind).pluginId)
     setWindowSurfaceMeta((current) => ({ ...current, [id]: pin }))
     setPopoverTabs((current) => [...current, id])
     showPopoverTab(id)
@@ -21120,7 +21124,7 @@ function OpenTuiWorkspace() {
     pluginOverlayKeyHandlerRef.current = handler
   })
   const pluginSelectedDetail = useMemo(() => ({ key: selectedSessionKey, detail: sessionDetail }), [selectedSessionKey, sessionDetail])
-  const offerPopoverPlacement = useStableEvent((kind: PopoverWindowKind | 'diff' | 'files' | 'pull-request') => {
+  const offerPopoverPlacement = useStableEvent((kind: WindowSurfaceKind) => {
     const beside = () => {
       if (isPopoverWindowKind(kind)) { openPopoverWindow(kind); return }
       setPopoverOpen(kind, false)
@@ -21138,6 +21142,7 @@ function OpenTuiWorkspace() {
     if (!isPopoverWindowKind(kind)) return
     const pinned = pinnedSessionOf(surface)
     const meta = windowSurfaceMeta[surface]
+    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, surface), 'root', getPluginSurface(kind).pluginId)
     returningPopoverRef.current = true
     closeSurfaceWindow(surface, true)
     returningPopoverRef.current = false
@@ -27268,14 +27273,14 @@ function OpenTuiWorkspace() {
       placement={surfacePanelPlacement}
       height={surfacePanelAtBottom ? effectiveSurfacePanelRows : surfacePanelHeight}
       focused={surfacePanelFocused}
-      availability={{
+      availability={panelSurfaceAvailability('tui', {
         browser: true,
         terminal: true,
         files: !!gitRepoCwd,
         diff: !!gitRepoCwd,
         'pull-request': !!gitRepoCwd,
         agents: true,
-      }}
+      })}
       unavailableHints={{
         files: 'Available when a project is open.',
         diff: 'Available for Git repositories.',

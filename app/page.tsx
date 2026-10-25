@@ -1,5 +1,7 @@
 'use client'
 
+import { panelSurfaceAvailability } from '@/lib/rightPanel'
+
 import { beginProviderLoading } from '@/lib/providerLoading'
 
 import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
@@ -1435,7 +1437,7 @@ export default function Home() {
   // Additive: every surface here is the same component the full-screen overlay
   // renders, in a docked shell. The overlay entry points (⌃G, ⌃F, the command
   // palette) are untouched.
-  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => ({
+  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => panelSurfaceAvailability('web', {
     browser: true,
     terminal: true,
     files: !!activeProjectDir,

@@ -14,7 +14,7 @@ export type PluginRenderer = 'web' | 'tui'
 /**
  * Where a surface may be presented. 'panel' is the side panel (TUI surface
  * panel, Web right panel): a surface offering it is also a side-panel kind,
- * so its id must be one of the hosts' `RightPanelSurfaceKind`s.
+ * so its stable id automatically joins the hosts' panel registry.
  */
 export type PluginPlacement = 'overlay' | 'window' | 'panel'
 
@@ -30,6 +30,8 @@ export type PluginSurfaceSpec = {
   /** 'window': routed after the global keys. 'capture': every key but ⌃B. */
   readonly keys: 'window' | 'capture'
   readonly placements: readonly PluginPlacement[]
+  /** Optional launcher order for panel contributions; unranked panels follow. */
+  readonly panelOrder?: number
   /** Palette label for opening the surface as a window. */
   readonly windowLabel: string
   /** Services the view needs; activation fails when a host lacks one. */
