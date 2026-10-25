@@ -55,7 +55,7 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
 
 export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
   ...Object.fromEntries(listPluginSurfaces('tui').filter(surface => surface.placements.includes('window') && !surface.placements.includes('panel')).map(surface => [surface.id, {
-    title: surface.title, pin: surface.pin === 'cwd' ? null : surface.pin, single: surface.single, keys: surface.keys, palette: surface.windowLabel,
+    title: surface.title, pin: surface.pin === 'cwd' ? null : surface.pin, single: surface.single, keys: surface.keys === 'capture' ? 'capture' : 'window', palette: surface.windowLabel,
   } satisfies PopoverWindowSpec])) as Record<PluginPopoverSurfaceId, PopoverWindowSpec>,
   ...BUILTIN_POPOVER_WINDOWS,
 }

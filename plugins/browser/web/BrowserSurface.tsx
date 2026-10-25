@@ -1,6 +1,7 @@
 'use client'
 
 import { createContextAttachment } from '@/lib/composerContext'
+import type { SendAttachment } from '@/lib/types'
 import { ArrowLeft, ArrowRight, ExternalLink, Globe2, RotateCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -30,9 +31,10 @@ function normalizeBrowserUrl(input: string): string | null {
 export default function BrowserSurface({
   url,
   onUrlChange,
-  canInsert = false,
+  onAttachContext,
 }: {
-  canInsert?: boolean
+  /** Present when there is a message being written to attach the page to. */
+  onAttachContext?: (attachment: SendAttachment) => void
   url: string | null
   onUrlChange: (url: string) => void
 }) {
@@ -141,12 +143,12 @@ export default function BrowserSurface({
         </a>
       </div>
 
-      {canInsert && current && <div className="av-context-source">
+      {onAttachContext && current && <div className="av-context-source">
         <button type="button" onClick={() => setContextOpen(open => !open)}>Attach page context</button>
         {contextOpen && <div>
           <label>Page note<input aria-label="Page note" value={contextNote} onChange={event => setContextNote(event.target.value)} placeholder="What should the agent look at?" /></label>
           <button type="button" onClick={() => {
-            window.dispatchEvent(new CustomEvent('agent-viewer:insert-context', { detail: createContextAttachment('browser', 'Browser page', contextNote, current) }))
+            onAttachContext(createContextAttachment('browser', 'Browser page', contextNote, current))
             setContextNote(''); setContextOpen(false)
           }}>Insert into message</button>
         </div>}

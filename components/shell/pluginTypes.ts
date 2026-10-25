@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import type { AnalyticsInput } from '@/lib/analytics'
 import type { PluginPlacement, PluginTarget } from '@/lib/plugins/types'
+import type { SendAttachment } from '@/lib/types'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
@@ -15,6 +16,13 @@ export type WebPluginServices = {
   composer?: {
     /** Insert a file path into the composer the user is writing in. */
     readonly insertPath: (path: string) => void
+    /** Attach a piece of context (a terminal selection, a page) to the message being written. */
+    readonly attachContext?: (attachment: SendAttachment) => void
+  }
+  'browser-location'?: {
+    /** Where this browser tab is pointed, kept by the host with the panel layout. */
+    readonly url: string | null
+    readonly navigate: (url: string) => void
   }
 }
 

@@ -4,7 +4,7 @@
 
 import { TextAttributes } from '@opentui/core'
 
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 
 /** The part of `@wterm/core`'s interface this needs; a fake in a test supplies the same. */
 export type ScreenSource = {

@@ -7,7 +7,17 @@ import type { Session, SessionDiagnosticSection } from '../../../lib/types'
 import type { ThreadedMessage } from '../../../lib/threading'
 import type { TuiThemePalette } from '../../theme'
 
-export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string; eventType?: 'press' | 'repeat' | 'release'; repeated?: boolean }
+export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string; eventType?: 'press' | 'repeat' | 'release'; repeated?: boolean; raw?: string }
+
+/**
+ * How a view holds the keyboard as a panel or window. false: it does not.
+ * true: its own text input has it; keys go to the view ahead of the global
+ * shortcuts (only ⌃W/⌃N/⌃P/⌃T escape). 'input': a focused native <input> has
+ * it; keys reach that input, Escape goes to the view, and in a window this
+ * is ahead of the ⌃B prefix. 'terminal': a program (a shell) has it; every
+ * key and paste goes to the view, ahead of the ⌃B prefix.
+ */
+export type TuiPluginCapture = boolean | 'input' | 'terminal'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
@@ -31,13 +41,15 @@ export type TuiPluginServices = {
     readonly insertText?: (text: string) => void
     /** What the user has typed into the composer, read when asked. */
     readonly readDraft?: () => string
+    /** Append a prompt to the composer and hand it the keyboard, saying so with `notice`. */
+    readonly appendPrompt?: (prompt: string, notice: string) => void
   }
   clipboard?: {
     readonly write: (text: string) => Promise<void>
     readonly read?: () => Promise<string>
   }
   notices?: {
-    readonly show: (kind: 'info' | 'error', text: string) => void
+    readonly show: (kind: 'info' | 'error', text: string, durationMs?: number) => void
   }
   'file-history'?: {
     readonly open: (path: string) => void
@@ -85,6 +97,16 @@ export type TuiPluginServices = {
     /** Deliver a diff-review comment into the composer. */
     readonly sendComment: (text: string) => void
   }
+  'browser-location'?: {
+    /** URLs opened from any browser view, newest first. */
+    readonly recent: readonly string[]
+    readonly opened: (url: string) => void
+  }
+  'window-selection'?: {
+    /** What this window showed before it last remounted (a move to another layout row). */
+    readonly initial: string | null
+    readonly changed: (id: string | null) => void
+  }
 }
 
 /** Services a host hands over as values; the transcript and repository it resolves itself. */
@@ -116,10 +138,11 @@ export type TuiPluginViewProps = {
   readonly onDispose: (cleanup: () => void) => () => void
   readonly registerKeys: (handler: TuiPluginKeyHandler | null) => void
   /**
-   * The view's own text input has the keyboard: in a panel or window the host
-   * then routes keys to it ahead of the global shortcuts (only ⌃W/⌃N/⌃P/⌃T escape).
+   * Whether the view's own input has the keyboard (TuiPluginCapture): true
+   * routes keys to it ahead of the global shortcuts in a panel or window
+   * (only ⌃W/⌃N/⌃P/⌃T escape); 'input' and 'terminal' are a shell pane's.
    */
-  readonly setCapture: (capture: boolean) => void
+  readonly setCapture: (capture: TuiPluginCapture) => void
   /** Run another plugin's or the host's command by id; false when nothing claimed it. */
   readonly runCommand: (commandId: string) => boolean
   readonly close: () => void

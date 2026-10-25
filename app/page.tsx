@@ -42,8 +42,6 @@ const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordin
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
-const BrowserSurface = dynamic(() => import('@/components/BrowserSurface'), { ssr: false })
-const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -1463,22 +1461,26 @@ export default function Home() {
   }, [])
 
   const { setBrowserUrl: setRightPanelBrowserUrl, close: closeRightPanelSurface } = rightPanel
+  // What the Terminal and Browser views are given: a way to attach what they
+  // show to the message being written, when there is one.
+  const contextServices = useMemo<WebPluginServices>(() => (!selectedProject && selectedSession ? {
+    composer: {
+      insertPath: insertFilePathToComposer,
+      attachContext: (attachment) => { window.dispatchEvent(new CustomEvent('agent-viewer:insert-context', { detail: attachment })) },
+    },
+  } : {}), [selectedProject, selectedSession, insertFilePathToComposer])
   const renderRightPanelSurface = useCallback((surface: RightPanelSurface) => {
     switch (surface.kind) {
       case 'browser':
+        // Each browser tab keeps its own URL with the panel layout.
         return (
-          <BrowserSurface
-            canInsert={!selectedProject && !!selectedSession}
-            url={surface.url ?? null}
-            onUrlChange={(url) => setRightPanelBrowserUrl(surface.id, url)}
-          />
+          <PluginSurfaceHost surfaceId="browser" placement="panel" sessionKey={null} onClose={() => closeRightPanelSurface(surface.id)} services={{
+            ...contextServices,
+            'browser-location': { url: surface.url ?? null, navigate: (url) => setRightPanelBrowserUrl(surface.id, url) },
+          }} />
         )
       case 'terminal':
-        return (
-          <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-            <TerminalView canInsert={!selectedProject && !!selectedSession} />
-          </div>
-        )
+        return <PluginSurfaceHost surfaceId="terminal" placement="panel" sessionKey={null} services={contextServices} onClose={() => closeRightPanelSurface(surface.id)} />
       case 'files':
       case 'diff':
         return activeProjectDir && repositoryServices ? (
@@ -1515,6 +1517,7 @@ export default function Home() {
   }, [
     activeProjectDir,
     closeRightPanelSurface,
+    contextServices,
     insertFilePathToComposer,
     loadSessionsForProvider,
     provider,

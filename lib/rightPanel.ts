@@ -15,13 +15,13 @@ import { PLUGIN_MANIFESTS, getPluginSurface, isPluginPanelSurfaceId, type Plugin
 
 export const BUILTIN_PANEL_SURFACE_KINDS = ['browser', 'terminal', 'pull-request', 'agents'] as const
 export type RightPanelSurfaceKind = (typeof BUILTIN_PANEL_SURFACE_KINDS)[number] | PluginPanelSurfaceId
-export const RIGHT_PANEL_SURFACE_KINDS: readonly RightPanelSurfaceKind[] = [
+export const RIGHT_PANEL_SURFACE_KINDS: readonly RightPanelSurfaceKind[] = [...new Set<RightPanelSurfaceKind>([
   'browser', 'terminal',
   ...PLUGIN_MANIFESTS.flatMap(manifest => manifest.surfaces.filter(surface => (surface.placements as readonly string[]).includes('panel')))
     .sort((a, b) => ('panelOrder' in a ? a.panelOrder : 100) - ('panelOrder' in b ? b.panelOrder : 100))
     .map(surface => surface.id as PluginPanelSurfaceId),
   'pull-request', 'agents',
-]
+])]
 
 /**
  * Kinds that may have more than one open surface at a time — two localhost

@@ -2331,7 +2331,8 @@ A shell program that asked for the mouse (DECSET 1000/1002/1003, SGR 1006) is se
 the wheel (`encodeTerminalMouse`); otherwise the wheel scrolls back, or sends arrows to a full-screen
 program, and a click gives the shell the keyboard.
 
-The surface panel's **Terminal** tab is `ProcessPane.tsx` (`⌃K l` opens it): long-running processes
+The surface panel's **Terminal** tab is the Terminal plugin (`plugins/terminal/tui/ProcessPane.tsx`;
+`⌃K l` opens it; the stores stay host code behind `tui/opentui/shell/sdkTerminal.ts`): long-running processes
 and their output. A repository declares them in `.agent-viewer/processes.json`
 (`{ "processes": [{ "name", "command", "cwd" }] }`, comments and trailing commas allowed); without
 one, `processConfig.ts` suggests package.json's `dev`/`start`/`serve`/`watch` scripts (runner chosen

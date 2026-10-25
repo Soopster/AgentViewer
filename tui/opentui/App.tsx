@@ -14,11 +14,11 @@ import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
-import type { TuiProvidedPluginServices } from './shell/pluginTypes'
+import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
-import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
+import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginPanelSurfaceId, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
 import type { PluginKeyChord, PluginServiceId } from '../../lib/plugins/types'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
@@ -39,7 +39,6 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
-import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
 import { transcriptViewportPosition, useTranscriptWindowPositions } from './transcriptWindowState'
 import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree, type WindowSplitNode } from './windowSplitTree'
@@ -474,7 +473,6 @@ const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) =>
 const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
-const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
 const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
 const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
@@ -5789,7 +5787,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
   { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
-  { id: 'processes',  label: 'Processes and logs (dev server, watchers)', key: '⌃K l', category: 'Session' },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
@@ -10031,15 +10028,13 @@ function OpenTuiWorkspace() {
   const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
   const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  // The side panel's plugin surface (Git): its key handler and its claim on input.
+  // The side panel's plugin surface: its key handler and its claim on input
+  // (TuiPluginCapture). The Terminal claims `input` while a command is typed
+  // (keys reach its <input>) and `terminal` while a shell has the keyboard
+  // (every key goes to the shell, the panel's own chords included, until ⌃]).
   const surfacePluginKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
-  const surfacePluginKeyCaptureRef = useRef(false)
+  const surfacePluginKeyCaptureRef = useRef<TuiPluginCapture>(false)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
-  const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  // The Terminal tab's claim on keys: `input` while a command is typed (keys
-  // reach its <input>), `terminal` while a shell has the keyboard (every key
-  // goes to the shell, the panel's own chords included, until ⌃]).
-  const surfaceProcessCaptureRef = useRef<'none' | 'input' | 'terminal'>('none')
   const [sessions, setSessions] = useWorkspaceState<Session[]>('sessions', [], false)
   const sessionsRef = useRef<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
@@ -19874,16 +19869,17 @@ function OpenTuiWorkspace() {
     if (spacesMenuOpen || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen) return // the focused window input owns bracketed paste
     // A shell with the keyboard takes the paste too, bracketed if it asked.
     const pasteKey = { name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') }
-    if (pendingPermissions.length === 0 && focusedWindowSurface && focusedWindowSurfaceKind === 'terminal' && windowSurfaceCaptureRef.current.get(focusedWindowSurface) === 'terminal') {
+    if (pendingPermissions.length === 0 && focusedWindowSurface && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && windowSurfaceCaptureRef.current.get(focusedWindowSurface) === 'terminal') {
       event.preventDefault()
       event.stopPropagation()
       windowSurfaceKeysRef.current.get(focusedWindowSurface)?.(pasteKey)
       return
     }
-    if (pendingPermissions.length === 0 && surfaceProcessCaptureRef.current === 'terminal' && surfacePanelOpen && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'terminal') {
+    const pastePanelKind = activeSurface(surfacePanel)?.kind
+    if (pendingPermissions.length === 0 && surfacePluginKeyCaptureRef.current === 'terminal' && surfacePanelOpen && surfacePanelFocused && pastePanelKind && isPluginSurfaceId(pastePanelKind)) {
       event.preventDefault()
       event.stopPropagation()
-      surfaceProcessKeyRef.current?.(pasteKey)
+      surfacePluginKeyRef.current?.(pasteKey)
       return
     }
     if (isInteractiveCoordinatorOpen()) {
@@ -20554,6 +20550,10 @@ function OpenTuiWorkspace() {
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
   const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => {
+    if (isPluginSurfaceId(kind) && !isPluginEnabled(getPluginSurface(kind).pluginId)) {
+      showNotice('info', `${getPluginSurface(kind).title.slice(2)} is off · turn its plugin on in Plugins (⌃K palette)`)
+      return
+    }
     const activePanel = activeSurface(surfacePanel)
     const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
     const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
@@ -20793,6 +20793,18 @@ function OpenTuiWorkspace() {
     if (command.requires === 'session' && !session) { showNotice('info', `${command.label} needs a session`); return }
     // A command names no file, so the editor opens where it was.
     if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
+    if (command.placement === 'panel') {
+      // A side-panel tab: the one already open, or a new one. Several may exist
+      // (shells); one in a window is its own and stays where it is.
+      const kind = command.opens as RightPanelSurfaceKind
+      setSurfacePanelOpen(true)
+      setSurfacePanelFocused(true)
+      setSurfacePanel((current) => {
+        const existing = current.surfaces.find((surface) => surface.kind === kind)
+        return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, kind)
+      })
+      return
+    }
     const opens = command.opens
     setPluginOpenRequests((current) => ({ ...current, [opens]: { count: (current[opens]?.count ?? 0) + 1, session } }))
     setPluginOverlay(opens)
@@ -20840,10 +20852,19 @@ function OpenTuiWorkspace() {
         setComposerActive(true)
         showNotice('info', 'Added to composer')
       },
+      appendPrompt: (prompt: string, notice: string) => {
+        appendDiffCommentPromptToComposer(prompt)
+        setSurfacePanelFocused(false)
+        showNotice('info', notice)
+      },
     },
     clipboard: { write: (text: string) => writeClipboard(text, renderer), read: readClipboardText },
     'open-file': { open: (path: string, line?: number | null) => openEditorAt(path, line ?? null) },
-    notices: { show: (kind: 'info' | 'error', text: string) => showNotice(kind, text) },
+    notices: { show: (kind: 'info' | 'error', text: string, durationMs?: number) => showNotice(kind, text, durationMs) },
+    'browser-location': {
+      recent: surfaceBrowserRecent,
+      opened: (url: string) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12)),
+    },
     ...(gitRepoCwd ? { 'file-history': { open: (path: string) => setFileHistoryPath(path) } } : {}),
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
     'task-control': {
@@ -20860,7 +20881,7 @@ function OpenTuiWorkspace() {
     ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor])
+  }), [renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent])
   // Why a service the root offers only sometimes is missing right now.
   const pluginServiceGaps = useMemo((): Partial<Record<PluginServiceId, string>> => ({
     ...(canUseChannelBridge ? {} : { 'channel-bridge': 'Select a Claude session to use the channel bridge' }),
@@ -20877,6 +20898,22 @@ function OpenTuiWorkspace() {
     return pluginOpenRequests[surfaceId]?.session ?? selectedSession
   }
   const pluginLiveTranscript = useMemo(() => ({ key: selectedSessionKey, messages: liveTranscriptMessagesForSession }), [selectedSessionKey, liveTranscriptMessagesForSession])
+  // A window's plugin services: the shared ones, plus what that window showed
+  // before a remount. Cached per window so a view's services keep their identity.
+  const windowPluginServicesRef = useRef(new Map<WindowSurfaceId, { base: TuiProvidedPluginServices; value: TuiProvidedPluginServices }>())
+  const windowPluginServices = (slot: WindowSurfaceId): TuiProvidedPluginServices => {
+    const cached = windowPluginServicesRef.current.get(slot)
+    if (cached?.base === pluginServices) return cached.value
+    const value: TuiProvidedPluginServices = {
+      ...pluginServices,
+      'window-selection': {
+        get initial() { return windowShellSelectionRef.current.get(slot) ?? null },
+        changed: (id: string | null) => { windowShellSelectionRef.current.set(slot, id) },
+      },
+    }
+    windowPluginServicesRef.current.set(slot, { base: pluginServices, value })
+    return value
+  }
   const closeFolderPicker = useStableEvent(() => setFolderPickerForNewSession(false))
   const folderPickerServices = useMemo((): TuiProvidedPluginServices => ({
     'directory-picker': { choose: (path: string) => handleNewSessionFolderSelected(path) },
@@ -20885,7 +20922,7 @@ function OpenTuiWorkspace() {
   const registerFolderPickerKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
     folderPickerKeyHandlerRef.current = handler
   })
-  const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
+  const surfacePluginCaptureChange = useStableEvent((capture: TuiPluginCapture) => { surfacePluginKeyCaptureRef.current = capture })
   const closePluginOverlay = useStableEvent(() => {
     if (pluginOverlay === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
     setPluginOverlay(null)
@@ -22298,16 +22335,6 @@ function OpenTuiWorkspace() {
       case 'window-float-shell':
         floatNewShell()
         break
-      case 'processes':
-        setSurfacePanelOpen(true)
-        setSurfacePanelFocused(true)
-        // Terminal surfaces are multi-instance; this goes to the one already open.
-        // A shell in a window is its own process and stays where it is.
-        setSurfacePanel((current) => {
-          const existing = current.surfaces.find((surface) => surface.kind === 'terminal')
-          return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, 'terminal')
-        })
-        break
       case 'coord-teammates':
         openTeammatesPanel()
         break
@@ -23572,7 +23599,7 @@ function OpenTuiWorkspace() {
       if (consumed !== false) handled(() => {})
       return
     }
-    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind === 'terminal' && windowCapture && windowCapture !== 'none') {
+    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && (windowCapture === 'terminal' || windowCapture === 'input')) {
       if (windowCapture === 'terminal' || key.name === 'escape') {
         handled(() => { windowKeys?.(key) })
       }
@@ -23584,14 +23611,14 @@ function OpenTuiWorkspace() {
     }
     // A browser window's address field takes typing; Escape and the ⌃B prefix
     // still reach the window controls.
-    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind === 'browser' && !splitChordPending && !(key.ctrl && key.name === 'b')) {
+    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && getPluginSurface(focusedWindowSurfaceKind).keys === 'field' && !splitChordPending && !(key.ctrl && key.name === 'b')) {
       if (key.name === 'escape') handled(focusReaderFromSplit)
       return
     }
 
     const panelSurfaceKind = activeSurface(surfacePanel)?.kind
     if (pendingPermissions.length === 0 && surfacePanelVisible && surfacePanelFocused && panelSurfaceKind && isPluginSurfaceId(panelSurfaceKind)
-      && surfacePluginKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
+      && surfacePluginKeyCaptureRef.current === true && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
       if (surfacePluginKeyRef.current?.(key) !== false) handled(() => {})
       return
     }
@@ -23601,14 +23628,16 @@ function OpenTuiWorkspace() {
       // Browser and shell surfaces own a focused <input>; swallowing their keys
       // here would make them untypeable, so only the panel's own chords are
       // intercepted and everything else falls through to the renderer.
-      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'terminal') {
-        handled(() => { surfaceProcessKeyRef.current?.(key) })
+      const pluginSurface = surface && isPluginSurfaceId(surface.kind) ? getPluginSurface(surface.kind) : null
+      const pluginCapture = pluginSurface ? surfacePluginKeyCaptureRef.current : false
+      if (pluginCapture === 'terminal') {
+        handled(() => { surfacePluginKeyRef.current?.(key) })
         return
       }
-      const inputOwned = surface?.kind === 'browser' || (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input')
+      const inputOwned = pluginSurface?.keys === 'field' || pluginCapture === 'input'
       // Escape cancels a command being typed rather than leaving the panel.
-      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input' && key.name === 'escape') {
-        handled(() => { surfaceProcessKeyRef.current?.(key) })
+      if (pluginCapture === 'input' && key.name === 'escape') {
+        handled(() => { surfacePluginKeyRef.current?.(key) })
         return
       }
       // Tab is deliberately absent: the docked surfaces use it for their own
@@ -26495,7 +26524,8 @@ function OpenTuiWorkspace() {
     }
     const leave = () => {
       capture()
-      surfaceProcessCaptureRef.current = 'none'
+      // A shell gives the keys back on leaving; a view's own text input keeps its claim.
+      if (typeof surfacePluginKeyCaptureRef.current === 'string') surfacePluginKeyCaptureRef.current = false
       windowSurfaceCaptureRef.current.clear()
       composerAbortRef.current?.abort()
       setComposerSendState('idle')
@@ -26556,7 +26586,7 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={surfaceCwd}
           repositorySessionId={gitSessionId}
-          provided={pluginServices}
+          provided={slot ? windowPluginServices(slot) : pluginServices}
           syntaxStyle={handoffBriefSyntaxStyle}
           path={editorInitialPath}
           line={editorInitialLine}
@@ -26566,47 +26596,12 @@ function OpenTuiWorkspace() {
           focused={focused}
           onClose={isPluginPanelSurfaceId(kind) ? close : leave}
           onKeyHandlerReady={keysReady(surfacePluginKeyRef as { current: SurfaceKeyHandler | null })}
-          onCaptureChange={slot ? captureChange({ current: false }) : surfacePluginCaptureChange}
+          onCaptureChange={slot ? captureChange<TuiPluginCapture>({ current: false }) : surfacePluginCaptureChange}
           runCommand={runCommandForPlugin}
         />
       )
     }
     switch (kind) {
-      case 'browser':
-        return (
-          <BrowserSurfaceView
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            focused={focused}
-            recent={surfaceBrowserRecent}
-            onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
-          />
-        )
-      case 'terminal':
-        return (
-          <ProcessPane
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            focused={focused}
-            cwd={surfaceCwd || process.cwd()}
-            onKeyHandlerReady={keysReady(surfaceProcessKeyRef as { current: SurfaceKeyHandler | null })}
-            onCaptureChange={captureChange(surfaceProcessCaptureRef)}
-            initialSelectedId={slot ? windowShellSelectionRef.current.get(slot) ?? null : null}
-            onSelectedChange={slot ? (id) => { windowShellSelectionRef.current.set(slot, id) } : undefined}
-            onNotice={showNotice}
-            onOpenFile={(path, line) => {
-              openEditorAt(path, line ?? null)
-            }}
-            onAskAgent={(prompt) => {
-              appendDiffCommentPromptToComposer(prompt)
-              // The composer takes the keys from here; the process keeps running.
-              setSurfacePanelFocused(false)
-              showNotice('info', 'Error added to composer')
-            }}
-          />
-        )
       case 'pull-request':
         return (
           <PullRequestPopover
@@ -26883,8 +26878,7 @@ function OpenTuiWorkspace() {
         if (!surface) return
         if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
         else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
-        else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
-        // browser/agents own their own <input> or are read-only.
+        // agents is read-only.
       }}
       renderSurface={(surface: TuiSurface, box) => renderSurfaceBody(surface.kind, box, () => setSurfacePanel((current) => closeSurfaceIn(current, surface.id)), surfacePanelFocused, undefined, surface.id, surface.cwd)}
     />

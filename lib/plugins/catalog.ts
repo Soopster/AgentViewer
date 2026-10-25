@@ -11,9 +11,11 @@ import { manifest as messaging } from '../../plugins/messaging/manifest'
 import { manifest as tasks } from '../../plugins/tasks/manifest'
 import { manifest as bridges } from '../../plugins/bridges/manifest'
 import { manifest as diagnostics } from '../../plugins/diagnostics/manifest'
+import { manifest as terminal } from '../../plugins/terminal/manifest'
+import { manifest as browser } from '../../plugins/browser/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
@@ -41,6 +43,7 @@ for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
   for (const command of manifest.commands) {
     if (commands.has(command.id)) throw new Error(`Duplicate plugin command id: ${command.id}`)
     if (!manifest.surfaces.some(surface => surface.id === command.opens)) throw new Error(`Plugin command ${command.id} opens an undeclared surface: ${command.opens}`)
+    if (!manifest.surfaces.find(surface => surface.id === command.opens)!.placements.includes(command.placement ?? 'overlay')) throw new Error(`Plugin command ${command.id} opens ${command.opens} where it cannot be placed`)
     commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
   }
 }

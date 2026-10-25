@@ -6,7 +6,16 @@ The feature plugin host exists (`lib/plugins/`, `tui/opentui/shell/`,
 `components/shell/`), and **Analytics, Git and Files** run through it in both
 apps (`plugins/analytics/`, `plugins/git/`, `plugins/files/`), and the TUI
 **editor** is a plugin (`plugins/editor/`, single, capture keys; its file
-target is `PluginTarget.path/line`, and its buffers survive overlay ↔ window). The TUI's
+target is `PluginTarget.path/line`, and its buffers survive overlay ↔ window).
+**Terminal and Browser** are plugins in both apps (`plugins/terminal/`,
+`plugins/browser/`, side-panel kinds with windows): the processes and shells
+stay host services (`processStore.ts`, `shellStore.ts`, reached through
+`tui/opentui/shell/sdkTerminal.ts`) that outlive closing the view or turning
+the plugin off; the contract gained a tri-state capture (`TuiPluginCapture`:
+`'input'`, `'terminal'`), `keys: 'field'`, a command `placement: 'panel'`
+(⌃K l), and `browser-location` / `window-selection` services. The Web
+terminal's PTY session is still tied to its view (closing or disabling it ends
+it), as it was before the move. The TUI's
 new-session folder picker is the Files view asked for a directory (the
 `directory-picker` service); with Files off, browsing says so and the recent
 folders still work. In the TUI, **cross-session messaging, the task list, the
