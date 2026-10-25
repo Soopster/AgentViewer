@@ -19,7 +19,7 @@ process.chdir(workspace)
 process.env.SHELL = '/bin/sh'
 const { default: OpenTuiApp } = await import('./App')
 const { getShells, shellTerminal, resetShellsForTest } = await import('./shellStore')
-const { readAllScreenText } = await import('./shellScreen')
+const { readAllScreenText } = await import('../../plugins/terminal/tui/shellScreen')
 
 // exitOnCtrlC off, as start.tsx runs the app: ⌃C is the shell's here.
 const setup = await testRender(<OpenTuiApp />, { width: 160, height: 44, kittyKeyboard: true, exitOnCtrlC: false })

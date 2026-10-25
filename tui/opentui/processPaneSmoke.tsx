@@ -12,9 +12,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { ProcessPane, type ProcessPaneKey } from './ProcessPane'
+import { ProcessPane, type ProcessPaneKey } from '../../plugins/terminal/tui/ProcessPane'
 import { addProcess, getProcesses, resetProcessesForTest, startProcess, stopProcess, stripAnsi } from './processStore'
-import { readProcessConfig } from './processConfig'
+import { readProcessConfig } from '../../plugins/terminal/tui/processConfig'
 import { buildStackTracePrompt, findLatestStackTrace, parseStackFrame } from '../../lib/stackTraces'
 
 function assert(condition: unknown, message: string): asserts condition {

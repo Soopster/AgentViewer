@@ -27,8 +27,12 @@ export type PluginSurfaceSpec = {
   readonly pin: 'session' | 'cwd' | null
   /** The surface's state is a singleton, so it exists once in any form. */
   readonly single: boolean
-  /** 'window': routed after the global keys. 'capture': every key but ⌃B. */
-  readonly keys: 'window' | 'capture'
+  /**
+   * 'window': routed after the global keys. 'capture': every key but ⌃B.
+   * 'field': the view's own text field (a browser's address bar) takes typing
+   * as a panel or window; Escape and the ⌃B prefix stay the host's.
+   */
+  readonly keys: 'window' | 'capture' | 'field'
   readonly placements: readonly PluginPlacement[]
   /** Palette label for opening the surface as a window. */
   readonly windowLabel: string
@@ -49,6 +53,8 @@ export type PluginCommandSpec = {
   readonly category: 'Session' | 'View'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
+  /** Where the command shows its surface: an overlay (the default) or a side-panel tab, reusing an open one. */
+  readonly placement?: 'overlay' | 'panel'
   /** What the command must have before it can run. */
   readonly requires: 'session' | null
   readonly renderers: readonly PluginRenderer[]
@@ -96,6 +102,10 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** Where a browser view is pointed, and what it opened, kept by the host with the layout. */
+  | 'browser-location'
+  /** Which item a window was showing, kept by the host so a remounted window comes back on it. */
+  | 'window-selection'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host

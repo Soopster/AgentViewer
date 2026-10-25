@@ -15,7 +15,7 @@ import type { PluginPlacement, PluginServiceId, PluginTarget } from '../../../li
 import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { usePinnedSessionDetail } from '../usePinnedSessionDetail'
 import type { SyntaxStyle } from '@opentui/core'
-import type { TuiPluginKeyHandler, TuiProvidedPluginServices, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
+import type { TuiPluginCapture, TuiPluginKeyHandler, TuiProvidedPluginServices, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
 import { tuiPluginViews } from './pluginViews'
 
 type KeyHandler = TuiPluginKeyHandler
@@ -57,7 +57,7 @@ export type PluginSurfaceHostProps = {
   onClose: () => void
   onDetach?: () => void
   onKeyHandlerReady: (handler: KeyHandler) => void
-  onCaptureChange?: (capture: boolean) => void
+  onCaptureChange?: (capture: TuiPluginCapture) => void
   runCommand?: (commandId: string) => boolean
   /** Test seams. */
   registry?: Pick<typeof tuiPluginViews, 'load' | 'peek'>
@@ -167,7 +167,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   }, [onKeyHandlerReady, onClose, retry])
   // A failed or unmounted view holds no input.
   const { onCaptureChange } = props
-  const setCapture = useCallback((capture: boolean) => { onCaptureChange?.(capture) }, [onCaptureChange])
+  const setCapture = useCallback((capture: TuiPluginCapture) => { onCaptureChange?.(capture) }, [onCaptureChange])
   useEffect(() => { if (failure) onCaptureChange?.(false) }, [failure, onCaptureChange])
   useEffect(() => () => { onCaptureChange?.(false) }, [onCaptureChange])
   const { runCommand: hostRunCommand } = props

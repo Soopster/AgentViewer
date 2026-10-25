@@ -7,10 +7,12 @@ import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
 import { manifest as editor } from '../../plugins/editor/manifest'
+import { manifest as terminal } from '../../plugins/terminal/manifest'
+import { manifest as browser } from '../../plugins/browser/manifest'
 import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, terminal, browser] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
@@ -40,6 +42,7 @@ for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
   for (const command of manifest.commands) {
     if (commands.has(command.id)) throw new Error(`Duplicate plugin command id: ${command.id}`)
     if (!manifest.surfaces.some(surface => surface.id === command.opens)) throw new Error(`Plugin command ${command.id} opens an undeclared surface: ${command.opens}`)
+    if (!manifest.surfaces.find(surface => surface.id === command.opens)!.placements.includes(command.placement ?? 'overlay')) throw new Error(`Plugin command ${command.id} opens ${command.opens} where it cannot be placed`)
     commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
   }
 }

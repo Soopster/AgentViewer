@@ -123,7 +123,7 @@ const readerShows = (name: string) => {
 
 
 const { getShells, shellTerminal, resetShellsForTest } = await import('./shellStore')
-const { readAllScreenText } = await import('./shellScreen')
+const { readAllScreenText } = await import('../../plugins/terminal/tui/shellScreen')
 const chordKey = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
   await settle(60)

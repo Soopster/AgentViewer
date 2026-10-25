@@ -248,6 +248,76 @@ check(!screen().includes('UNSAVEDEDIT') && screen().includes('Open project edito
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('The editor opens as a lazy plugin and keeps an unsaved edit across full screen → window → full screen.')
 
+// Terminal is a plugin, and the processes and shells it shows are the host's:
+// ⌃K l loads it on demand, and neither closing its view nor turning the plugin
+// off stops a running process or shell.
+const { getProcesses, resetProcessesForTest } = await import('./processStore')
+const { getShells, resetShellsForTest } = await import('./shellStore')
+const { mkdirSync } = await import('node:fs')
+mkdirSync(path.join(CWD, '.agent-viewer'), { recursive: true })
+writeFileSync(path.join(CWD, '.agent-viewer', 'processes.json'), JSON.stringify({ processes: [{ name: 'sleeper', command: 'sleep 30' }] }))
+const alive = (pid: number | null | undefined) => { if (!pid) return false; try { process.kill(pid, 0); return true } catch { return false } }
+const sleeper = () => getProcesses().find((entry) => entry.name === 'sleeper')
+const sleeperRunning = () => sleeper()?.status === 'running' && alive(sleeper()?.pid)
+const shellRunning = () => getShells().some((entry) => entry.status === 'running')
+check(!tuiPluginViews.isLoaded('terminal') && !tuiPluginViews.isLoaded('browser'), 'the Terminal or Browser plugin loaded before it was opened')
+await key('k', { ctrl: true }); await key('l')
+await waitFor('the Terminal tab with the declared process', () => tuiPluginViews.isLoaded('terminal') && screen().includes('sleeper'))
+await key('s')
+await waitFor('the process running', sleeperRunning)
+await key('o')
+await waitFor('a shell running', shellRunning)
+await key(']', { ctrl: true })
+await settle(200)
+// ⇧O closes the focused panel: the view unmounts, the process and shell do not stop.
+await key('O', { shift: true })
+await waitFor('the panel closed', () => !screen().includes('sleeper'))
+await settle(400)
+check(sleeperRunning() && shellRunning(), 'closing the Terminal view stopped its process or shell')
+// Open again, then turn the plugin off under the mounted view.
+await key('k', { ctrl: true }); await key('l')
+await waitFor('the Terminal tab again', () => screen().includes('sleeper'))
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'terminal', false))
+await waitFor('the Terminal view turned off', () => screen().includes('Terminal is turned off'))
+await settle(400)
+check(sleeperRunning() && shellRunning(), 'turning the Terminal plugin off stopped its process or shell')
+await key('escape')
+await key('b', { ctrl: true }); await key('1')
+await key('k', { ctrl: true }); await key('l')
+await settle(300)
+check(screen().includes('● Processes and logs (dev server'), 'a disabled Terminal command opened, or said nothing')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await settle(200)
+check(sleeperRunning() && shellRunning(), 'turning the Terminal plugin back on disturbed its process or shell')
+await resetProcessesForTest()
+await resetShellsForTest()
+console.log('Terminal opens as a lazy plugin; its process and shell outlive closing the view and turning the plugin off, and a disabled command says so.')
+
+// Browser is a plugin too: a window of it loads on demand and its address
+// field takes typing; turned off, opening one says so.
+const openPalette = async (query: string) => {
+  await key('?')
+  await settle(250)
+  await act(async () => { await setup.mockInput.typeText(query) })
+  await settle(200)
+  await key('return')
+}
+await key('escape')
+await key('b', { ctrl: true }); await key('1')
+await openPalette('Browser in a window')
+await waitFor('the Browser window', () => tuiPluginViews.isLoaded('browser') && screen().includes('URL, host, or port'))
+await act(async () => { await setup.mockInput.typeText('localhost:5173') })
+await settle(200)
+check(screen().includes('localhost:5173'), 'typing did not reach the Browser address field')
+await key('escape')
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'browser', false))
+await waitFor('the Browser window turned off', () => !!setup.renderer.root.findDescendantById('plugin-disabled:browser'))
+await openPalette('Browser in a window')
+await settle(300)
+check(screen().includes('Browser is off'), 'opening a disabled Browser window said nothing')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Browser opens as a lazy plugin window whose address field takes typing, and says so when it is off.')
+
 // A module that fails to load is evicted and loads on the next attempt.
 const { PluginSurfaceHost, pluginInstanceId } = await import('./shell/PluginSurfaceHost')
 let loadAttempts = 0

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import { useWindowSnapshot } from './windowActivity'
-import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
+import { useWindowSnapshot } from '../../../tui/opentui/shell/sdkTerminal'
+import { useWorkspaceContext, useWorkspaceState, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 // The surface panel's Terminal tab: long-running processes (a dev server, a
 // watcher, `docker compose logs -f`) and their output, and interactive shells.
 // Both live in stores (`processStore.ts`, `shellStore.ts`), so they keep
@@ -15,14 +15,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useRenderer } from '@opentui/react'
 import type { BoxRenderable, MouseEvent as TuiMouseEvent } from '@opentui/core'
 
-import type { TuiThemePalette } from '../theme'
-import { parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
-import { buildStackTracePrompt, findLatestStackTrace, type StackTrace } from '../../lib/stackTraces'
-import { encodeTerminalKey, encodeTerminalMouse, encodeTerminalPaste, type TerminalMouseButton } from '../../lib/terminalKeys'
+import { parseTuiLineTokens, parseTuiLinkTarget } from '../../../lib/tuiLinkTargets'
+import { buildStackTracePrompt, findLatestStackTrace, type StackTrace } from '../../../lib/stackTraces'
+import { encodeTerminalKey, encodeTerminalMouse, encodeTerminalPaste, type TerminalMouseButton } from '../../../lib/terminalKeys'
 import { readProcessConfig, PROCESS_CONFIG_PATH } from './processConfig'
 import { ShellView } from './ShellView'
 import { readAllScreenText } from './shellScreen'
-import { closeShell, getShells, shellTerminal, startShell, subscribeShells, writeShell, type ShellSession } from './shellStore'
+import { closeShell, getShells, shellTerminal, startShell, subscribeShells, writeShell, type ShellSession } from '../../../tui/opentui/shell/sdkTerminal'
 import {
   addProcess,
   clearProcessOutput,
@@ -33,7 +32,7 @@ import {
   stopProcess,
   subscribeProcesses,
   type ManagedProcess,
-} from './processStore'
+} from '../../../tui/opentui/shell/sdkTerminal'
 
 export type ProcessPaneKey = { name: string; ctrl: boolean; shift: boolean; sequence: string; meta?: boolean; option?: boolean; raw?: string }
 export type ProcessPaneCapture = 'none' | 'input' | 'terminal'
