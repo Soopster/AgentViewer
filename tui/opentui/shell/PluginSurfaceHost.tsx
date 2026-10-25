@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RGBA } from '@opentui/core'
 import type { Session } from '../../../lib/types'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
+import type { ThreadedMessage } from '../../../lib/threading'
 import { getPluginSurface, type PluginSurfaceId } from '../../../lib/plugins/catalog'
 import { pluginState, useScopedPluginState, type PluginStateStore } from '../../../lib/plugins/scopedState'
 import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
@@ -25,6 +26,7 @@ type KeyHandler = TuiPluginKeyHandler
 export const PLUGIN_OVERLAY_Z_INDEX = 50
 
 const NO_SELECTION = { key: null, detail: null } as const
+const NO_LIVE_MESSAGES: readonly ThreadedMessage[] = []
 const NEVER_YIELD = () => false
 
 export type PluginSurfaceHostProps = {
@@ -35,6 +37,10 @@ export type PluginSurfaceHostProps = {
   sessionKey?: string | null
   /** The root's loaded detail for the selected session, reused rather than re-read. */
   selected?: { key: string | null; detail: TuiSessionDetail | null }
+  /** The selected session's in-flight turn, which the transcript does not hold yet. */
+  live?: { key: string | null; messages: readonly ThreadedMessage[] }
+  /** Counts the root's requests to open this surface (PluginTarget.request). */
+  request?: number
   density?: TuiDensity
   showToolCalls?: boolean
   shouldYield?: () => boolean
@@ -139,16 +145,22 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const wants = (service: PluginServiceId) => surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
   const repositoryCwd = cwd ?? process.cwd()
   const { repositorySessionId = null, repositoryLabel, provided } = props
+  // Only a surface that declares them follows these, so a streaming turn or a
+  // selection change does not re-render every other open view.
+  const targetSession = wants('session') ? session : null
+  const liveMessages = wants('live-transcript') && sessionKey && props.live?.key === sessionKey ? props.live.messages : NO_LIVE_MESSAGES
   const services = useMemo<TuiPluginServices>(() => {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return {
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
+      ...(wants('session') ? { session: { session: targetSession } } : {}),
+      ...(wants('live-transcript') ? { 'live-transcript': { messages: liveMessages } } : {}),
     }
   // `wants` reads only the surface, which `surfaceId` names.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided])
+  }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided, targetSession, liveMessages])
 
   const viewKeys = useRef<KeyHandler | null>(null)
   const retry = useCallback(() => { setFailure(null); setView(null); setAttempt(value => value + 1) }, [])
@@ -175,7 +187,8 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
 
   const filePath = props.path ?? null
   const fileLine = props.line ?? null
-  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null, path: filePath, line: fileLine }), [sessionKey, surface.pin, repositoryCwd, filePath, fileLine])
+  const request = props.request ?? 0
+  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null, path: filePath, line: fileLine, request }), [sessionKey, surface.pin, repositoryCwd, filePath, fileLine, request])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // Called from the view's render as a hook; the identity is stable per instance.
     // eslint-disable-next-line react-hooks/rules-of-hooks

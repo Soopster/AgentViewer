@@ -3,6 +3,8 @@ import type { SyntaxStyle } from '@opentui/core'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
 import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
 import type { SelectionAskInput } from '../../../lib/selectionAsk'
+import type { Session, SessionDiagnosticSection } from '../../../lib/types'
+import type { ThreadedMessage } from '../../../lib/threading'
 import type { TuiThemePalette } from '../../theme'
 
 export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string; eventType?: 'press' | 'repeat' | 'release'; repeated?: boolean }
@@ -27,6 +29,8 @@ export type TuiPluginServices = {
     readonly askAboutSelection?: (request: SelectionAskInput) => void
     /** Insert text at the composer's cursor and give it the keyboard. */
     readonly insertText?: (text: string) => void
+    /** What the user has typed into the composer, read when asked. */
+    readonly readDraft?: () => string
   }
   clipboard?: {
     readonly write: (text: string) => Promise<void>
@@ -49,10 +53,42 @@ export type TuiPluginServices = {
     readonly velocity: boolean
     readonly toggleVelocity: () => void
   }
+  /** Resolved by the host for the view's target. */
+  session?: {
+    readonly session: Session | null
+  }
+  /** Resolved by the host: empty unless the target is the session whose turn is streaming. */
+  'live-transcript'?: {
+    readonly messages: readonly ThreadedMessage[]
+  }
+  'task-control'?: {
+    /** Bring a task's most recent card into view in the reader. */
+    readonly jumpTo: (eventUuid: string) => void
+    /** Stop a running background task; absent when the composer's session cannot. */
+    readonly stop?: (taskId: string) => void
+  }
+  'session-diagnostics'?: {
+    readonly read: (session: Session) => Promise<SessionDiagnosticSection[]>
+    readonly run: (session: Session, action: string, extra: Record<string, unknown>) => Promise<Record<string, unknown>>
+    /** Whether the session's runtime has the MCP, hook and reload controls. */
+    readonly hasControls: (session: Session) => boolean
+  }
+  'channel-bridge'?: {
+    readonly routed: boolean
+    readonly toggleRoute: () => void
+    readonly accentColor: string
+  }
+  'ide-bridge'?: {
+    readonly routed: boolean
+    readonly toggleRoute: () => void
+    readonly accentColor: string
+    /** Deliver a diff-review comment into the composer. */
+    readonly sendComment: (text: string) => void
+  }
 }
 
 /** Services a host hands over as values; the transcript and repository it resolves itself. */
-export type TuiProvidedPluginServices = Omit<TuiPluginServices, 'session-transcript' | 'repository'>
+export type TuiProvidedPluginServices = Omit<TuiPluginServices, 'session-transcript' | 'repository' | 'session' | 'live-transcript'>
 
 /** A key handler returns false for a key it did not use, so the host may route it on. */
 export type TuiPluginKeyHandler = (key: TuiPluginKeyEvent) => boolean | void

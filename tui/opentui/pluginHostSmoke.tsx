@@ -55,6 +55,25 @@ mock.module('../../lib/tui/service', () => ({
   readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
+  listTuiAddressableSessions: async () => [],
+  readTuiSessionDiagnostics: async () => {
+    diagnosticsReads += 1
+    return { sections: [{ id: 'commands', title: 'COMMANDS', items: ['PLUGIN-DIAG-MARKER'] }] }
+  },
+}))
+// The live CLI bridge's subscriptions, counted: the panel holds one and the
+// host one more while the panel is open or the composer routes to the bridge.
+// Only the panel's may end with the panel.
+let diagnosticsReads = 0
+let bridgeSubscriptions = 0
+const channelBridge = await import('../../lib/channelBridge')
+mock.module('../../lib/channelBridge', () => ({
+  ...channelBridge,
+  subscribeToChannelEvents: () => {
+    bridgeSubscriptions += 1
+    let live = true
+    return () => { if (live) { live = false; bridgeSubscriptions -= 1 } }
+  },
 }))
 
 // The Analytics plugin's view, instrumented: it throws on its first render, and
@@ -247,6 +266,61 @@ await settle(300)
 check(!screen().includes('UNSAVEDEDIT') && screen().includes('Open project editor is off'), 'a disabled editor still opened, or said nothing')
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('The editor opens as a lazy plugin and keeps an unsaved edit across full screen → window → full screen.')
+
+// Messaging, the task list, the bridge panels and diagnostics are plugins:
+// none loads before it is opened, each opens from its old key.
+await settle(300)
+for (const id of ['messaging', 'tasks', 'bridges', 'diagnostics']) check(!tuiPluginViews.isLoaded(id), `the ${id} plugin loaded before it was opened`)
+await key('b', { ctrl: true }); await key('1')
+await key('m', { shift: true })
+await waitFor('the messaging overlay', () => screen().includes('Cross-session messaging') && screen().includes('reachable'))
+check(tuiPluginViews.isLoaded('messaging') && !tuiPluginViews.isLoaded('tasks'), 'opening messaging loaded the wrong plugins')
+await key('escape')
+await waitFor('messaging closed', () => !screen().includes('reachable'))
+await key('l', { shift: true })
+await waitFor('the task list overlay', () => screen().includes(' Tasks '))
+check(tuiPluginViews.isLoaded('tasks'), 'the task list opened without its plugin module')
+await key('escape')
+await waitFor('the task list closed', () => !screen().includes(' Tasks '))
+
+// Diagnostics reads once per open: breaking it out into a window keeps what
+// it read rather than reading again (a read can activate a session).
+await key('d', { shift: true })
+await waitFor('the diagnostics overlay', () => screen().includes('DIAGNOSTICS') && screen().includes('PLUGIN-DIAG-MARKER'))
+check(diagnosticsReads === 1, `opening diagnostics read ${diagnosticsReads} times`)
+await key('w', { ctrl: true, shift: true })
+await waitFor('placement choice or window', () => screen().includes('beside') || !!setup.renderer.root.findDescendantById('surface-frame:diagnostics'))
+if (!setup.renderer.root.findDescendantById('surface-frame:diagnostics')) await key('return')
+await waitFor('diagnostics in a window', () => !!setup.renderer.root.findDescendantById('surface-frame:diagnostics') && screen().includes('PLUGIN-DIAG-MARKER'))
+check(diagnosticsReads === 1, `moving diagnostics into a window read it again (${diagnosticsReads} reads)`)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'diagnostics', false))
+await waitFor('the window saying diagnostics is off', () => screen().includes('Diagnostics is turned off'))
+await key('b', { ctrl: true }); await key('1')
+await key('d', { shift: true })
+await waitFor('the refusal', () => screen().includes('Session diagnostics is off'))
+check(diagnosticsReads === 1, 'a disabled diagnostics plugin still read the session')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await settle(200)
+
+// The CLI bridge panel flips the composer's routing; turning the panel's
+// plugin off closes the panel but not the bridge the composer routes through.
+check(!screen().includes('→ live CLI bridge'), 'the composer was routed to the bridge before the test routed it')
+await key('c', { shift: true })
+await waitFor('the CLI bridge panel', () => screen().includes(' Live CLI bridge '))
+check(tuiPluginViews.isLoaded('bridges'), 'the bridge panel opened without its plugin module')
+check(bridgeSubscriptions === 2, `the open panel and host hold ${bridgeSubscriptions} bridge subscriptions, not 2`)
+await key('r', { ctrl: true })
+await waitFor('the composer routed to the bridge', () => screen().includes('→ live CLI bridge'))
+check(bridgeSubscriptions === 2, `routing did not hold its own bridge subscription (${bridgeSubscriptions})`)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'bridges', false))
+await waitFor('the panel closed', () => !screen().includes(' Live CLI bridge '))
+check(screen().includes('→ live CLI bridge'), 'turning the bridge panels off dropped the composer\'s routing')
+check(bridgeSubscriptions === 1, `turning the bridge panels off dropped the routed bridge connection (${bridgeSubscriptions} subscriptions)`)
+await key('c', { shift: true })
+await waitFor('the refusal', () => screen().includes('Channel bridge is off'))
+check(!screen().includes(' Live CLI bridge '), 'a disabled bridge panel still opened')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Messaging, tasks, the bridge panels and diagnostics load on first open; diagnostics reads once per open; a disabled bridge panel leaves the routed bridge running.')
 
 // A module that fails to load is evicted and loads on the next attempt.
 const { PluginSurfaceHost, pluginInstanceId } = await import('./shell/PluginSurfaceHost')

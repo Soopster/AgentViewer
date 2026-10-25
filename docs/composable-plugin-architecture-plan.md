@@ -9,7 +9,13 @@ apps (`plugins/analytics/`, `plugins/git/`, `plugins/files/`), and the TUI
 target is `PluginTarget.path/line`, and its buffers survive overlay ↔ window). The TUI's
 new-session folder picker is the Files view asked for a directory (the
 `directory-picker` service); with Files off, browsing says so and the recent
-folders still work. A **plugin manager** (TUI palette
+folders still work. In the TUI, **cross-session messaging, the task list, the
+bridge panels and diagnostics** are plugins (`plugins/{messaging,tasks,bridges,diagnostics}/`,
+TUI only): bridge routing and the bridges stay with the composer, a service the host
+offers only sometimes refuses its command with the host's reason (`pluginServiceGaps`),
+and diagnostics reads once per open (`PluginTarget.request`); their Web views (composer
+bridge popovers on `useChannelBridge`/`useIdeBridge`, MessageView's inline diagnostics,
+`TaskRail`, page-level messaging) are still host code. A **plugin manager** (TUI palette
 "Plugins: turn features on or off", Web palette "Plugins") turns each plugin
 off or on; the choice is `.agent-viewer-data/plugins.json`, shared by the TUI
 and the web daemon (`/api/plugins`). `npm run plugins:smoke` checks the

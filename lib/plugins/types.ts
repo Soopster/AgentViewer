@@ -46,7 +46,7 @@ export type PluginCommandSpec = {
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
-  readonly category: 'Session' | 'View'
+  readonly category: 'Session' | 'View' | 'Transcript'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
   /** What the command must have before it can run. */
@@ -96,6 +96,18 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** The session the view was opened for: its identity, not its transcript. */
+  | 'session'
+  /** The selected session's in-flight turn, before it reaches the transcript. */
+  | 'live-transcript'
+  /** Jump to a task's card in the reader, and stop a background task. */
+  | 'task-control'
+  /** Read a session's diagnostics and run its runtime controls (MCP, hooks, reloads). */
+  | 'session-diagnostics'
+  /** The live CLI channel bridge: whether the composer routes to it, and the toggle. */
+  | 'channel-bridge'
+  /** The IDE bridge: whether the composer routes to it, the toggle, and diff comments. */
+  | 'ide-bridge'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host
@@ -112,6 +124,11 @@ export type PluginTarget = {
    */
   readonly path?: string | null
   readonly line?: number | null
+  /**
+   * Counts the host's requests to open this surface. A view that loads once per
+   * open (rather than following the selection) treats a change as a new open.
+   */
+  readonly request?: number
 }
 
 /** A renderer's lazy entry: one view component per declared surface. */

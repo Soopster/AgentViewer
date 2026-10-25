@@ -2,7 +2,7 @@
 import React, { memo, useMemo } from 'react'
 import { RGBA, TextTableRenderable, type TextTableContent } from '@opentui/core'
 import { extend } from '@opentui/react'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 
 extend({ textTable: TextTableRenderable })
 

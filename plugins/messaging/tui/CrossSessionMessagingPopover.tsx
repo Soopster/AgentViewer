@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useState } from 'react'
-import type { TuiThemePalette } from '../theme'
-import { getProviderAccent } from '../theme'
-import type { Session } from '../../lib/types'
-import type { AddressableSession } from '../../lib/crossSessionMessaging'
-import { listTuiAddressableSessions, sendTuiCrossSessionMessage } from '../../lib/tui/service'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { getProviderAccent } from '../../../tui/opentui/shell/sdk'
+import type { Session } from '../../../lib/types'
+import type { AddressableSession } from '../../../lib/crossSessionMessaging'
+import { listTuiAddressableSessions, sendTuiCrossSessionMessage } from '../../../lib/tui/service'
 
 type MessagingKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -21,6 +21,8 @@ type Props = {
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
   onDetach?: () => void
+  /** The message field has the keyboard, so a window must route keys to it first. */
+  onCaptureChange?: (capture: boolean) => void
 }
 
 export function CrossSessionMessagingPopover({
@@ -33,6 +35,7 @@ export function CrossSessionMessagingPopover({
   onKeyHandlerReady,
   docked = false,
   onDetach,
+  onCaptureChange,
 }: Props) {
   const [sessions, setSessions] = useState<AddressableSession[]>([])
   const [index, setIndex] = useState(0)
@@ -126,6 +129,7 @@ export function CrossSessionMessagingPopover({
   }, [focus, onClose, reload, selected, sessions.length, submit])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
+  useEffect(() => { onCaptureChange?.(focus === 'composer') }, [focus, onCaptureChange])
 
   const frame = popoverFrameCells(docked)
   const popW = docked ? width : Math.min(width - 4, 96)
