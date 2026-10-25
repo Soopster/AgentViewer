@@ -79,7 +79,7 @@
     "coord:remote:smoke": "bun run ./scripts/coordNativePermissionGuardSmoke.ts && bun run ./scripts/coordRemoteMachinesSmoke.ts && bun run ./tui/opentui/remoteCoordinatorPopoverSmoke.tsx && REMOTE_PANEL_SIZE=44x28 bun run ./tui/opentui/remoteCoordinatorPopoverSmoke.tsx && bun run ./tui/opentui/remoteNativeRequestSmoke.tsx",
     "ahp:smoke": "bun run ./scripts/ahpSmoke.ts",
     "a2a:smoke": "bun run ./scripts/a2aFacadeSmoke.ts",
-    "plugins:smoke": "bun run ./scripts/pluginHostSmoke.ts && bun run ./scripts/pluginBoundarySmoke.ts && bun run ./tui/opentui/pluginHostSmoke.tsx",
+    "plugins:smoke": "bun run ./scripts/pluginHostSmoke.ts && bun run ./scripts/pluginBoundarySmoke.ts && bun run ./scripts/tuiWorkerEntrypointsSmoke.ts && bun run ./tui/opentui/pluginHostSmoke.tsx",
     "providers:scaffold": "node ./scripts/scaffoldProviderExtension.mjs",
     "providers:extensions:smoke": "bun run ./scripts/providerExtensionSmoke.mjs && node ./scripts/providerExtensionContributorSmoke.mjs && bun run ./scripts/providerRuntimeBoundarySmoke.mjs",
     "adapters:smoke": "bun run ./scripts/adapterReadSweep.ts",

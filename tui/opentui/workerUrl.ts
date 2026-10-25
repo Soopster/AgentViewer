@@ -1,18 +1,24 @@
-// Resolves the URL a Worker client should hand to `new Worker(...)`.
+// Resolves the URL a Worker client should hand to `new Worker(...)`, from the
+// worker's path relative to the repository root (`tui/opentui/threadingWorker`,
+// `plugins/analytics/tui/analyticsWorker`), without an extension.
 //
-// When the TUI runs from source (`bun run tui/opentui/main.tsx`), the worker
-// entrypoints exist on disk as `.ts` files next to the client. When the TUI is
-// compiled into a standalone binary (`bun build --compile`), the worker files
-// are listed as extra entrypoints and embedded under `$bunfs/root/<name>.js`
-// (basename `.ts` → `.js`). Bun's worker-resolution remap for absolute $bunfs
-// specifiers has not landed in the pinned bun (1.3.x), so referencing the
-// `.ts` name from a compiled binary fails with
-// `ModuleNotFound resolving "/$bunfs/root/<name>.ts"` — the embedded graph is
-// keyed by `.js`. Pick the extension to match whichever layout is live.
+// From source (`bun run tui/opentui/main.tsx`) that is the `.ts` file in the
+// checkout. In a binary compiled with `bun build --compile --root .`
+// (scripts/prepareDesktopResources.mjs), every worker entrypoint is embedded at
+// `$bunfs/root/<that path>.js` — keyed by `.js`, and by the path from the
+// build root. `--root .` is what makes that path the repository path whatever
+// directories the entrypoints come from: without it Bun uses their common
+// ancestor, so one plugin worker outside tui/opentui moved every other worker
+// and each failed with `ModuleNotFound`. A bundled module's own
+// `import.meta.url` is the binary, never its source file, so the path cannot
+// be derived from the client either; callers name it.
 
-const workerExtFor = (importerUrl: string): 'js' | 'ts' =>
-  importerUrl.includes('$bunfs/') || importerUrl.includes('~BUN/') ? 'js' : 'ts'
+const COMPILED_ROOTS = ['$bunfs/root/', '~BUN/root/']
 
-export function tuiWorkerUrl(workerName: string, importerUrl: string): string {
-  return new URL(`./${workerName}.${workerExtFor(importerUrl)}`, importerUrl).href
+export function tuiWorkerUrl(workerPath: string, here: string = import.meta.url): string {
+  for (const root of COMPILED_ROOTS) {
+    const at = here.indexOf(root)
+    if (at >= 0) return `${here.slice(0, at + root.length)}${workerPath}.js`
+  }
+  return new URL(`../../${workerPath}.ts`, here).href
 }

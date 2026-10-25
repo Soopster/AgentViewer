@@ -354,7 +354,7 @@ export function retainTranscriptSession(session: Session): () => void {
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const w = new Worker(tuiWorkerUrl('threadingWorker', import.meta.url), { type: 'module' })
+  const w = new Worker(tuiWorkerUrl('tui/opentui/threadingWorker'), { type: 'module' })
   // The renderer keeps the TUI alive; the worker on its own must not, or a
   // process that is done (a smoke, a harness) waits on it forever.
   ;(w as unknown as { unref(): void }).unref()

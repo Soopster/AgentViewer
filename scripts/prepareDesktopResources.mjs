@@ -86,14 +86,13 @@ function main() {
   console.log('[prepare-desktop] compiling TUI with bun build --compile...')
   const tuiOutfile = path.join(binariesDir, `agent-viewer-tui-${triple}`)
   // The workers are passed as extra entrypoints so `bun build --compile`
-  // embeds them in the binary under `$bunfs`. The worker clients resolve their
-  // runtime URL via tui/opentui/workerUrl.ts. Entrypoint paths must be RELATIVE
-  // (with cwd at the repo root): bun keys $bunfs entries by the path string
-  // given on the command line, and the worker clients match the resulting
-  // basename (`root/threadingWorker.js`). Absolute paths produce long
-  // `root/Users/...` keys the clients can't resolve, and until bun 1.3.x lands
-  // its absolute-$bunfs worker remap those fail at runtime with
-  // `ModuleNotFound resolving ".../threadingWorker.js"`.
+  // embeds them in the binary under `$bunfs`, and `--root .` keys each one by
+  // its repository path (`root/tui/opentui/threadingWorker.js`,
+  // `root/plugins/analytics/tui/analyticsWorker.js`), which is what
+  // tui/opentui/workerUrl.ts resolves. Without `--root` Bun keys them from the
+  // entrypoints' common ancestor, which a plugin worker moves. Entrypoint paths
+  // must be RELATIVE (cwd at the repo root). scripts/tuiWorkerEntrypointsSmoke.ts
+  // checks this list against every worker the code starts.
   run(
     'bun',
     [
@@ -101,10 +100,13 @@ function main() {
       'tui/opentui/main.tsx',
       'tui/opentui/threadingWorker.ts',
       'tui/opentui/markdownBlocksWorker.ts',
-      'tui/opentui/analyticsWorker.ts',
+      'plugins/analytics/tui/analyticsWorker.ts',
       'tui/opentui/editorProjectSearchWorker.ts',
       'tui/opentui/composerMentionWorker.ts',
       'tui/opentui/gitDiffHighlightWorker.ts',
+      // Pins each embedded worker at its repository path (tui/opentui/workerUrl.ts).
+      '--root',
+      '.',
       '--compile',
       '--outfile',
       tuiOutfile,

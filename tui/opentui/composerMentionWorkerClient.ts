@@ -27,7 +27,7 @@ const pending = new Map<number, Pending>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const w = new Worker(tuiWorkerUrl('composerMentionWorker', import.meta.url), { type: 'module' })
+  const w = new Worker(tuiWorkerUrl('tui/opentui/composerMentionWorker'), { type: 'module' })
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const data = event.data
     const entry = pending.get(data.id)

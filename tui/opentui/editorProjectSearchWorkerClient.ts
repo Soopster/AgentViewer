@@ -23,7 +23,7 @@ function abortError(): Error {
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const instance = new Worker(tuiWorkerUrl('editorProjectSearchWorker', import.meta.url), { type: 'module' })
+  const instance = new Worker(tuiWorkerUrl('tui/opentui/editorProjectSearchWorker'), { type: 'module' })
   instance.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const response = event.data
     const entry = pending.get(response.id)

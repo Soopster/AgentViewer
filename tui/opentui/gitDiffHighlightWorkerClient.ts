@@ -49,7 +49,7 @@ export function createGitDiffHighlightClient(budget?: number) {
     busy = target
     try {
       if (!worker) {
-        worker = new Worker(tuiWorkerUrl('gitDiffHighlightWorker', import.meta.url), { type: 'module' })
+        worker = new Worker(tuiWorkerUrl('tui/opentui/gitDiffHighlightWorker'), { type: 'module' })
         worker.onmessage = (event: MessageEvent<DiffHighlightResponse>) => finish(event.data)
         worker.onerror = event => {
           event.preventDefault()

@@ -27,7 +27,7 @@ function dispatch() {
     active = job
     try {
       if (!worker) {
-        worker = new Worker(tuiWorkerUrl('markdownBlocksWorker', import.meta.url), { type: 'module' })
+        worker = new Worker(tuiWorkerUrl('tui/opentui/markdownBlocksWorker'), { type: 'module' })
         ;(worker as unknown as { unref(): void }).unref()
         worker.onmessage = ({ data }: MessageEvent<Result & { id: number; error?: string }>) => {
           if (!active || active.id !== data.id) return
