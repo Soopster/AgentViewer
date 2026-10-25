@@ -1,9 +1,13 @@
 # Composable application core and feature plugins
 
-Status: implementation underway, 25 October 2026. Provider contributions have an
-extension contract, lazy registry and contributor scaffold, and every SDK runtime
-has moved into its extension; see [Provider extensions](provider-extensions.md). Feature surface hosting and the
-Analytics vertical slice described below remain planned.
+Status, 25 October 2026: delivery steps 2 and 3 are done. Every provider SDK
+runtime lives in its extension ([Provider extensions](provider-extensions.md)).
+The feature plugin host exists (`lib/plugins/`, `tui/opentui/shell/`,
+`components/shell/`) and Analytics runs through it in both apps
+(`plugins/analytics/`). `npm run plugins:smoke` checks the contract, the TUI
+host in the real App, and the import boundaries. **Next: review the API (below)
+before migrating Git.** Plugin state has a versioned snapshot codec but is not
+yet written to disk; it lives for the process.
 
 ## Objective
 
@@ -230,3 +234,26 @@ plugins and application feature plugins remain distinct layers.
 The first implementation milestone is Analytics running through the same host
 contract in Web and TUI, with the current application behavior preserved. That
 is the point to review the API before migrating Git and the remaining families.
+
+## API review: what Git needs that version one lacks
+
+Analytics needed one service and two placements. Git (`diff` surface) is also a
+side-panel surface, is targeted by repository rather than session, mutates, and
+captures keys mid-precedence. Before moving it, decide:
+
+1. **A `panel` placement** — the surface panel (`SurfacePanel`, web `RightPanel`)
+   hosts `diff` today. Its kind is the `RightPanelSurfaceKind` union shared by
+   both apps and saved layouts, so the plugin surface id must stay `diff`.
+2. **A repository target** — `pin: 'cwd'`, matching `windowSurfaceMeta[id].cwd`,
+   with the session id as an optional second field (Git's review notes use it).
+3. **Services**: `repository` (cwd, session id), `composer` (append a diff note,
+   ask an agent about a selection — both target the composer the user is
+   writing in, resolved by the host), `clipboard`.
+4. **Dynamic key capture** — Git reports when its own text input has the keys
+   (`onKeyCaptureChange`); the root routes those ahead of global shortcuts. The
+   view context needs `setCapture(boolean)` with that meaning.
+5. **Full-screen overlays** — Git's overlay hides the navigation bars
+   (`fullScreenPopoverOpen`); a surface flag `fullScreen` replaces the root's list.
+6. **Cross-surface commands** — `p` in Git switches to pull requests. Either PR
+   joins the Git plugin, or plugins may dispatch another plugin's command id
+   through the shared dispatcher (never import it).
