@@ -63,6 +63,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
+import { getPluginCommand, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId } from '@/lib/plugins/catalog'
+import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
+import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
@@ -113,7 +116,9 @@ import {
   type TimelineScrollAnchor,
 } from '@/lib/timelineVirtualizer'
 
-const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
+const PluginSurfaceHost = dynamic(() => import('./shell/PluginSurfaceHost'), { ssr: false })
+// Feature plugins that put a button on the session toolbar.
+const WEB_TOOLBAR_PLUGIN_COMMANDS = listPluginCommands('web').filter((command) => command.webToolbarLabel)
 const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
 const ChannelBridgePanel = dynamic(() => import('./ChannelBridgePanel'), { ssr: false })
 const IdeBridgePanel = dynamic(() => import('./IdeBridgePanel'), { ssr: false })
@@ -3253,7 +3258,8 @@ function MessageViewInner({
     if (!preferencesHydrated) return
     writeLocalStorageValue('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
   }, [composerCollapsed, preferencesHydrated])
-  const [analyticsOpen, setAnalyticsOpen] = useState(false)
+  // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
+  const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -6812,6 +6818,15 @@ function MessageViewInner({
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
   }, [isProject, session])
+  // Plugin commands from the palette, the toolbar or a shortcut target the
+  // session this view shows; a project feed has no session to give them.
+  useEffect(() => subscribePluginCommands((commandId) => {
+    const command = getPluginCommand(commandId)
+    if (!command || !command.renderers.includes('web') || !isPluginSurfaceId(command.opens)) return false
+    if (command.requires === 'session' && (isProject || !session)) return false
+    setPluginOverlay(command.opens)
+    return true
+  }), [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const modelsPending = modelsLoading && !selectedModel
   const sendBusy = sendState === 'sending' || awaitingPersistedTurn || modelsPending
@@ -8106,11 +8121,12 @@ function MessageViewInner({
           Terminal
         </Link>
 
-        {/* Analytics */}
-        {!isProject && (
+        {/* Feature plugin commands (lib/plugins/catalog.ts) */}
+        {!isProject && WEB_TOOLBAR_PLUGIN_COMMANDS.map((command) => (
           <Button
-            onClick={() => setAnalyticsOpen(true)}
-            title="Session analytics"
+            key={command.id}
+            onClick={() => dispatchPluginCommand(command.id)}
+            title={command.label}
             variant="outline"
             size="sm"
             className="av-hover-control"
@@ -8126,9 +8142,9 @@ function MessageViewInner({
               cursor: 'pointer',
             }}
           >
-            Session stats
+            {command.webToolbarLabel}
           </Button>
-        )}
+        ))}
 
         {/* Stats */}
         {!loading && (
@@ -10657,11 +10673,13 @@ function MessageViewInner({
           </Card>
         )}
       </div>}
-      {analyticsOpen ? (
-        <AnalyticsPopover
-          open={analyticsOpen}
-          onClose={() => setAnalyticsOpen(false)}
-          input={{ info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages }}
+      {pluginOverlay && session ? (
+        <PluginSurfaceHost
+          surfaceId={pluginOverlay}
+          placement="overlay"
+          sessionKey={sessionIdentityKey(session)}
+          services={{ 'session-transcript': { info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages } }}
+          onClose={() => setPluginOverlay(null)}
         />
       ) : null}
     </div>

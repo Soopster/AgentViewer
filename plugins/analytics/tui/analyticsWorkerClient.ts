@@ -1,5 +1,5 @@
-import type { Analytics, AnalyticsInput } from '../../lib/analytics'
-import { tuiWorkerUrl } from './workerUrl'
+import type { Analytics, AnalyticsInput } from '../../../lib/analytics'
+import { tuiWorkerUrl } from '../../../tui/opentui/shell/sdk'
 
 type Pending = {
   resolve: (analytics: Analytics) => void

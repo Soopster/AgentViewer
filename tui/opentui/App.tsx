@@ -12,6 +12,9 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
+import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
+import { getPluginCommand, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
+import type { PluginKeyChord } from '../../lib/plugins/types'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
@@ -455,12 +458,14 @@ const COMPOSER_WAITING_MESSAGES = [
 ] as const
 
 
+// Plugin commands with a TUI binding, matched by the global key router.
+const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): command is ResolvedPluginCommand & { tuiKey: PluginKeyChord } => Boolean(command.tuiKey))
+
 // Overlays load when first opened — see lazyComponent.tsx.
 const GitPopover = lazyComponent(() => import('./GitPopover').then((module) => module.GitPopover))
 const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
 const FileViewerPopover = lazyComponent(() => import('./FileViewerPopover').then((module) => module.FileViewerPopover))
 const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
-const AnalyticsPopover = lazyComponent(() => import('./AnalyticsPopover').then((module) => module.AnalyticsPopover))
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
@@ -5785,7 +5790,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
-  { id: 'analytics',  label: 'Session analytics',      key: '⌃A', category: 'Session'    },
+  // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
+  ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
   { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
   { id: 'processes',  label: 'Processes and logs (dev server, watchers)', key: '⌃K l', category: 'Session' },
@@ -7717,24 +7723,6 @@ const SPLIT_PANE_ARRANGED_MAX = 5
 const EMPTY_SEARCH_MATCHES: number[] = []
 const SPLIT_PANE_EMPTY_LIVE: ThreadedMessage[] = []
 const noopSelectCard = () => {}
-
-// Analytics in a window: the pinned session's numbers, whatever the reader shows.
-function PinnedAnalyticsWindow({ session, density, showToolCalls, shouldYield, theme, width, height, onClose, onKeyHandlerReady }: {
-  session: Session | null
-  density: TuiDensity
-  showToolCalls: boolean
-  shouldYield: () => boolean
-  theme: TuiThemePalette
-  width: number
-  height: number
-  onClose: () => void
-  onKeyHandlerReady: (handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => void
-}) {
-  const { detail, status } = usePinnedSessionDetail(session, density, showToolCalls, shouldYield)
-  if (status === 'gone') return <text fg={theme.dim}>  That session is no longer available.</text>
-  if (!detail) return <text fg={theme.dim}>{status === 'error' ? '  Could not read the session.' : '  Loading…'}</text>
-  return <AnalyticsPopover docked detail={detail} theme={theme} width={width} height={height} onClose={onClose} onKeyHandlerReady={onKeyHandlerReady} />
-}
 
 // A pinned session's detail handed to whatever renders it, or why there is none.
 function PinnedSessionDetail({ session, density, showToolCalls, shouldYield, theme, children }: {
@@ -10113,10 +10101,11 @@ function OpenTuiWorkspace() {
   const [newSessionBusy, setNewSessionBusy] = useState(false)
   const [folderPickerForNewSession, setFolderPickerForNewSession] = useState(false)
   const newSessionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const [analyticsOpen, setAnalyticsOpen] = useState(false)
+  // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
+  const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
   const [deskOpen, setDeskOpen] = useState(false)
   const deskKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => void) | null>(null)
-  const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
@@ -10634,7 +10623,7 @@ function OpenTuiWorkspace() {
     || sessionSearchMode
     || gitOpen
     || pullRequestOpen
-    || analyticsOpen
+    || pluginOverlay !== null
     || deskOpen
     || crossSessionMessagingOpen
     || windowSwitcherOpen
@@ -20885,7 +20874,7 @@ function OpenTuiWorkspace() {
     if (kind === 'diff') setGitOpen(open)
     else if (kind === 'files') setFileViewerOpen(open)
     else if (kind === 'pull-request') setPullRequestOpen(open)
-    else if (kind === 'analytics') setAnalyticsOpen(open)
+    else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'editor') setEditorOpen(open)
     else if (kind === 'coordination') setCoordBoardOpen(open)
@@ -20906,7 +20895,7 @@ function OpenTuiWorkspace() {
   // The popover open now, if it can become a window. Order is the popovers' own
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
-    analyticsOpen ? 'analytics' : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination'
+    pluginOverlay ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
     : crossSessionMessagingOpen ? 'messaging' : handoffBriefOpen ? 'handoff' : taskPopoverOpen ? 'tasks'
     : fileHistoryPath && gitRepoCwd ? 'file-history' : checkpointOpen && gitRepoCwd ? 'checkpoints'
@@ -21042,6 +21031,17 @@ function OpenTuiWorkspace() {
 
   // Where the ⧉ button puts a popover: one menu for every popover — Git, Files
   // and pull requests included, which are side-panel surface kinds as well.
+  // A plugin command opens its surface: in the window already showing it for
+  // this pin when there is one (the open-popover effect routes it), else as an overlay.
+  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand) => {
+    if (!isPluginSurfaceId(command.opens)) return
+    setPluginOverlay(command.opens)
+  })
+  const closePluginOverlay = useStableEvent(() => setPluginOverlay(null))
+  const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => {
+    pluginOverlayKeyHandlerRef.current = handler
+  })
+  const pluginSelectedDetail = useMemo(() => ({ key: selectedSessionKey, detail: sessionDetail }), [selectedSessionKey, sessionDetail])
   const offerPopoverPlacement = useStableEvent((kind: PopoverWindowKind | 'diff' | 'files' | 'pull-request') => {
     const beside = () => {
       if (isPopoverWindowKind(kind)) { openPopoverWindow(kind); return }
@@ -22019,7 +22019,7 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [analyticsOpen, dailySummaryOpen, editorOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
+  }, [pluginOverlay, dailySummaryOpen, editorOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
     crossSessionMessagingOpen, handoffBriefOpen, taskPopoverOpen, checkpointOpen, fileHistoryPath, channelBridgeOpen, ideBridgeOpen, deskOpen])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
@@ -22337,6 +22337,11 @@ function OpenTuiWorkspace() {
     if (id.startsWith('popwin:')) {
       const kind = id.slice('popwin:'.length)
       if (isPopoverWindowKind(kind)) openPopoverWindow(kind)
+      return
+    }
+    const pluginCommand = getPluginCommand(id)
+    if (pluginCommand) {
+      runPluginCommand(pluginCommand)
       return
     }
     switch (id) {
@@ -22869,9 +22874,6 @@ function OpenTuiWorkspace() {
         setEditorInitialLine(null)
         setEditorOpen(true)
         break
-      case 'analytics':
-        setAnalyticsOpen(true)
-        break
       case 'handoff-brief':
         openHandoffBrief()
         break
@@ -23069,7 +23071,7 @@ function OpenTuiWorkspace() {
   // Window controls are transient keyboard owners, never persisted workspace state.
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
-    analytics: analyticsOpen, 'daily-summary': dailySummaryOpen, editor: editorOpen, coordination: coordBoardOpen,
+    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, editor: editorOpen, coordination: coordBoardOpen,
     playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
     messaging: crossSessionMessagingOpen, handoff: handoffBriefOpen, tasks: taskPopoverOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd), checkpoints: checkpointOpen,
@@ -23834,8 +23836,8 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (analyticsOpen) {
-      handled(() => { analyticsKeyHandlerRef.current?.(key) })
+    if (pluginOverlay) {
+      handled(() => { pluginOverlayKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -24839,10 +24841,12 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // Global analytics popover. Raw Ctrl+A remains analytics; it must never be
-    // guessed to mean Ctrl+Shift+A on terminals that cannot distinguish them.
-    if (isCtrl('a')) {
-      handled(() => setAnalyticsOpen(true))
+    // Plugin commands' own bindings (a manifest's `tuiKey`), at global precedence.
+    const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(({ tuiKey }) => tuiKey.ctrl
+      ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))
+      : key.name === tuiKey.name && !key.ctrl && Boolean(key.shift) === Boolean(tuiKey.shift))
+    if (pluginChord) {
+      handled(() => runPluginCommand(pluginChord))
       return
     }
 
@@ -26792,6 +26796,28 @@ function OpenTuiWorkspace() {
       if (slot) windowSurfaceCaptureRef.current.set(slot, capture)
       else panelRef.current = capture
     }
+    // Plugin surfaces in windows: `close` there leaves the window (Esc, q).
+    if (isPluginSurfaceId(kind)) {
+      const pinned = slot ? pinnedSessionOf(slot) : selectedSession
+      return (
+        <PluginSurfaceHost
+          surfaceId={kind}
+          placement="window"
+          session={pinned}
+          sessionKey={pinned ? sessionKey(pinned) : null}
+          selected={pluginSelectedDetail}
+          density={density}
+          showToolCalls={showToolCalls}
+          shouldYield={splitPaneShouldYield}
+          theme={theme}
+          width={box.width}
+          height={box.height}
+          focused={focused}
+          onClose={leave}
+          onKeyHandlerReady={keysReady({ current: null })}
+        />
+      )
+    }
     switch (kind) {
       case 'browser':
         return (
@@ -26916,20 +26942,6 @@ function OpenTuiWorkspace() {
         )
       // Popovers in windows: `close` there leaves the window (Esc, q), so the
       // popover's own close keys hand focus back rather than closing it.
-      case 'analytics':
-        return (
-          <PinnedAnalyticsWindow
-            session={slot ? pinnedSessionOf(slot) : selectedSession}
-            density={density}
-            showToolCalls={showToolCalls}
-            shouldYield={splitPaneShouldYield}
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            onClose={leave}
-            onKeyHandlerReady={keysReady({ current: null })}
-          />
-        )
       case 'attention':
         return (
           <AttentionInboxPopover docked items={attentionItems} theme={theme} width={box.width} height={box.height}
@@ -29003,27 +29015,23 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {analyticsOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {analyticsOpen ? (
-        <AnalyticsPopover
-          detail={sessionDetail}
+      {pluginOverlay ? (
+        <PluginSurfaceHost
+          surfaceId={pluginOverlay}
+          placement="overlay"
+          session={selectedSession}
+          sessionKey={selectedSessionKey}
+          selected={pluginSelectedDetail}
+          density={density}
+          showToolCalls={showToolCalls}
+          shouldYield={splitPaneShouldYield}
           theme={theme}
           width={width}
           height={height}
-          onClose={() => setAnalyticsOpen(false)}
-          onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('analytics')}
+          focused
+          onClose={closePluginOverlay}
+          onDetach={() => offerPopoverPlacement(pluginOverlay)}
+          onKeyHandlerReady={registerPluginOverlayKeys}
         />
       ) : null}
 

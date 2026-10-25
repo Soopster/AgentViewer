@@ -16,6 +16,10 @@
     "tui/opentui/**/*.tsx",
     "tui/theme.ts",
     "tui/format.ts",
+    "plugins/**/tui/**/*.ts",
+    "plugins/**/tui/**/*.tsx",
+    "plugins/*/manifest.ts",
+    "lib/plugins/**/*.ts",
     "lib/tui/service.ts"
   ]
 }

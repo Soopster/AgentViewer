@@ -1,13 +1,12 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
-import type { TuiSessionDetail } from '../../lib/tui/service'
+import type { TuiSessionDetail } from '../../../lib/tui/service'
 import { computeAnalyticsAsync } from './analyticsWorkerClient'
-import type { Analytics, TimelinePoint } from '../../lib/analytics'
-import { fmtCost, fmtDuration, fmtNum } from '../../lib/analytics'
-import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthReport, penaltyLabel } from '../../lib/healthScore'
+import type { Analytics, TimelinePoint } from '../../../lib/analytics'
+import { fmtCost, fmtDuration, fmtNum } from '../../../lib/analytics'
+import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthReport, penaltyLabel } from '../../../lib/healthScore'
 import {
   type Insight,
   type InsightSeverity,
@@ -18,7 +17,7 @@ import {
   summarizeCache,
   summarizePace,
   summarizeRisk,
-} from '../../lib/analyticsInsights'
+} from '../../../lib/analyticsInsights'
 
 function bar(value: number, max: number, width: number): string {
   if (max <= 0 || width <= 0) return ''
@@ -30,7 +29,7 @@ function bar(value: number, max: number, width: number): string {
 // Pane definitions
 // ---------------------------------------------------------------------------
 
-type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
+export type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
   1: 'Tokens',
@@ -74,6 +73,9 @@ type Props = {
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
   onDetach?: () => void
+  /** The selected pane, when the host keeps it (scoped plugin state). */
+  pane?: PaneId
+  onPaneChange?: (next: PaneId | ((previous: PaneId) => PaneId)) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -123,13 +125,15 @@ function Sparkline({
 // AnalyticsPopover
 // ---------------------------------------------------------------------------
 
-export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyHandlerReady, docked = false, onDetach }: Props) {
+export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyHandlerReady, docked = false, onDetach, pane: controlledPane, onPaneChange }: Props) {
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   // Health is a cheap single-pass computation, so it stays on the main thread
   // rather than round-tripping through the analytics worker.
   const health = useMemo(() => computeHealthReport(detail), [detail])
   const requestRef = useRef(0)
-  const [pane, setPane] = React.useState<PaneId>(0)
+  const [localPane, setLocalPane] = React.useState<PaneId>(0)
+  const pane = controlledPane ?? localPane
+  const setPane = onPaneChange ?? setLocalPane
   const scrollRef = useRef<ScrollBoxRenderable>(null)
 
   useEffect(() => {
@@ -173,7 +177,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
     if (key.name === 'k' || key.name === 'up')   { scrollRef.current?.scrollBy(-1); return }
     if (key.name === 'd')                         { scrollRef.current?.scrollBy(10); return }
     if (key.name === 'u')                         { scrollRef.current?.scrollBy(-10); return }
-  }, [onClose])
+  }, [onClose, setPane])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 

@@ -7,6 +7,8 @@ import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, Comma
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META } from '@/lib/themes'
+import { listPluginCommands } from '@/lib/plugins/catalog'
+import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
 import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
 import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
 import {
@@ -496,6 +498,19 @@ export default function CommandPalette({
         closeOnRun: false,
         run: () => { void rebuildSearchIndex() },
       },
+      // Feature plugins' commands, run by whichever view owns their target.
+      ...listPluginCommands('web')
+        .filter((command) => command.requires !== 'session' || (selectedSession && !selectedProject))
+        .map((command): PaletteItem => ({
+          id: `plugin:${command.id}`,
+          label: command.label,
+          description: command.requires === 'session' && selectedSession ? `For ${selectedSession.title || selectedSession.sessionId}` : command.label,
+          icon: <BarChart3 size={16} />,
+          group: 'actions',
+          keywords: [...(command.keywords ?? []), command.pluginId],
+          score: 0,
+          run: () => { dispatchPluginCommand(command.id) },
+        })),
       {
         id: 'open-cross-session-analytics',
         label: 'Open cross-session analytics',
@@ -853,7 +868,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

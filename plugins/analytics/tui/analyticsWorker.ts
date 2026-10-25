@@ -1,4 +1,4 @@
-import { computeAnalytics, type Analytics, type AnalyticsInput } from '../../lib/analytics'
+import { computeAnalytics, type Analytics, type AnalyticsInput } from '../../../lib/analytics'
 
 type AnalyticsRequest = { id: number; detail: AnalyticsInput | null }
 type AnalyticsResponse =

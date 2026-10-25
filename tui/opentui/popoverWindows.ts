@@ -13,11 +13,16 @@
 //           ahead of the global keys, as a shell in terminal mode is — for
 //           views that are editors in their own right.
 
-export type PopoverWindowKind =
-  | 'analytics' | 'daily-summary' | 'editor' | 'coordination'
+import { listPluginSurfaces, type PluginSurfaceId } from '../../lib/plugins/catalog'
+
+type BuiltinPopoverWindowKind =
+  | 'daily-summary' | 'editor' | 'coordination'
   | 'attention' | 'prompt-library' | 'playbooks' | 'messaging' | 'handoff' | 'tasks'
   | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
   | 'teammates' | 'desk' | 'diagnostics'
+
+/** Built-in kinds plus every TUI plugin surface; a plugin adds none here. */
+export type PopoverWindowKind = BuiltinPopoverWindowKind | PluginSurfaceId
 
 export type PopoverWindowSpec = {
   title: string
@@ -27,8 +32,7 @@ export type PopoverWindowSpec = {
   palette: string
 }
 
-export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
-  analytics: { title: '◔ Analytics', pin: 'session', single: false, keys: 'window', palette: 'Analytics in a window' },
+const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpec> = {
   'daily-summary': { title: '☰ Daily summary', pin: null, single: true, keys: 'window', palette: 'Daily summary in a window' },
   editor: { title: '✎ Editor', pin: null, single: true, keys: 'capture', palette: 'Editor in a window' },
   // The agent control center (⌃K a): one coordination store, so one view of it.
@@ -49,6 +53,13 @@ export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
   // The desk's letters belong to its command line, as the editor's do to its buffer.
   desk: { title: '▣ Desk', pin: null, single: true, keys: 'capture', palette: 'Desk in a window' },
   diagnostics: { title: '⚕ Diagnostics', pin: null, single: true, keys: 'window', palette: 'Diagnostics in a window' },
+}
+
+export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
+  ...Object.fromEntries(listPluginSurfaces('tui').filter(surface => surface.placements.includes('window')).map(surface => [surface.id, {
+    title: surface.title, pin: surface.pin, single: surface.single, keys: surface.keys, palette: surface.windowLabel,
+  } satisfies PopoverWindowSpec])) as Record<PluginSurfaceId, PopoverWindowSpec>,
+  ...BUILTIN_POPOVER_WINDOWS,
 }
 
 export function isPopoverWindowKind(kind: string): kind is PopoverWindowKind {

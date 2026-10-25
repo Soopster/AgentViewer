@@ -9,7 +9,7 @@ import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthRepor
 import type { CoachInsight } from '@/lib/coachInsights'
 import { readJsonResponse } from '@/lib/httpResponse'
 
-type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
+export type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
@@ -53,10 +53,15 @@ type Props = {
   open: boolean
   onClose: () => void
   input: AnalyticsInput | null
+  /** The selected pane, when the host keeps it (scoped plugin state). */
+  pane?: PaneId
+  onPaneChange?: (next: PaneId | ((previous: PaneId) => PaneId)) => void
 }
 
-export default function AnalyticsPopover({ open, onClose, input }: Props) {
-  const [pane, setPane] = useState<PaneId>(0)
+export default function AnalyticsPopover({ open, onClose, input, pane: controlledPane, onPaneChange }: Props) {
+  const [localPane, setLocalPane] = useState<PaneId>(0)
+  const pane = controlledPane ?? localPane
+  const setPane = onPaneChange ?? setLocalPane
   const [hoveredPane, setHoveredPane] = useState<PaneId | null>(null)
   const analytics = useMemo(() => computeAnalytics(open ? input : null), [open, input])
   const health = useMemo(() => computeHealthReport(open ? input : null), [open, input])
