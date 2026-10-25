@@ -1,16 +1,16 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
-import type { ThreadedMessage } from '../../lib/threading'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import type { ThreadedMessage } from '../../../lib/threading'
 import {
   buildTaskRegistry,
   groupAndSortTasks,
   isStoppableTask,
   type TaskGroup,
   type TaskState,
-} from '../../lib/taskRegistry'
+} from '../../../lib/taskRegistry'
 
 type TaskPanelKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 

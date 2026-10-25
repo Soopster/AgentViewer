@@ -7,9 +7,13 @@ import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
 import { manifest as editor } from '../../plugins/editor/manifest'
+import { manifest as messaging } from '../../plugins/messaging/manifest'
+import { manifest as tasks } from '../../plugins/tasks/manifest'
+import { manifest as bridges } from '../../plugins/bridges/manifest'
+import { manifest as diagnostics } from '../../plugins/diagnostics/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
