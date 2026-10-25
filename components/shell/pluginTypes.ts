@@ -9,6 +9,12 @@ export type WebPluginServices = {
     readonly cwd: string
     /** Scopes turn lists to one session; null means every turn in the repository. */
     readonly sessionId: string | null
+    /** The provider of `sessionId`, which scopes reads made on its behalf. */
+    readonly provider?: string | null
+  }
+  composer?: {
+    /** Insert a file path into the composer the user is writing in. */
+    readonly insertPath: (path: string) => void
   }
 }
 

@@ -5,3 +5,5 @@ export { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../doc
 export { tuiWorkerUrl } from '../workerUrl'
 export type { TuiThemePalette } from '../../theme'
 export type { TuiPluginView, TuiPluginViewProps, TuiPluginServices, TuiPluginKeyEvent } from './pluginTypes'
+export { useWorkspaceState } from '../workspaceContext'
+export { detectTuiCodeFiletypeFromPath } from '../../codeFiletypes'

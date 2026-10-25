@@ -3,13 +3,16 @@
 Status, 25 October 2026: delivery steps 2–4's Git half are done. Every
 provider SDK runtime lives in its extension ([Provider extensions](provider-extensions.md)).
 The feature plugin host exists (`lib/plugins/`, `tui/opentui/shell/`,
-`components/shell/`), and **Analytics and Git** run through it in both apps
-(`plugins/analytics/`, `plugins/git/`). A **plugin manager** (TUI palette
+`components/shell/`), and **Analytics, Git and Files** run through it in both
+apps (`plugins/analytics/`, `plugins/git/`, `plugins/files/`). The TUI's
+new-session folder picker is the Files view asked for a directory (the
+`directory-picker` service); with Files off, browsing says so and the recent
+folders still work. A **plugin manager** (TUI palette
 "Plugins: turn features on or off", Web palette "Plugins") turns each plugin
 off or on; the choice is `.agent-viewer-data/plugins.json`, shared by the TUI
 and the web daemon (`/api/plugins`). `npm run plugins:smoke` checks the
 contract, enablement, the TUI host, Git and the manager in the real App, and the
-import boundaries. Next: files/editor, terminal/browser, coordination and the
+import boundaries. Next: the editor, terminal/browser, coordination and the
 remaining optional features (step 5), then step 6. Plugin view state has a
 versioned snapshot codec but is not yet written to disk.
 

@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton } from './dockedPopover'
-import { useWorkspaceState } from './workspaceContext'
+import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
+import { useWorkspaceState } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import type { TuiThemePalette } from '../theme'
-import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { detectTuiCodeFiletypeFromPath } from '../../../tui/opentui/shell/sdk'
 
 export type FileViewerKeyEvent = {
   name: string

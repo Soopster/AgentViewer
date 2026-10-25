@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { SyntaxStyle } from '@opentui/core'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
 import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
 import type { SelectionAskInput } from '../../../lib/selectionAsk'
@@ -24,11 +25,27 @@ export type TuiPluginServices = {
     readonly appendDiffNote: (prompt: string) => void
     /** Hand lines to an agent with what to do with them. */
     readonly askAboutSelection?: (request: SelectionAskInput) => void
+    /** Insert text at the composer's cursor and give it the keyboard. */
+    readonly insertText?: (text: string) => void
   }
   clipboard?: {
     readonly write: (text: string) => Promise<void>
   }
+  'open-file'?: {
+    readonly open: (path: string, line?: number | null) => void
+  }
+  'directory-picker'?: {
+    /** Called with the chosen directory; the host closes the view. */
+    readonly choose: (path: string) => void
+  }
+  'scroll-preferences'?: {
+    readonly velocity: boolean
+    readonly toggleVelocity: () => void
+  }
 }
+
+/** Services a host hands over as values; the transcript and repository it resolves itself. */
+export type TuiProvidedPluginServices = Omit<TuiPluginServices, 'session-transcript' | 'repository'>
 
 /** A key handler returns false for a key it did not use, so the host may route it on. */
 export type TuiPluginKeyHandler = (key: TuiPluginKeyEvent) => boolean | void
@@ -43,6 +60,8 @@ export type TuiPluginViewProps = {
   readonly target: PluginTarget
   readonly services: TuiPluginServices
   readonly theme: TuiThemePalette
+  /** Code highlighting styles, bound to this renderer's scene. */
+  readonly syntaxStyle: SyntaxStyle | null
   readonly width: number
   readonly height: number
   readonly focused: boolean

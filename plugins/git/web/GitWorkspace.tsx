@@ -12,7 +12,7 @@ import { PierrePatchDiffView } from '@/components/shell/sdkDiff'
 import { useGitWorkspace } from '@/lib/git/useGitWorkspace'
 import { webWorkspaceTransport } from '@/lib/git/webWorkspaceTransport'
 import { filesForSide } from '@/lib/git/workspaceTypes'
-import { isDocked, type SurfaceVariant } from '@/components/shell/sdkDiff'
+import { isDocked, type SurfaceVariant } from '@/components/shell/sdk'
 
 type Inspection = { kind: 'branch' | 'remote-branch' | 'commit' | 'stash'; ref: string; label: string; selector?: string }
 function readDraft(cwd: string) { try { return localStorage.getItem(`git-commit-v1:${cwd}`) ?? '' } catch { return '' } }

@@ -24,13 +24,13 @@ import { surfaceKindLabel, type RightPanelSurface, type RightPanelSurfaceKind } 
 import { teamAttentionMark } from '@/lib/coordinatorAttention'
 import { getPluginCommand, getPluginSurface, isPluginSurfaceId, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
+import type { WebPluginServices } from '@/components/shell/pluginTypes'
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
 const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { ssr: false })
-const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
@@ -377,7 +377,6 @@ export default function Home() {
   // A repository-pinned plugin surface (Git) open as an overlay on the active project.
   const [repositoryOverlay, setRepositoryOverlay] = useState<PluginSurfaceId | null>(null)
   const [pullRequestViewOpen, setPullRequestViewOpen] = useState(false)
-  const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
   const composerInsertRequestRef = useRef(0)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
@@ -527,10 +526,6 @@ export default function Home() {
     setPullRequestViewOpen(true)
   }, [activeProjectDir])
 
-  const openFileViewer = useCallback(() => {
-    if (!activeProjectDir) return
-    setFileViewerOpen(true)
-  }, [activeProjectDir])
 
   const consumeComposerInsertRequest = useCallback((requestId: number) => {
     setComposerInsertRequest((current) => current?.requestId === requestId ? null : current)
@@ -543,6 +538,12 @@ export default function Home() {
       text: `@${path} `,
     })
   }, [])
+  // What a repository-pinned plugin surface (Git, Files) is given on the active project.
+  const liveSession = selectedSession && !selectedSession.isPending ? selectedSession : null
+  const repositoryServices = useMemo<WebPluginServices | null>(() => (activeProjectDir ? {
+    repository: { cwd: activeProjectDir, sessionId: liveSession?.sessionId ?? null, provider: liveSession?.provider ?? null },
+    ...(!selectedProject && selectedSession ? { composer: { insertPath: insertFilePathToComposer } } : {}),
+  } : null), [activeProjectDir, liveSession?.sessionId, liveSession?.provider, selectedProject, selectedSession, insertFilePathToComposer])
 
   const openRunDashboard = useCallback(() => {
     setDashboardContextSession(selectedSession)
@@ -839,7 +840,7 @@ export default function Home() {
       if (event.key.toLowerCase() !== 'f') return
       if (!activeProjectDir) return
       event.preventDefault()
-      setFileViewerOpen(true)
+      dispatchPluginCommand('files')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1477,21 +1478,9 @@ export default function Home() {
           </div>
         )
       case 'files':
-        return activeProjectDir ? (
-          <FileViewer
-            variant="docked"
-            open
-            cwd={activeProjectDir}
-            canInsert={!selectedProject && !!selectedSession}
-            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
-            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
-            onOpenChange={(next) => { if (!next) closeRightPanelSurface(surface.id) }}
-            onInsertPath={insertFilePathToComposer}
-          />
-        ) : null
       case 'diff':
-        return activeProjectDir ? (
-          <PluginSurfaceHost surfaceId="diff" placement="panel" sessionKey={null} cwd={activeProjectDir} services={{ repository: { cwd: activeProjectDir, sessionId: selectedSession?.sessionId ?? null } }} onClose={() => closeRightPanelSurface(surface.id)} />
+        return activeProjectDir && repositoryServices ? (
+          <PluginSurfaceHost surfaceId={surface.kind} placement="panel" sessionKey={null} cwd={activeProjectDir} services={repositoryServices} onClose={() => closeRightPanelSurface(surface.id)} />
         ) : null
       case 'pull-request':
         return activeProjectDir ? (
@@ -1737,7 +1726,6 @@ export default function Home() {
                   messageViewFullscreen={messageViewFullscreen}
                   canMaximizeMessageView={canMaximizeMessageView}
                   canOpenGit={!!activeProjectDir}
-                  canOpenFiles={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
                   canOpenPromptLibrary={!selectedProject && !!selectedSession}
                   canOpenChannelBridge={canUseChannelBridge}
@@ -1757,7 +1745,6 @@ export default function Home() {
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
                   onOpenPullRequests={openPullRequestView}
-                  onOpenFiles={openFileViewer}
                   onOpenCoordinator={openCoordinator}
                   onOpenCrossSessionMessaging={openCrossSessionMessaging}
                   onOpenTasks={openTaskPanel}
@@ -1794,13 +1781,13 @@ export default function Home() {
             renderSurface={renderRightPanelSurface}
           />
         ) : null}
-        {activeProjectDir && repositoryOverlay ? (
+        {activeProjectDir && repositoryOverlay && repositoryServices ? (
           <PluginSurfaceHost
             surfaceId={repositoryOverlay}
             placement="overlay"
             sessionKey={null}
             cwd={activeProjectDir}
-            services={{ repository: { cwd: activeProjectDir, sessionId: selectedSession?.sessionId ?? null } }}
+            services={repositoryServices!}
             onClose={() => setRepositoryOverlay(null)}
           />
         ) : null}
@@ -1827,17 +1814,6 @@ export default function Home() {
                 }),
               }).then(() => { void fetchSessions() }).catch(() => {})
             } : undefined}
-          />
-        ) : null}
-        {activeProjectDir && fileViewerOpen ? (
-          <FileViewer
-            open={fileViewerOpen}
-            cwd={activeProjectDir}
-            canInsert={!selectedProject && !!selectedSession}
-            sessionId={selectedSession && !selectedSession.isPending ? selectedSession.sessionId : undefined}
-            provider={selectedSession && !selectedSession.isPending ? selectedSession.provider : undefined}
-            onOpenChange={setFileViewerOpen}
-            onInsertPath={insertFilePathToComposer}
           />
         ) : null}
         {provenanceOpen ? (

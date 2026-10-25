@@ -32,9 +32,9 @@ import { CommandDialog } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
-import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
+import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from '@/components/shell/sdk'
 
-const CodeViewer = dynamic(() => import('./CodeRenderers').then((module) => module.CodeViewer), {
+const CodeViewer = dynamic(() => import('@/components/shell/sdkCode').then((module) => module.CodeViewer), {
   ssr: false,
   loading: () => <div className="p-4 font-mono text-xs text-[var(--text-3)]">Loading syntax highlighter…</div>,
 })

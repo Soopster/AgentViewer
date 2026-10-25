@@ -5,10 +5,11 @@
 // changes.
 import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
+import { manifest as files } from '../../plugins/files/manifest'
 import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

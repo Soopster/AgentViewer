@@ -13,6 +13,7 @@ import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
+import type { TuiProvidedPluginServices } from './shell/pluginTypes'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
@@ -468,7 +469,6 @@ const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): co
 
 // Overlays load when first opened — see lazyComponent.tsx.
 const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
-const FileViewerPopover = lazyComponent(() => import('./FileViewerPopover').then((module) => module.FileViewerPopover))
 const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
 const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
@@ -5792,7 +5792,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
-  { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
@@ -10047,7 +10046,6 @@ function OpenTuiWorkspace() {
   const surfacePluginKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const surfacePluginKeyCaptureRef = useRef(false)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
-  const surfaceFilesKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The Terminal tab's claim on keys: `input` while a command is typed (keys
   // reach its <input>), `terminal` while a shell has the keyboard (every key
@@ -10086,8 +10084,8 @@ function OpenTuiWorkspace() {
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
   const [pullRequestOpen, setPullRequestOpen] = useState(false)
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
-  const [fileViewerOpen, setFileViewerOpen] = useState(false)
-  const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // The new-session folder picker: the Files plugin's view, asked to choose a directory.
+  const folderPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorInitialPath, setEditorInitialPath] = useWorkspaceState<string | null>('editorInitialPath', null)
   // 1-based, as every transcript reference and stack trace writes it; the editor
@@ -16085,13 +16083,15 @@ function OpenTuiWorkspace() {
   })
 
   const openNewSessionFolderPicker = useStableEvent(() => {
+    if (!isPluginEnabled('files')) {
+      showNotice('info', 'Folder browsing needs Files · turn it on in Plugins')
+      return
+    }
     setFolderPickerForNewSession(true)
-    setFileViewerOpen(true)
   })
 
   const handleNewSessionFolderSelected = useStableEvent((path: string) => {
     setNewSessionCwd(path)
-    setFileViewerOpen(false)
     setFolderPickerForNewSession(false)
   })
 
@@ -20880,8 +20880,7 @@ function OpenTuiWorkspace() {
   // `pin` reopens a path-pinned popover (file history) on its path.
   const setPopoverOpen = (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => {
     // Git, Files and pull requests are surface kinds with a popover of their own.
-    if (kind === 'files') setFileViewerOpen(open)
-    else if (kind === 'pull-request') setPullRequestOpen(open)
+    if (kind === 'pull-request') setPullRequestOpen(open)
     else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'editor') setEditorOpen(open)
@@ -21065,16 +21064,48 @@ function OpenTuiWorkspace() {
     }
     return false
   })
-  const pluginComposer = useMemo(() => ({
-    appendDiffNote: (prompt: string) => {
-      appendDiffCommentPromptToComposer(prompt)
-      showNotice('info', 'Diff comment added to composer')
+  const toggleVelocityScroll = useStableEvent(() => {
+    setVelocityScrollEnabled((v) => {
+      const next = !v
+      showToggleOutcome('Velocity scroll', next)
+      void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
+      return next
+    })
+  })
+  // What the root offers plugin views. Each surface receives only the services it declares.
+  const pluginServices = useMemo((): TuiProvidedPluginServices => ({
+    composer: {
+      appendDiffNote: (prompt: string) => {
+        appendDiffCommentPromptToComposer(prompt)
+        showNotice('info', 'Diff comment added to composer')
+      },
+      askAboutSelection: (request: SelectionAskInput) => { void askAgentAboutSelection(request) },
+      insertText: (text: string) => {
+        insertComposerTextAtCursor(text)
+        setComposerActive(true)
+        showNotice('info', 'Added to composer')
+      },
     },
-    askAboutSelection: (request: SelectionAskInput) => { void askAgentAboutSelection(request) },
-  // Both are the root's stable events.
+    clipboard: { write: (text: string) => writeClipboard(text, renderer) },
+    'open-file': {
+      open: (path: string, line?: number | null) => {
+        setEditorInitialPath(path)
+        setEditorInitialLine(line ?? null)
+        setEditorOpen(true)
+      },
+    },
+    'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
+  // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [])
-  const pluginClipboard = useMemo(() => ({ write: (text: string) => writeClipboard(text, renderer) }), [renderer])
+  }), [renderer, velocityScrollEnabled])
+  const closeFolderPicker = useStableEvent(() => setFolderPickerForNewSession(false))
+  const folderPickerServices = useMemo((): TuiProvidedPluginServices => ({
+    'directory-picker': { choose: (path: string) => handleNewSessionFolderSelected(path) },
+    'scroll-preferences': pluginServices['scroll-preferences'],
+  }), [pluginServices, handleNewSessionFolderSelected])
+  const registerFolderPickerKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
+    folderPickerKeyHandlerRef.current = handler
+  })
   const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
   const closePluginOverlay = useStableEvent(() => setPluginOverlay(null))
   // Turning a plugin off closes its overlay; its windows say it is off.
@@ -22576,15 +22607,9 @@ function OpenTuiWorkspace() {
         })
         break
       }
-      case 'velocity-scroll': {
-        setVelocityScrollEnabled((v) => {
-          const next = !v
-          showToggleOutcome('Velocity scroll', next)
-          void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
-          return next
-        })
+      case 'velocity-scroll':
+        toggleVelocityScroll()
         break
-      }
       case 'mode': {
         const target = composerTargetSession ?? selectedSession
         if (target?.provider === 'opencode') {
@@ -22909,9 +22934,6 @@ function OpenTuiWorkspace() {
       case 'pull-requests':
         setPullRequestOpen(true)
         break
-      case 'files':
-        setFileViewerOpen(true)
-        break
       case 'editor':
         setEditorInitialPath(null)
         setEditorInitialLine(null)
@@ -23126,7 +23148,7 @@ function OpenTuiWorkspace() {
     || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen || coordModalOpen || remoteCoordinatorTarget
     || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
     || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
-    || pullRequestOpen || fileViewerOpen || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
+    || pullRequestOpen || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
   )
   const endWindowResizeGroup = () => {
     windowResizeGroupRef.current = false
@@ -23403,11 +23425,10 @@ function OpenTuiWorkspace() {
       const popover = openPopoverKind()
       if (popover) { handled(() => openPopoverWindow(popover)); return }
       // Git, Files and pull requests already have window kinds of their own.
-      const surfaceKind: WindowSurfaceKind | null = pluginOverlay && isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : fileViewerOpen ? 'files' : pullRequestOpen ? 'pull-request' : null
+      const surfaceKind: WindowSurfaceKind | null = pluginOverlay && isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : pullRequestOpen ? 'pull-request' : null
       if (surfaceKind && gitRepoCwd) {
         handled(() => {
           setPluginOverlay(null)
-          setFileViewerOpen(false)
           setPullRequestOpen(false)
           openSurfaceWindow(surfaceKind as RightPanelSurfaceKind)
         })
@@ -23763,8 +23784,8 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (fileViewerOpen) {
-      handled(() => { fileViewerKeyHandlerRef.current?.(key) })
+    if (folderPickerForNewSession) {
+      if (folderPickerKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -24841,12 +24862,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // Yazi-inspired project file browser
-    if (isCtrl('f')) {
-      handled(() => setFileViewerOpen(true))
-      return
-    }
-
     // LazyVim-inspired project editor. The editor owns text input while open;
     // the root handler only intercepts shortcuts the editor reports consumed.
     if (isCtrl('e')) {
@@ -25562,14 +25577,7 @@ function OpenTuiWorkspace() {
     }
 
     if (sequence === 'V') {
-      handled(() => {
-        setVelocityScrollEnabled((v) => {
-          const next = !v
-          void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
-          showToggleOutcome('Velocity scroll', next)
-          return next
-        })
-      })
+      handled(toggleVelocityScroll)
       return
     }
 
@@ -26843,8 +26851,8 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={surfaceCwd}
           repositorySessionId={gitSessionId}
-          composer={pluginComposer}
-          clipboard={pluginClipboard}
+          provided={pluginServices}
+          syntaxStyle={handoffBriefSyntaxStyle}
           theme={theme}
           width={box.width}
           height={box.height}
@@ -26891,32 +26899,6 @@ function OpenTuiWorkspace() {
               // The composer takes the keys from here; the process keeps running.
               setSurfacePanelFocused(false)
               showNotice('info', 'Error added to composer')
-            }}
-          />
-        )
-      case 'files':
-        return (
-          <FileViewerPopover
-            docked
-            cwd={surfaceCwd}
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            syntaxStyle={handoffBriefSyntaxStyle}
-            velocityScrollEnabled={velocityScrollEnabled}
-            onClose={close}
-            onKeyHandlerReady={keysReady(surfaceFilesKeyRef as { current: SurfaceKeyHandler | null })}
-            onInsertPath={(path) => {
-              insertComposerTextAtCursor(path)
-              setComposerActive(true)
-            }}
-            onToggleVelocityScroll={() => {
-              setVelocityScrollEnabled((current) => {
-                const next = !current
-                showToggleOutcome('Velocity scroll', next)
-                void writeTuiVelocityScroll(next).catch(() => {})
-                return next
-              })
             }}
           />
         )
@@ -27364,7 +27346,6 @@ function OpenTuiWorkspace() {
         if (!surface) return
         if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
         else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
-        else if (surface.kind === 'files') surfaceFilesKeyRef.current?.(key)
         else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
         // browser/agents own their own <input> or are read-only.
       }}
@@ -27373,7 +27354,7 @@ function OpenTuiWorkspace() {
   ) : null
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
-  const fullScreenPopoverOpen = editorOpen || Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || fileViewerOpen || deskOpen
+  const fullScreenPopoverOpen = editorOpen || Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || folderPickerForNewSession || deskOpen
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
@@ -28920,52 +28901,19 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {fileViewerOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {fileViewerOpen ? (
-        <FileViewerPopover
-          cwd={folderPickerForNewSession ? (newSessionCwd || gitRepoCwd) : gitRepoCwd}
+      {folderPickerForNewSession ? (
+        <PluginSurfaceHost
+          surfaceId="files"
+          placement="overlay"
+          cwd={newSessionCwd || gitRepoCwd}
+          provided={folderPickerServices}
           theme={theme}
+          syntaxStyle={handoffBriefSyntaxStyle}
           width={width}
           height={height}
-          syntaxStyle={handoffBriefSyntaxStyle}
-          velocityScrollEnabled={velocityScrollEnabled}
-          onClose={() => {
-            setFileViewerOpen(false)
-            setFolderPickerForNewSession(false)
-          }}
-          onKeyHandlerReady={(handler) => { fileViewerKeyHandlerRef.current = handler }}
-          onDetach={folderPickerForNewSession ? undefined : () => offerPopoverPlacement('files')}
-          onToggleVelocityScroll={() => {
-            setVelocityScrollEnabled((current) => {
-              const next = !current
-              showToggleOutcome('Velocity scroll', next)
-              void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
-              return next
-            })
-          }}
-          onSelectDirectory={folderPickerForNewSession ? handleNewSessionFolderSelected : undefined}
-          onEditPath={folderPickerForNewSession ? undefined : (path) => {
-            setFileViewerOpen(false)
-            setEditorInitialPath(path)
-            setEditorInitialLine(null)
-            setEditorOpen(true)
-          }}
-          onInsertPath={folderPickerForNewSession ? undefined : (path) => {
-            insertComposerTextAtCursor(`@${path} `)
-            setComposerActive(true)
-            showNotice('info', 'File added to composer')
-          }}
+          focused
+          onClose={closeFolderPicker}
+          onKeyHandlerReady={registerFolderPickerKeys}
         />
       ) : null}
 
@@ -29009,8 +28957,8 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={gitRepoCwd}
           repositorySessionId={gitSessionId}
-          composer={pluginComposer}
-          clipboard={pluginClipboard}
+          provided={pluginServices}
+          syntaxStyle={handoffBriefSyntaxStyle}
           runCommand={runCommandForPlugin}
           theme={theme}
           width={width}

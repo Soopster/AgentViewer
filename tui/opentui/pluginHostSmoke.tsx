@@ -188,6 +188,32 @@ check(isPluginEnabled('git') && !readPluginSettingsFile().disabled.includes('git
 await key('escape')
 console.log('Git opens as a lazy plugin; the plugin manager turns it off (no command, no binding, saved) and back on.')
 
+// Files is a plugin, and the new-session folder picker is its view in picker mode.
+check(!tuiPluginViews.isLoaded('files'), 'the Files plugin loaded before it was opened')
+await key('f', { ctrl: true })
+await waitFor('the Files overlay', () => screen().includes(' Files '))
+check(tuiPluginViews.isLoaded('files'), 'Files opened without its plugin module')
+await key('escape')
+await waitFor('Files closed', () => !screen().includes(' Files '))
+await key('n', { shift: true })
+await waitFor('the new-session modal', () => screen().includes('Folder') || screen().includes('folder'))
+await key('b')
+await waitFor('the folder picker', () => screen().includes(' Choose folder '))
+await key('o')
+await waitFor('back in the new-session modal', () => !screen().includes(' Choose folder ') && screen().includes(path.basename(CWD)))
+await key('escape')
+const { applyPluginSettings, withPluginEnabled, DEFAULT_PLUGIN_SETTINGS } = await import('../../lib/plugins/enablement')
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'files', false))
+await settle(100)
+await key('n', { shift: true })
+await settle(300)
+await key('b')
+await settle(300)
+check(!screen().includes(' Choose folder ') && screen().includes('Folder browsing needs Files'), 'the folder picker opened with Files off, or said nothing')
+await key('escape')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Files opens as a lazy plugin; the new-session folder picker is its view, and says so when Files is off.')
+
 // A module that fails to load is evicted and loads on the next attempt.
 const { PluginSurfaceHost, pluginInstanceId } = await import('./shell/PluginSurfaceHost')
 let loadAttempts = 0

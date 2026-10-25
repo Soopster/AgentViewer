@@ -745,7 +745,7 @@ export function CoordinationPopover({
             : pending?.kind === 'rerun-agent'
               ? `Rerun ${pending.agent.name}${pending.task ? ` — requeue ${pending.task.id} and reset the agent` : ' — reset the agent to ready'}? y/Enter · n/Esc`
               : null
-  const gitComposer = useMemo(() => (onSendDiffNoteToComposer ? { appendDiffNote: onSendDiffNoteToComposer } : undefined), [onSendDiffNoteToComposer])
+  const gitServices = useMemo(() => (onSendDiffNoteToComposer ? { composer: { appendDiffNote: onSendDiffNoteToComposer } } : {}), [onSendDiffNoteToComposer])
   const gitAgentUsesWorktree = Boolean(gitAgent?.worktreePath && run?.baseCwd && gitAgent.worktreePath !== run.baseCwd)
   return (
     <>
@@ -822,7 +822,7 @@ export function CoordinationPopover({
           placement="overlay"
           cwd={gitAgent.worktreePath || run?.baseCwd}
           repositoryLabel={`${gitAgent.name} · ${gitAgentUsesWorktree ? (gitAgent.worktreeBranch || 'worktree') : 'shared checkout'}`}
-          composer={gitComposer}
+          provided={gitServices}
           zIndex={85}
           theme={theme}
           width={width}

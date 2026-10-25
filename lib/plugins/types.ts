@@ -86,6 +86,12 @@ export type PluginServiceId =
   /** The composer the user is writing in, resolved by the host. */
   | 'composer'
   | 'clipboard'
+  /** Open a file where the host edits files (the editor, in whatever form it is open). */
+  | 'open-file'
+  /** The host is asking the view to choose a directory for it (the new-session folder). */
+  | 'directory-picker'
+  /** The user's scrolling preferences, which the host stores. */
+  | 'scroll-preferences'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host

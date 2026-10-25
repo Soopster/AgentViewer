@@ -43,7 +43,6 @@ type CommandPaletteProps = {
   messageViewFullscreen: boolean
   canMaximizeMessageView: boolean
   canOpenGit: boolean
-  canOpenFiles: boolean
   canOpenTasks: boolean
   canOpenPromptLibrary: boolean
   canOpenChannelBridge: boolean
@@ -63,7 +62,6 @@ type CommandPaletteProps = {
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
   onOpenPullRequests: () => void
-  onOpenFiles: () => void
   onOpenCoordinator: () => void
   onOpenCrossSessionMessaging: () => void
   onOpenTasks: () => void
@@ -345,7 +343,6 @@ export default function CommandPalette({
   messageViewFullscreen,
   canMaximizeMessageView,
   canOpenGit,
-  canOpenFiles,
   canOpenTasks,
   canOpenPromptLibrary,
   canOpenChannelBridge,
@@ -365,7 +362,6 @@ export default function CommandPalette({
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
   onOpenPullRequests,
-  onOpenFiles,
   onOpenCoordinator,
   onOpenCrossSessionMessaging,
   onOpenTasks,
@@ -627,17 +623,6 @@ export default function CommandPalette({
         run: onOpenPullRequests,
       },
       {
-        id: 'open-files',
-        label: 'Browse project files',
-        description: canOpenFiles ? 'Open the three-pane project file viewer with syntax previews' : 'Select a session or project first',
-        icon: <FolderOpen size={16} />,
-        shortcut: 'Ctrl F',
-        group: 'actions',
-        keywords: ['file', 'files', 'folder', 'browse', 'viewer', 'preview', 'project', 'yazi'],
-        score: 0,
-        run: onOpenFiles,
-      },
-      {
         id: 'open-agent-team',
         label: 'Open Agent Operations dashboard',
         description: 'Open the multi-agent dashboard for teammates, tasks, messages, worktrees, and merge controls',
@@ -870,7 +855,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

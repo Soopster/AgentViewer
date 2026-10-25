@@ -14,7 +14,8 @@ import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
 import type { PluginPlacement, PluginServiceId, PluginTarget } from '../../../lib/plugins/types'
 import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { usePinnedSessionDetail } from '../usePinnedSessionDetail'
-import type { TuiPluginKeyHandler, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
+import type { SyntaxStyle } from '@opentui/core'
+import type { TuiPluginKeyHandler, TuiProvidedPluginServices, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
 import { tuiPluginViews } from './pluginViews'
 
 type KeyHandler = TuiPluginKeyHandler
@@ -41,9 +42,10 @@ export type PluginSurfaceHostProps = {
   cwd?: string | null
   repositorySessionId?: string | null
   repositoryLabel?: string
-  composer?: TuiPluginServices['composer']
-  clipboard?: TuiPluginServices['clipboard']
+  /** Service values the host offers; a view receives the ones its surface declares. */
+  provided?: TuiProvidedPluginServices
   theme: TuiThemePalette
+  syntaxStyle?: SyntaxStyle | null
   width: number
   height: number
   focused: boolean
@@ -133,15 +135,17 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const transcriptStatus = useSelectedDetail ? 'ready' : pinned.status
   const wants = (service: PluginServiceId) => surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
   const repositoryCwd = cwd ?? process.cwd()
-  const { repositorySessionId = null, repositoryLabel, composer, clipboard } = props
-  const services = useMemo<TuiPluginServices>(() => ({
-    ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
-    ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
-    ...(wants('composer') && composer ? { composer } : {}),
-    ...(wants('clipboard') && clipboard ? { clipboard } : {}),
+  const { repositorySessionId = null, repositoryLabel, provided } = props
+  const services = useMemo<TuiPluginServices>(() => {
+    const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
+    return {
+      ...Object.fromEntries(offered),
+      ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
+      ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
+    }
   // `wants` reads only the surface, which `surfaceId` names.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, composer, clipboard])
+  }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided])
 
   const viewKeys = useRef<KeyHandler | null>(null)
   const retry = useCallback(() => { setFailure(null); setView(null); setAttempt(value => value + 1) }, [])
@@ -201,7 +205,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   // OpenTUI's JSX yields ReactNode; React renders any function component.
   const Component = View as unknown as (props: TuiPluginViewProps) => React.ReactElement | null
   const viewProps: TuiPluginViewProps = {
-    pluginId: surface.pluginId, surfaceId, instanceId, placement, target, services, theme, width, height,
+    pluginId: surface.pluginId, surfaceId, instanceId, placement, target, services, theme, syntaxStyle: props.syntaxStyle ?? null, width, height,
     focused: props.focused, zIndex, useState: useState_, onDispose, registerKeys, setCapture, runCommand, close: onClose,
     ...(overlay && props.onDetach ? { detach: props.onDetach } : {}),
   }

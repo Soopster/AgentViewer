@@ -3,4 +3,3 @@
 // never pulls the Pierre renderers into its chunk.
 export * from '../PierreDiffView'
 export { ReviewBoard } from '../review/ReviewBoard'
-export { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from '../surfaceVariant'

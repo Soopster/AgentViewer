@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { SyntaxStyle } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { FileViewerPopover, type FileViewerKeyEvent } from './FileViewerPopover'
+import { FileViewerPopover, type FileViewerKeyEvent } from '../../plugins/files/tui/FileViewerPopover'
 
 const workspace = await mkdtemp(join(tmpdir(), 'file-viewer-preview-'))
 const syntaxStyleDefinitions = {}
