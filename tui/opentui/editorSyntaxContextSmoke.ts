@@ -1,4 +1,4 @@
-import { classifyEditorOffset, editorSyntaxForPath, indentForClosingBracket, matchingBracketAt } from './editorSyntaxContext'
+import { classifyEditorOffset, editorSyntaxForPath, indentForClosingBracket, matchingBracketAt } from '../../plugins/editor/tui/editorSyntaxContext'
 
 function expectKind(content: string, marker: string, path: string, expected: string) {
   const offset = content.indexOf(marker)

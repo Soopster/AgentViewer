@@ -14,8 +14,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { MAX_EDITOR_BUFFER_CHARS } from './editorLargeFile'
-import { EditorPopover } from './EditorPopover'
+import { MAX_EDITOR_BUFFER_CHARS } from '../../plugins/editor/tui/editorLargeFile'
+import { EditorPopover } from '../../plugins/editor/tui/EditorPopover'
 
 const BUFFER_LIMIT_CHARS = 1024 * 1024
 const workspace = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-large-file-'))

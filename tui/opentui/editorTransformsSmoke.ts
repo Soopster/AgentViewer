@@ -1,4 +1,4 @@
-import { detectEditorIndentUnit, transformEditorCase, transformEditorLines, trimEditorTrailingWhitespace } from './editorTransforms'
+import { detectEditorIndentUnit, transformEditorCase, transformEditorLines, trimEditorTrailingWhitespace } from '../../plugins/editor/tui/editorTransforms'
 
 const moved = transformEditorLines('alpha\nbeta\ngamma\n', 6, 6, 'move-up')
 if (moved.content !== 'beta\nalpha\ngamma\n' || moved.start !== 0) throw new Error(`Move line up failed: ${JSON.stringify(moved)}`)

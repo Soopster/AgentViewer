@@ -7,7 +7,7 @@ import { RGBA, SyntaxStyle } from '@opentui/core'
 import type { ScrollBarRenderable, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-'))

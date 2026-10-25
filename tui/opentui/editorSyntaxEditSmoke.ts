@@ -9,7 +9,7 @@
 // line table carried forward across edits must equal a table rebuilt from
 // scratch. Both were verified to fail when the tail shift in
 // `advanceLineStarts` is skewed by one and when the newline rescan is dropped.
-import { advanceLineStarts, editorLineStarts, editorSyntaxEdit } from './editorSyntaxBuffer'
+import { advanceLineStarts, editorLineStarts, editorSyntaxEdit } from '../../plugins/editor/tui/editorSyntaxBuffer'
 
 function referencePosition(content: string, offset: number): { row: number; column: number } {
   let row = 0

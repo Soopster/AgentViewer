@@ -5,7 +5,7 @@
 // language, which is only sound if the delimiter table is complete; this smoke
 // checks it differentially against the straightforward scan it replaced, over
 // randomized content in every language family the editor knows.
-import { classifyEditorOffset, editorSyntaxForPath, type EditorOffsetKind } from './editorSyntaxContext'
+import { classifyEditorOffset, editorSyntaxForPath, type EditorOffsetKind } from '../../plugins/editor/tui/editorSyntaxContext'
 
 type Syntax = ReturnType<typeof editorSyntaxForPath>
 

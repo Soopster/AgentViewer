@@ -1,4 +1,4 @@
-import { parseEditorSnippet } from './editorSnippet'
+import { parseEditorSnippet } from '../../plugins/editor/tui/editorSnippet'
 
 const parsed = parseEditorSnippet(
   'function ${1:name}(${2:first}, $2, ${3|fast,safe|}) {\n  ${4:${TM_FILENAME_BASE}}\n  $0\n}',

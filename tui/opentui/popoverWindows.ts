@@ -16,7 +16,7 @@
 import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugins/catalog'
 
 type BuiltinPopoverWindowKind =
-  | 'daily-summary' | 'editor' | 'coordination'
+  | 'daily-summary' | 'coordination'
   | 'attention' | 'prompt-library' | 'playbooks' | 'messaging' | 'handoff' | 'tasks'
   | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
   | 'teammates' | 'desk' | 'diagnostics'
@@ -38,7 +38,6 @@ export type PopoverWindowSpec = {
 
 const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpec> = {
   'daily-summary': { title: '☰ Daily summary', pin: null, single: true, keys: 'window', palette: 'Daily summary in a window' },
-  editor: { title: '✎ Editor', pin: null, single: true, keys: 'capture', palette: 'Editor in a window' },
   // The agent control center (⌃K a): one coordination store, so one view of it.
   coordination: { title: '◆ Control center', pin: null, single: true, keys: 'window', palette: 'Agent control center in a window' },
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },

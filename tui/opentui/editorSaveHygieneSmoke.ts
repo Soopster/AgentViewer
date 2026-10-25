@@ -5,8 +5,8 @@ import {
   editorPositionOffset,
   ensureEditorFinalNewline,
   trimEditorTrailingWhitespace,
-} from './editorSaveHygiene'
-import type { EditorTextEdit } from './editorLsp'
+} from '../../plugins/editor/tui/editorSaveHygiene'
+import type { EditorTextEdit } from '../../plugins/editor/tui/editorLsp'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)

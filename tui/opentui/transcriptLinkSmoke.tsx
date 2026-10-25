@@ -95,8 +95,8 @@ mock.module('../../lib/tui/service', () => ({
 // project and spawns language servers — none of which this is testing. Stub the
 // popover with a marker that records what it was handed.
 let editorOpenedWith: { path: string | null; line: number | null } | null = null
-const editorModule = await import('./EditorPopover')
-mock.module('./EditorPopover', () => ({
+const editorModule = await import('../../plugins/editor/tui/EditorPopover')
+mock.module('../../plugins/editor/tui/EditorPopover', () => ({
   ...editorModule,
   EditorPopover: (props: { initialPath?: string | null; initialLine?: number | null }) => {
     editorOpenedWith = { path: props.initialPath ?? null, line: props.initialLine ?? null }

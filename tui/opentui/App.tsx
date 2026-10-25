@@ -470,7 +470,6 @@ const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): co
 // Overlays load when first opened — see lazyComponent.tsx.
 const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
 const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
-const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
@@ -5792,7 +5791,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
-  { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
   { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
@@ -10086,14 +10084,13 @@ function OpenTuiWorkspace() {
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // The new-session folder picker: the Files plugin's view, asked to choose a directory.
   const folderPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
-  const [editorOpen, setEditorOpen] = useState(false)
+  // The file the editor plugin opens on (its target), kept per workspace.
   const [editorInitialPath, setEditorInitialPath] = useWorkspaceState<string | null>('editorInitialPath', null)
   // 1-based, as every transcript reference and stack trace writes it; the editor
   // converts to its own 0-based cursor. Null means "no particular line", which
   // is not the same as line 1 — a file opened with no destination must restore
   // the reader's remembered place instead.
   const [editorInitialLine, setEditorInitialLine] = useWorkspaceState<number | null>('editorInitialLine', null)
-  const editorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }) => boolean) | null>(null)
   // New agent session modal: pick a folder (via the file picker in folder-select
   // mode) and provider before creating, instead of defaulting to the viewed cwd.
   const [newSessionModalOpen, setNewSessionModalOpen] = useState(false)
@@ -16541,9 +16538,7 @@ function OpenTuiWorkspace() {
         showNotice('info', 'This project has no CLAUDE.md yet — /init creates one', 6000)
         return true
       }
-      setEditorInitialPath(memoryPath)
-      setEditorInitialLine(null)
-      setEditorOpen(true)
+      openEditorAt(memoryPath, null)
       return true
     }
     return false
@@ -19725,9 +19720,7 @@ function OpenTuiWorkspace() {
     // A file target opens in the project editor rather than externally — the
     // editor is already the TUI's file surface, and handing the path to the OS
     // would bounce the user out of the terminal.
-    setEditorInitialPath(target.path)
-    setEditorInitialLine(target.line ?? null)
-    setEditorOpen(true)
+    openEditorAt(target.path, target.line ?? null)
     return true
   })
 
@@ -20883,7 +20876,6 @@ function OpenTuiWorkspace() {
     if (kind === 'pull-request') setPullRequestOpen(open)
     else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
-    else if (kind === 'editor') setEditorOpen(open)
     else if (kind === 'coordination') setCoordBoardOpen(open)
     else if (kind === 'attention') setAttentionOpen(open)
     else if (kind === 'prompt-library') setPromptLibraryOpen(open)
@@ -20902,7 +20894,7 @@ function OpenTuiWorkspace() {
   // The popover open now, if it can become a window. Order is the popovers' own
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
-    pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination'
+    pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
     : crossSessionMessagingOpen ? 'messaging' : handoffBriefOpen ? 'handoff' : taskPopoverOpen ? 'tasks'
     : fileHistoryPath && gitRepoCwd ? 'file-history' : checkpointOpen && gitRepoCwd ? 'checkpoints'
@@ -21046,6 +21038,8 @@ function OpenTuiWorkspace() {
       showNotice('info', `${command.label} is off · turn its plugin on in Plugins (⌃K palette)`)
       return
     }
+    // A command names no file, so the editor opens where it was.
+    if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
     setPluginOverlay(command.opens)
   })
   const runPluginCommandId = useStableEvent((id: string) => {
@@ -21086,18 +21080,14 @@ function OpenTuiWorkspace() {
         showNotice('info', 'Added to composer')
       },
     },
-    clipboard: { write: (text: string) => writeClipboard(text, renderer) },
-    'open-file': {
-      open: (path: string, line?: number | null) => {
-        setEditorInitialPath(path)
-        setEditorInitialLine(line ?? null)
-        setEditorOpen(true)
-      },
-    },
+    clipboard: { write: (text: string) => writeClipboard(text, renderer), read: readClipboardText },
+    'open-file': { open: (path: string, line?: number | null) => openEditorAt(path, line ?? null) },
+    notices: { show: (kind: 'info' | 'error', text: string) => showNotice(kind, text) },
+    ...(gitRepoCwd ? { 'file-history': { open: (path: string) => setFileHistoryPath(path) } } : {}),
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [renderer, velocityScrollEnabled])
+  }), [renderer, velocityScrollEnabled, Boolean(gitRepoCwd)])
   const closeFolderPicker = useStableEvent(() => setFolderPickerForNewSession(false))
   const folderPickerServices = useMemo((): TuiProvidedPluginServices => ({
     'directory-picker': { choose: (path: string) => handleNewSessionFolderSelected(path) },
@@ -21107,7 +21097,21 @@ function OpenTuiWorkspace() {
     folderPickerKeyHandlerRef.current = handler
   })
   const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
-  const closePluginOverlay = useStableEvent(() => setPluginOverlay(null))
+  const closePluginOverlay = useStableEvent(() => {
+    if (pluginOverlay === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
+    setPluginOverlay(null)
+  })
+  // Opens the editor on a file (1-based line, or null for its remembered place):
+  // in its window when it has one (the open-popover effect routes it), else full screen.
+  const openEditorAt = useStableEvent((path: string | null, line: number | null) => {
+    if (!isPluginEnabled('editor')) {
+      showNotice('info', 'The editor is off · turn it on in Plugins (⌃K palette)')
+      return
+    }
+    setEditorInitialPath(path)
+    setEditorInitialLine(line)
+    setPluginOverlay('editor')
+  })
   // Turning a plugin off closes its overlay; its windows say it is off.
   useEffect(() => {
     if (pluginOverlay && disabledPlugins.has(getPluginSurface(pluginOverlay).pluginId)) setPluginOverlay(null)
@@ -22093,7 +22097,7 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [pluginOverlay, dailySummaryOpen, editorOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
+  }, [pluginOverlay, dailySummaryOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
     crossSessionMessagingOpen, handoffBriefOpen, taskPopoverOpen, checkpointOpen, fileHistoryPath, channelBridgeOpen, ideBridgeOpen, deskOpen])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
@@ -22934,11 +22938,6 @@ function OpenTuiWorkspace() {
       case 'pull-requests':
         setPullRequestOpen(true)
         break
-      case 'editor':
-        setEditorInitialPath(null)
-        setEditorInitialLine(null)
-        setEditorOpen(true)
-        break
       case 'handoff-brief':
         openHandoffBrief()
         break
@@ -23136,7 +23135,7 @@ function OpenTuiWorkspace() {
   // Window controls are transient keyboard owners, never persisted workspace state.
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
-    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, editor: editorOpen, coordination: coordBoardOpen,
+    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, coordination: coordBoardOpen,
     playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
     messaging: crossSessionMessagingOpen, handoff: handoffBriefOpen, tasks: taskPopoverOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd), checkpoints: checkpointOpen,
@@ -23762,12 +23761,6 @@ function OpenTuiWorkspace() {
     }
     if (windowPickerOpen) {
       if (windowPickerKeyHandlerRef.current?.(key) !== false) handled(() => {})
-      return
-    }
-
-    if (editorOpen) {
-      const consumed = editorKeyHandlerRef.current?.(key) ?? true
-      if (consumed) handled(() => {})
       return
     }
 
@@ -24862,16 +24855,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // LazyVim-inspired project editor. The editor owns text input while open;
-    // the root handler only intercepts shortcuts the editor reports consumed.
-    if (isCtrl('e')) {
-      handled(() => {
-        setEditorInitialPath(null)
-        setEditorInitialLine(null)
-        setEditorOpen(true)
-      })
-      return
-    }
 
     // Enhanced terminals preserve this direct modifier chord; ⌃K a is the
     // portable path when Ctrl+Shift cannot be represented independently.
@@ -26853,6 +26836,8 @@ function OpenTuiWorkspace() {
           repositorySessionId={gitSessionId}
           provided={pluginServices}
           syntaxStyle={handoffBriefSyntaxStyle}
+          path={editorInitialPath}
+          line={editorInitialLine}
           theme={theme}
           width={box.width}
           height={box.height}
@@ -26890,9 +26875,7 @@ function OpenTuiWorkspace() {
             onSelectedChange={slot ? (id) => { windowShellSelectionRef.current.set(slot, id) } : undefined}
             onNotice={showNotice}
             onOpenFile={(path, line) => {
-              setEditorInitialPath(path)
-              setEditorInitialLine(line ?? null)
-              setEditorOpen(true)
+              openEditorAt(path, line ?? null)
             }}
             onAskAgent={(prompt) => {
               appendDiffCommentPromptToComposer(prompt)
@@ -27075,30 +27058,6 @@ function OpenTuiWorkspace() {
             onKeyHandlerReady={keysReady({ current: null })}
             onCopy={(text) => { void writeClipboard(text, renderer) }}
             onSendToComposer={(text) => appendDiffCommentPromptToComposer(text)}
-          />
-        )
-      case 'editor':
-        return (
-          <EditorPopover
-            docked
-            active={focused}
-            cwd={surfaceCwd}
-            initialPath={editorInitialPath}
-            initialLine={editorInitialLine}
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            syntaxStyle={handoffBriefSyntaxStyle}
-            onClose={leave}
-            onKeyHandlerReady={keysReady({ current: null })}
-            onNotice={(kind, text) => showNotice(kind, text)}
-            onClipboardRead={readClipboardText}
-            onClipboardWrite={(text) => writeClipboard(text, renderer)}
-            onAskAgent={(request) => {
-              void askAgentAboutSelection({ ...request, filePath: request.path, origin: 'editor selection' })
-              return false
-            }}
-            onOpenFileHistory={surfaceCwd ? (path) => setFileHistoryPath(path) : undefined}
           />
         )
     }
@@ -27354,7 +27313,7 @@ function OpenTuiWorkspace() {
   ) : null
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
-  const fullScreenPopoverOpen = editorOpen || Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || folderPickerForNewSession || deskOpen
+  const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || folderPickerForNewSession || deskOpen
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
@@ -28862,45 +28821,6 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {editorOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.5)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {editorOpen ? (
-        <EditorPopover
-          cwd={gitRepoCwd}
-          initialPath={editorInitialPath}
-          initialLine={editorInitialLine}
-          theme={theme}
-          width={width}
-          height={height}
-          syntaxStyle={handoffBriefSyntaxStyle}
-          onClose={() => {
-            setEditorOpen(false)
-            setEditorInitialPath(null)
-            setEditorInitialLine(null)
-          }}
-          onKeyHandlerReady={(handler) => { editorKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('editor')}
-          onNotice={(kind, text) => showNotice(kind, text)}
-          onClipboardRead={readClipboardText}
-          onClipboardWrite={(text) => writeClipboard(text, renderer)}
-          onAskAgent={(request) => {
-            void askAgentAboutSelection({ ...request, filePath: request.path, origin: 'editor selection' })
-            return true
-          }}
-          onOpenFileHistory={gitRepoCwd ? (path) => setFileHistoryPath(path) : undefined}
-        />
-      ) : null}
-
       {folderPickerForNewSession ? (
         <PluginSurfaceHost
           surfaceId="files"
@@ -28959,6 +28879,8 @@ function OpenTuiWorkspace() {
           repositorySessionId={gitSessionId}
           provided={pluginServices}
           syntaxStyle={handoffBriefSyntaxStyle}
+          path={editorInitialPath}
+          line={editorInitialLine}
           runCommand={runCommandForPlugin}
           theme={theme}
           width={width}

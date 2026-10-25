@@ -92,6 +92,10 @@ export type PluginServiceId =
   | 'directory-picker'
   /** The user's scrolling preferences, which the host stores. */
   | 'scroll-preferences'
+  /** One-line messages in the host's notice area. */
+  | 'notices'
+  /** Open a file's history across agent turns. */
+  | 'file-history'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host
@@ -101,6 +105,13 @@ export type PluginTarget = {
   readonly sessionKey: string | null
   /** The repository a `pin: 'cwd'` surface was opened on. */
   readonly cwd: string | null
+  /**
+   * A file the view was opened on, and its 1-based line. Null line means no
+   * particular line, which is not line 1: a file opened with no destination
+   * restores its remembered place.
+   */
+  readonly path?: string | null
+  readonly line?: number | null
 }
 
 /** A renderer's lazy entry: one view component per declared surface. */

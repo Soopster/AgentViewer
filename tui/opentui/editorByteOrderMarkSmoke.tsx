@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { editorTextFromDisk, editorTextToDisk } from './editorLineEndings'
-import { prepareEditorBuffer } from './editorLargeFile'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { editorTextFromDisk, editorTextToDisk } from '../../plugins/editor/tui/editorLineEndings'
+import { prepareEditorBuffer } from '../../plugins/editor/tui/editorLargeFile'
 
 // Visual Studio writes a UTF-8 BOM into most files it creates, and the terminal
 // edit buffer silently drops a leading U+FEFF: 13 characters handed in, 12 held.

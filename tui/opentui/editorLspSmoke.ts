@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient, getEditorLspServerSpecs, type EditorDiagnostic, type EditorLspStatus } from './editorLsp'
-import { disposeAllLspSessions, pooledLspSessionCount } from './editorLspSession'
+import { EditorLspClient, getEditorLspServerSpecs, type EditorDiagnostic, type EditorLspStatus } from '../../plugins/editor/tui/editorLsp'
+import { disposeAllLspSessions, pooledLspSessionCount } from '../../plugins/editor/tui/editorLspSession'
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-lsp-'))
 const serverPath = join(cwd, 'fake-lsp.mjs')

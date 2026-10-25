@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { disposeAllLspSessions } from './editorLspSession'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { disposeAllLspSessions } from '../../plugins/editor/tui/editorLspSession'
 
 // Save hygiene is only worth anything if the bytes on disk change, and only
 // safe if they change exactly as much as was asked for. Everything here is

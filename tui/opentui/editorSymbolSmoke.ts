@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient, type EditorSymbol } from './editorLsp'
-import { disposeAllLspSessions } from './editorLspSession'
+import { EditorLspClient, type EditorSymbol } from '../../plugins/editor/tui/editorLsp'
+import { disposeAllLspSessions } from '../../plugins/editor/tui/editorLspSession'
 
 // `textDocument/documentSymbol` has two legal response shapes and the server
 // picks. A client that understands only one gets an empty outline from half the

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, open, readFile, rename, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createEditorDiskReader } from './editorDiskReader'
+import { createEditorDiskReader } from '../../plugins/editor/tui/editorDiskReader'
 
 const root = await mkdtemp(join(tmpdir(), 'editor-disk-reader-'))
 const outside = await mkdtemp(join(tmpdir(), 'editor-disk-reader-outside-'))

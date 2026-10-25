@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { heapStats } from 'bun:jsc'
 import type { Session } from '../../lib/types'
 import { filterComposerMentionEntries, type ComposerMentionFileEntry } from './composerMentionRanking'
-import { searchEditorBuffers, type EditorProjectSearchBuffer, type EditorProjectSearchOptions } from './editorProjectSearch'
+import { searchEditorBuffers, type EditorProjectSearchBuffer, type EditorProjectSearchOptions } from '../../plugins/editor/tui/editorProjectSearch'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
 
 function baselineMention(entries: ComposerMentionFileEntry[], limit: number, scores?: Record<string, number>, prefix?: string) {

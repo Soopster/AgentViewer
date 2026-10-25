@@ -5,7 +5,7 @@ import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
 import type { SelectionAskInput } from '../../../lib/selectionAsk'
 import type { TuiThemePalette } from '../../theme'
 
-export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string; eventType?: string; repeated?: boolean }
+export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string; eventType?: 'press' | 'repeat' | 'release'; repeated?: boolean }
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
@@ -30,6 +30,13 @@ export type TuiPluginServices = {
   }
   clipboard?: {
     readonly write: (text: string) => Promise<void>
+    readonly read?: () => Promise<string>
+  }
+  notices?: {
+    readonly show: (kind: 'info' | 'error', text: string) => void
+  }
+  'file-history'?: {
+    readonly open: (path: string) => void
   }
   'open-file'?: {
     readonly open: (path: string, line?: number | null) => void

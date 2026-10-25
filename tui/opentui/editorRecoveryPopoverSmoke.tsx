@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { readEditorRecovery, writeEditorRecovery } from './editorRecovery'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { readEditorRecovery, writeEditorRecovery } from '../../plugins/editor/tui/editorRecovery'
 
 const root = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-recovery-ui-'))
 const safePath = join(root, 'safe.ts')

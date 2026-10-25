@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient, type EditorDiagnostic, type EditorLspStatus } from './editorLsp'
-import { editorLspStartupNotifications } from './editorLspServers'
-import { disposeAllLspSessions } from './editorLspSession'
+import { EditorLspClient, type EditorDiagnostic, type EditorLspStatus } from '../../plugins/editor/tui/editorLsp'
+import { editorLspStartupNotifications } from '../../plugins/editor/tui/editorLspServers'
+import { disposeAllLspSessions } from '../../plugins/editor/tui/editorLspSession'
 
 // Two things a C# buffer needs that no other server in the table does, both
 // verified against real roslyn-language-server before being pinned here.

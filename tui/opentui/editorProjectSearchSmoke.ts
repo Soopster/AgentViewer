@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { searchEditorProject } from './editorProjectSearch'
-import { disposeEditorProjectSearchWorker, searchEditorProjectAsync } from './editorProjectSearchWorkerClient'
+import { searchEditorProject } from '../../plugins/editor/tui/editorProjectSearch'
+import { disposeEditorProjectSearchWorker, searchEditorProjectAsync } from '../../plugins/editor/tui/editorProjectSearchWorkerClient'
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-project-search-'))
 

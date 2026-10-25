@@ -15,8 +15,8 @@
 //
 //   bun run ./tui/opentui/editorSyntaxPerf.ts
 //   EDITOR_SYNTAX_PERF_SIZES=200,20000 bun run ./tui/opentui/editorSyntaxPerf.ts
-import { advanceLineStarts, editorLineStarts, editorSyntaxEdit } from './editorSyntaxBuffer'
-import { classifyEditorOffset, matchingBracketAt } from './editorSyntaxContext'
+import { advanceLineStarts, editorLineStarts, editorSyntaxEdit } from '../../plugins/editor/tui/editorSyntaxBuffer'
+import { classifyEditorOffset, matchingBracketAt } from '../../plugins/editor/tui/editorSyntaxContext'
 
 const SIZES = (process.env.EDITOR_SYNTAX_PERF_SIZES ?? '200,2000,6000,20000')
   .split(',').map((value) => Number.parseInt(value.trim(), 10)).filter((value) => value > 0)

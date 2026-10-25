@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverRootProps } from './dockedPopover'
-import { useWorkspaceContext, useWorkspaceState } from './workspaceContext'
+import { PopoverDetachButton, popoverRootProps } from '../../../tui/opentui/shell/sdk'
+import { useWorkspaceContext, useWorkspaceState } from '../../../tui/opentui/shell/sdk'
 import { buildEditorFileTree as buildTree, compareEditorPaths, type TreeNode } from './editorFileTree'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { readFile } from 'node:fs/promises'
@@ -17,11 +17,11 @@ import {
 } from '@opentui/core'
 import type { MouseEvent } from '@opentui/core'
 import { extend } from '@opentui/react'
-import type { TuiThemePalette } from '../theme'
-import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
-import { listProjectFiles } from '../../lib/projectFiles'
-import { frecencyKey, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
-import { runGitCommand } from '../../lib/gitNodeProvider'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { detectTuiCodeFiletypeFromPath } from '../../../tui/opentui/shell/sdk'
+import { listProjectFiles } from '../../../lib/projectFiles'
+import { frecencyKey, readFrecencyScores, recordFrecencyUse } from '../../../lib/tuiFrecency'
+import { runGitCommand } from '../../../lib/gitNodeProvider'
 import {
   EditorLspClient,
   type EditorCodeAction,
@@ -45,7 +45,7 @@ import {
   DEFAULT_EDITOR_SAVE_HYGIENE,
   type EditorSaveHygiene,
 } from './editorSaveHygiene'
-import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
+import { createScrollVelocityState, velocityScrollStep } from '../../../tui/opentui/shell/sdk'
 import {
   type EditorProjectSearchResult,
 } from './editorProjectSearch'
@@ -109,7 +109,7 @@ import {
   indexAtDisplayOffset,
   type CellMeasure,
 } from './editorCells'
-import { SELECTION_ASK_INTENTS, type SelectionAskIntent } from '../../lib/selectionAsk'
+import { SELECTION_ASK_INTENTS, type SelectionAskIntent } from '../../../lib/selectionAsk'
 
 extend({ editorScrollbar: ScrollBarRenderable })
 

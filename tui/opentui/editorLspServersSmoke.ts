@@ -1,14 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findLspExecutable, resolveLspCommand } from './editorLspCommand'
+import { findLspExecutable, resolveLspCommand } from '../../plugins/editor/tui/editorLspCommand'
 import {
   clearEditorLspConfigCache,
   getEditorLspServerSpecs,
   loadEditorLspConfig,
   editorLspStartupNotifications,
   resolveLspWorkspaceRoot,
-} from './editorLspServers'
+} from '../../plugins/editor/tui/editorLspServers'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)

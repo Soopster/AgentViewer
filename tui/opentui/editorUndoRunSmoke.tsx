@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { continuesTypingRun, MAX_UNDO_RUN_STEPS, undoTypingRun, type UndoableEditor } from './editorUndoRuns'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { continuesTypingRun, MAX_UNDO_RUN_STEPS, undoTypingRun, type UndoableEditor } from '../../plugins/editor/tui/editorUndoRuns'
 
 // The edit buffer records one undo step per character, so undoing a line took
 // as many presses as it had letters. A typed run now comes off together — and

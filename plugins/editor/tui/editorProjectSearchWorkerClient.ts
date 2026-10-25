@@ -1,5 +1,5 @@
 import type { EditorProjectSearchBuffer, EditorProjectSearchOptions, EditorProjectSearchResult } from './editorProjectSearch'
-import { tuiWorkerUrl } from './workerUrl'
+import { tuiWorkerUrl } from '../../../tui/opentui/shell/sdk'
 
 type Pending = {
   resolve: (results: EditorProjectSearchResult[]) => void
@@ -23,7 +23,7 @@ function abortError(): Error {
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const instance = new Worker(tuiWorkerUrl('tui/opentui/editorProjectSearchWorker'), { type: 'module' })
+  const instance = new Worker(tuiWorkerUrl('plugins/editor/tui/editorProjectSearchWorker'), { type: 'module' })
   instance.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const response = event.data
     const entry = pending.get(response.id)

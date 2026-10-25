@@ -17,8 +17,8 @@ import {
   applyEditorLineEnding,
   detectEditorLineEnding,
   normalizeEditorNewlines,
-} from './editorLineEndings'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+} from '../../plugins/editor/tui/editorLineEndings'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 
 const CR = String.fromCharCode(13)
 const CRLF = `${CR}\n`

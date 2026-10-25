@@ -1,4 +1,4 @@
-import { expandEditorSearchReplacement, findEditorSearchMatches } from './editorSearch'
+import { expandEditorSearchReplacement, findEditorSearchMatches } from '../../plugins/editor/tui/editorSearch'
 
 const literal = findEditorSearchMatches('CAFÉ café', 'café', { matchCase: false, regex: false })
 if (literal.matches.length !== 2 || literal.matches[1]!.start !== 5) throw new Error(`Unicode literal offsets drifted: ${JSON.stringify(literal)}`)

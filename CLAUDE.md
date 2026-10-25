@@ -844,7 +844,7 @@ it against the native CLI (see the composer flow harness in memory).
 
 #### Project editor: cost per keystroke and the file boundary (load-bearing)
 
-`tui/opentui/EditorPopover.tsx` is a real editor, so it is held to an editor's
+`plugins/editor/tui/EditorPopover.tsx` (the editor plugin; its `editor*.ts` modules sit beside it) is a real editor, so it is held to an editor's
 defining property: **a keystroke costs the same in a 20,000-line file as in a
 200-line one.** Measure with `npm run tui:editortypingperf`
 (`tui/opentui/editorTypingPerf.tsx`), which types into the real popover at
@@ -2698,7 +2698,7 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
 | `plugins/git/web/GitPopover.tsx` | ~2370 | Web Git diff/branch view (Git plugin) |
 | `plugins/git/tui/GitPopover.tsx` | ~2360 | OpenTUI Git review (Git plugin) |
-| `tui/opentui/EditorPopover.tsx` | ~5510 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
+| `plugins/editor/tui/EditorPopover.tsx` | ~5510 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
 | `plugins/analytics/tui/AnalyticsView.tsx` | ~1200 | OpenTUI analytics overlay (separate impl from the web one) |
 | `plugins/analytics/web/AnalyticsView.tsx` | ~1240 | Recharts analytics |
 | `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |

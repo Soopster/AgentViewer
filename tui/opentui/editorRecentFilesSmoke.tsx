@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 
 // Ctrl+P with nothing typed used to list whatever the file walk produced first,
 // because every fuzzy score is 0 for an empty query. In a repository of any

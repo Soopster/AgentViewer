@@ -23,7 +23,7 @@ import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
 import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { formatTuiFrameBudgetMs, TUI_FRAME_BUDGET_MS, TUI_TARGET_FPS } from './performanceBudget'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 
 const SIZES = (process.env.EDITOR_TYPING_SIZES ?? '200,2000,6000')
   .split(',').map((value) => Number.parseInt(value.trim(), 10)).filter((value) => value > 0)

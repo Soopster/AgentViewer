@@ -12,7 +12,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient } from './editorLsp'
+import { EditorLspClient } from '../../plugins/editor/tui/editorLsp'
 import {
   applyLspContentChange,
   LSP_SYNC_FULL,
@@ -20,7 +20,7 @@ import {
   LSP_SYNC_NONE,
   lspContentChanges,
   lspSyncKind,
-} from './editorLspSync'
+} from '../../plugins/editor/tui/editorLspSync'
 
 // --- capability parsing -----------------------------------------------------
 

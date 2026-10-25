@@ -12,7 +12,7 @@ import {
   displayOffsetAt,
   indexAtCellColumn,
   indexAtDisplayOffset,
-} from './editorCells'
+} from '../../plugins/editor/tui/editorCells'
 
 const measure = bufferCellMeasure('unicode')
 // The ground truth is a real edit buffer (0.6 requires it an owner).

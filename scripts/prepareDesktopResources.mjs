@@ -101,7 +101,7 @@ function main() {
       'tui/opentui/threadingWorker.ts',
       'tui/opentui/markdownBlocksWorker.ts',
       'plugins/analytics/tui/analyticsWorker.ts',
-      'tui/opentui/editorProjectSearchWorker.ts',
+      'plugins/editor/tui/editorProjectSearchWorker.ts',
       'tui/opentui/composerMentionWorker.ts',
       'tui/opentui/gitDiffHighlightWorker.ts',
       // Pins each embedded worker at its repository path (tui/opentui/workerUrl.ts).

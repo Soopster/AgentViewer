@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorLspClient, type EditorLspStatus } from './editorLsp'
-import { disposeAllLspSessions } from './editorLspSession'
+import { EditorLspClient, type EditorLspStatus } from '../../plugins/editor/tui/editorLsp'
+import { disposeAllLspSessions } from '../../plugins/editor/tui/editorLspSession'
 
 // A language server crashing is ordinary — rust-analyzer and gopls both do it
 // on a bad workspace state, and jdtls does it routinely. Before this, the

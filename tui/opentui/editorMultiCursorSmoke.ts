@@ -4,7 +4,7 @@ import {
   applyEditorMultiCursorEdit,
   splitEditorSelectionIntoLineEndCursors,
   updateEditorBlockSelection,
-} from './editorMultiCursor'
+} from '../../plugins/editor/tui/editorMultiCursor'
 
 const source = 'const café = café + café\n'
 let state = addEditorCursorAtNextMatch(source, null, { start: 6, end: 6 }, 7)

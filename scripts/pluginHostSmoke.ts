@@ -26,7 +26,7 @@ for (const manifest of PLUGIN_MANIFESTS) {
   for (const command of manifest.commands) assert.equal(getPluginCommand(command.id)?.pluginId, manifest.id)
 }
 assert.equal(isPluginSurfaceId('__proto__'), false)
-assert.equal(isPluginSurfaceId('editor'), false, 'built-in kinds are not plugin surfaces')
+assert.equal(isPluginSurfaceId('desk'), false, 'built-in kinds are not plugin surfaces')
 assert.deepEqual(listPluginCommands('tui').map(command => command.id).includes('analytics'), true)
 assert.deepEqual(listPluginSurfaces('web').map(surface => surface.id).includes('analytics'), true)
 
@@ -157,6 +157,7 @@ assert.equal(isPluginPanelSurfaceId('analytics'), false)
 const { POPOVER_WINDOWS } = await import('../tui/opentui/popoverWindows')
 assert.equal('diff' in POPOVER_WINDOWS, false, 'a panel surface is not also a popover window kind')
 assert.equal('analytics' in POPOVER_WINDOWS, true)
+assert.equal(POPOVER_WINDOWS.editor?.keys, 'capture', 'the editor plugin keeps capturing keys as a window')
 
 // Enablement: malformed settings mean every plugin on; unknown ids survive;
 // the store notifies only on a change.

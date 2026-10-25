@@ -1,8 +1,8 @@
 import { chmod, lstat, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EditorDiskConflictError, saveEditorFileSafely } from './editorFileSave'
-import { EditorEncodingError } from './editorLineEndings'
+import { EditorDiskConflictError, saveEditorFileSafely } from '../../plugins/editor/tui/editorFileSave'
+import { EditorEncodingError } from '../../plugins/editor/tui/editorLineEndings'
 
 const root = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-save-'))
 const outside = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-save-outside-'))

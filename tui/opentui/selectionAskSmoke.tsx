@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorAskRequest, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorAskRequest, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 import { buildSelectionAskPrompt, codeFenceFor } from '../../lib/selectionAsk'
 
 function assert(condition: unknown, message: string): asserts condition {

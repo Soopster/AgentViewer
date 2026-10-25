@@ -19,14 +19,14 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 import {
   createEditorJumpList,
   editorJumpBackward,
   editorJumpForward,
   forgetEditorJumpPath,
   recordEditorJump,
-} from './editorJumpList'
+} from '../../plugins/editor/tui/editorJumpList'
 
 // --- the stack itself, before any rendering ---------------------------------
 {

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RGBA, type SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { act, testRenderWithSyntaxStyle } from './testRender'
-import { EditorPopover } from './EditorPopover'
+import { EditorPopover } from '../../plugins/editor/tui/EditorPopover'
 import { DARK_THEME } from '../theme'
 
 const LINES = 3000

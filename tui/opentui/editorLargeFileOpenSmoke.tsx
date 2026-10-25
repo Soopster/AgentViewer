@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { formatEditorSize, MAX_EDITOR_BUFFER_CHARS, prepareEditorBuffer } from './editorLargeFile'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { formatEditorSize, MAX_EDITOR_BUFFER_CHARS, prepareEditorBuffer } from '../../plugins/editor/tui/editorLargeFile'
 
 // A file bigger than the edit buffer used to be refused outright, so the one
 // thing the editor could still usefully do with it — let someone read it — was

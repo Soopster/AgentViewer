@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createEditorFile, deleteEditorFile, renameEditorFile } from './editorFileOperations'
+import { createEditorFile, deleteEditorFile, renameEditorFile } from '../../plugins/editor/tui/editorFileOperations'
 
 const root = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-files-'))
 const outside = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-outside-'))

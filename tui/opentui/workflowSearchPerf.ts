@@ -3,10 +3,10 @@
 import assert from 'node:assert/strict'
 import type { Session } from '../../lib/types'
 import { formatSessionProject, formatSessionTitle } from '../format'
-import { buildEditorFileTree, type TreeNode } from './editorFileTree'
+import { buildEditorFileTree, type TreeNode } from '../../plugins/editor/tui/editorFileTree'
 import { filterComposerMentionEntries } from './composerMentionRanking'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
-import { searchEditorBuffers } from './editorProjectSearch'
+import { searchEditorBuffers } from '../../plugins/editor/tui/editorProjectSearch'
 
 // Pre-optimization algorithm retained as a correctness and timing reference.
 function baselineTree(paths: string[]): TreeNode[] {

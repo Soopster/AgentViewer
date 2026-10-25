@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { disposeAllLspSessions } from './editorLspSession'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { disposeAllLspSessions } from '../../plugins/editor/tui/editorLspSession'
 
 // Jumping to a symbol is the most common thing anyone does in a long file, and
 // until now the editor could only go to a line number or a text match. This

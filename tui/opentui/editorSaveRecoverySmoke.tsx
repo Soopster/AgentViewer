@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle, type TextareaRenderable } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
-import { readEditorRecovery } from './editorRecovery'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
+import { readEditorRecovery } from '../../plugins/editor/tui/editorRecovery'
 
 const root = await mkdtemp(join(tmpdir(), 'editor-save-recovery-'))
 const syntaxStyleDefinitions = { default: { fg: RGBA.fromHex(DARK_THEME.text) } }

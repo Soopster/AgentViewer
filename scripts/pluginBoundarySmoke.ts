@@ -57,7 +57,8 @@ for (const file of walk(pluginsDir)) {
 const loaderLists = new Set(['tui/opentui/shell/pluginViews.ts', 'components/shell/pluginViews.ts'])
 for (const dir of ['app', 'components', 'tui', 'lib', 'bin']) {
   for (const file of walk(path.join(root, dir))) {
-    if (loaderLists.has(rel(file)) || /Smoke\.tsx?$/.test(file)) continue
+    // Test harnesses (smokes, perf runs, `_` scratch harnesses) may load a view directly.
+    if (loaderLists.has(rel(file)) || /(Smoke|Perf)\.tsx?$/.test(file) || path.basename(file).startsWith('_')) continue
     for (const specifier of importsOf(file)) {
       const target = resolve(file, specifier)
       if (!path.isAbsolute(target)) continue

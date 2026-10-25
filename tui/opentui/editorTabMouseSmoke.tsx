@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover } from './EditorPopover'
+import { EditorPopover } from '../../plugins/editor/tui/EditorPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 
 registerExtraTreeSitterParsers()

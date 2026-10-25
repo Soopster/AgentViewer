@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import { testRender, testRenderWithSyntaxStyle, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { EditorPopover, type EditorKeyEvent } from './EditorPopover'
+import { EditorPopover, type EditorKeyEvent } from '../../plugins/editor/tui/EditorPopover'
 
 const cwd = await mkdtemp(join(tmpdir(), 'agent-viewer-many-tabs-'))
 const names = Array.from({ length: 14 }, (_, index) => `module-number-${String(index).padStart(2, '0')}.ts`)

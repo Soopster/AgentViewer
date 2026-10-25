@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 // @ts-expect-error -- Bun-only diagnostic API
 import { heapStats } from 'bun:jsc'
-import { classifyEditorOffset, editorSyntaxForPath, type EditorOffsetKind } from './editorSyntaxContext'
+import { classifyEditorOffset, editorSyntaxForPath, type EditorOffsetKind } from '../../plugins/editor/tui/editorSyntaxContext'
 
 type Syntax = ReturnType<typeof editorSyntaxForPath>
 

@@ -7,7 +7,7 @@ import {
   readEditorRecovery,
   writeEditorRecovery,
   type EditorRecoverySnapshot,
-} from './editorRecovery'
+} from '../../plugins/editor/tui/editorRecovery'
 
 const root = await mkdtemp(join(tmpdir(), 'agent-viewer-editor-recovery-'))
 const firstPath = join(root, 'first.ts')

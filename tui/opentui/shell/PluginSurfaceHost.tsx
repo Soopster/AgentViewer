@@ -42,6 +42,9 @@ export type PluginSurfaceHostProps = {
   cwd?: string | null
   repositorySessionId?: string | null
   repositoryLabel?: string
+  /** A file the surface opens on, 1-based line or null (its target). */
+  path?: string | null
+  line?: number | null
   /** Service values the host offers; a view receives the ones its surface declares. */
   provided?: TuiProvidedPluginServices
   theme: TuiThemePalette
@@ -170,7 +173,9 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const { runCommand: hostRunCommand } = props
   const runCommand = useCallback((commandId: string) => hostRunCommand?.(commandId) ?? false, [hostRunCommand])
 
-  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null }), [sessionKey, surface.pin, repositoryCwd])
+  const filePath = props.path ?? null
+  const fileLine = props.line ?? null
+  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null, path: filePath, line: fileLine }), [sessionKey, surface.pin, repositoryCwd, filePath, fileLine])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // Called from the view's render as a hook; the identity is stable per instance.
     // eslint-disable-next-line react-hooks/rules-of-hooks

@@ -13,8 +13,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const realpath = async (command: string) => (await promisify(execFile)('sh', ['-c', `command -v ${command}`])).stdout.trim()
-import { isEditorPathWithin, normalizeEditorFilePath } from './editorFileOperations'
-import { EditorProjectSearchUnavailableError, searchEditorProject } from './editorProjectSearch'
+import { isEditorPathWithin, normalizeEditorFilePath } from '../../plugins/editor/tui/editorFileOperations'
+import { EditorProjectSearchUnavailableError, searchEditorProject } from '../../plugins/editor/tui/editorProjectSearch'
 
 // --- Containment on win32 -------------------------------------------------
 // `relative` cannot express "C:\root -> D:\evil" as a traversal, so it answers
