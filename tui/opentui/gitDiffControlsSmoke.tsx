@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testRender, act } from './testRender'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { GitReviewPopover as GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from '../../plugins/git/tui/GitPopover'
 import { DARK_THEME } from '../theme'
 
 const cwd = await mkdtemp(join(tmpdir(), 'git-diff-controls-'))

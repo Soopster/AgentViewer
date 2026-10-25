@@ -8,11 +8,11 @@ import { PatchSelection } from './PatchSelection'
 import { GitBranch, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { PierrePatchDiffView } from '@/components/PierreDiffView'
+import { PierrePatchDiffView } from '@/components/shell/sdkDiff'
 import { useGitWorkspace } from '@/lib/git/useGitWorkspace'
 import { webWorkspaceTransport } from '@/lib/git/webWorkspaceTransport'
 import { filesForSide } from '@/lib/git/workspaceTypes'
-import { isDocked, type SurfaceVariant } from '../surfaceVariant'
+import { isDocked, type SurfaceVariant } from '@/components/shell/sdkDiff'
 
 type Inspection = { kind: 'branch' | 'remote-branch' | 'commit' | 'stash'; ref: string; label: string; selector?: string }
 function readDraft(cwd: string) { try { return localStorage.getItem(`git-commit-v1:${cwd}`) ?? '' } catch { return '' } }

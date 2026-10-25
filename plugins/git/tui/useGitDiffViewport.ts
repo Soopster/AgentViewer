@@ -1,4 +1,4 @@
-import { useWindowVisible } from './windowActivity'
+import { useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { captureDiffAnchor, diffRowWindow, resolveDiffAnchor, type DiffGeometry, type DiffViewportAnchor } from './gitDiffGeometry'

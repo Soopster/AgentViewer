@@ -1,4 +1,4 @@
-import type { TuiPierreDiffRow, TuiPierreSplitRow } from './pierreDiffView'
+import type { TuiPierreDiffRow, TuiPierreSplitRow } from '../../../tui/opentui/shell/sdkDiff'
 
 export type DiffGeometryRow = { keys: string[]; top: number; height: number }
 export type DiffGeometry = { rows: DiffGeometryRow[]; total: number; byKey: Map<string, number> }

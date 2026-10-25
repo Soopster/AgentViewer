@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { FileDiffMetadata } from '@pierre/diffs'
-import { diffDisplayPath, type DiffFileSpanHighlights } from './pierreDiffView'
-import { createGitDiffHighlightClient, diffHighlightTarget } from './gitDiffHighlightWorkerClient'
+import { diffDisplayPath, type DiffFileSpanHighlights } from '../../../tui/opentui/shell/sdkDiff'
+import { createGitDiffHighlightClient, diffHighlightTarget } from '../../../tui/opentui/shell/sdkDiff'
 
 export function useGitDiffHighlighting(files: FileDiffMetadata[] | undefined, rows: readonly { filePath?: string }[], start: number, end: number, appearance: 'dark' | 'light', enabled: boolean) {
   const [client] = useState(() => createGitDiffHighlightClient())

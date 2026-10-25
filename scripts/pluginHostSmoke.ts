@@ -8,6 +8,13 @@ import { createPluginViewRegistry, pluginStateVersions } from '../lib/plugins/ac
 import { createPluginStateStore, decodePluginStateSnapshot } from '../lib/plugins/scopedState'
 import { dispatchPluginCommand, subscribePluginCommands } from '../lib/plugins/commandBus'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginViewModule } from '../lib/plugins/types'
+import { applyPluginSettings, decodePluginSettings, isPluginEnabled, subscribePluginEnablement, withPluginEnabled, DEFAULT_PLUGIN_SETTINGS } from '../lib/plugins/enablement'
+import { readPluginSettingsFile, writePluginSettingsFile } from '../lib/plugins/settingsFile'
+import { RIGHT_PANEL_SURFACE_KINDS } from '../lib/rightPanel'
+import { isPluginPanelSurfaceId } from '../lib/plugins/catalog'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5))
 
@@ -26,6 +33,8 @@ assert.deepEqual(listPluginSurfaces('web').map(surface => surface.id).includes('
 // Manifests are browser-safe: bundling the catalog reaches no dependency, view,
 // worker or server module.
 const graph: string[] = []
+type BunBuildPlugin = { name: string; setup(build: { onLoad(options: { filter: RegExp }, load: (args: { path: string }) => undefined): void }): void }
+const { Bun } = globalThis as unknown as { Bun: { build(options: { entrypoints: string[]; target: string; minify: boolean; plugins: BunBuildPlugin[] }): Promise<{ success: boolean; logs: unknown[] }> } }
 const bundle = await Bun.build({
   entrypoints: ['./lib/plugins/catalog.ts'], target: 'browser', minify: true,
   plugins: [{ name: 'plugin-metadata-boundary', setup(build) { build.onLoad({ filter: /.*/ }, args => { graph.push(args.path); return undefined }) } }],
@@ -36,7 +45,7 @@ assert.equal(graph.some(name => /\/node_modules\/|\/plugins\/[^/]+\/(tui|web|ser
 
 // Activation: lazy, deduplicated, retryable, validated.
 const fixture: PluginManifest = {
-  apiVersion: PLUGIN_API_VERSION, id: 'fixture', title: 'Fixture', renderers: ['tui'], stateVersion: 1,
+  apiVersion: PLUGIN_API_VERSION, id: 'fixture', title: 'Fixture', description: 'A fixture.', renderers: ['tui'], stateVersion: 1,
   surfaces: [{ id: 'fixture-view', title: '◇ Fixture', pin: null, single: true, keys: 'window', placements: ['overlay'], windowLabel: 'Fixture', services: ['session-transcript'] }],
   commands: [],
 }
@@ -138,5 +147,39 @@ assert.equal(dispatchPluginCommand('nothing'), false)
 offA(); offB()
 assert.equal(dispatchPluginCommand('analytics'), false)
 assert.deepEqual(seen, ['a:analytics', 'b:analytics', 'a:nothing', 'b:nothing'])
+
+// Panel surfaces are side-panel kinds the hosts and saved layouts already know.
+for (const surface of listPluginSurfaces('tui')) {
+  if (surface.placements.includes('panel')) assert.ok((RIGHT_PANEL_SURFACE_KINDS as readonly string[]).includes(surface.id), `${surface.id} is a panel surface but no side-panel kind`)
+}
+assert.equal(isPluginPanelSurfaceId('diff'), true)
+assert.equal(isPluginPanelSurfaceId('analytics'), false)
+const { POPOVER_WINDOWS } = await import('../tui/opentui/popoverWindows')
+assert.equal('diff' in POPOVER_WINDOWS, false, 'a panel surface is not also a popover window kind')
+assert.equal('analytics' in POPOVER_WINDOWS, true)
+
+// Enablement: malformed settings mean every plugin on; unknown ids survive;
+// the store notifies only on a change.
+for (const junk of [null, 'x', [], { version: 2, disabled: ['git'] }, { version: 1, disabled: 'git' }]) {
+  assert.deepEqual(decodePluginSettings(junk), DEFAULT_PLUGIN_SETTINGS)
+}
+assert.deepEqual(decodePluginSettings({ version: 1, disabled: ['git', 'git', 7, '', 'retired'] }).disabled, ['git', 'retired'])
+let changes = 0
+const offEnablement = subscribePluginEnablement(() => { changes++ })
+const off = withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'git', false)
+applyPluginSettings(off)
+applyPluginSettings(off)
+assert.equal(isPluginEnabled('git'), false)
+assert.equal(isPluginEnabled('analytics'), true)
+assert.equal(changes, 1, 'reapplying the same choice notifies nobody')
+applyPluginSettings(withPluginEnabled(off, 'git', true))
+assert.equal(isPluginEnabled('git'), true)
+offEnablement()
+const settingsFile = path.join(mkdtempSync(path.join(tmpdir(), 'plugin-settings-')), 'nested', 'plugins.json')
+assert.deepEqual(readPluginSettingsFile(settingsFile), DEFAULT_PLUGIN_SETTINGS, 'a missing file is every plugin on')
+writePluginSettingsFile(withPluginEnabled(decodePluginSettings({ version: 1, disabled: ['retired'] }), 'analytics', false), settingsFile)
+assert.deepEqual(readPluginSettingsFile(settingsFile).disabled, ['analytics', 'retired'], 'a plugin this build lacks keeps its choice')
+writeFileSync(settingsFile, '{"version":1,"disabled":[')
+assert.deepEqual(readPluginSettingsFile(settingsFile), DEFAULT_PLUGIN_SETTINGS)
 
 console.log(JSON.stringify({ test: 'plugin host', passed: true, plugins: PLUGIN_MANIFESTS.length, metadataModules: graph.length }))

@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { GitPopover, type GitKeyEvent, type GitPopoverProps } from './GitPopover'
+import { GitPopover, type GitKeyEvent, type GitPopoverProps } from '../../plugins/git/tui/GitPopover'
 const exec = promisify(execFile), root = await mkdtemp(join(tmpdir(), 'git-workspace-ui-'))
 let handler: (key: GitKeyEvent) => boolean | void = () => {}
 let capture = false

@@ -54,7 +54,7 @@ import type { AgentProtocolEvent, PlaybookPhase, PlaybookSummary, PlaybookTask, 
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import type { WorktreeTask } from '@/lib/worktreeTasks'
 
-const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
 
 type Props = {
   provider: ProviderSelection
@@ -2025,7 +2025,7 @@ export default function AgentTeamCoordinator({
           <span><kbd>J/K</kbd> navigate</span>
         </footer>
 
-        {gitReviewCwd ? <GitPopover open cwd={gitReviewCwd} onClose={() => setGitReviewCwd(null)} /> : null}
+        {gitReviewCwd ? <PluginSurfaceHost surfaceId="diff" placement="overlay" sessionKey={null} cwd={gitReviewCwd} services={{ repository: { cwd: gitReviewCwd, sessionId: null } }} onClose={() => setGitReviewCwd(null)} /> : null}
 
         {messageTarget !== null ? (
           <div className="av-coord-drawer">

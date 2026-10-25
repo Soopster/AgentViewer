@@ -4,14 +4,26 @@
 // tui/opentui/shell/pluginViews.ts); no root, palette or window-kind union
 // changes.
 import { manifest as analytics } from '../../plugins/analytics/manifest'
+import { manifest as git } from '../../plugins/git/manifest'
+import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
 export type PluginSurfaceId = BundledManifest['surfaces'][number]['id']
 export type PluginCommandId = BundledManifest['commands'][number]['id']
+type BundledSurface = BundledManifest['surfaces'][number]
+/** Surfaces that may sit in the side panel: hosts treat these ids as side-panel kinds. */
+export type PluginPanelSurfaceId = BundledSurface extends infer S
+  ? S extends { readonly id: infer I; readonly placements: readonly (infer P)[] } ? ('panel' extends P ? I : never) : never
+  : never
+/** Surfaces that are popover kinds only (overlay and window). */
+export type PluginPopoverSurfaceId = Exclude<PluginSurfaceId, PluginPanelSurfaceId>
+// A panel surface's id is a saved-layout kind; a new one joins RIGHT_PANEL_SURFACE_KINDS first.
+type PanelKindsAreHostKinds<T extends RightPanelSurfaceKind> = T
+export type CheckedPanelSurfaceIds = PanelKindsAreHostKinds<PluginPanelSurfaceId>
 
 export type ResolvedPluginSurface = PluginSurfaceSpec & { readonly pluginId: PluginId; readonly stateVersion: number }
 export type ResolvedPluginCommand = PluginCommandSpec & { readonly pluginId: PluginId }
@@ -32,6 +44,10 @@ for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
 
 export function isPluginSurfaceId(id: string): id is PluginSurfaceId {
   return surfaces.has(id)
+}
+
+export function isPluginPanelSurfaceId(id: string): id is PluginPanelSurfaceId {
+  return surfaces.get(id)?.placements.includes('panel') ?? false
 }
 
 export function getPluginSurface(id: PluginSurfaceId): ResolvedPluginSurface {

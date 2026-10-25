@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { GitReviewPopover as GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from '../../plugins/git/tui/GitPopover'
 import { createTurnCheckpoint } from '../../lib/checkpoints'
 
 const execFileAsync = promisify(execFile)

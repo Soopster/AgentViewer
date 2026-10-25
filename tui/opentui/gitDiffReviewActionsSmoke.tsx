@@ -7,11 +7,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testRender, act } from './testRender'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { GitReviewPopover as GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from '../../plugins/git/tui/GitPopover'
 import { DARK_THEME } from '../theme'
 import { buildPierreDiffView } from './pierreDiffView'
 import { copyDiffCellSelection, copyDiffRows, diffMatchRanges, findDiffTextMatches, highlightDiffMatches, sourceIndexAtCell } from './gitDiffReviewActions'
-import type { ReviewActionKey } from './useGitDiffReviewActions'
+import type { ReviewActionKey } from '../../plugins/git/tui/useGitDiffReviewActions'
 
 assert.deepEqual(diffMatchRanges('a.b A.B axb', 'a.b'), [{start:0,end:3},{start:4,end:7}], 'literal case-insensitive matches')
 assert.deepEqual(diffMatchRanges('界𐐀x', '𐐨'), [{start:1,end:3}], 'Unicode indices remain source offsets')

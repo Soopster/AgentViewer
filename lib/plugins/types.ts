@@ -11,16 +11,20 @@ export const PLUGIN_API_VERSION = 1
 
 export type PluginRenderer = 'web' | 'tui'
 
-/** Where a surface may be presented. */
-export type PluginPlacement = 'overlay' | 'window'
+/**
+ * Where a surface may be presented. 'panel' is the side panel (TUI surface
+ * panel, Web right panel): a surface offering it is also a side-panel kind,
+ * so its id must be one of the hosts' `RightPanelSurfaceKind`s.
+ */
+export type PluginPlacement = 'overlay' | 'window' | 'panel'
 
 export type PluginSurfaceSpec = {
   /** Globally unique and stable: it is a window id in saved layouts. */
   readonly id: string
   /** Title with its leading glyph, as window chrome shows it. */
   readonly title: string
-  /** What a window keeps showing while the selection moves on. */
-  readonly pin: 'session' | null
+  /** What a window keeps showing while the selection moves on: a session, a repository, or nothing. */
+  readonly pin: 'session' | 'cwd' | null
   /** The surface's state is a singleton, so it exists once in any form. */
   readonly single: boolean
   /** 'window': routed after the global keys. 'capture': every key but ⌃B. */
@@ -30,6 +34,10 @@ export type PluginSurfaceSpec = {
   readonly windowLabel: string
   /** Services the view needs; activation fails when a host lacks one. */
   readonly services: readonly PluginServiceId[]
+  /** Services the view uses when the host has them, and does without otherwise. */
+  readonly optionalServices?: readonly PluginServiceId[]
+  /** As an overlay it draws from the top row, so the host's navigation bars drop beneath it. */
+  readonly fullScreen?: boolean
 }
 
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
@@ -57,6 +65,8 @@ export type PluginManifest = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
   readonly id: string
   readonly title: string
+  /** One sentence for the plugin manager. */
+  readonly description: string
   readonly renderers: readonly PluginRenderer[]
   readonly surfaces: readonly PluginSurfaceSpec[]
   readonly commands: readonly PluginCommandSpec[]
@@ -68,7 +78,14 @@ export type PluginManifest = {
  * Service capabilities a host may supply to a view. Distinct from the active
  * provider's SessionCapabilities: these describe the host, not the session.
  */
-export type PluginServiceId = 'session-transcript'
+export type PluginServiceId =
+  /** The target session's transcript, read for the target, not the selection. */
+  | 'session-transcript'
+  /** The target repository: its working directory, and the session scoping its turns. */
+  | 'repository'
+  /** The composer the user is writing in, resolved by the host. */
+  | 'composer'
+  | 'clipboard'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host
@@ -76,6 +93,8 @@ export type PluginServiceId = 'session-transcript'
  */
 export type PluginTarget = {
   readonly sessionKey: string | null
+  /** The repository a `pin: 'cwd'` surface was opened on. */
+  readonly cwd: string | null
 }
 
 /** A renderer's lazy entry: one view component per declared surface. */

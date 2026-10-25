@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { copyDiffCellSelection, copyDiffRows, findDiffTextMatches, type DiffCellSelection, type ReviewRow } from './gitDiffReviewActions'
-import { diffTextHeight, diffTextWidth } from './gitDiffText'
+import { copyDiffCellSelection, copyDiffRows, findDiffTextMatches, type DiffCellSelection, type ReviewRow } from '../../../tui/opentui/shell/sdkDiff'
+import { diffTextHeight, diffTextWidth } from '../../../tui/opentui/shell/sdkDiff'
 import type { DiffGeometry } from './gitDiffGeometry'
 
 export type ReviewActionKey = { name: string; sequence: string; ctrl: boolean; shift: boolean }
@@ -40,7 +40,7 @@ export function useGitDiffReviewActions({ rows, geometry, scrollRef, cursor, anc
     lastJump.current = identity
     onCursor(active.row); onFocus()
     const source = rows[active.row]!
-    const split = source as import('./pierreDiffView').TuiPierreSplitRow
+    const split = source as import('../../../tui/opentui/shell/sdkDiff').TuiPierreSplitRow
     const text = split.left || split.right ? (active.side === 'old' ? split.left?.text : split.right?.text) ?? '' : source.text ?? ''
     const prefix = text.slice(0, active.start)
     if (!wrap) onOffset(Math.max(0, diffTextWidth(prefix, tabWidth) - Math.floor(columns / 3)))

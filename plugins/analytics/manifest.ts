@@ -7,6 +7,7 @@ export const manifest = {
   apiVersion: PLUGIN_API_VERSION,
   id: 'analytics',
   title: 'Session analytics',
+  description: "Token, tool, timing and health views over one session's transcript.",
   renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{

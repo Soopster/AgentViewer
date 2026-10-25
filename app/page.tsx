@@ -22,13 +22,18 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 import { useRightPanel } from '@/components/useRightPanel'
 import { surfaceKindLabel, type RightPanelSurface, type RightPanelSurfaceKind } from '@/lib/rightPanel'
 import { teamAttentionMark } from '@/lib/coordinatorAttention'
+import { getPluginCommand, getPluginSurface, isPluginSurfaceId, type PluginSurfaceId } from '@/lib/plugins/catalog'
+import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
+import { isPluginEnabled } from '@/lib/plugins/enablement'
+import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
-const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
 const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { ssr: false })
 const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
+const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
 const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
@@ -369,7 +374,8 @@ export default function Home() {
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
-  const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  // A repository-pinned plugin surface (Git) open as an overlay on the active project.
+  const [repositoryOverlay, setRepositoryOverlay] = useState<PluginSurfaceId | null>(null)
   const [pullRequestViewOpen, setPullRequestViewOpen] = useState(false)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
@@ -377,6 +383,8 @@ export default function Home() {
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
+  const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
+  usePluginSettingsSync()
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('sessions')
   const rightPanel = useRightPanel()
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
@@ -503,10 +511,16 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isMessageViewMaximized])
 
-  const openGitPopover = useCallback(() => {
-    if (!activeProjectDir) return
-    setGitPopoverOpen(true)
-  }, [activeProjectDir])
+  const openGitPopover = useCallback(() => { dispatchPluginCommand('git') }, [])
+  // Commands whose surface is pinned to a repository open on the active project;
+  // session-pinned ones are the message view's.
+  useEffect(() => subscribePluginCommands((commandId) => {
+    const command = getPluginCommand(commandId)
+    if (!command || !command.renderers.includes('web') || !isPluginSurfaceId(command.opens)) return false
+    if (getPluginSurface(command.opens).pin !== 'cwd' || !activeProjectDir || !isPluginEnabled(command.pluginId)) return false
+    setRepositoryOverlay(command.opens)
+    return true
+  }), [activeProjectDir])
 
   const openPullRequestView = useCallback(() => {
     if (!activeProjectDir) return
@@ -802,7 +816,7 @@ export default function Home() {
       if (event.key.toLowerCase() !== 'g') return
       if (!activeProjectDir) return
       event.preventDefault()
-      setGitPopoverOpen(true)
+      dispatchPluginCommand('git')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1477,7 +1491,7 @@ export default function Home() {
         ) : null
       case 'diff':
         return activeProjectDir ? (
-          <GitPopover variant="docked" open cwd={activeProjectDir} sessionId={selectedSession?.sessionId ?? null} onClose={() => closeRightPanelSurface(surface.id)} />
+          <PluginSurfaceHost surfaceId="diff" placement="panel" sessionKey={null} cwd={activeProjectDir} services={{ repository: { cwd: activeProjectDir, sessionId: selectedSession?.sessionId ?? null } }} onClose={() => closeRightPanelSurface(surface.id)} />
         ) : null
       case 'pull-request':
         return activeProjectDir ? (
@@ -1742,7 +1756,6 @@ export default function Home() {
                   onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
-                  onOpenGit={openGitPopover}
                   onOpenPullRequests={openPullRequestView}
                   onOpenFiles={openFileViewer}
                   onOpenCoordinator={openCoordinator}
@@ -1756,6 +1769,7 @@ export default function Home() {
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                   onOpenProvenance={() => setProvenanceOpen(true)}
                   onOpenRemoteAccess={() => setRemoteAccessOpen(true)}
+                  onOpenPlugins={() => setPluginManagerOpen(true)}
                 />
               ) : null}
             </div>
@@ -1780,12 +1794,14 @@ export default function Home() {
             renderSurface={renderRightPanelSurface}
           />
         ) : null}
-        {activeProjectDir && gitPopoverOpen ? (
-          <GitPopover
-            open={gitPopoverOpen}
-            onClose={() => setGitPopoverOpen(false)}
+        {activeProjectDir && repositoryOverlay ? (
+          <PluginSurfaceHost
+            surfaceId={repositoryOverlay}
+            placement="overlay"
+            sessionKey={null}
             cwd={activeProjectDir}
-            sessionId={selectedSession?.sessionId ?? null}
+            services={{ repository: { cwd: activeProjectDir, sessionId: selectedSession?.sessionId ?? null } }}
+            onClose={() => setRepositoryOverlay(null)}
           />
         ) : null}
         {activeProjectDir && pullRequestViewOpen ? (
@@ -1844,6 +1860,7 @@ export default function Home() {
         {remoteAccessOpen ? (
           <RemoteAccessPopover open={remoteAccessOpen} onClose={() => setRemoteAccessOpen(false)} />
         ) : null}
+        {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
         {bookmarksPanelOpen ? (
           <BookmarksPanel
             open={bookmarksPanelOpen}

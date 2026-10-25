@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TextareaRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import type { GitKeyEvent } from './GitPopover'
-import { localWorkspaceTransport } from '../../lib/git/workspaceService'
-import { chooseConflictBlock, conflictBlocks } from '../../lib/git/conflictText'
-import type { ConflictPreview, WorkflowDraft } from '../../lib/git/workspaceTypes'
+import { localWorkspaceTransport } from '../../../lib/git/workspaceService'
+import { chooseConflictBlock, conflictBlocks } from '../../../lib/git/conflictText'
+import type { ConflictPreview, WorkflowDraft } from '../../../lib/git/workspaceTypes'
 
 export function GitConflictEditor({ cwd, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
   cwd: string; path: string; theme: TuiThemePalette; width: number; height: number; busy: boolean; error: string | null

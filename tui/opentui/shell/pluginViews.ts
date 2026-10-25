@@ -4,8 +4,9 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'clipboard']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   analytics: async () => (await import('../../../plugins/analytics/tui')).module,
+  git: async () => (await import('../../../plugins/git/tui')).module,
 }, TUI_PLUGIN_SERVICES)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { expandDiffContext, readDiffBaseLines, type DiffContextExpansion, type DiffContextGap } from './gitDiffContext'
+import { expandDiffContext, readDiffBaseLines, type DiffContextExpansion, type DiffContextGap } from '../../../tui/opentui/shell/sdkDiff'
 
 const EMPTY_EXPANSIONS = new Map<string, DiffContextExpansion>()
 

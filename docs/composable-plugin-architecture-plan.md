@@ -1,13 +1,17 @@
 # Composable application core and feature plugins
 
-Status, 25 October 2026: delivery steps 2 and 3 are done. Every provider SDK
-runtime lives in its extension ([Provider extensions](provider-extensions.md)).
+Status, 25 October 2026: delivery steps 2–4's Git half are done. Every
+provider SDK runtime lives in its extension ([Provider extensions](provider-extensions.md)).
 The feature plugin host exists (`lib/plugins/`, `tui/opentui/shell/`,
-`components/shell/`) and Analytics runs through it in both apps
-(`plugins/analytics/`). `npm run plugins:smoke` checks the contract, the TUI
-host in the real App, and the import boundaries. **Next: review the API (below)
-before migrating Git.** Plugin state has a versioned snapshot codec but is not
-yet written to disk; it lives for the process.
+`components/shell/`), and **Analytics and Git** run through it in both apps
+(`plugins/analytics/`, `plugins/git/`). A **plugin manager** (TUI palette
+"Plugins: turn features on or off", Web palette "Plugins") turns each plugin
+off or on; the choice is `.agent-viewer-data/plugins.json`, shared by the TUI
+and the web daemon (`/api/plugins`). `npm run plugins:smoke` checks the
+contract, enablement, the TUI host, Git and the manager in the real App, and the
+import boundaries. Next: files/editor, terminal/browser, coordination and the
+remaining optional features (step 5), then step 6. Plugin view state has a
+versioned snapshot codec but is not yet written to disk.
 
 ## Objective
 
@@ -236,6 +240,21 @@ contract in Web and TUI, with the current application behavior preserved. That
 is the point to review the API before migrating Git and the remaining families.
 
 ## API review: what Git needs that version one lacks
+
+**Resolved** (API version stays 1; every addition is optional for existing
+plugins): `panel` placement and `isPluginPanelSurfaceId` (a panel surface is a
+side-panel kind, checked against `RIGHT_PANEL_SURFACE_KINDS` at type level and
+in the smoke, and is not also a popover-window kind); `pin: 'cwd'` with
+`PluginTarget.cwd`; `repository`, `composer`, `clipboard` services, plus
+`optionalServices` for what a view uses only when the host has it (the Web Git
+view has no composer yet); `setCapture`; `fullScreen`; and `runCommand(id)`,
+which reaches another plugin's command or a named host command. **Pull requests
+stayed a host surface**: Git's `p` calls `runCommand('pull-requests')`. Shared
+diff rendering stays host code behind `tui/opentui/shell/sdkDiff.ts` and
+`components/shell/sdkDiff.ts`, separate from the core SDK so a view that draws
+no diff never loads it.
+
+The original review:
 
 Analytics needed one service and two placements. Git (`diff` surface) is also a
 side-panel surface, is targeted by repository rather than session, mutates, and

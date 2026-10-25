@@ -63,8 +63,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { getPluginCommand, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId } from '@/lib/plugins/catalog'
+import { getPluginCommand, getPluginSurface, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
+import { isPluginEnabled } from '@/lib/plugins/enablement'
+import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
@@ -3260,6 +3262,7 @@ function MessageViewInner({
   }, [composerCollapsed, preferencesHydrated])
   // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
   const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
+  const disabledPlugins = useDisabledPlugins()
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -6823,6 +6826,7 @@ function MessageViewInner({
   useEffect(() => subscribePluginCommands((commandId) => {
     const command = getPluginCommand(commandId)
     if (!command || !command.renderers.includes('web') || !isPluginSurfaceId(command.opens)) return false
+    if (getPluginSurface(command.opens).pin !== 'session' || !isPluginEnabled(command.pluginId)) return false
     if (command.requires === 'session' && (isProject || !session)) return false
     setPluginOverlay(command.opens)
     return true
@@ -8122,7 +8126,7 @@ function MessageViewInner({
         </Link>
 
         {/* Feature plugin commands (lib/plugins/catalog.ts) */}
-        {!isProject && WEB_TOOLBAR_PLUGIN_COMMANDS.map((command) => (
+        {!isProject && WEB_TOOLBAR_PLUGIN_COMMANDS.filter((command) => !disabledPlugins.has(command.pluginId)).map((command) => (
           <Button
             key={command.id}
             onClick={() => dispatchPluginCommand(command.id)}

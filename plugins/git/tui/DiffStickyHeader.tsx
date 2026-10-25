@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React from 'react'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import type { DiffProgress } from './gitDiffProgress'
 
 export function DiffStickyHeader({ width, theme, progress }: { width: number; theme: TuiThemePalette; progress: DiffProgress | null }) {

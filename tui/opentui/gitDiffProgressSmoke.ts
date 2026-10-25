@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { buildPierreDiffView } from './pierreDiffView'
-import { buildDiffProgress } from './gitDiffProgress'
+import { buildDiffProgress } from '../../plugins/git/tui/gitDiffProgress'
 
 const patch = [
   'diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1 +1 @@', '-old', '+new',

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RGBA } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import { CoordinationControlCenter } from './CoordinationControlCenter'
-import { GitPopover } from './GitPopover'
+import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
 import { AGENT_PROTOCOL_VERSION } from '../../lib/agentProtocol'
 import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../lib/agentProtocol'
 import {
@@ -745,6 +745,7 @@ export function CoordinationPopover({
             : pending?.kind === 'rerun-agent'
               ? `Rerun ${pending.agent.name}${pending.task ? ` — requeue ${pending.task.id} and reset the agent` : ' — reset the agent to ready'}? y/Enter · n/Esc`
               : null
+  const gitComposer = useMemo(() => (onSendDiffNoteToComposer ? { appendDiffNote: onSendDiffNoteToComposer } : undefined), [onSendDiffNoteToComposer])
   const gitAgentUsesWorktree = Boolean(gitAgent?.worktreePath && run?.baseCwd && gitAgent.worktreePath !== run.baseCwd)
   return (
     <>
@@ -815,27 +816,20 @@ export function CoordinationPopover({
         }}
       />
       {gitAgent ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={84}
-        />
-      ) : null}
-      {gitAgent ? (
-        <GitPopover
+        // The agent's checkout, through the Git plugin: loaded on first open.
+        <PluginSurfaceHost
+          surfaceId="diff"
+          placement="overlay"
           cwd={gitAgent.worktreePath || run?.baseCwd}
-          scopeLabel={`${gitAgent.name} · ${gitAgentUsesWorktree ? (gitAgent.worktreeBranch || 'worktree') : 'shared checkout'}`}
+          repositoryLabel={`${gitAgent.name} · ${gitAgentUsesWorktree ? (gitAgent.worktreeBranch || 'worktree') : 'shared checkout'}`}
+          composer={gitComposer}
           zIndex={85}
           theme={theme}
           width={width}
           height={height}
+          focused
           onClose={closeAgentGit}
           onKeyHandlerReady={registerAgentGitKeyHandler}
-          onSendDiffNoteToComposer={onSendDiffNoteToComposer}
         />
       ) : null}
     </>

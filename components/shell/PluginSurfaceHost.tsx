@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { getPluginSurface, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { pluginState, useScopedPluginState, type PluginStateStore } from '@/lib/plugins/scopedState'
+import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import type { PluginPlacement } from '@/lib/plugins/types'
 import type { WebPluginServices, WebPluginView, WebPluginViewProps } from './pluginTypes'
 import { webPluginViews } from './pluginViews'
@@ -15,6 +16,8 @@ type Props = {
   surfaceId: PluginSurfaceId
   placement: PluginPlacement
   sessionKey: string | null
+  /** The repository a `pin: 'cwd'` surface was opened on. */
+  cwd?: string | null
   services: WebPluginServices
   onClose: () => void
   registry?: Pick<typeof webPluginViews, 'load' | 'peek'>
@@ -28,9 +31,23 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
   render() { return this.state.failed ? null : this.props.children }
 }
 
-export default function PluginSurfaceHost({ surfaceId, placement, sessionKey, services, onClose, registry = webPluginViews, store = pluginState }: Props) {
+export default function PluginSurfaceHost(props: Props) {
+  const surface = getPluginSurface(props.surfaceId)
+  if (useDisabledPlugins().has(surface.pluginId)) {
+    // A panel tab or layout can outlive the choice to turn its plugin off; it says so and loads nothing.
+    return (
+      <div data-plugin-disabled={props.surfaceId} style={{ padding: 16, fontSize: 13, color: 'var(--text-2)' }}>
+        {surface.title.slice(2)} is turned off. Turn it on from Plugins in the command palette.{' '}
+        <button type="button" onClick={props.onClose} style={{ textDecoration: 'underline', background: 'none', border: 0, color: 'inherit', cursor: 'pointer' }}>Close</button>
+      </div>
+    )
+  }
+  return <ActivePluginSurface {...props} />
+}
+
+function ActivePluginSurface({ surfaceId, placement, sessionKey, cwd, services, onClose, registry = webPluginViews, store = pluginState }: Props) {
   const surface = getPluginSurface(surfaceId)
-  const instanceId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surfaceId
+  const instanceId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surface.pin === 'cwd' && cwd ? `${surfaceId}:${cwd}` : surfaceId
   const [attempt, setAttempt] = useState(0)
   const [failure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
@@ -45,7 +62,7 @@ export default function PluginSurfaceHost({ surfaceId, placement, sessionKey, se
   }, [View, attempt, registry, surface.pluginId, surfaceId])
   useEffect(() => store.hold(surface.pluginId, instanceId), [store, surface.pluginId, instanceId])
 
-  const target = useMemo(() => ({ sessionKey }), [sessionKey])
+  const target = useMemo(() => ({ sessionKey, cwd: cwd ?? null }), [sessionKey, cwd])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useScopedPluginState(store, surface.pluginId, instanceId, name, initial)

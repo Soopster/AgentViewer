@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React from 'react'
-import type { TuiThemePalette } from '../theme'
-import type { DiffLayoutMode } from './gitDiffText'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import type { DiffLayoutMode } from '../../../tui/opentui/shell/sdkDiff'
 
 /** Keep pointer and keyboard access to the same diff preferences. */
 export function DiffViewControls({ width, theme, mode, layout, wrap, tabWidth, offset, onLayout, onWrap, onTabs, onPan, onFilter }: {

@@ -10,44 +10,61 @@ import type { Session } from '../../../lib/types'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
 import { getPluginSurface, type PluginSurfaceId } from '../../../lib/plugins/catalog'
 import { pluginState, useScopedPluginState, type PluginStateStore } from '../../../lib/plugins/scopedState'
-import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
+import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
+import type { PluginPlacement, PluginServiceId, PluginTarget } from '../../../lib/plugins/types'
 import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { usePinnedSessionDetail } from '../usePinnedSessionDetail'
-import type { TuiPluginKeyEvent, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
+import type { TuiPluginKeyHandler, TuiPluginServices, TuiPluginView, TuiPluginViewProps } from './pluginTypes'
 import { tuiPluginViews } from './pluginViews'
 
-type KeyHandler = (key: TuiPluginKeyEvent) => void
+type KeyHandler = TuiPluginKeyHandler
 
 // The layer overlay views draw at (popoverRootProps' zIndex), with their scrim
 // just beneath. Below the root modal scrim, which dims for a blocking modal.
 export const PLUGIN_OVERLAY_Z_INDEX = 50
 
+const NO_SELECTION = { key: null, detail: null } as const
+const NEVER_YIELD = () => false
+
 export type PluginSurfaceHostProps = {
   surfaceId: PluginSurfaceId
   placement: PluginPlacement
   /** The session the surface was opened for, resolved by the root. */
-  session: Session | null
-  sessionKey: string | null
+  session?: Session | null
+  sessionKey?: string | null
   /** The root's loaded detail for the selected session, reused rather than re-read. */
-  selected: { key: string | null; detail: TuiSessionDetail | null }
-  density: TuiDensity
-  showToolCalls: boolean
-  shouldYield: () => boolean
+  selected?: { key: string | null; detail: TuiSessionDetail | null }
+  density?: TuiDensity
+  showToolCalls?: boolean
+  shouldYield?: () => boolean
+  /** The repository a `pin: 'cwd'` surface was opened on, and the session scoping it. */
+  cwd?: string | null
+  repositorySessionId?: string | null
+  repositoryLabel?: string
+  composer?: TuiPluginServices['composer']
+  clipboard?: TuiPluginServices['clipboard']
   theme: TuiThemePalette
   width: number
   height: number
   focused: boolean
+  /** An overlay's layer, for one opened above another overlay. */
+  zIndex?: number
   onClose: () => void
   onDetach?: () => void
   onKeyHandlerReady: (handler: KeyHandler) => void
+  onCaptureChange?: (capture: boolean) => void
+  runCommand?: (commandId: string) => boolean
   /** Test seams. */
   registry?: Pick<typeof tuiPluginViews, 'load' | 'peek'>
   store?: PluginStateStore
 }
 
 /** One instance per pin: an overlay and the window it becomes share state. */
-export function pluginInstanceId(surfaceId: string, sessionKey: string | null): string {
-  return getPluginSurface(surfaceId as PluginSurfaceId).pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surfaceId
+export function pluginInstanceId(surfaceId: string, sessionKey: string | null, cwd: string | null = null): string {
+  const pin = getPluginSurface(surfaceId as PluginSurfaceId).pin
+  if (pin === 'session' && sessionKey) return `${surfaceId}:${sessionKey}`
+  if (pin === 'cwd' && cwd) return `${surfaceId}:${cwd}`
+  return surfaceId
 }
 
 class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => void; children: React.ReactNode }, { failed: boolean }> {
@@ -58,11 +75,40 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 }
 
 export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
-  const { surfaceId, placement, session, sessionKey, selected, theme, width, height, onClose, onKeyHandlerReady } = props
+  const disabled = useDisabledPlugins().has(getPluginSurface(props.surfaceId).pluginId)
+  if (disabled) return <DisabledPluginSurface {...props} />
+  return <ActivePluginSurface {...props} />
+}
+
+// A window, panel tab or saved layout can outlive the choice to turn its plugin
+// off; it says so, and loads nothing.
+function DisabledPluginSurface({ surfaceId, theme, onClose, onKeyHandlerReady }: PluginSurfaceHostProps) {
+  const surface = getPluginSurface(surfaceId)
+  useEffect(() => {
+    onKeyHandlerReady((key) => {
+      if (key.name === 'escape' || key.sequence === 'q') onClose()
+      return true
+    })
+  }, [onKeyHandlerReady, onClose])
+  return (
+    <box id={`plugin-disabled:${surfaceId}`} flexDirection="column" paddingX={1}>
+      <text fg={theme.muted}>{surface.title.slice(2)} is turned off.</text>
+      <text fg={theme.dim}>Turn it on from Plugins in the ⌃K palette · <span fg={theme.cyan}>esc</span> close</text>
+    </box>
+  )
+}
+
+function ActivePluginSurface(props: PluginSurfaceHostProps) {
+  const { surfaceId, placement, theme, width, height, onClose, onKeyHandlerReady } = props
+  const session = props.session ?? null
+  const sessionKey = props.sessionKey ?? null
+  const selected = props.selected ?? NO_SELECTION
   const registry = props.registry ?? tuiPluginViews
   const store = props.store ?? pluginState
   const surface = getPluginSurface(surfaceId)
-  const instanceId = pluginInstanceId(surfaceId, sessionKey)
+  const cwd = props.cwd ?? null
+  const instanceId = pluginInstanceId(surfaceId, sessionKey, cwd)
+  const zIndex = props.zIndex ?? PLUGIN_OVERLAY_Z_INDEX
 
   const [attempt, setAttempt] = useState(0)
   const [failure, setFailure] = useState<Error | null>(null)
@@ -82,12 +128,20 @@ export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   // Services are resolved for the target, never for whatever is selected now.
   const wantsTranscript = surface.services.includes('session-transcript')
   const useSelectedDetail = wantsTranscript && Boolean(sessionKey && sessionKey === selected.key && selected.detail)
-  const pinned = usePinnedSessionDetail(wantsTranscript && !useSelectedDetail ? session : null, props.density, props.showToolCalls, props.shouldYield)
+  const pinned = usePinnedSessionDetail(wantsTranscript && !useSelectedDetail ? session : null, props.density ?? 'balanced', props.showToolCalls ?? true, props.shouldYield ?? NEVER_YIELD)
   const transcript = useSelectedDetail ? selected.detail : pinned.detail
   const transcriptStatus = useSelectedDetail ? 'ready' : pinned.status
-  const services = useMemo<TuiPluginServices>(() => (
-    wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}
-  ), [wantsTranscript, transcript, transcriptStatus])
+  const wants = (service: PluginServiceId) => surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
+  const repositoryCwd = cwd ?? process.cwd()
+  const { repositorySessionId = null, repositoryLabel, composer, clipboard } = props
+  const services = useMemo<TuiPluginServices>(() => ({
+    ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
+    ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
+    ...(wants('composer') && composer ? { composer } : {}),
+    ...(wants('clipboard') && clipboard ? { clipboard } : {}),
+  // `wants` reads only the surface, which `surfaceId` names.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, composer, clipboard])
 
   const viewKeys = useRef<KeyHandler | null>(null)
   const retry = useCallback(() => { setFailure(null); setView(null); setAttempt(value => value + 1) }, [])
@@ -98,14 +152,21 @@ export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
       if (failed.current) {
         if (key.name === 'escape' || key.sequence === 'q') onClose()
         else if (key.sequence === 'r') retry()
-        return
+        return true
       }
-      if (key.name === 'escape' && !viewKeys.current) { onClose(); return }
-      viewKeys.current?.(key)
+      if (key.name === 'escape' && !viewKeys.current) { onClose(); return true }
+      return viewKeys.current?.(key)
     })
   }, [onKeyHandlerReady, onClose, retry])
+  // A failed or unmounted view holds no input.
+  const { onCaptureChange } = props
+  const setCapture = useCallback((capture: boolean) => { onCaptureChange?.(capture) }, [onCaptureChange])
+  useEffect(() => { if (failure) onCaptureChange?.(false) }, [failure, onCaptureChange])
+  useEffect(() => () => { onCaptureChange?.(false) }, [onCaptureChange])
+  const { runCommand: hostRunCommand } = props
+  const runCommand = useCallback((commandId: string) => hostRunCommand?.(commandId) ?? false, [hostRunCommand])
 
-  const target = useMemo<PluginTarget>(() => ({ sessionKey }), [sessionKey])
+  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null }), [sessionKey, surface.pin, repositoryCwd])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // Called from the view's render as a hook; the identity is stable per instance.
     // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -115,7 +176,7 @@ export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   const registerKeys = useCallback((handler: KeyHandler | null) => { viewKeys.current = handler }, [])
 
   const overlay = placement === 'overlay'
-  const scrim = overlay ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={PLUGIN_OVERLAY_Z_INDEX - 1} /> : null
+  const scrim = overlay ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
 
   if (failure) {
     const boxWidth = overlay ? Math.min(width - 4, 72) : width
@@ -123,7 +184,7 @@ export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
       <>
         {scrim}
         <box
-          {...(overlay ? { position: 'absolute' as const, top: Math.max(1, Math.floor(height / 3)), left: Math.max(0, Math.floor((width - boxWidth) / 2)), zIndex: PLUGIN_OVERLAY_Z_INDEX, border: true, borderColor: theme.red, title: ` ${surface.title} ` } : {})}
+          {...(overlay ? { position: 'absolute' as const, top: Math.max(1, Math.floor(height / 3)), left: Math.max(0, Math.floor((width - boxWidth) / 2)), zIndex, border: true, borderColor: theme.red, title: ` ${surface.title} ` } : {})}
           id={`plugin-failure:${surfaceId}`}
           width={boxWidth}
           flexDirection="column"
@@ -141,7 +202,7 @@ export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   const Component = View as unknown as (props: TuiPluginViewProps) => React.ReactElement | null
   const viewProps: TuiPluginViewProps = {
     pluginId: surface.pluginId, surfaceId, instanceId, placement, target, services, theme, width, height,
-    focused: props.focused, useState: useState_, onDispose, registerKeys, close: onClose,
+    focused: props.focused, zIndex, useState: useState_, onDispose, registerKeys, setCapture, runCommand, close: onClose,
     ...(overlay && props.onDetach ? { detach: props.onDetach } : {}),
   }
   return (

@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import type { GitKeyEvent } from './GitPopover'
-import { initialWorkflowValues, workflowPaths, workflowChoices, workflowSummary, type WorkflowChoice, type WorkflowContext } from '../../lib/git/workflowMenu'
-import type { WorkflowDraft, WorkspaceSnapshot } from '../../lib/git/workspaceTypes'
+import { initialWorkflowValues, workflowPaths, workflowChoices, workflowSummary, type WorkflowChoice, type WorkflowContext } from '../../../lib/git/workflowMenu'
+import type { WorkflowDraft, WorkspaceSnapshot } from '../../../lib/git/workspaceTypes'
 
 export function GitWorkflowMenu({ snapshot, context, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
   snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; theme: TuiThemePalette; width: number; height: number

@@ -11,8 +11,9 @@
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = path.resolve(import.meta.dir, '..')
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
   const full = path.join(dir, name)
   return statSync(full).isDirectory() ? walk(full) : /\.(ts|tsx|mjs)$/.test(name) ? [full] : []

@@ -1,4 +1,4 @@
-import type { TuiPierreDiffRow, TuiPierreSplitRow } from './pierreDiffView'
+import type { TuiPierreDiffRow, TuiPierreSplitRow } from '../../../tui/opentui/shell/sdkDiff'
 
 export type DiffProgress = {
   filePath: string

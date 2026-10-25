@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React from 'react'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 
 export function DiffReviewActionsBar({ theme, width, query, editing, matchLabel, status, prompt, onSearch, onNext, onCopy }: {
   theme: TuiThemePalette; width: number; query: string; editing: boolean; matchLabel: string; status: string

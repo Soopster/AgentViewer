@@ -7,14 +7,14 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { GitReviewPopover as GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from '../../plugins/git/tui/GitPopover'
 import { fetchGitData } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import {
   describeStatusEntry, describeUpstream, fetchGitOperation, fetchGitWorkspaceStatus, formatGitWorkspaceStatus,
   isConflictEntry, parseBranchHeader, parseStatusEntries, parseWorktreeList, renameLabel, renameOriginLabel, siblingDisplayPath,
 } from '../../lib/gitWorkspaceStatus'
-import { DIFF_SCROLL_OFF, revealDiffScrollTop } from './gitDiffGeometry'
+import { DIFF_SCROLL_OFF, revealDiffScrollTop } from '../../plugins/git/tui/gitDiffGeometry'
 
 const execFileAsync = promisify(execFile)
 function check(condition: unknown, message: string): asserts condition {

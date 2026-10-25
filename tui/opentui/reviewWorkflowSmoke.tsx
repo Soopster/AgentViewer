@@ -7,10 +7,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { testRender, act } from './testRender'
-import { GitReviewPopover as GitPopover } from './GitPopover'
+import { GitReviewPopover as GitPopover } from '../../plugins/git/tui/GitPopover'
 import { DARK_THEME } from '../theme'
 import { readReview, mutateReview } from '../../lib/review/store'
-import type { ReviewActionKey } from './useGitDiffReviewActions'
+import type { ReviewActionKey } from '../../plugins/git/tui/useGitDiffReviewActions'
 
 const cwd = await mkdtemp(join(tmpdir(), 'review-ui-'))
   process.env.AGENT_VIEWER_REVIEW_DIR = join(cwd, '.reviews')

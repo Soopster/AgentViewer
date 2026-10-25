@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -9,6 +9,7 @@ import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/proje
 import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META } from '@/lib/themes'
 import { listPluginCommands } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
+import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
 import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
 import {
@@ -61,7 +62,6 @@ type CommandPaletteProps = {
   onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
-  onOpenGit: () => void
   onOpenPullRequests: () => void
   onOpenFiles: () => void
   onOpenCoordinator: () => void
@@ -75,6 +75,7 @@ type CommandPaletteProps = {
   onOpenBookmarks: () => void
   onOpenProvenance: () => void
   onOpenRemoteAccess: () => void
+  onOpenPlugins: () => void
 }
 
 type PaletteItem = {
@@ -363,7 +364,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenGit,
   onOpenPullRequests,
   onOpenFiles,
   onOpenCoordinator,
@@ -377,7 +377,9 @@ export default function CommandPalette({
   onOpenBookmarks,
   onOpenProvenance,
   onOpenRemoteAccess,
+  onOpenPlugins,
 }: CommandPaletteProps) {
+  const disabledPlugins = useDisabledPlugins()
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -500,6 +502,7 @@ export default function CommandPalette({
       },
       // Feature plugins' commands, run by whichever view owns their target.
       ...listPluginCommands('web')
+        .filter((command) => !disabledPlugins.has(command.pluginId))
         .filter((command) => command.requires !== 'session' || (selectedSession && !selectedProject))
         .map((command): PaletteItem => ({
           id: `plugin:${command.id}`,
@@ -611,17 +614,6 @@ export default function CommandPalette({
           if (messageViewFullscreen) onToggleMessageViewMaximized()
           else onEnterMessageViewFullscreen()
         },
-      },
-      {
-        id: 'open-git',
-        label: 'Open Git status',
-        description: canOpenGit ? 'Show working tree, branches, and commits for the active project' : 'Select a session or project first',
-        icon: <GitBranch size={16} />,
-        shortcut: 'Ctrl G',
-        group: 'actions',
-        keywords: ['git', 'status', 'diff', 'branch', 'commit', 'working tree'],
-        score: 0,
-        run: onOpenGit,
       },
       {
         id: 'open-pull-requests',
@@ -786,6 +778,16 @@ export default function CommandPalette({
         run: onOpenRemoteAccess,
       },
       {
+        id: 'open-plugins',
+        label: 'Plugins',
+        description: 'Turn features such as Git and Analytics on or off',
+        icon: <Puzzle size={16} />,
+        group: 'actions',
+        keywords: ['plugins', 'extensions', 'features', 'enable', 'disable', 'settings'],
+        score: 0,
+        run: onOpenPlugins,
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -868,7 +870,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenFiles, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

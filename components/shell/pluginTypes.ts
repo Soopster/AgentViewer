@@ -5,6 +5,11 @@ import type { PluginPlacement, PluginTarget } from '@/lib/plugins/types'
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
   'session-transcript'?: AnalyticsInput
+  repository?: {
+    readonly cwd: string
+    /** Scopes turn lists to one session; null means every turn in the repository. */
+    readonly sessionId: string | null
+  }
 }
 
 /** Everything a Web plugin view receives. Never the page's state or setters. */

@@ -2696,10 +2696,11 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `lib/extensions/providers/claude/runtime.ts` | ~2230 | Claude send path (pool turns, actions, fork/rewind); codex/copilot/opencode/pi runtimes sit beside it |
 | `components/SessionList.tsx` | ~2330 | Sidebar: project grouping, search, tag filters, collapsible groups |
 | `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
-| `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
+| `plugins/git/web/GitPopover.tsx` | ~2370 | Web Git diff/branch view (Git plugin) |
+| `plugins/git/tui/GitPopover.tsx` | ~2360 | OpenTUI Git review (Git plugin) |
 | `tui/opentui/EditorPopover.tsx` | ~5510 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
-| `tui/opentui/AnalyticsPopover.tsx` | ~1150 | OpenTUI analytics overlay (separate impl from the web one) |
-| `components/AnalyticsPopover.tsx` | ~1050 | Recharts analytics |
+| `plugins/analytics/tui/AnalyticsView.tsx` | ~1200 | OpenTUI analytics overlay (separate impl from the web one) |
+| `plugins/analytics/web/AnalyticsView.tsx` | ~1240 | Recharts analytics |
 | `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |
 | `app/globals.css` | ~1000 | All ~30 themes' CSS vars + base styles (each `[data-theme="…"]` block is contiguous) |
 | `tui/format.ts` | ~2915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
@@ -2721,6 +2722,7 @@ Concrete recipes for typical asks. Each lists every file you usually need to tou
 
 - **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
 - **Add a provider** → `npm run providers:scaffold -- <id> "<Name>"`, then implement its `manifest.ts`, `adapter.ts` (read path) and `runtime.ts` (send path) under `lib/extensions/providers/<id>/` — see `docs/provider-extensions.md`. `AgentProvider` is inferred from the catalog; no root, palette or backend switch needs an entry. Verify with `npm run providers:extensions:smoke` and `npm run adapters:smoke`.
+- **Add a feature plugin** → `plugins/<id>/manifest.ts` (metadata only: surfaces, commands, services), one line in `lib/plugins/catalog.ts`, and one lazy loader per renderer in `tui/opentui/shell/pluginViews.ts` / `components/shell/pluginViews.ts`; views live in `plugins/<id>/{tui,web}/` and reach the host only through `tui/opentui/shell/sdk*.ts` / `components/shell/`. No root switch, palette entry or window-kind union changes. It appears in the plugin manager automatically. Verify with `npm run plugins:smoke` (the boundary check fails on a root, provider or cross-plugin import). See `docs/composable-plugin-architecture-plan.md`.
 - **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
 - **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
 - **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).

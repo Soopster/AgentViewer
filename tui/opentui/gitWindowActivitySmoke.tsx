@@ -22,7 +22,7 @@ mock.module('../../lib/review/localTransport', () => ({ localReviewTransport: {
     return { ...emptyReview(request.source), sequence: publications.length }
   },
 } }))
-const { GitReviewPopover } = await import('./GitPopover')
+const { GitReviewPopover } = await import('../../plugins/git/tui/GitPopover')
 const cwd = await mkdtemp(join(tmpdir(), 'git-window-activity-'))
 let show!: (visible: boolean) => void
 function Harness() {

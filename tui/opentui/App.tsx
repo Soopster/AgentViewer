@@ -13,7 +13,10 @@ import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
-import { getPluginCommand, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
+import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
+import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
+import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
+import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
 import type { PluginKeyChord } from '../../lib/plugins/types'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
@@ -459,12 +462,14 @@ const COMPOSER_WAITING_MESSAGES = [
 
 
 // Plugin commands with a TUI binding, matched by the global key router.
+// The plugin choice of this workspace, before the first frame offers any command.
+applyPluginSettings(readPluginSettingsFile())
 const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): command is ResolvedPluginCommand & { tuiKey: PluginKeyChord } => Boolean(command.tuiKey))
 
 // Overlays load when first opened — see lazyComponent.tsx.
-const GitPopover = lazyComponent(() => import('./GitPopover').then((module) => module.GitPopover))
 const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
 const FileViewerPopover = lazyComponent(() => import('./FileViewerPopover').then((module) => module.FileViewerPopover))
+const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
 const EditorPopover = lazyComponent(() => import('./EditorPopover').then((module) => module.EditorPopover))
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
@@ -5785,13 +5790,13 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
-  { id: 'git',        label: 'Git status',             key: '⌃G', category: 'Session'    },
   { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   { id: 'files',      label: 'Browse project files',   key: '⌃F', category: 'Session'    },
   { id: 'editor',     label: 'Open project editor',    key: '⌃E', category: 'Session'    },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
+  { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
   { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
   { id: 'processes',  label: 'Processes and logs (dev server, watchers)', key: '⌃K l', category: 'Session' },
@@ -10038,7 +10043,9 @@ function OpenTuiWorkspace() {
   const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
   const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const surfaceGitKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
+  // The side panel's plugin surface (Git): its key handler and its claim on input.
+  const surfacePluginKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
+  const surfacePluginKeyCaptureRef = useRef(false)
   const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const surfaceFilesKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -10077,10 +10084,6 @@ function OpenTuiWorkspace() {
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
-  const [gitOpen, setGitOpen] = useState(false)
-  const gitKeyCaptureRef = useRef(false)
-  const surfaceGitKeyCaptureRef = useRef(false)
-  const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [pullRequestOpen, setPullRequestOpen] = useState(false)
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
@@ -10104,8 +10107,11 @@ function OpenTuiWorkspace() {
   // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
   const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
   const [deskOpen, setDeskOpen] = useState(false)
+  const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
+  const pluginManagerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const disabledPlugins = useDisabledPlugins()
   const deskKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => void) | null>(null)
-  const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
@@ -10621,10 +10627,10 @@ function OpenTuiWorkspace() {
     || exitConfirmOpen
     || searchMode
     || sessionSearchMode
-    || gitOpen
     || pullRequestOpen
     || pluginOverlay !== null
     || deskOpen
+    || pluginManagerOpen
     || crossSessionMessagingOpen
     || windowSwitcherOpen
     || windowBroadcastOpen
@@ -15036,9 +15042,12 @@ function OpenTuiWorkspace() {
   }, [])
 
   const filteredCommands = useMemo(() => {
+    const enabledCommands = disabledPlugins.size
+      ? COMMANDS.filter((cmd) => { const plugin = getPluginCommand(cmd.id)?.pluginId; return !plugin || !disabledPlugins.has(plugin) })
+      : COMMANDS
     const bridgeFiltered = canUseChannelBridge
-      ? COMMANDS
-      : COMMANDS.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
+      ? enabledCommands
+      : enabledCommands.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
     const availableCommands = canUseIdeBridge
       ? bridgeFiltered
       : bridgeFiltered.filter((cmd) => cmd.id !== 'ide-bridge' && cmd.id !== 'ide-bridge-route')
@@ -15051,7 +15060,7 @@ function OpenTuiWorkspace() {
       ))
     }
     return availableCommands.filter((cmd) => `${cmd.label} ${cmd.key} ${cmd.category}`.toLowerCase().includes(q))
-  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery])
+  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery, disabledPlugins])
 
   useEffect(() => {
     currentThemeRef.current = themeMode
@@ -16409,7 +16418,7 @@ function OpenTuiWorkspace() {
     }
     if (command === 'diff') {
       setComposerActive(false)
-      setGitOpen(true)
+      runPluginCommandId('git')
       return true
     }
     if (command === 'mcp') {
@@ -20871,8 +20880,7 @@ function OpenTuiWorkspace() {
   // `pin` reopens a path-pinned popover (file history) on its path.
   const setPopoverOpen = (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => {
     // Git, Files and pull requests are surface kinds with a popover of their own.
-    if (kind === 'diff') setGitOpen(open)
-    else if (kind === 'files') setFileViewerOpen(open)
+    if (kind === 'files') setFileViewerOpen(open)
     else if (kind === 'pull-request') setPullRequestOpen(open)
     else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
@@ -20895,7 +20903,7 @@ function OpenTuiWorkspace() {
   // The popover open now, if it can become a window. Order is the popovers' own
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
-    pluginOverlay ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination'
+    pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : editorOpen ? 'editor' : coordBoardOpen ? 'coordination'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
     : crossSessionMessagingOpen ? 'messaging' : handoffBriefOpen ? 'handoff' : taskPopoverOpen ? 'tasks'
     : fileHistoryPath && gitRepoCwd ? 'file-history' : checkpointOpen && gitRepoCwd ? 'checkpoints'
@@ -21035,10 +21043,45 @@ function OpenTuiWorkspace() {
   // this pin when there is one (the open-popover effect routes it), else as an overlay.
   const runPluginCommand = useStableEvent((command: ResolvedPluginCommand) => {
     if (!isPluginSurfaceId(command.opens)) return
+    if (!isPluginEnabled(command.pluginId)) {
+      showNotice('info', `${command.label} is off · turn its plugin on in Plugins (⌃K palette)`)
+      return
+    }
     setPluginOverlay(command.opens)
   })
+  const runPluginCommandId = useStableEvent((id: string) => {
+    const command = getPluginCommand(id)
+    if (command) runPluginCommand(command)
+  })
+  // What a plugin view's runCommand reaches: another plugin's command, or a host
+  // command a plugin may ask for by id. Plugins never import each other.
+  const runCommandForPlugin = useStableEvent((id: string): boolean => {
+    const command = getPluginCommand(id)
+    if (command) { runPluginCommand(command); return true }
+    if (id === 'pull-requests') {
+      setPluginOverlay(null)
+      setPullRequestOpen(true)
+      return true
+    }
+    return false
+  })
+  const pluginComposer = useMemo(() => ({
+    appendDiffNote: (prompt: string) => {
+      appendDiffCommentPromptToComposer(prompt)
+      showNotice('info', 'Diff comment added to composer')
+    },
+    askAboutSelection: (request: SelectionAskInput) => { void askAgentAboutSelection(request) },
+  // Both are the root's stable events.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [])
+  const pluginClipboard = useMemo(() => ({ write: (text: string) => writeClipboard(text, renderer) }), [renderer])
+  const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
   const closePluginOverlay = useStableEvent(() => setPluginOverlay(null))
-  const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => {
+  // Turning a plugin off closes its overlay; its windows say it is off.
+  useEffect(() => {
+    if (pluginOverlay && disabledPlugins.has(getPluginSurface(pluginOverlay).pluginId)) setPluginOverlay(null)
+  }, [pluginOverlay, disabledPlugins])
+  const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
     pluginOverlayKeyHandlerRef.current = handler
   })
   const pluginSelectedDetail = useMemo(() => ({ key: selectedSessionKey, detail: sessionDetail }), [selectedSessionKey, sessionDetail])
@@ -22198,7 +22241,7 @@ function OpenTuiWorkspace() {
   // diagnostics takes a target.
   const openSplitPaneOverlay = useStableEvent((kind: 'git' | 'diagnostics', target: Session | null) => {
     if (!target) return
-    if (kind === 'git') { setGitOpen(true); return }
+    if (kind === 'git') { runPluginCommandId('git'); return }
     openDiagnostics(target)
   })
 
@@ -22860,8 +22903,8 @@ function OpenTuiWorkspace() {
           return next
         })
         break
-      case 'git':
-        setGitOpen(true)
+      case 'plugins':
+        setPluginManagerOpen(true)
         break
       case 'pull-requests':
         setPullRequestOpen(true)
@@ -23083,7 +23126,7 @@ function OpenTuiWorkspace() {
     || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen || coordModalOpen || remoteCoordinatorTarget
     || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
     || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
-    || gitOpen || pullRequestOpen || fileViewerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
+    || pullRequestOpen || fileViewerOpen || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
   )
   const endWindowResizeGroup = () => {
     windowResizeGroupRef.current = false
@@ -23360,10 +23403,10 @@ function OpenTuiWorkspace() {
       const popover = openPopoverKind()
       if (popover) { handled(() => openPopoverWindow(popover)); return }
       // Git, Files and pull requests already have window kinds of their own.
-      const surfaceKind: WindowSurfaceKind | null = gitOpen ? 'diff' : fileViewerOpen ? 'files' : pullRequestOpen ? 'pull-request' : null
+      const surfaceKind: WindowSurfaceKind | null = pluginOverlay && isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : fileViewerOpen ? 'files' : pullRequestOpen ? 'pull-request' : null
       if (surfaceKind && gitRepoCwd) {
         handled(() => {
-          setGitOpen(false)
+          setPluginOverlay(null)
           setFileViewerOpen(false)
           setPullRequestOpen(false)
           openSurfaceWindow(surfaceKind as RightPanelSurfaceKind)
@@ -23707,17 +23750,10 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (gitOpen) {
-      // p hops to the PR review popover — the reliable path on terminals whose
-      // legacy encoding folds Ctrl+Shift+G into Ctrl+G (e.g. Windows).
-      if (key.name === 'p' && !key.ctrl && !key.shift && !gitKeyCaptureRef.current) {
-        handled(() => {
-          setGitOpen(false)
-          setPullRequestOpen(true)
-        })
-        return
-      }
-      if (gitKeyHandlerRef.current?.(key) !== false) handled(() => {})
+    // A plugin overlay (Git, Analytics) owns the keys while it is up; a key its
+    // view declines (returns false) is left unhandled.
+    if (pluginOverlay) {
+      if (pluginOverlayKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -23765,9 +23801,10 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (pendingPermissions.length === 0 && surfacePanelVisible && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'diff'
-      && surfaceGitKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
-      if (surfaceGitKeyRef.current?.(key) !== false) handled(() => {})
+    const panelSurfaceKind = activeSurface(surfacePanel)?.kind
+    if (pendingPermissions.length === 0 && surfacePanelVisible && surfacePanelFocused && panelSurfaceKind && isPluginSurfaceId(panelSurfaceKind)
+      && surfacePluginKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
+      if (surfacePluginKeyRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -23831,13 +23868,13 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (newSessionModalOpen) {
-      handled(() => { newSessionKeyHandlerRef.current?.(key) })
+    if (pluginManagerOpen) {
+      handled(() => { pluginManagerKeyHandlerRef.current?.(key) })
       return
     }
 
-    if (pluginOverlay) {
-      handled(() => { pluginOverlayKeyHandlerRef.current?.(key) })
+    if (newSessionModalOpen) {
+      handled(() => { newSessionKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -24801,12 +24838,6 @@ function OpenTuiWorkspace() {
 
     if (isCtrlShift('g')) {
       handled(() => setPullRequestOpen(true))
-      return
-    }
-
-    // Global git status popover
-    if (isCtrl('g')) {
-      handled(() => setGitOpen(true))
       return
     }
 
@@ -26796,25 +26827,32 @@ function OpenTuiWorkspace() {
       if (slot) windowSurfaceCaptureRef.current.set(slot, capture)
       else panelRef.current = capture
     }
-    // Plugin surfaces in windows: `close` there leaves the window (Esc, q).
+    // Plugin surfaces in windows and the side panel. A popover kind's close
+    // (Esc, q) leaves its window; a side-panel kind's closes it, as Files' does.
     if (isPluginSurfaceId(kind)) {
       const pinned = slot ? pinnedSessionOf(slot) : selectedSession
       return (
         <PluginSurfaceHost
           surfaceId={kind}
-          placement="window"
+          placement={slot ? 'window' : 'panel'}
           session={pinned}
           sessionKey={pinned ? sessionKey(pinned) : null}
           selected={pluginSelectedDetail}
           density={density}
           showToolCalls={showToolCalls}
           shouldYield={splitPaneShouldYield}
+          cwd={surfaceCwd}
+          repositorySessionId={gitSessionId}
+          composer={pluginComposer}
+          clipboard={pluginClipboard}
           theme={theme}
           width={box.width}
           height={box.height}
           focused={focused}
-          onClose={leave}
-          onKeyHandlerReady={keysReady({ current: null })}
+          onClose={isPluginPanelSurfaceId(kind) ? close : leave}
+          onKeyHandlerReady={keysReady(surfacePluginKeyRef as { current: SurfaceKeyHandler | null })}
+          onCaptureChange={slot ? captureChange({ current: false }) : surfacePluginCaptureChange}
+          runCommand={runCommandForPlugin}
         />
       )
     }
@@ -26880,26 +26918,6 @@ function OpenTuiWorkspace() {
                 return next
               })
             }}
-          />
-        )
-      case 'diff':
-        return (
-          <GitPopover
-            docked
-            cwd={surfaceCwd}
-            sessionId={gitSessionId}
-            onKeyCaptureChange={captureChange(surfaceGitKeyCaptureRef)}
-            onClipboardWrite={(text) => writeClipboard(text, renderer)}
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            onClose={close}
-            onKeyHandlerReady={keysReady(surfaceGitKeyRef as { current: SurfaceKeyHandler | null })}
-            onSendDiffNoteToComposer={(prompt) => {
-              appendDiffCommentPromptToComposer(prompt)
-              showNotice('info', 'Diff comment added to composer')
-            }}
-            onAskAgent={(request) => { void askAgentAboutSelection(request) }}
           />
         )
       case 'pull-request':
@@ -27344,7 +27362,7 @@ function OpenTuiWorkspace() {
       surfaceKeyHandler={(key) => {
         const surface = activeSurface(surfacePanel)
         if (!surface) return
-        if (surface.kind === 'diff') surfaceGitKeyRef.current?.(key)
+        if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
         else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
         else if (surface.kind === 'files') surfaceFilesKeyRef.current?.(key)
         else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
@@ -27355,7 +27373,7 @@ function OpenTuiWorkspace() {
   ) : null
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
-  const fullScreenPopoverOpen = editorOpen || gitOpen || pullRequestOpen || fileViewerOpen || deskOpen
+  const fullScreenPopoverOpen = editorOpen || Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || fileViewerOpen || deskOpen
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
@@ -28838,18 +28856,6 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {gitOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
       {pullRequestOpen ? (
         <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={49} />
       ) : null}
@@ -28871,30 +28877,6 @@ function OpenTuiWorkspace() {
           onSendDiffNoteToComposer={(prompt) => {
             appendDiffCommentPromptToComposer(prompt)
             showNotice('info', 'PR diff comment added to composer')
-          }}
-        />
-      ) : null}
-
-      {gitOpen ? (
-        <GitPopover
-          cwd={gitRepoCwd}
-          sessionId={gitSessionId}
-          onKeyCaptureChange={(capture) => { gitKeyCaptureRef.current = capture }}
-          onClipboardWrite={(text) => writeClipboard(text, renderer)}
-          theme={theme}
-          width={width}
-          height={height}
-          onClose={() => setGitOpen(false)}
-          onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('diff')}
-          onSendDiffNoteToComposer={(prompt) => {
-            appendDiffCommentPromptToComposer(prompt)
-            showNotice('info', 'Diff comment added to composer')
-          }}
-          onAskAgent={(request) => {
-            void askAgentAboutSelection(request)
-            // A full-screen popover hides the composer the prompt just went to.
-            setGitOpen(false)
           }}
         />
       ) : null}
@@ -29025,6 +29007,11 @@ function OpenTuiWorkspace() {
           density={density}
           showToolCalls={showToolCalls}
           shouldYield={splitPaneShouldYield}
+          cwd={gitRepoCwd}
+          repositorySessionId={gitSessionId}
+          composer={pluginComposer}
+          clipboard={pluginClipboard}
+          runCommand={runCommandForPlugin}
           theme={theme}
           width={width}
           height={height}
@@ -29778,7 +29765,7 @@ function OpenTuiWorkspace() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
         <box
           position="absolute"
           top={0}
@@ -29787,6 +29774,17 @@ function OpenTuiWorkspace() {
           height={height}
           renderAfter={paintModalScrim}
           zIndex={MODAL_SCRIM_Z_INDEX}
+        />
+      ) : null}
+
+      {pluginManagerOpen ? (
+        <PluginManagerPopover
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setPluginManagerOpen(false)}
+          onKeyHandlerReady={(handler) => { pluginManagerKeyHandlerRef.current = handler }}
+          onNotice={showNotice}
         />
       ) : null}
 

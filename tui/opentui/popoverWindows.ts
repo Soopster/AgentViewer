@@ -13,7 +13,7 @@
 //           ahead of the global keys, as a shell in terminal mode is — for
 //           views that are editors in their own right.
 
-import { listPluginSurfaces, type PluginSurfaceId } from '../../lib/plugins/catalog'
+import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugins/catalog'
 
 type BuiltinPopoverWindowKind =
   | 'daily-summary' | 'editor' | 'coordination'
@@ -21,8 +21,12 @@ type BuiltinPopoverWindowKind =
   | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
   | 'teammates' | 'desk' | 'diagnostics'
 
-/** Built-in kinds plus every TUI plugin surface; a plugin adds none here. */
-export type PopoverWindowKind = BuiltinPopoverWindowKind | PluginSurfaceId
+/**
+ * Built-in kinds plus every TUI plugin surface that is not also a side-panel
+ * kind (those, like Git's `diff`, are surface kinds of their own); a plugin adds
+ * none here.
+ */
+export type PopoverWindowKind = BuiltinPopoverWindowKind | PluginPopoverSurfaceId
 
 export type PopoverWindowSpec = {
   title: string
@@ -56,9 +60,9 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
 }
 
 export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
-  ...Object.fromEntries(listPluginSurfaces('tui').filter(surface => surface.placements.includes('window')).map(surface => [surface.id, {
-    title: surface.title, pin: surface.pin, single: surface.single, keys: surface.keys, palette: surface.windowLabel,
-  } satisfies PopoverWindowSpec])) as Record<PluginSurfaceId, PopoverWindowSpec>,
+  ...Object.fromEntries(listPluginSurfaces('tui').filter(surface => surface.placements.includes('window') && !surface.placements.includes('panel')).map(surface => [surface.id, {
+    title: surface.title, pin: surface.pin === 'cwd' ? null : surface.pin, single: surface.single, keys: surface.keys, palette: surface.windowLabel,
+  } satisfies PopoverWindowSpec])) as Record<PluginPopoverSurfaceId, PopoverWindowSpec>,
   ...BUILTIN_POPOVER_WINDOWS,
 }
 
