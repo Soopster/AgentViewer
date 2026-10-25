@@ -252,10 +252,10 @@ export async function sendCrossSessionMessage(params: {
 
   const fromName = params.fromName.trim() || (params.fromSessionId ? `session-${shortId(params.fromSessionId)}` : 'Agent Viewer')
   const wrapped = `[Message from session "${fromName}" via Agent Viewer cross-session messaging]\n${text}`
-  const running = getRunningSessionInfo(target.sessionId)
+  const running = getRunningSessionInfo(target.sessionId, target)
   if (running.running && running.canSteer) {
     try {
-      const result = await steerRunningSessionIdempotent(target.sessionId, wrapped, undefined, randomUUID())
+      const result = await steerRunningSessionIdempotent(target.sessionId, wrapped, undefined, randomUUID(), target)
       if (result.delivered) {
         return {
           delivered: true,
@@ -267,7 +267,7 @@ export async function sendCrossSessionMessage(params: {
       }
     } catch (error) {
       // Starting a second turn while the first still owns the session is unsafe.
-      if (getRunningSessionInfo(target.sessionId).running) {
+      if (getRunningSessionInfo(target.sessionId, target).running) {
         return { delivered: false, mode: 'error', error: error instanceof Error ? error.message : 'The running session rejected the message' }
       }
     }
@@ -305,7 +305,7 @@ export async function sendCrossSessionMessage(params: {
         }),
       ])
     } catch (error) {
-      await interruptRunningSession(target.sessionId, turnRequestId).catch(() => {})
+      await interruptRunningSession(target.sessionId, turnRequestId, false, target).catch(() => {})
       return { delivered: false, mode: 'error', error: error instanceof Error ? error.message : String(error) }
     } finally {
       if (timeout) clearTimeout(timeout)
