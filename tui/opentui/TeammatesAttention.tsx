@@ -8,7 +8,7 @@ import { fitText } from './textLayout'
 
 const TEAM_RECHECK_MS = 5_000
 
-export const TeammatesAttention = memo(function TeammatesAttention({ theme, width, session, top = 0 }: { theme: TuiThemePalette; width: number; session?: Session | null; top?: number }) {
+export const TeammatesAttention = memo(function TeammatesAttention({ theme, width, session, top = 0, inline = false }: { theme: TuiThemePalette; width: number; session?: Session | null; top?: number; inline?: boolean }) {
   const sessionId = session?.isPending ? undefined : session?.sessionId
   const provider = session?.provider ?? 'claude'
   const cwd = session?.cwd
@@ -41,7 +41,7 @@ export const TeammatesAttention = memo(function TeammatesAttention({ theme, widt
   }, [sessionId, provider, cwd, title, hasTeam])
   const label = useSyncExternalStore(subscribeInteractiveCoordinator, getInteractiveCoordinatorAttention, getInteractiveCoordinatorAttention)
   if (!label) return null
-  return <box id="teammates-attention" position="absolute" top={top} right={2} height={1} zIndex={5} backgroundColor={theme.surface2}
+  return <box id="teammates-attention" position={inline ? "relative" : "absolute"} top={inline ? undefined : top} right={inline ? undefined : 2} height={1} flexShrink={0} overflow="hidden" zIndex={5} backgroundColor={theme.surface2}
     onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); openInteractiveCoordinatorAttention() } }}>
     <text fg={label.startsWith('!') ? theme.amber : theme.green} wrapMode="none">{fitText(label, Math.max(Math.min(width - 4, 48), 1)).trimEnd()}</text>
   </box>

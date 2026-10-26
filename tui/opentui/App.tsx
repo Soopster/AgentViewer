@@ -26920,7 +26920,6 @@ function OpenTuiWorkspace() {
               </box>
             )
           })() : null}
-      <TeammatesAttention theme={theme} width={width} top={1} session={selectedSession} />
       <box
         flexGrow={surfacePanelAtBottom ? 0 : 1}
         flexShrink={surfacePanelAtBottom ? 0 : undefined}
@@ -27032,17 +27031,21 @@ function OpenTuiWorkspace() {
         <box width={readerAreaWidth} flexDirection="column">
           {showTabs ? (
             <box
+              id="session-tab-strip"
+              height={TAB_BAR_HEIGHT}
+              flexShrink={0}
               paddingX={1}
               overflow="hidden"
-              backgroundColor={theme.surface2}
+              backgroundColor={theme.bg}
             >
               <tab-select
                 id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
-                width={readerAreaWidth - 2}
+                width={Math.max(readerAreaWidth - 2, 1)}
+                height={TAB_BAR_HEIGHT}
                 tabWidth={tabWidth}
-                backgroundColor={theme.surface2}
+                backgroundColor={theme.bg}
                 focusedBackgroundColor={theme.surface3}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
@@ -28348,8 +28351,9 @@ function OpenTuiWorkspace() {
                   )}
               </text>
             </box>
+            {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
             <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
+            <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {dockShowsStatusBar
                   ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)
@@ -28363,8 +28367,11 @@ function OpenTuiWorkspace() {
       ) : null}
 
       {!searchMode && !fullscreenMode && !statusBarInDock ? (
-        <box backgroundColor={theme.surface2} paddingX={1}>
-          <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
+        <box backgroundColor={theme.surface2} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
+          <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+            <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
+          </box>
+          <TeammatesAttention inline theme={theme} width={Math.floor(width / 3)} session={selectedSession} />
         </box>
       ) : null}
 
