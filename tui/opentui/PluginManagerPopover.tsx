@@ -4,7 +4,8 @@
 // The choice is written to .agent-viewer-data/plugins.json, which the web daemon
 // reads too, and applied at once: a plugin turned off closes its overlay and
 // its commands stop being offered.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ScrollBoxRenderable } from '@opentui/core'
 import { PLUGIN_MANIFESTS } from '../../lib/plugins/catalog'
 import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
@@ -36,6 +37,11 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
   const manifests = PLUGIN_MANIFESTS as readonly PluginManifest[]
   const disabled = useDisabledPlugins()
   const [cursor, setCursor] = useState(0)
+  const scroll = useRef<ScrollBoxRenderable>(null)
+  useEffect(() => {
+    const timer = setTimeout(() => scroll.current?.scrollChildIntoView(`plugin-row:${manifests[cursor]?.id}`), 0)
+    return () => clearTimeout(timer)
+  }, [cursor, height, width])
   const toggle = (manifest: PluginManifest) => {
     const enabled = disabled.has(manifest.id)
     const next = withPluginEnabled(readPluginSettings(), manifest.id, enabled)
@@ -53,18 +59,19 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       if (key.name === 'escape' || key.sequence === 'q') { onClose(); return }
       if (key.name === 'down' || key.sequence === 'j') setCursor(index => Math.min(manifests.length - 1, index + 1))
       else if (key.name === 'up' || key.sequence === 'k') setCursor(index => Math.max(0, index - 1))
+      else if (key.name === 'pagedown') setCursor(index => Math.min(manifests.length - 1, index + Math.max(1, Math.floor((height - 6) / 3))))
+      else if (key.name === 'pageup') setCursor(index => Math.max(0, index - Math.max(1, Math.floor((height - 6) / 3))))
+      else if (key.name === 'home') setCursor(0)
+      else if (key.name === 'end') setCursor(manifests.length - 1)
       else if (key.name === 'space' || key.sequence === ' ' || key.name === 'return') toggle(manifests[cursor]!)
     })
   })
 
   const panelWidth = Math.min(Math.max(width - 6, 40), 76)
-  // Three rows a plugin, the footer, and the border.
+  // Allow descriptions and command summaries to wrap inside the scroll area.
   const panelHeight = Math.min(height - 2, manifests.length * 3 + 4)
-  // More plugins than rows: a window of whole rows that keeps the cursor in view.
-  const fitting = Math.max(1, Math.floor((panelHeight - 4) / 3))
-  const first = Math.min(Math.max(0, cursor - fitting + 1), Math.max(0, manifests.length - fitting))
-  const shown = manifests.slice(first, first + fitting)
-  const hidden = manifests.length - shown.length
+  const footer = '↑↓ move · wheel scroll · space toggle · esc close'
+  const footerRows = Math.ceil(footer.length / Math.max(1, panelWidth - 4))
   return (
     <box
       id="plugin-manager"
@@ -82,27 +89,24 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       flexDirection="column"
       paddingX={1}
     >
-      {shown.map((manifest, offset) => {
-        const index = first + offset
+      <scrollbox id="plugin-manager-scroll" ref={scroll} height={Math.max(1, panelHeight - 2 - footerRows)} flexShrink={0} scrollY viewportCulling>
+      {manifests.map((manifest, index) => {
         const on = !disabled.has(manifest.id)
         const selected = index === cursor
         return (
-          <box key={manifest.id} id={`plugin-row:${manifest.id}`} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined} onMouseDown={() => { setCursor(index); toggle(manifest) }}>
-            <text wrapMode="none">
+          <box key={manifest.id} id={`plugin-row:${manifest.id}`} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(index); toggle(manifest) } }}>
+            <text width="100%" wrapMode="word" selectable={false}>
               <span fg={on ? theme.green : theme.dim}>{on ? '●' : '○'} </span>
               <span fg={theme.text}>{manifest.title}</span>
               <span fg={on ? theme.green : theme.muted}>{on ? '  on' : '  off'}</span>
             </text>
-            <text fg={theme.muted} wrapMode="none">{`  ${manifest.description}`.slice(0, panelWidth - 4)}</text>
-            <text fg={theme.dim} wrapMode="none">{`  ${pluginSummary(manifest)}`.slice(0, panelWidth - 4)}</text>
+            <text fg={theme.muted} width="100%" wrapMode="word" selectable={false}>{`  ${manifest.description}`}</text>
+            <text fg={theme.dim} width="100%" wrapMode="word" selectable={false}>{`  ${pluginSummary(manifest)}`}</text>
           </box>
         )
       })}
-      <box flexGrow={1} />
-      <text fg={theme.muted} wrapMode="none">
-        <span fg={theme.cyan}>↑↓</span> move · <span fg={theme.cyan}>space</span> turn on/off · <span fg={theme.cyan}>esc</span> close
-        {hidden > 0 ? ` · ${first + 1}–${first + shown.length} of ${manifests.length}` : ''}
-      </text>
+      </scrollbox>
+      <text height={footerRows} flexShrink={0} fg={theme.muted} wrapMode="word" selectable={false}>{footer}</text>
     </box>
   )
 }

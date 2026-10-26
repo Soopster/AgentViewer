@@ -4,7 +4,7 @@ import { useWorkspaceState } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve } from 'node:path'
 import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import { detectTuiCodeFiletypeFromPath } from '../../../tui/opentui/shell/sdk'
 
@@ -264,6 +264,8 @@ export function FileViewerPopover({
   const listScrollRef = useRef<ScrollBoxRenderable>(null)
   const previewScrollRef = useRef<ScrollBoxRenderable>(null)
   const requestRef = useRef(0)
+  const pendingSelection = useRef<string | null>(null)
+  const lastClick = useRef<{ path: string; time: number } | null>(null)
   const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
 
   useEffect(() => {
@@ -273,7 +275,9 @@ export function FileViewerPopover({
       .then((next) => {
         if (cancelled) return
         setEntries(next)
-        setCursor(0)
+        const selectedPath = pendingSelection.current
+        pendingSelection.current = null
+        setCursor(Math.max(0, next.findIndex(entry => entry.path === selectedPath)))
         listScrollRef.current?.scrollTo(0)
       })
       .catch((error) => {
@@ -357,17 +361,34 @@ export function FileViewerPopover({
   const goParent = useCallback(() => {
     const parent = dirname(directory)
     if (parent === directory) return
-    const previousName = basename(directory)
+    pendingSelection.current = directory
     setDirectory(parent)
     setFilter('')
-    // The directory refresh resets the cursor; select the previous child once loaded.
-    setTimeout(() => {
-      setCursor((current) => {
-        const index = entries.findIndex((entry) => entry.name === previousName)
-        return index >= 0 ? index : current
-      })
-    }, 0)
-  }, [directory, entries])
+    setPreviewFocused(false)
+  }, [directory])
+
+  const browseDirectory = useCallback((path: string, selectedPath?: string) => {
+    pendingSelection.current = selectedPath ?? null
+    setFilter('')
+    setPreviewFocused(false)
+    setDirectory(path)
+  }, [])
+
+  const activateMouseEntry = useCallback((entry: FileEntry) => {
+    if (entry.kind === 'directory') { browseDirectory(entry.path); return }
+    if (directorySelect) return
+    if (onEditPath) { onEditPath(entry.path); onClose() }
+    else if (onInsertPath) { onInsertPath(entry.path); onClose() }
+  }, [browseDirectory, directorySelect, onEditPath, onInsertPath, onClose])
+
+  const clickEntry = useCallback((entry: FileEntry, index: number) => {
+    setCursor(index)
+    setPreviewFocused(false)
+    const now = performance.now()
+    const double = lastClick.current?.path === entry.path && now - lastClick.current.time < 400
+    lastClick.current = double ? null : { path: entry.path, time: now }
+    if (double) activateMouseEntry(entry)
+  }, [activateMouseEntry])
 
   // Descend into the highlighted directory (browse without selecting).
   const navigateInto = useCallback(() => {
@@ -491,9 +512,9 @@ export function FileViewerPopover({
   // can go — it is reachable with `h` — leaving the listing and the preview.
   const narrow = popW < 72
   const leftW = narrow ? 0 : Math.max(20, Math.floor((popW - 2) * 0.22))
-  const middleW = Math.max(26, Math.floor((popW - 2) * 0.34))
-  const previewW = previewExpanded ? popW - 2 : Math.max(24, popW - leftW - middleW - 4)
-  const contentH = popH - 5
+  const middleW = narrow ? Math.max(16, Math.floor((popW - 2) * 0.46)) : Math.max(26, Math.floor((popW - 2) * 0.34))
+  const previewW = previewExpanded ? popW - 2 : Math.max(12, popW - 2 - leftW - middleW)
+  const contentH = popH - 6
   const parentPath = dirname(directory)
   // The leading `/` is drawn separately; the root itself adds no segment (as
   // `[directory]` it rendered `///`).
@@ -517,27 +538,30 @@ export function FileViewerPopover({
       borderColor={docked ? theme.surface : theme.cyan}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={docked ? undefined : directorySelect ? ' Choose folder ' : ' Files '}
+      title={docked ? undefined : directorySelect ? ' Choose ' : ' Files '}
       titleColor={theme.cyan}
     >
       {!docked && onDetach && !directorySelect ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
-      <box height={1} paddingX={1} backgroundColor={theme.surface2}>
-        <text wrapMode="none">
-          <span fg={theme.dim}>/</span>
-          {parentSegments.map((segment, index) => (
-            <span key={`${segment}:${index}`} fg={index === parentSegments.length - 1 ? theme.cyan : theme.muted}>{`${segment}/`}</span>
-          ))}
-        </text>
+      <box height={1} paddingX={1} backgroundColor={theme.surface2} flexDirection="row" overflow="hidden">
+        <text id="files-root" fg={theme.dim} selectable={false} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); browseDirectory('/') } }}>/</text>
+        {parentSegments.map((segment, index) => <text key={`${segment}:${index}`} id={`files-ancestor:${index}`} flexShrink={0} selectable={false} wrapMode="none"
+          fg={index === parentSegments.length - 1 ? theme.cyan : theme.muted}
+          onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); browseDirectory('/' + parentSegments.slice(0, index + 1).join('/')) } }}>{`${segment}/`}</text>)}
       </box>
       <box flexDirection="row" height={contentH}>
         {!previewExpanded && !narrow ? <box width={leftW} border borderStyle="single" borderColor={theme.border} title=" Parent " flexDirection="column">
           <text fg={theme.dim}>{fitText(parentPath, leftW - 2)}</text>
-          <scrollbox style={{ height: contentH - 3 }}>
+          <scrollbox id="files-parent-scroll" scrollY style={{ height: contentH - 3 }}>
             {parentEntries.map((entry) => {
               const selected = entry.path === directory
               const icon = entryIcon(entry)
               return (
-                <text key={entry.path} wrapMode="none">
+                <text key={entry.path} id={`files-parent:${entry.name}`} selectable={false} wrapMode="none" onMouseDown={event => {
+                  if (event.button !== 0) return
+                  event.stopPropagation()
+                  if (entry.kind === 'directory') browseDirectory(entry.path)
+                  else browseDirectory(parentPath, entry.path)
+                }}>
                   <span fg={selected ? theme.cyan : theme.dim}>{`${selected ? '›' : ' '} `}</span>
                   <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
                   <span fg={selected ? theme.text : entry.kind === 'directory' ? theme.cyan : theme.muted}>{fitText(entry.name, leftW - 6)}</span>
@@ -546,36 +570,41 @@ export function FileViewerPopover({
             })}
           </scrollbox>
         </box> : null}
-        {!previewExpanded ? <box width={middleW} border borderStyle="single" borderColor={!previewFocused ? theme.cyan : theme.border} title={` ${filteredEntries.length} items `}>
+        {!previewExpanded ? <box width={middleW} onMouseDown={event => { if (event.button === 0) setPreviewFocused(false) }} border borderStyle="single" borderColor={!previewFocused ? theme.cyan : theme.border} title={` ${filteredEntries.length} items `}>
           {loading ? <text fg={theme.dim}>Loading…</text> : (
-            <scrollbox ref={listScrollRef} style={{ height: contentH - 2 }}>
+            <scrollbox id="files-list-scroll" scrollY ref={listScrollRef} style={{ height: contentH - 2 }}>
               {filteredEntries.map((entry, index) => {
                 const selected = index === cursor
                 const meta = entry.kind === 'directory' ? '' : formatSize(entry.size)
                 const nameWidth = Math.max(4, middleW - meta.length - 7)
                 const icon = entryIcon(entry)
                 return (
-                  <box key={entry.path} height={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : undefined}>
-                    <text wrapMode="none">
+                  <box key={entry.path} id={`files-entry:${entry.name}`} height={1} flexShrink={0} flexDirection="row" backgroundColor={selected ? theme.surface3 : undefined}
+                    onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); clickEntry(entry, index) } }}>
+                    <text wrapMode="none" selectable={false}>
                       <span fg={selected ? theme.cyan : theme.dim}>{`${selected ? '›' : ' '} `}</span>
                       <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
                       <span fg={selected ? theme.text : entry.kind === 'directory' ? theme.cyan : theme.text}>{fitText(entry.name, nameWidth)}</span>
                     </text>
                     <box flexGrow={1} />
-                    <text fg={theme.dim}>{meta}</text>
+                    <text fg={theme.dim} selectable={false}>{meta}</text>
                   </box>
                 )
               })}
             </scrollbox>
           )}
         </box> : null}
-        <box width={previewW} border borderStyle="single" borderColor={previewFocused ? theme.cyan : theme.border} title={` ${fitText(selectedEntry?.name ?? 'Preview', previewW - 6)} `}>
+        <box id="files-preview" width={previewW} onMouseDown={event => { if (event.button === 0) setPreviewFocused(true) }} onMouseScroll={() => setPreviewFocused(true)} border borderStyle="single" borderColor={previewFocused ? theme.cyan : theme.border} title={` ${fitText(selectedEntry?.name ?? 'Preview', previewW - 6)} `}>
           {previewLoading ? <text fg={theme.dim}>Loading preview…</text> : preview.kind === 'directory' ? (
-            <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
+            <scrollbox id="files-preview-scroll" scrollY ref={previewScrollRef} style={{ height: contentH - 2 }}>
               {preview.entries.map((entry) => {
                 const icon = entryIcon(entry)
                 return (
-                  <text key={entry.path} wrapMode="none">
+                  <text key={entry.path} id={`files-preview-entry:${entry.name}`} wrapMode="none" selectable={false} onMouseDown={event => {
+                    if (event.button !== 0 || !selectedEntry) return
+                    event.stopPropagation()
+                    browseDirectory(selectedEntry.path, entry.path)
+                  }}>
                     <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
                     <span fg={entry.kind === 'directory' ? theme.cyan : theme.muted}>{fitText(entry.name, previewW - 5)}</span>
                   </text>
@@ -592,7 +621,7 @@ export function FileViewerPopover({
             const bottomSpacerH = totalLines - windowEnd
 
             return (
-              <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
+              <scrollbox id="files-preview-scroll" scrollY ref={previewScrollRef} style={{ height: contentH - 2 }}>
                 <box flexDirection="row">
                   <box width={lineNumberWidth + 1} flexDirection="column">
                     <box height={topSpacerH} />
@@ -640,6 +669,20 @@ export function FileViewerPopover({
             </box>
           ) : <text fg={preview.kind === 'error' ? theme.red : theme.dim}>{preview.message}</text>}
         </box>
+      </box>
+      <box height={1} flexShrink={0} flexDirection="row" paddingX={1} backgroundColor={theme.surface2}>
+        {([
+          ['parent', ' ↑ ', goParent],
+          ['open', directorySelect ? ' Choose ' : ' Open ', () => directorySelect ? enterSelected() : selectedEntry && activateMouseEntry(selectedEntry)],
+          ...(directorySelect ? [['choose-here', ' Here ', () => { onSelectDirectory?.(directory); onClose() }]] as const : []),
+          ['hidden', showHidden ? ' .* ' : ' . ', () => setShowHidden(value => !value)],
+          ['sort', ' ⇅ ', () => setSortMode(value => value === 'name' ? 'modified' : value === 'modified' ? 'size' : 'name')],
+          ['refresh', ' ↻ ', () => setRefreshVersion(value => value + 1)],
+          ['expand', previewExpanded ? ' ↙ ' : ' ⤢ ', () => { setPreviewExpanded(value => !value); setPreviewFocused(true) }],
+          ['close', ' × ', onClose],
+        ] as const).map(([id, label, action]) => <box key={id} id={`files-action:${id}`} width={label.length} flexShrink={0} onMouseDown={event => {
+          if (event.button === 0) { event.stopPropagation(); action() }
+        }}><text fg={theme.cyan} selectable={false} wrapMode="none">{label}</text></box>)}
       </box>
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">
