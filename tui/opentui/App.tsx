@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { tabStripName, tabStripActivity, tabStripWidth } from './tabStrip'
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
@@ -13858,7 +13859,7 @@ function OpenTuiWorkspace() {
     // capped to avoid very wide tabs when only a few sessions are open.
     // The strip spans the reader area (reader box plus any split panes), so
     // tabs get the full width instead of being squeezed into the reader column.
-    const available = Math.max(readerAreaWidth - 6, 20)
+    const available = tabStripWidth(readerAreaWidth)
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
   }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length])
@@ -13879,7 +13880,7 @@ function OpenTuiWorkspace() {
       return {
         // tab-select draws a name in tabWidth - 2 cells from its second column,
         // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
-        name: `${fitText(label, Math.max(1, tabWidth - 4))} ×`,
+        name: tabStripName(label, tabWidth),
         description: isPreviewMode && selectedSessionKey === sessionKey(s)
           ? 'Preview tab'
           : inSplit
@@ -13893,7 +13894,7 @@ function OpenTuiWorkspace() {
     const pinned = windowSurfaceMeta[id]?.session
     const pinnedSession = pinned ? openTabByKey.get(pinned) ?? sessions.find((entry) => sessionKey(entry) === pinned) : null
     const label = `${surfaceTitle(id)}${pinnedSession ? ` · ${formatSessionTitle(pinnedSession)}` : ''}`
-    return { name: `${fitText(label, Math.max(1, tabWidth - 4))} ×`, description: 'popover tab', value: `popover:${id}` }
+    return { name: tabStripName(label, tabWidth), description: 'popover tab', value: `popover:${id}` }
   })), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
   // Index in the strip: session tabs, then popover tabs.
   const activeStripIndex = shownPopoverTab ? visibleTabSessions.length + popoverTabs.indexOf(shownPopoverTab) : activeTabIndex
@@ -19323,7 +19324,7 @@ function OpenTuiWorkspace() {
       if (!target) return
       target.setOptions(tabOptions.map((option) => (
         option.value != null && runningTabKeys.has(option.value as string)
-          ? { ...option, name: `${TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length]} ${option.name}` }
+          ? { ...option, name: tabStripActivity(option.name, tabWidth, TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length]) }
           : option
       )))
     }
@@ -19333,7 +19334,7 @@ function OpenTuiWorkspace() {
       paint()
     }, TAB_SPINNER_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [runningTabKeys, tabOptions, showTabs])
+  }, [runningTabKeys, tabOptions, showTabs, tabWidth])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
@@ -27187,7 +27188,7 @@ function OpenTuiWorkspace() {
                 id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
-                width={Math.max(readerAreaWidth - 2, 1)}
+                width={tabStripWidth(readerAreaWidth)}
                 height={TAB_BAR_HEIGHT}
                 tabWidth={tabWidth}
                 backgroundColor={theme.bg}
@@ -27232,7 +27233,7 @@ function OpenTuiWorkspace() {
                   if (event.button !== 0) return
                   sessionDragHandlers.release(event)
                 }}
-                onChange={(index) => selectStripIndex(index)}
+                onChange={(index: number) => selectStripIndex(index)}
               />
             </box>
           ) : showPreviewBar && selectedSession ? (
