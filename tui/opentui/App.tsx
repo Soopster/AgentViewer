@@ -2,7 +2,6 @@
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
 import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
-import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
 import { SessionTabConnection } from './SessionTabConnection'
@@ -283,7 +282,7 @@ import {
   warmTranscriptAsync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SubagentSummary } from '../../lib/types'
+import type { AgentProvider, ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SubagentSummary } from '../../lib/types'
 import { fitText, joinMeta } from './textLayout'
 import { Slot } from './slots'
 import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
@@ -351,7 +350,6 @@ import {
   resolveSelectedSession,
   resolveSelectedSessionIndex,
   runComposerSessionPreparation,
-  splitCommandKey,
   SPLIT_SHARE_EVEN,
   SPLIT_SHARE_MAX,
   SPLIT_SHARE_MIN,
@@ -377,7 +375,7 @@ import {
   isShiftedKey,
   PORTABLE_COMMAND_CHORDS,
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
-import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type PaletteCommand, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
+import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
 import { NATIVE_OSC_ENABLED, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
 import { SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
@@ -397,6 +395,8 @@ import { extractDiffText } from './app/diffCache'
 import { cardDiffView, cardDiffText, filePathFromDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, agentToolCardsFor, streamToolSummaryName, agentToolCardIsExpanded, nestedAgentToolDisplay, streamActivitySummarySegments, isStreamActivityToolCard, transcriptToolLineSegments, streamToolSummarySegments, streamToolDetailLine, agentsToolSummaryLine, coordinatorResultSegments, countCodeBlockLines, codeBlockHeight, sliceCodeBlockLines, codeBlockLabel, isCompactSystemCard, codeBlockHiddenLineCount, stickyPromptText, groupStreamToolCards, isStreamGhostCard, visibleCardsForTranscriptView, resolveExpandedCardKeys, cardFoldsByDefault, scrollbackParkedCursorKey, usesAgentCardPresentation, renderedBodyLines, computeAllLandmarks } from './app/transcriptRows'
 import { streamDiffPreviewData, StreamDiffPreview } from './app/StreamDiffPreview'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, nextTranscriptDiffRowIndex, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './app/transcriptDiffSelection'
+import { type CoordModalFocus, sessionProviderLabel, filterModelPickerOptions, effortPickerOptions, PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL, QUESTION_PREVIEW_MAX_LINES, QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS, providerOptionIndex, providerSelectOptions, parseCoordContractLines, moveCoordModalFocus, cycleCoordProvider, coordRunProviders, cycleCoordAutonomy, TUI_PROVIDER_TAG } from './app/pickers'
+import { FLEET_PAGE_SIZE, TRANSCRIPT_VIEWS, COMMANDS, COMMAND_CATEGORY_ORDER, tuiCommandEquivalent, RUNNING_INSIDE_TMUX, TRANSCRIPT_VIEW_LABELS, TRANSCRIPT_VIEW_DESCRIPTIONS } from './app/commands'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -433,14 +433,6 @@ if (PERF_LOG) {
   try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
 }
 
-const PROVIDERS: ProviderSelection[] = [...PROVIDER_IDS, 'all']
-const TUI_PROVIDER_TAG: Record<string, string> = {
-  claude: 'claude',
-  codex: 'codex',
-  opencode: 'opencode',
-  copilot: 'copilot',
-  pi: 'pi',
-}
 export type TerminalSelectionCopyDestination = 'none' | 'osc52' | 'host'
 
 export function terminalSelectionCopyDestination(options: {
@@ -478,395 +470,6 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
     : current === 'balanced'
     ? 'dense'
     : 'comfortable'
-}
-
-// Rows the picker leaves for the transcript before it starts collapsing —
-// mainContentHeight's own floor, so the two agree — and the floor the picker
-// will not shrink below even on a very short terminal.
-const QUESTION_PICKER_MIN_TRANSCRIPT_ROWS = 8
-const QUESTION_PICKER_MIN_ROWS = 8
-// An AskUserQuestion option may carry a `preview` — an ASCII mockup, a code
-// snippet, a config sample. The SDK's default `previewFormat` is markdown/ASCII
-// described as "rendered in a monospace box", so the TUI is the surface it was
-// authored for; the web picker already shows it behind a toggle and this one
-// dropped it entirely.
-//
-// Only the option under the cursor gets one. Previews are multi-line by nature
-// and the picker is already rationing rows, so drawing one per option would
-// blow the budget on the first question. Capped, because a long preview would
-// otherwise push the option list — the thing the keys act on — off the card.
-const QUESTION_PREVIEW_MAX_LINES = 8
-// Label row + at least one line of content: below this there is no point
-// reserving anything, so the preview is dropped instead.
-const QUESTION_PREVIEW_MIN_ROWS = 2
-
-const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']
-
-const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
-  conversation: 'CONVERSATION',
-  full: 'FULL',
-  continue: 'CONTINUE',
-  stream: 'STREAM',
-  agents: 'AGENTS',
-  chat: 'CHAT',
-  transcript: 'TRANSCRIPT',
-  scrollback: 'SCROLLBACK',
-  codex: 'CODEX',
-  'claude-code': 'CLAUDE',
-  copilot: 'COPILOT',
-  opencode: 'OPENCODE',
-}
-
-const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
-  conversation: 'Conversation with technical details folded',
-  full: 'Every transcript card expanded',
-  continue: 'Focus on the latest continuation',
-  stream: 'Chronological Claude-style activity stream',
-  agents: 'Group tool activity by agent',
-  chat: 'Composer flows inline with the conversation, no dock',
-  transcript: 'One continuous transcript, a rule per message',
-  scrollback: 'One long text transcript that scrolls by line, no card cursor',
-  codex: 'Codex CLI-style scrollback with shaded prompts and compact activity',
-  'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
-  copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
-  opencode: 'OpenCode-style continuous transcript with context sidebar',
-}
-
-// A session from a further provider instance — a configured ACP agent, a second
-// account — goes by the name that instance was given ("GEMINI", "WORK"); every
-// other session by its provider's.
-function sessionProviderLabel(session: Pick<Session, 'provider' | 'providerInstanceId' | 'providerDisplayName'>): string {
-  return session.providerDisplayName && session.providerInstanceId && session.providerInstanceId !== session.provider
-    ? session.providerDisplayName.toUpperCase()
-    : formatProviderLabel(session.provider ?? 'claude')
-}
-
-const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
-  name: provider.toUpperCase(),
-  description: provider === 'all' ? 'All providers' : `${provider} sessions`,
-  value: provider,
-}))
-
-// A provider with further instances lists each under its own row. The bare
-// provider row then means all of them; a value of `provider|instance` one.
-function providerSelectOptions(instances: readonly TuiProviderInstanceChoice[]): SelectOption[] {
-  // A provider turned off in the plugin manager has no row; 'all' always has one.
-  const options = PROVIDER_SELECT_OPTIONS.filter((option) => option.value === 'all' || isProviderEnabled(option.value as string))
-  if (instances.length === 0) return options
-  return options.flatMap((option) => [
-    option,
-    ...instances.filter((instance) => instance.provider === option.value).map((instance) => ({
-      name: `  ${instance.label.toUpperCase()}`,
-      description: `  ${option.value} · ${instance.label} only`,
-      value: `${instance.provider}|${instance.providerInstanceId}`,
-    })),
-  ])
-}
-
-function providerOptionIndex(options: readonly SelectOption[], provider: ProviderSelection, instanceId: string | null): number {
-  const exact = options.findIndex((option) => option.value === (instanceId ? `${provider}|${instanceId}` : provider))
-  return Math.max(exact >= 0 ? exact : options.findIndex((option) => option.value === provider), 0)
-}
-
-const COORD_RUN_PROVIDER_CHOICES: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
-/** The run modal's providers, minus any turned off in the plugin manager. */
-function coordRunProviders(): AgentProvider[] {
-  const on = COORD_RUN_PROVIDER_CHOICES.filter(isProviderEnabled)
-  return on.length > 0 ? on : COORD_RUN_PROVIDER_CHOICES
-}
-const COORD_MODAL_FOCUS_ORDER = [
-  'prompt', 'acceptance', 'nonGoals', 'manualQa', 'escalation',
-  'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'tokenBudget',
-  'durationBudget', 'worktrees', 'gate', 'autonomy', 'plans', 'review', 'launch',
-] as const
-type CoordModalFocus = (typeof COORD_MODAL_FOCUS_ORDER)[number]
-
-function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): CoordModalFocus {
-  const index = COORD_MODAL_FOCUS_ORDER.indexOf(current)
-  return COORD_MODAL_FOCUS_ORDER[(index + direction + COORD_MODAL_FOCUS_ORDER.length) % COORD_MODAL_FOCUS_ORDER.length]
-}
-
-function cycleCoordProvider(current: AgentProvider, direction: 1 | -1): AgentProvider {
-  const choices = coordRunProviders()
-  const index = choices.indexOf(current)
-  return choices[(Math.max(index, 0) + direction + choices.length) % choices.length]
-}
-
-const COORD_AUTONOMY_LEVELS: ProtocolAutonomy[] = ['low', 'medium', 'high']
-
-function cycleCoordAutonomy(current: ProtocolAutonomy, direction: 1 | -1): ProtocolAutonomy {
-  const index = COORD_AUTONOMY_LEVELS.indexOf(current)
-  return COORD_AUTONOMY_LEVELS[(Math.max(index, 0) + direction + COORD_AUTONOMY_LEVELS.length) % COORD_AUTONOMY_LEVELS.length]
-}
-
-function parseCoordContractLines(value: string): string[] {
-  return value.split(/\r?\n|;/).map((line) => line.trim()).filter(Boolean)
-}
-
-function filterModelPickerOptions(options: ModelPickerOption[], query: string): ModelPickerOption[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (terms.length === 0) return options
-  return options.filter((option) => {
-    const haystack = `${option.name} ${String(option.value ?? '')} ${option.description ?? ''}`.toLowerCase()
-    return terms.every((term) => haystack.includes(term))
-  })
-}
-
-const EFFORT_DESCRIPTIONS: Record<TuiEffort, string> = {
-  auto: 'Use the model or session default',
-  off: 'Disable extended reasoning',
-  minimal: 'Fastest reasoning pass',
-  low: 'Light reasoning',
-  medium: 'Balanced reasoning',
-  high: 'Deep reasoning',
-  xhigh: 'Extra-high reasoning',
-  max: 'Maximum reasoning budget',
-}
-
-function effortLevelsForModel(
-  provider: ProviderSelection | undefined,
-  model: ModelPickerOption | undefined,
-): ReasoningEffortLevel[] {
-  if (!provider || provider === 'all' || provider === 'opencode' || model?.supportsEffort === false) return []
-  const allowed: ReasoningEffortLevel[] = provider === 'codex'
-    ? ['low', 'medium', 'high']
-    : provider === 'copilot'
-      ? ['low', 'medium', 'high', 'xhigh']
-      : ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-  const reported = model?.supportedEffortLevels
-  if (!reported || reported.length === 0) return allowed
-  return allowed.filter((level) => reported.includes(level))
-}
-
-function effortPickerOptions(
-  provider: ProviderSelection | undefined,
-  model: ModelPickerOption | undefined,
-): Array<SelectOption & { value: TuiEffort }> {
-  return [
-    { name: 'AUTO', value: 'auto', description: EFFORT_DESCRIPTIONS.auto },
-    ...effortLevelsForModel(provider, model).map((level) => ({
-      name: level === 'xhigh' ? 'XHIGH' : level.toUpperCase(),
-      value: level,
-      description: EFFORT_DESCRIPTIONS[level],
-    })),
-  ]
-}
-
-// Permission mode indicator in the composer dock — Claude Code's shift+tab style.
-const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
-  plan: '“',           // " left double quotation mark (read-only/pause)
-  acceptEdits: '▶▶',    // ▶▶ (auto-accept edits)
-  auto: '▶▶',           // ▶▶ (classifier decides)
-  bypassPermissions: '▶▶', // ▶▶ (bypass all)
-}
-const PERMISSION_MODE_LABEL: Partial<Record<string, string>> = {
-  plan: 'plan',
-  acceptEdits: 'accept edits',
-  auto: 'auto',
-  bypassPermissions: 'bypass',
-}
-
-const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
-
-const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
-const FLEET_PAGE_SIZE = 9
-
-const COMMANDS: PaletteCommand[] = [
-  // Navigation
-  { id: 'move-prev',  label: 'Move to previous item',  key: 'k / ↑', category: 'Navigation' },
-  { id: 'move-next',  label: 'Move to next item',      key: 'j / ↓', category: 'Navigation' },
-  { id: 'first',      label: 'Jump to first item',     key: 'g',     category: 'Navigation' },
-  { id: 'last',       label: 'Jump to last item',      key: '⇧G',    category: 'Navigation' },
-  { id: 'page-prev',  label: 'Page transcript up',     key: 'PgUp / ⌃U', category: 'Navigation' },
-  { id: 'page-next',  label: 'Page transcript down',   key: 'PgDn / ⌃D', category: 'Navigation' },
-  { id: 'focus-next', label: 'Move focus',              key: 'Tab',   category: 'Navigation' },
-  { id: 'live',       label: 'Jump to live tail',      key: 'f',  category: 'Navigation' },
-  { id: 'unread',     label: 'Jump to first unread',   key: 'u',  category: 'Navigation' },
-  { id: 'mark',       label: 'Mark position',          key: 'm',  category: 'Navigation' },
-  // Transcript
-  { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
-  { id: 'session-search', label: 'Search sessions',    key: '/',  category: 'Session'    },
-  { id: 'next-attention', label: 'Jump to next attention item', key: '⌃N', category: 'Session' },
-  { id: 'search-prev', label: 'Previous search match', key: '⇧N', category: 'Transcript' },
-  { id: 'search-next', label: 'Next search match',     key: 'n',  category: 'Transcript' },
-  { id: 'conversation-prev', label: 'Previous conversation card', key: '(', category: 'Transcript' },
-  { id: 'conversation-next', label: 'Next conversation card',     key: ')', category: 'Transcript' },
-  { id: 'technical-prev', label: 'Previous technical card', key: '{', category: 'Transcript' },
-  { id: 'technical-next', label: 'Next technical card',     key: '}', category: 'Transcript' },
-  { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
-  { id: 'fold-parent', label: 'Fold/expand parent card', key: 'Enter', category: 'Transcript' },
-  { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
-  { id: 'reply',      label: 'Reply to selected message', key: '⇧Q', category: 'Transcript' },
-  { id: 'bookmark-toggle', label: 'Bookmark message',  key: 'b',  category: 'Transcript' },
-  { id: 'bookmark-prev',   label: 'Jump to previous bookmark', key: '[', category: 'Transcript' },
-  { id: 'bookmark-jump',   label: 'Jump to next bookmark', key: ']', category: 'Transcript' },
-  { id: 'bookmark-all',    label: 'Browse all bookmarks', key: '⇧B', category: 'Transcript' },
-  { id: 'tasks',      label: 'Open task panel',         key: '⇧T', category: 'Transcript' },
-  { id: 'surface-panel', label: 'Surface panel (browser/shell/files/diff/PR/agents)', key: '⇧O', category: 'Transcript' },
-  { id: 'surface-add', label: 'Add a surface tab', key: '⌃T', category: 'Transcript' },
-  { id: 'surface-cycle', label: 'Next/previous surface tab', key: '⌃N/⌃P', category: 'Transcript' },
-  { id: 'surface-expand', label: 'Expand/restore surface panel', key: '=', category: 'Transcript' },
-  { id: 'window-identify', label: 'Identify windows', key: '⌃K q', category: 'View' },
-  { id: 'window-manage', label: 'Manage windows', key: '⌃K w', category: 'View' },
-  { id: 'window-menu', label: 'Focused window menu', key: '⌃B Enter', category: 'View' },
-  { id: 'window-layout', label: 'Window layout (move, arrange, full screen)', key: '⌃B w', category: 'View' },
-  { id: 'window-terminal', label: 'Shell and processes in a window', key: '', category: 'View' },
-  { id: 'window-diff', label: 'Diff in a window', key: '', category: 'View' },
-  { id: 'window-files', label: 'Files in a window', key: '', category: 'View' },
-  { id: 'window-terminal-new', label: 'Another shell in a window', key: '', category: 'View' },
-  { id: 'window-browser', label: 'Browser in a window', key: '', category: 'View' },
-  { id: 'window-pull-request', label: 'Pull request in a window', key: '', category: 'View' },
-  { id: 'window-agents', label: 'Agents in a window', key: '', category: 'View' },
-  ...Object.entries(POPOVER_WINDOWS).map(([kind, spec]) => ({ id: `popwin:${kind}`, label: spec.palette, key: '', category: 'View' as const })),
-  { id: 'tab-coordination', label: 'Agent control center in a new tab', key: '', category: 'View' },
-  { id: 'tab-editor', label: 'Editor in a new tab', key: '', category: 'View' },
-  { id: 'window-float', label: 'Float the focused window (or dock it)', key: '⌃B f', category: 'View' },
-  { id: 'window-float-shell', label: 'Shell in a floating window', key: '', category: 'View' },
-  { id: 'surface-placement', label: 'Surface panel beside / under the panes', key: '|', category: 'Transcript' },
-  { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
-  { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
-  { id: 'tasks-expand', label: 'Expand/restore task panel', key: '=', category: 'Transcript' },
-  { id: 'tasks-narrow', label: 'Narrow task panel',    key: '-/_', category: 'Transcript' },
-  { id: 'tasks-wide', label: 'Widen task panel',       key: '+', category: 'Transcript' },
-  // Session
-  { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
-  { id: 'composer-window', label: 'Open composer window', key: '⌃O', category: 'Session'    },
-  { id: 'clipboard-paste', label: 'Paste clipboard into composer', key: '⌃V', category: 'Session' },
-  { id: 'composer-toggle', label: 'Show/hide composer',   key: '⇧E', category: 'Session'    },
-  { id: 'composer-stash', label: 'Stash composer prompt', key: '', category: 'Session' },
-  { id: 'composer-stash-pop', label: 'Pop composer stash', key: '', category: 'Session' },
-  { id: 'composer-stash-list', label: 'List composer stash', key: '', category: 'Session' },
-  { id: 'new',        label: 'New agent session',      key: '⇧N',  category: 'Session'    },
-  { id: 'reuse',      label: 'Reuse last prompt',      key: '⇧R',  category: 'Session'    },
-  { id: 'rename',     label: 'Rename session',         key: '⌃R', category: 'Session'    },
-  { id: 'cli',        label: 'Copy CLI resume command', key: '',  category: 'Session'    },
-  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
-  { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
-  { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
-  // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
-  ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
-  { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
-  { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
-  { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
-  { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
-  { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
-  { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
-  { id: 'coord-start', label: 'Start coordinated run', key: '⌃K n / ⌃⇧N', category: 'Coordination' },
-  { id: 'coord-cleanup', label: 'Clean completed worktrees', key: '', category: 'Coordination' },
-  { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
-  { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
-  { id: 'fleet-prev', label: 'Previous fleet page',     key: '{', category: 'View'       },
-  { id: 'fleet-next', label: 'Next fleet page',         key: '}', category: 'View'       },
-  { id: 'handoff-brief', label: 'Handoff brief',       key: '⇧H',  category: 'Session'    },
-  { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
-  { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
-  { id: 'sort',       label: 'Toggle sidebar sort',    key: '⇧S',  category: 'Session'    },
-  { id: 'scratch',    label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
-  { id: 'settle',     label: 'Settle/reopen session',  key: 'x',   category: 'Session'    },
-  { id: 'settled',    label: 'Show/hide settled sessions', key: '', category: 'Session'  },
-  { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
-  // Tabs
-  { id: 'tabs-horizontal', label: 'Use horizontal tabs', key: '', category: 'Tabs' },
-  { id: 'tabs-vertical', label: 'Use vertical tabs', key: '', category: 'Tabs' },
-  { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
-  { id: 'tab-prev',   label: 'Previous tab',           key: '←',  category: 'Tabs'       },
-  { id: 'tab-next',   label: 'Next tab',               key: '→',  category: 'Tabs'       },
-  { id: 'tab-close',  label: 'Close current tab',      key: 'w',  category: 'Tabs'       },
-  // View
-  { id: 'theme',      label: 'Switch theme',           key: 't',  category: 'View'       },
-  { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
-  { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
-  { id: 'sticky-headers', label: 'Toggle sticky prompt headers', key: 'l', category: 'View' },
-  { id: 'lightweight-windows', label: 'Toggle lightweight windows (compact, folded, tail-loaded)', key: 'v tab', category: 'View' },
-  { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
-  { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
-  { id: 'width',      label: 'Cycle layout: readable / centered / full', key: '⇧W', category: 'View' },
-  { id: 'split-add',    label: 'Split focused window right', key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
-  { id: 'split-add-stacked', label: 'Split focused window below', key: splitCommandKey('"', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-rotate', label: 'Rotate split layout',       key: splitCommandKey('r', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-grow-reader',   label: 'Grow focused pane',  key: splitCommandKey('>', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-shrink-reader', label: 'Shrink focused pane', key: splitCommandKey('<', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-even',   label: 'Even split sizes',          key: splitCommandKey('=', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'window-next-attention', label: 'Next window needing attention', key: splitCommandKey('a', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'window-switcher', label: 'Workspace overview', key: splitCommandKey('p', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'window-broadcast', label: 'Broadcast prompt to session windows', key: splitCommandKey('b', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'window-stop-coordinator', label: 'Stop watching Coordinator run', key: '', category: 'View' },
-  { id: 'workspaces-toggle', label: 'Toggle workspaces', key: splitCommandKey('W', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'spaces-switcher', label: 'Spaces and workspaces', key: splitCommandKey('S', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'window-redo', key: splitCommandKey('U', RUNNING_INSIDE_TMUX), label: 'Redo window change', category: 'View' },
-  { id: 'window-reopen', key: splitCommandKey('X', RUNNING_INSIDE_TMUX), label: 'Reopen closed pane', category: 'View' },
-  { id: 'window-recent', key: splitCommandKey('L', RUNNING_INSIDE_TMUX), label: 'Recent windows across workspaces', category: 'View' },
-  { id: 'window-previous', key: splitCommandKey(';', RUNNING_INSIDE_TMUX), label: 'Focus previous pane', category: 'View' },
-  { id: 'window-undo', label: 'Undo window change', key: splitCommandKey('u', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-help',   label: 'Split pane keybinds',       key: splitCommandKey('?', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
-  { id: 'split-focus',  label: 'Focus next split pane',    key: splitCommandKey('o', RUNNING_INSIDE_TMUX), category: 'View'  },
-  { id: 'split-focus-prev', label: 'Focus previous split pane', key: splitCommandKey('←', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-flip',   label: 'Focus previous pane',  key: splitCommandKey(';', RUNNING_INSIDE_TMUX), category: 'View'  },
-  { id: 'split-focus-back', label: 'Focus a session pane', key: 'esc', category: 'View' },
-  { id: 'split-cycle',  label: 'Next session in split pane', key: splitCommandKey('n', RUNNING_INSIDE_TMUX), category: 'View' },
-  { id: 'split-toggle', label: 'Toggle split panes',       key: splitCommandKey('z', RUNNING_INSIDE_TMUX), category: 'View'  },
-  { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
-  { id: 'rail-narrow', label: 'Narrow session rail',   key: '[', category: 'View'       },
-  { id: 'rail-wide',  label: 'Widen session rail',     key: ']', category: 'View'       },
-  { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
-  { id: 'fullscreen', label: 'Toggle fullscreen transcript', key: '⇧Z', category: 'View' },
-  { id: 'tools',      label: 'Toggle tool calls',      key: '⇧X',  category: 'View'       },
-  { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
-  { id: 'mode',       label: 'Cycle provider mode',    key: '',  category: 'Session'    },
-  { id: 'model',      label: 'Composer settings',      key: 'Alt+M', category: 'Session'    },
-  { id: 'workflow',   label: 'Toggle workflow tool',   key: 'composer ⌃W',   category: 'Session'    },
-  // App
-  { id: 'shortcut-guide', label: 'Keyboard shortcut guide', key: '?', category: 'App' },
-  { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
-  { id: 'quit',       label: 'Quit',                   key: 'q / Esc / ⌃C',  category: 'App'        },
-]
-
-type TuiCommandEquivalent = { palette: string } | { notice: string }
-
-// Native CLI commands that belong to their terminal UI. Each is answered by the
-// agent-viewer surface that does the same job, or by why there is none, so no
-// command a native user types ends in "cannot run".
-const TUI_COMMAND_EQUIVALENTS: Record<string, { providers?: readonly AgentProvider[]; equivalent: TuiCommandEquivalent }> = {
-  theme: { equivalent: { palette: 'theme' } },
-  keymap: { equivalent: { palette: 'shortcut-guide' } },
-  keybindings: { equivalent: { palette: 'shortcut-guide' } },
-  settings: { providers: ['codex', 'pi'], equivalent: { palette: 'model' } },
-  raw: { providers: ['codex'], equivalent: { palette: 'transcript-pager' } },
-  multiagents: { providers: ['codex'], equivalent: { palette: 'coord-teammates' } },
-  ide: { providers: ['claude'], equivalent: { palette: 'ide-bridge' } },
-  vim: { equivalent: { notice: 'The composer has no Vim mode — ⌃O opens a larger composer window, and ⌃K v opens the transcript in $EDITOR' } },
-  statusline: { equivalent: { notice: 'agent-viewer draws its own status line: the composer footer shows model, context, effort and mode' } },
-  title: { providers: ['codex'], equivalent: { notice: 'agent-viewer names the terminal itself; the tab bar shows each conversation' } },
-  pets: { providers: ['codex'], equivalent: { notice: 'agent-viewer has no companion decorations' } },
-  pet: { providers: ['codex'], equivalent: { notice: 'agent-viewer has no companion decorations' } },
-  realtime: { providers: ['codex'], equivalent: { notice: 'Voice sessions are not available in agent-viewer — use the codex CLI for /realtime' } },
-  'terminal-setup': { providers: ['claude'], equivalent: { notice: 'Not needed here: ⇧⏎ inserts a newline in agent-viewer without terminal setup' } },
-  'privacy-settings': { providers: ['claude'], equivalent: { notice: 'Privacy settings live in your claude.ai account settings (Privacy)' } },
-  'release-notes': { providers: ['claude'], equivalent: { notice: 'Release notes: github.com/anthropics/claude-code/blob/main/CHANGELOG.md' } },
-  'setup-default-sandbox': { providers: ['codex'], equivalent: { notice: 'Sandbox setup is for Codex on Windows — run /setup-default-sandbox in the codex CLI there' } },
-  'sandbox-add-read-dir': { providers: ['codex'], equivalent: { notice: 'Readable directories belong to the Windows sandbox profile — run /sandbox-add-read-dir in the codex CLI there' } },
-  hotkeys: { providers: ['pi'], equivalent: { palette: 'shortcut-guide' } },
-  themes: { providers: ['opencode'], equivalent: { palette: 'theme' } },
-  models: { providers: ['opencode'], equivalent: { palette: 'model' } },
-  details: { providers: ['opencode'], equivalent: { palette: 'tools' } },
-  thinking: { providers: ['opencode'], equivalent: { palette: 'thinking' } },
-  status: { providers: ['opencode'], equivalent: { palette: 'diagnostics' } },
-  agents: { providers: ['opencode'], equivalent: { notice: '⇧Tab switches the OpenCode agent (build, plan, …); the footer shows the current one' } },
-  connect: { providers: ['opencode'], equivalent: { notice: 'Provider sign-in is `opencode auth login` in a terminal; agent-viewer uses the credentials it stores' } },
-  'scoped-models': { providers: ['pi'], equivalent: { palette: 'model' } },
-  changelog: { providers: ['pi'], equivalent: { notice: 'Pi changelog: github.com/badlogic/pi-mono → packages/coding-agent/CHANGELOG.md' } },
-  share: { providers: ['pi'], equivalent: { notice: 'Sharing publishes the session to a public gist — run /share in pi itself to do that deliberately' } },
-  approve: { providers: ['codex'], equivalent: { notice: 'Nothing to approve: agent-viewer does not route Codex commands through auto-review, so none are auto-denied' } },
-}
-
-function tuiCommandEquivalent(provider: AgentProvider, command: string): TuiCommandEquivalent | null {
-  if (provider === 'codex' && command === 'ide') {
-    return { notice: 'Codex has no IDE link in agent-viewer — @ mentions add files to the prompt' }
-  }
-  const entry = TUI_COMMAND_EQUIVALENTS[command]
-  if (!entry || (entry.providers && !entry.providers.includes(provider))) return null
-  return entry.equivalent
 }
 
 function currentProjectName(session: Session | null): string {
