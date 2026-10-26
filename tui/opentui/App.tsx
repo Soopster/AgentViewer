@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
 import { tabStripName, tabStripActivity, tabStripWidth } from './tabStrip'
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
@@ -178,6 +179,7 @@ import {
   readTuiSidebarWidth,
   readTuiShowToolCalls,
   readTuiTabsEnabled,
+  readTuiTabOrientation,
   readTuiSplitPanes,
   readTuiSplitOrientation,
   readTuiSplitReaderShare,
@@ -236,6 +238,7 @@ import {
   writeTuiHideScratchSessions,
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
+  writeTuiTabOrientation,
   writeTuiSplitPanes,
   writeTuiSplitOrientation,
   writeTuiSplitReaderShare,
@@ -5811,6 +5814,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'settled',    label: 'Show/hide settled sessions', key: '', category: 'Session'  },
   { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
   // Tabs
+  { id: 'tabs-horizontal', label: 'Use horizontal tabs', key: '', category: 'Tabs' },
+  { id: 'tabs-vertical', label: 'Use vertical tabs', key: '', category: 'Tabs' },
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
   { id: 'tab-prev',   label: 'Previous tab',           key: '←',  category: 'Tabs'       },
   { id: 'tab-next',   label: 'Next tab',               key: '→',  category: 'Tabs'       },
@@ -9810,6 +9815,7 @@ function OpenTuiWorkspace() {
   const [fullscreenMode, setFullscreenMode] = useWorkspaceState('fullscreenMode', false)
   const [railVisible, setRailVisible] = useAppState('railVisible', true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
+  const [tabOrientation, setTabOrientation] = useState<'horizontal' | 'vertical'>('horizontal')
   // Number of read-only split panes mounted beside the reader (0 = off), and
   // which of the other open tabs they start from.
   const [splitPaneCount, setSplitPaneCount] = useWorkspaceState('splitPaneCount', 0)
@@ -13301,7 +13307,10 @@ function OpenTuiWorkspace() {
   const rightPanelsWidth = effectiveTaskPanelWidth + effectiveSurfacePanelWidth
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - MIN_READER_WIDTH - rightPanelsWidth)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
-  const readerAreaWidth = Math.max(width - sidebarWidth - rightPanelsWidth, 40)
+  const tabsHaveEntries = openTabSessions.length > 0 || popoverTabs.length > 0 || selectedSession !== null
+  const verticalTabsWidth = verticalTabRailWidth(width - sidebarWidth - rightPanelsWidth,
+    tabsEnabled && tabOrientation === 'vertical' && !fullscreenMode && tabsHaveEntries)
+  const readerAreaWidth = Math.max(width - sidebarWidth - rightPanelsWidth - verticalTabsWidth, 40)
   // Split panes take their width out of the reader area, so `rightPaneWidth`
   // (the primary transcript's layout width, threaded through every card) keeps
   // being the single source of truth for the reader. Panes are dropped one at a
@@ -13325,7 +13334,7 @@ function OpenTuiWorkspace() {
   // the strip cannot make the next measurement oscillate across a fit boundary.
   const windowBudgetHeight = measuredWindowAreaHeight > 0
     ? measuredWindowAreaHeight
-    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode ? 1 : 0), 1)
+    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode && !verticalTabsWidth ? 1 : 0), 1)
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
   const pinnedWindowKeys = pinnedWindowSessions.map(sessionKey)
@@ -13771,6 +13780,7 @@ function OpenTuiWorkspace() {
   ), [isPreviewMode, openTabSessions, selectedSession])
   const showTabs = !fullscreenMode && tabsEnabled && (visibleTabSessions.length > 0 || popoverTabs.length > 0)
 
+  const showHorizontalTabs = showTabs && verticalTabsWidth === 0
   const showPreviewBar = false
   const TAB_BAR_HEIGHT = 1
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
@@ -13791,7 +13801,7 @@ function OpenTuiWorkspace() {
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
     - (fullscreenMode && !presentationFocusMode && isCopilotView ? 1 : 0)
-    - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
+    - (showHorizontalTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
     - streamActionFooterRows
@@ -13847,6 +13857,7 @@ function OpenTuiWorkspace() {
   }, [attentionDone, recentlyWrittenKeys, sidebarSessionActivity, visibleTabSessions])
 
   const tabWidth = useMemo(() => {
+    if (verticalTabsWidth > 0) return verticalTabsWidth + 8
     if (visibleTabSessions.length === 0) return 16
     // Fill available width proportionally so tabs look natural at any count,
     // capped to avoid very wide tabs when only a few sessions are open.
@@ -13855,7 +13866,7 @@ function OpenTuiWorkspace() {
     const available = tabStripWidth(readerAreaWidth)
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
-  }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length])
+  }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length, verticalTabsWidth])
   const tabOptions = useMemo((): TabSelectOption[] => (
     visibleTabSessions.map((s) => {
       // Every open session can be on screen, so the strip marks none of them;
@@ -18547,6 +18558,7 @@ function OpenTuiWorkspace() {
           configuredTranscriptView,
           configuredTranscriptWidth,
           configuredTabsEnabled,
+          configuredTabOrientation,
           configuredSidebarSort,
           configuredHideScratch,
           configuredSidebarWidth,
@@ -18568,6 +18580,7 @@ function OpenTuiWorkspace() {
           readTuiTranscriptView(),
           readTuiTranscriptWidth(),
           readTuiTabsEnabled(),
+          readTuiTabOrientation(),
           readTuiSidebarSort(),
           readTuiHideScratchSessions(),
           readTuiSidebarWidth(),
@@ -18620,6 +18633,7 @@ function OpenTuiWorkspace() {
         setTranscriptView(configuredTranscriptView)
         setTranscriptWidth(configuredTranscriptWidth)
         setTabsEnabled(configuredTabsEnabled)
+        setTabOrientation(configuredTabOrientation)
         setSidebarSort(configuredSidebarSort)
         setHideScratch(configuredHideScratch)
         setSidebarWidthPreference(configuredSidebarWidth)
@@ -19290,7 +19304,7 @@ function OpenTuiWorkspace() {
     syncingTabSelectionRef.current = true
     try { tabSelectRef.current.setSelectedIndex(activeStripIndex) }
     finally { syncingTabSelectionRef.current = false }
-  }, [activeStripIndex])
+  }, [activeStripIndex, showHorizontalTabs])
 
   // Animate the running tabs' spinner IMPERATIVELY, through the renderable's
   // own setOptions. Driving it from state would re-render the root — and the
@@ -19327,7 +19341,7 @@ function OpenTuiWorkspace() {
       paint()
     }, TAB_SPINNER_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [runningTabKeys, tabOptions, showTabs, tabWidth])
+  }, [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
@@ -22746,6 +22760,15 @@ function OpenTuiWorkspace() {
       case 'tasks-wide':
         resizeTaskPanel(TASK_PANEL_RESIZE_STEP)
         break
+      case 'tabs-horizontal':
+      case 'tabs-vertical': {
+        const next = id === 'tabs-vertical' ? 'vertical' : 'horizontal'
+        setTabOrientation(next)
+        setTabsEnabled(true)
+        void Promise.all([writeTuiTabOrientation(next), writeTuiTabsEnabled(true)]).catch(err => setError(String(err)))
+        showNotice('info', `${next === 'vertical' ? 'Vertical' : 'Horizontal'} tabs enabled`)
+        break
+      }
       case 'tab-toggle': {
         const next = !tabsEnabled
         setTabsEnabled(next)
@@ -26997,7 +27020,7 @@ function OpenTuiWorkspace() {
             const rect = clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
             const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
             return (
-              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
+              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth + verticalTabsWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
                 // Over a floating surface (drawn by the surface layer at 41) it is
                 // only its controls; over a session it is the window and opaque —
                 // an unpainted cell would show the windows underneath through it.
@@ -27131,8 +27154,33 @@ function OpenTuiWorkspace() {
           </box>
         ) : null}
 
+        {showTabs && verticalTabsWidth > 0 ? <VerticalTabs
+          options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys}
+          width={verticalTabsWidth} height={mainContentHeight} theme={theme}
+          onClose={index => {
+            if (index < visibleTabSessions.length) closeSessionTab(visibleTabSessions[index])
+            else { const id = popoverTabs[index - visibleTabSessions.length]; if (id) closePopoverTab(id) }
+          }}
+          onHorizontal={() => {
+            setTabOrientation('horizontal')
+            void writeTuiTabOrientation('horizontal').catch(err => setError(String(err)))
+          }}
+          onPress={(index, event) => {
+            const session = visibleTabSessions[index]
+            if (event.button === 2) {
+              event.stopPropagation()
+              if (session) splitPaneActions.sessionMenu(session, 'tab', event)
+              else { const id = popoverTabs[index - visibleTabSessions.length]; if (id) openPopoverTabMenu(id, event) }
+            } else if (event.button === 0) {
+              if (session) sessionDragHandlers.press(session, null, event, () => selectStripIndex(index))
+              else selectStripIndex(index)
+            }
+          }}
+          onDrag={event => sessionDragHandlers.move(event)}
+          onRelease={event => { if (event.button === 0) sessionDragHandlers.release(event) }}
+        /> : null}
         <box width={readerAreaWidth} flexDirection="column">
-          {showTabs ? (
+          {showHorizontalTabs ? (
             <box
               id="session-tab-strip"
               height={TAB_BAR_HEIGHT}
@@ -27285,7 +27333,7 @@ function OpenTuiWorkspace() {
           )}
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
-            ownerKey={selectedSessionKey} enabled={showTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
+            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
             foreground={theme.cyan} background={theme.surface} />
 
           </box>
@@ -27959,7 +28007,7 @@ function OpenTuiWorkspace() {
           id="surface-panel-frame"
           height={effectiveSurfacePanelRows}
           width={readerAreaWidth}
-          marginLeft={sidebarWidth}
+          marginLeft={sidebarWidth + verticalTabsWidth}
           flexShrink={0}
           overflow="hidden"
         >

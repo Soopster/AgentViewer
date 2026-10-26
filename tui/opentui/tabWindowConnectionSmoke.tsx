@@ -99,6 +99,41 @@ try {
     return Boolean(box && row(box.y).includes('Alpha session') && row(box.y).includes('Bravo session'))
   })
 
+  // Switch orientation through the actual palette, preserving open sessions.
+  await act(async () => { setup.mockInput.pressKey('?') })
+  await settle(100)
+  await act(async () => { await setup.mockInput.typeText('Use vertical tabs') })
+  await settle(100)
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('vertical tabs', () => Boolean(rectOf('vertical-tabs')))
+  if (strip()) fail('horizontal tabs remained visible in vertical mode')
+  const vertical = rectOf('vertical-tabs')!
+  const verticalReader = rectOf('transcript-reader')!
+  if (vertical.x + vertical.width > verticalReader.x) fail('vertical tabs overlap the transcript')
+  const { getConfiguredTuiTabOrientation } = await import('../../lib/tuiState')
+  assert.equal(await getConfiguredTuiTabOrientation(), 'vertical', 'orientation persists')
+  const alphaRow = rectOf('vertical-tab:0')!
+  await act(async () => { await setup.mockMouse.click(alphaRow.x + 4, alphaRow.y) })
+  await waitFor('vertical selection', () => setup.captureCharFrame().includes('Alpha session body'))
+  const bravoRow = rectOf('vertical-tab:1')!
+  await act(async () => { await setup.mockMouse.click(bravoRow.x + 4, bravoRow.y) })
+  await waitFor('second vertical selection', () => setup.captureCharFrame().includes('Bravo session body'))
+  await act(async () => { setup.resize(70, 30) })
+  await waitFor('narrow fallback', () => Boolean(strip()) && !rectOf('vertical-tabs'))
+  assert.equal(await getConfiguredTuiTabOrientation(), 'vertical', 'fallback preserves preference')
+  await act(async () => { setup.resize(160, 40) })
+  await waitFor('vertical restored after resize', () => Boolean(rectOf('vertical-tabs')))
+  // Fullscreen hides the rail; restoring brings it back with the same tabs.
+  act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+  await waitFor('vertical fullscreen', () => Boolean(rectOf('fullscreen-restore')) && !rectOf('vertical-tabs'))
+  act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
+  await waitFor('vertical restored after fullscreen', () => Boolean(rectOf('vertical-tabs')))
+  await settle(250)
+  const horizontalButton = rectOf('vertical-tabs-horizontal')!
+  await act(async () => { await setup.mockMouse.click(horizontalButton.x + 1, horizontalButton.y) })
+  await waitFor('horizontal tabs restored', () => Boolean(strip()) && !rectOf('vertical-tabs'))
+  assert.equal(await getConfiguredTuiTabOrientation(), 'horizontal')
+
   const tabs = rectOf('session-tabs')! as Rect & { getSelectedIndex(): number; getTabWidth(): number; scrollOffset: number }
   const reader = rectOf('transcript-reader')!
   if (tabs.y + 1 !== reader.y) fail('the tab row moved into the window instead of remaining above it')
@@ -124,7 +159,7 @@ try {
   })
   act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
   await waitFor('the original tab row restored', () => Boolean(strip() && rectOf('transcript-reader') && strip()!.y + 1 === rectOf('transcript-reader')!.y))
-  console.log('Tab/window connection passed (separate row, native frame, connected outline, controls, close)')
+  console.log('Tab/window connection and vertical orientation passed (persistence, selection, resize, fullscreen, connected outline, controls, close)')
 } finally {
   setup.renderer.destroy?.()
 }

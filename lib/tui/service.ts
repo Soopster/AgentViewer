@@ -24,6 +24,7 @@ import {
   getConfiguredTuiSidebarWidth,
   getConfiguredTuiShowToolCalls,
   getConfiguredTuiTabsEnabled,
+  getConfiguredTuiTabOrientation,
   getConfiguredTuiSplitPanes,
   getConfiguredTuiSplitOrientation,
   getConfiguredTuiSplitReaderShare,
@@ -49,6 +50,7 @@ import {
   setConfiguredTuiShowToolCalls,
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
+  setConfiguredTuiTabOrientation,
   setConfiguredTuiSplitPanes,
   setConfiguredTuiSplitOrientation,
   setConfiguredTuiSplitReaderShare,
@@ -394,6 +396,14 @@ export async function readTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {
 
 export async function writeTuiTranscriptWidth(transcriptWidth: TuiTranscriptWidth): Promise<void> {
   await setConfiguredTuiTranscriptWidth(transcriptWidth)
+}
+
+export async function readTuiTabOrientation() {
+  return getConfiguredTuiTabOrientation()
+}
+
+export async function writeTuiTabOrientation(orientation: 'horizontal' | 'vertical'): Promise<void> {
+  await setConfiguredTuiTabOrientation(orientation)
 }
 
 export async function readTuiTabsEnabled(): Promise<boolean> {

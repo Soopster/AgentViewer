@@ -181,6 +181,7 @@ type TuiState = {
   diffLayout?: unknown
   transcriptView?: unknown
   transcriptWidth?: unknown
+  tabOrientation?: unknown
   tabsEnabled?: unknown
   teammateNotifications?: unknown
   splitPanes?: unknown
@@ -449,6 +450,17 @@ export async function getConfiguredTuiTeammateNotifications(): Promise<TuiTeamma
 
 export async function setConfiguredTuiTeammateNotifications(teammateNotifications: TuiTeammateNotifications): Promise<void> {
   await writeTuiState({ teammateNotifications })
+}
+
+export type TuiTabOrientation = 'horizontal' | 'vertical'
+
+export async function getConfiguredTuiTabOrientation(): Promise<TuiTabOrientation> {
+  const parsed = await readTuiState()
+  return parsed.tabOrientation === 'vertical' ? 'vertical' : 'horizontal'
+}
+
+export async function setConfiguredTuiTabOrientation(tabOrientation: TuiTabOrientation): Promise<void> {
+  await writeTuiState({ tabOrientation })
 }
 
 export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
