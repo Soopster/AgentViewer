@@ -6,7 +6,6 @@ import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
 import { SessionTabConnection } from './SessionTabConnection'
-import { sessionIdentityKey } from './sessionIdentity'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
@@ -387,7 +386,7 @@ import {
   PORTABLE_COMMAND_CHORDS,
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
 import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type PaletteCommand, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
-import { NATIVE_OSC_ENABLED, RECENT_SESSION_ACTIVITY_MS, MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
+import { NATIVE_OSC_ENABLED, MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
 import { READER_CARD_SEARCH_DEPTH, SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
 import { PERF_LOG, PERF_LOG_PATH, CARD_PROFILE, noteRootRender, FRAME_TIMING_NEEDED, recordFramePerf, sameJson } from './app/perf'
@@ -399,8 +398,10 @@ import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOu
 import { formatElapsedClock, formatCopilotTimestamp, formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TuiErrorBoundary, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { formatTimeGap, isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
+import { sessionKey, sessionActivityMs, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
+export { createSidebarRowElements } from './app/sessionList'
 export { inlineSegmentActionAt, inlineSegmentIndexAt, renderInlineMarkdownSpans } from './app/inlineText'
 
 // Plugin commands with a TUI binding, matched by the global key router.
@@ -532,256 +533,6 @@ const TUI_SLASH_HINTS: Record<string, string[]> = {
   pi: ['/sessions', '/message', '/help', '/model', '/thinking', '/compact'],
 }
 
-
-function sessionActivityMs(session: Session): number {
-  const value = session.lastModified ?? session.createdAt
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
-  if (typeof value === 'string') {
-    const ms = new Date(value).getTime()
-    return Number.isNaN(ms) ? 0 : ms
-  }
-  return 0
-}
-
-function isSessionRecentlyTouched(session: Session, now = Date.now()): boolean {
-  const activityMs = sessionActivityMs(session)
-  return activityMs > 0 && activityMs >= now - RECENT_SESSION_ACTIVITY_MS
-}
-
-function compareSessionsByActivityDesc(a: Session, b: Session): number {
-  const byActivity = sessionActivityMs(b) - sessionActivityMs(a)
-  if (byActivity !== 0) return byActivity
-  return sessionKey(a).localeCompare(sessionKey(b))
-}
-
-// Which session (sessionId + provider) a read detail belongs to. The detail
-// itself carries no identity, and two sessions can hold identical transcripts.
-const sessionDetailOwnerKeys = new WeakMap<TuiSessionDetail, string>()
-const sessionKey = sessionIdentityKey
-const PENDING_INBOX_EDIT_MS = 15_000
-
-function withPendingInboxEdits(sessions: Session[], pending: Map<string, PendingInboxEdit>): Session[] {
-  if (pending.size === 0) return sessions
-  const now = Date.now()
-  for (const [key, edit] of pending) if (edit.until <= now) pending.delete(key)
-  if (pending.size === 0) return sessions
-  return sessions.map((session) => {
-    const edit = pending.get(sessionKey(session))
-    if (!edit || session.inbox?.settledAt === edit.settledAt || Boolean(session.inbox?.settledAt) === Boolean(edit.settledAt)) return session
-    const inbox = { ...session.inbox, settledAt: edit.settledAt }
-    if (edit.settledAt === undefined) delete inbox.settledAt
-    return { ...session, inbox }
-  })
-}
-
-function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const prev = a[i]
-    const next = b[i]
-    if (
-      prev.sessionId !== next.sessionId
-      || prev.provider !== next.provider
-      || prev.lastModified !== next.lastModified
-      || prev.transcriptUpdatedAt !== next.transcriptUpdatedAt
-      || prev.customTitle !== next.customTitle
-      || prev.summary !== next.summary
-      || prev.cwd !== next.cwd
-      || prev.tag !== next.tag
-      || prev.parentSessionId !== next.parentSessionId
-      // Settling, pinning and snoozing change only the inbox; ignoring it kept a
-      // session settled on the web (or here, by an earlier poll) as it was.
-      || prev.inbox?.settledAt !== next.inbox?.settledAt
-      || prev.inbox?.pinnedAt !== next.inbox?.pinnedAt
-      || prev.inbox?.snoozedUntil !== next.inbox?.snoozedUntil
-    ) return false
-  }
-  return true
-}
-
-function sidebarEntrySession(entry: SidebarEntry): Session | null {
-  if (entry.type === 'session') return entry.session
-  if (entry.type === 'subagent' && entry.entry.kind === 'session') return entry.entry.session
-  return null
-}
-
-// Keep only the current list. Selection moves copy its element array and
-// rebuild the old/new highlights without walking or allocating keys for every
-// row. Multiple rows may represent the same session (including nested rows).
-export function createSidebarRowElements<Entry extends { key: string }, Element>(
-  getSessionKey: (entry: Entry) => string | null,
-) {
-  let previousEntries: readonly Entry[] | null = null
-  let previousBuild: ((entry: Entry, selected: boolean) => Element) | null = null
-  let previousSelection: string | null = null
-  let rows: Element[] = []
-  let sessionKeys: Array<string | null> = []
-  const indicesBySession = new Map<string, number | number[]>()
-  const cache = new Map<string, { entry: Entry; selected: boolean; element: Element; generation: number }>()
-  let generation = 0
-  return (entries: readonly Entry[], selectedKey: string | null, build: (entry: Entry, selected: boolean) => Element): Element[] => {
-    // Polls/filters can replace the array without changing any row. Preserve
-    // the index and cached elements for this case instead of rebuilding Maps.
-    if (entries !== previousEntries && build === previousBuild && previousEntries?.length === entries.length
-      && entries.every((entry, index) => entry === previousEntries![index])) previousEntries = entries
-    if (entries === previousEntries && build === previousBuild) {
-      if (selectedKey === previousSelection) return rows
-      const next = rows.slice()
-      for (const [key, selected] of [[previousSelection, false], [selectedKey, true]] as const) {
-        if (key === null) continue
-        const indices = indicesBySession.get(key)
-        if (indices === undefined) continue
-        for (const index of typeof indices === 'number' ? [indices] : indices) {
-          const entry = entries[index]
-          const element = build(entry, selected)
-          next[index] = element
-          cache.set(entry.key, { entry, selected, element, generation })
-        }
-      }
-      previousSelection = selectedKey
-      rows = next
-      return rows
-    }
-    generation++
-    let indexChanged = sessionKeys.length !== entries.length
-    const nextSessionKeys = new Array<string | null>(entries.length)
-    rows = entries.map((entry, index) => {
-      const key = getSessionKey(entry)
-      nextSessionKeys[index] = key
-      if (key !== sessionKeys[index]) indexChanged = true
-      const selected = key !== null && key === selectedKey
-      const previous = cache.get(entry.key)
-      const reusable = build === previousBuild && previous?.entry === entry && previous.selected === selected
-      const element = reusable ? previous.element : build(entry, selected)
-      if (reusable) previous.generation = generation
-      else cache.set(entry.key, { entry, selected, element, generation })
-      return element
-    })
-    if (indexChanged) {
-      indicesBySession.clear()
-      for (let index = 0; index < nextSessionKeys.length; index++) {
-        const key = nextSessionKeys[index]
-        if (key === null) continue
-        const indices = indicesBySession.get(key)
-        if (typeof indices === 'number') indicesBySession.set(key, [indices, index])
-        else if (indices) indices.push(index)
-        else indicesBySession.set(key, index)
-      }
-    }
-    sessionKeys = nextSessionKeys
-    for (const [key, cached] of cache) if (cached.generation !== generation) cache.delete(key)
-    previousEntries = entries
-    previousBuild = build
-    previousSelection = selectedKey
-    return rows
-  }
-}
-
-function sidebarEntrySessionKey(entry: SidebarEntry): string | null {
-  const session = sidebarEntrySession(entry)
-  return session ? sessionKey(session) : entry.type === 'subagent' ? entry.key : null
-}
-
-function buildSidebarEntries(
-  sessions: Session[],
-  sort: TuiSidebarSort,
-  childrenByParentId?: Map<string, SidebarSubagentEntry[]>,
-  collapsedSubagents: ReadonlySet<string> = new Set(),
-): SidebarEntry[] {
-  const entries: SidebarEntry[] = []
-  // Real child sessions are nested under their parent instead of
-  // appearing as unrelated top-level rows — but only when the parent is
-  // actually present in this list (search/filter can exclude it).
-  const presentIds = new Set(sessions.map(sessionKey))
-  const isNestedChild = (session: Session) =>
-    !!session.parentSessionId
-    && presentIds.has(sessionKey({ sessionId: session.parentSessionId, provider: session.provider, providerInstanceId: session.providerInstanceId }))
-  const pushSubagents = (
-    parentSession: Session,
-    parentKey: string,
-    depth = 1,
-    lineage = new Set<string>(),
-  ) => {
-    const parentIdentity = sessionKey(parentSession)
-    if (lineage.has(parentIdentity) || collapsedSubagents.has(parentIdentity)) return
-    const nextLineage = new Set(lineage).add(parentIdentity)
-    const children = childrenByParentId?.get(parentIdentity)
-    if (!children || children.length === 0) return
-    for (const child of children) {
-      const key = child.kind === 'session'
-        ? `subagent:${parentKey}:${sessionKey(child.session)}`
-        : `subagent:${parentKey}:${child.summary.agentId}`
-      entries.push({ type: 'subagent', key, parentSession, entry: child, depth })
-      if (child.kind === 'session') pushSubagents(child.session, key, depth + 1, nextLineage)
-    }
-  }
-
-  const visibleSessions = sessions.filter((session) => !isNestedChild(session))
-  const orderedSessions = visibleSessions
-    .map((session) => ({ session, absoluteIndex: sessions.indexOf(session) }))
-    .sort((a, b) => compareSessionsByActivityDesc(a.session, b.session))
-
-  if (sort === 'time') {
-    // Sessions stay in global time-sort order. A project header is injected before
-    // each run of consecutive sessions that share a project name.
-    let prevProject = ''
-    for (let i = 0; i < orderedSessions.length; i++) {
-      const { session, absoluteIndex } = orderedSessions[i]
-      const projectName = formatSessionProject(session).toUpperCase()
-      if (projectName !== prevProject) {
-        // Measure the length of this consecutive run so the header can show a count.
-        let run = 1
-        while (
-          i + run < orderedSessions.length
-          && formatSessionProject(orderedSessions[i + run].session).toUpperCase() === projectName
-        ) run++
-        // Key includes the absolute index so the same project appearing multiple
-        // times in time-order gets distinct keys (required by the reconciler).
-        entries.push({ type: 'project', key: `project:${projectName}:${i}`, projectName, count: run })
-        prevProject = projectName
-      }
-      const sessionEntryKey = `session:${sessionKey(session)}`
-      entries.push({
-        type: 'session',
-        key: sessionEntryKey,
-        session,
-        absoluteIndex,
-      })
-      pushSubagents(session, sessionEntryKey)
-    }
-    return entries
-  }
-
-  // 'project' mode: group sessions by project, preserving time-sort order within each
-  // group. Groups are ordered by the most-recently modified session they contain.
-  const groupOrder: string[] = []
-  const groups = new Map<string, Array<{ session: Session; absoluteIndex: number }>>()
-  orderedSessions.forEach(({ session, absoluteIndex }) => {
-    const projectName = formatSessionProject(session).toUpperCase()
-    if (!groups.has(projectName)) {
-      groups.set(projectName, [])
-      groupOrder.push(projectName)
-    }
-    groups.get(projectName)!.push({ session, absoluteIndex })
-  })
-
-  for (const projectName of groupOrder) {
-    const members = groups.get(projectName)!
-    entries.push({ type: 'project', key: `project:${projectName}`, projectName, count: members.length })
-    for (const { session, absoluteIndex } of members) {
-      const sessionEntryKey = `session:${sessionKey(session)}`
-      entries.push({
-        type: 'session',
-        key: sessionEntryKey,
-        session,
-        absoluteIndex,
-      })
-      pushSubagents(session, sessionEntryKey)
-    }
-  }
-  return entries
-}
 
 function findCardIndex(cards: TuiTranscriptCard[], key: string | null): number {
   if (!key) return -1
