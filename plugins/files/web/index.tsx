@@ -13,7 +13,7 @@ function FilesSurface({ services, placement, close }: WebPluginViewProps) {
       open
       variant={placement === 'overlay' ? undefined : 'docked'}
       cwd={repository.cwd}
-      canInsert={Boolean(composer)}
+      canInsert={Boolean(composer?.insertPath)}
       sessionId={repository.sessionId ?? undefined}
       provider={repository.provider ?? undefined}
       onOpenChange={(next) => { if (!next) close() }}

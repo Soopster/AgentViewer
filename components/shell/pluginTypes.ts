@@ -13,8 +13,16 @@ export type WebPluginServices = {
     readonly provider?: string | null
   }
   composer?: {
-    /** Insert a file path into the composer the user is writing in. */
-    readonly insertPath: (path: string) => void
+    /** Insert a file path into the composer the user is writing in; absent when no session composer is open. */
+    readonly insertPath?: (path: string) => void
+    /** Insert text (a question for the agent) into the composer the user is writing in. */
+    readonly insertText?: (text: string) => void
+  }
+  'session-pull-request'?: {
+    /** The pull request already linked to the selected session, if any. */
+    readonly linkedNumber?: number
+    /** Link a pull request to the selected session; absent with no session selected. */
+    readonly link?: (pr: { repo: string; number: number; url: string; cwd: string }) => void
   }
 }
 

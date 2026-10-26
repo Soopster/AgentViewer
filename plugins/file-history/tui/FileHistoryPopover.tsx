@@ -5,11 +5,10 @@
 // prompt. Any one hunk of any step can be undone against the file as it is
 // now, the file can be put back to how it was before a step, and a step can be
 // handed to an agent with the prompt that produced it.
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { MODAL_CONTENT_Z_INDEX, PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
-import { SELECTION_ASK_INTENTS, type SelectionAskInput } from '../../lib/selectionAsk'
+import { SELECTION_ASK_INTENTS, type SelectionAskInput } from '../../../lib/selectionAsk'
 import {
   readTuiFileHistory,
   restoreTuiCheckpoint,
@@ -17,8 +16,7 @@ import {
   type FileHistory,
   type FileHistoryStep,
   type WorkingDiffHunk,
-} from '../../lib/tui/service'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+} from '../../../lib/tui/service'
 
 type FileHistoryKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 

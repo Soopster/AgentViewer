@@ -4,7 +4,7 @@
 import React from 'react'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { PullRequestPopover } from './PullRequestPopover'
+import { PullRequestPopover } from '../../plugins/pull-requests/tui/PullRequestPopover'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 let handleKey: ((key: Key) => boolean) | null = null

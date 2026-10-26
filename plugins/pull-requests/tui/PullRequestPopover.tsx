@@ -1,26 +1,22 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton } from './dockedPopover'
+import { PopoverDetachButton, createScrollVelocityState, velocityScrollStep, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useReview } from '../../lib/review/useReview'
-import { localReviewTransport } from '../../lib/review/localTransport'
-import { reviewRangeKey, type ReviewTarget } from '../../lib/review/types'
-import { ReviewBoard, type ReviewBoardKey } from './ReviewBoard'
+import { useReview } from '../../../lib/review/useReview'
+import { localReviewTransport } from '../../../lib/review/localTransport'
+import { reviewRangeKey, type ReviewTarget } from '../../../lib/review/types'
+import { DiffCodeText, ReviewBoard, flattenHastLine, loadDiffHighlights, type ReviewBoardKey, type TuiFileHighlights, type TuiRenderSpan } from '../../../tui/opentui/shell/sdkDiff'
 import { TextAttributes } from '@opentui/core'
 import type { MouseEvent, ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { SelectedLineRange } from '@pierre/diffs'
-import type { TuiThemePalette } from '../theme'
 import {
   fetchPullRequestWorkspace,
   mutatePullRequest,
   type PullRequestComment,
   type PullRequestFile,
   type PullRequestWorkspace,
-} from '../../lib/githubPr'
-import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
-import { flattenHastLine, loadDiffHighlights, type TuiFileHighlights, type TuiRenderSpan } from './pierreDiffView'
-import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
-import { DiffCodeText } from './DiffCodeText'
-import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewState, type TuiDiffReviewNote } from '../../lib/tuiDiffReviewState'
+} from '../../../lib/githubPr'
+import { buildDiffCommentComposerPrompt } from '../../../lib/diffCommentComposer'
+import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewState, type TuiDiffReviewNote } from '../../../lib/tuiDiffReviewState'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; meta?: boolean; ctrl?: boolean }

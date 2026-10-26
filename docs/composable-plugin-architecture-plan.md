@@ -9,7 +9,12 @@ apps (`plugins/analytics/`, `plugins/git/`, `plugins/files/`), and the TUI
 target is `PluginTarget.path/line`, and its buffers survive overlay ↔ window). The TUI's
 new-session folder picker is the Files view asked for a directory (the
 `directory-picker` service); with Files off, browsing says so and the recent
-folders still work. A **plugin manager** (TUI palette
+folders still work. **Pull requests** (both apps; the `pull-request` side-panel kind, Git's
+`p` reaches it as a plugin command), **checkpoints** and **file history** (TUI) are plugins too:
+file history is opened only through the `file-history` service and keeps an overlay slot of its
+own above the plugin overlay, because it stacks over the editor or checkpoints that opened it;
+the contract gained a `'path'` pin, a `'repository'` command requirement, `PluginTarget.turn`
+(the turn checkpoints open on) and a view `accent`. A **plugin manager** (TUI palette
 "Plugins: turn features on or off", Web palette "Plugins") turns each plugin
 off or on; the choice is `.agent-viewer-data/plugins.json`, shared by the TUI
 and the web daemon (`/api/plugins`). `npm run plugins:smoke` checks the

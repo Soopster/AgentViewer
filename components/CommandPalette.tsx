@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, GitPullRequest, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -61,7 +61,6 @@ type CommandPaletteProps = {
   onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
-  onOpenPullRequests: () => void
   onOpenCoordinator: () => void
   onOpenCrossSessionMessaging: () => void
   onOpenTasks: () => void
@@ -361,7 +360,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenPullRequests,
   onOpenCoordinator,
   onOpenCrossSessionMessaging,
   onOpenTasks,
@@ -612,17 +610,6 @@ export default function CommandPalette({
         },
       },
       {
-        id: 'open-pull-requests',
-        label: 'Review pull requests',
-        description: canOpenGit ? 'Review GitHub PRs, ask the agent, and publish comments with gh' : 'Select a session or project first',
-        icon: <GitPullRequest size={16} />,
-        shortcut: 'Ctrl Shift G',
-        group: 'actions',
-        keywords: ['github', 'pull request', 'pr', 'review', 'comment', 'approve', 'gh'],
-        score: 0,
-        run: onOpenPullRequests,
-      },
-      {
         id: 'open-agent-team',
         label: 'Open Agent Operations dashboard',
         description: 'Open the multi-agent dashboard for teammates, tasks, messages, worktrees, and merge controls',
@@ -855,7 +842,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenPullRequests, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

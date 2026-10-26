@@ -45,9 +45,15 @@ export type PluginSurfaceHostProps = {
   /** A file the surface opens on, 1-based line or null (its target). */
   path?: string | null
   line?: number | null
+  /** An agent turn the surface opens on (its target). */
+  turn?: PluginTarget['turn']
+  /** An overlay's dimming layer; off when the host draws its own modal scrim. */
+  scrim?: boolean
   /** Service values the host offers; a view receives the ones its surface declares. */
   provided?: TuiProvidedPluginServices
   theme: TuiThemePalette
+  /** Accent for titles and selection; the theme's cyan when absent. */
+  accent?: string
   syntaxStyle?: SyntaxStyle | null
   width: number
   height: number
@@ -65,10 +71,11 @@ export type PluginSurfaceHostProps = {
 }
 
 /** One instance per pin: an overlay and the window it becomes share state. */
-export function pluginInstanceId(surfaceId: string, sessionKey: string | null, cwd: string | null = null): string {
+export function pluginInstanceId(surfaceId: string, sessionKey: string | null, cwd: string | null = null, path: string | null = null): string {
   const pin = getPluginSurface(surfaceId as PluginSurfaceId).pin
   if (pin === 'session' && sessionKey) return `${surfaceId}:${sessionKey}`
   if (pin === 'cwd' && cwd) return `${surfaceId}:${cwd}`
+  if (pin === 'path' && path) return `${surfaceId}:${cwd ?? ''}:${path}`
   return surfaceId
 }
 
@@ -82,7 +89,9 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   const disabled = useDisabledPlugins().has(getPluginSurface(props.surfaceId).pluginId)
   if (disabled) return <DisabledPluginSurface {...props} />
-  return <ActivePluginSurface {...props} />
+  // Keyed by surface: an overlay host handed a different surface (one view's
+  // command opening another's) must load that view, not keep the last one.
+  return <ActivePluginSurface key={props.surfaceId} {...props} />
 }
 
 // A window, panel tab or saved layout can outlive the choice to turn its plugin
@@ -112,7 +121,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const store = props.store ?? pluginState
   const surface = getPluginSurface(surfaceId)
   const cwd = props.cwd ?? null
-  const instanceId = pluginInstanceId(surfaceId, sessionKey, cwd)
+  const instanceId = pluginInstanceId(surfaceId, sessionKey, cwd, props.path ?? null)
   const zIndex = props.zIndex ?? PLUGIN_OVERLAY_Z_INDEX
 
   const [attempt, setAttempt] = useState(0)
@@ -175,7 +184,8 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
 
   const filePath = props.path ?? null
   const fileLine = props.line ?? null
-  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null, path: filePath, line: fileLine }), [sessionKey, surface.pin, repositoryCwd, filePath, fileLine])
+  const turn = props.turn ?? null
+  const target = useMemo<PluginTarget>(() => ({ sessionKey, cwd: surface.pin === 'cwd' ? repositoryCwd : null, path: filePath, line: fileLine, turn }), [sessionKey, surface.pin, repositoryCwd, filePath, fileLine, turn])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // Called from the view's render as a hook; the identity is stable per instance.
     // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -185,7 +195,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const registerKeys = useCallback((handler: KeyHandler | null) => { viewKeys.current = handler }, [])
 
   const overlay = placement === 'overlay'
-  const scrim = overlay ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
+  const scrim = overlay && props.scrim !== false ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
 
   if (failure) {
     const boxWidth = overlay ? Math.min(width - 4, 72) : width
@@ -210,7 +220,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   // OpenTUI's JSX yields ReactNode; React renders any function component.
   const Component = View as unknown as (props: TuiPluginViewProps) => React.ReactElement | null
   const viewProps: TuiPluginViewProps = {
-    pluginId: surface.pluginId, surfaceId, instanceId, placement, target, services, theme, syntaxStyle: props.syntaxStyle ?? null, width, height,
+    pluginId: surface.pluginId, surfaceId, instanceId, placement, target, services, theme, accent: props.accent ?? theme.cyan, syntaxStyle: props.syntaxStyle ?? null, width, height,
     focused: props.focused, zIndex, useState: useState_, onDispose, registerKeys, setCapture, runCommand, close: onClose,
     ...(overlay && props.onDetach ? { detach: props.onDetach } : {}),
   }

@@ -23,8 +23,11 @@ export type PluginSurfaceSpec = {
   readonly id: string
   /** Title with its leading glyph, as window chrome shows it. */
   readonly title: string
-  /** What a window keeps showing while the selection moves on: a session, a repository, or nothing. */
-  readonly pin: 'session' | 'cwd' | null
+  /**
+   * What a window keeps showing while the selection moves on: a session, a
+   * repository, a file (`PluginTarget.path`; one window per file), or nothing.
+   */
+  readonly pin: 'session' | 'cwd' | 'path' | null
   /** The surface's state is a singleton, so it exists once in any form. */
   readonly single: boolean
   /** 'window': routed after the global keys. 'capture': every key but ⌃B. */
@@ -49,8 +52,8 @@ export type PluginCommandSpec = {
   readonly category: 'Session' | 'View'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
-  /** What the command must have before it can run. */
-  readonly requires: 'session' | null
+  /** What the command must have before it can run: a selected session, or a repository to work in. */
+  readonly requires: 'session' | 'repository' | null
   readonly renderers: readonly PluginRenderer[]
   /** TUI binding, matched by the host's key router at global precedence. */
   readonly tuiKey?: PluginKeyChord
@@ -96,6 +99,8 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** Web: the pull request linked to the selected session, and linking one to it. */
+  | 'session-pull-request'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host
@@ -112,6 +117,8 @@ export type PluginTarget = {
    */
   readonly path?: string | null
   readonly line?: number | null
+  /** An agent turn the view opened on, named by the prompt that started it. */
+  readonly turn?: { readonly sessionId: string; readonly text: string; readonly timestamp?: string } | null
 }
 
 /** A renderer's lazy entry: one view component per declared surface. */

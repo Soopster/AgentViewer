@@ -11,4 +11,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   git: async () => (await import('../../../plugins/git/tui')).module,
   files: async () => (await import('../../../plugins/files/tui')).module,
   editor: async () => (await import('../../../plugins/editor/tui')).module,
+  'pull-requests': async () => (await import('../../../plugins/pull-requests/tui')).module,
+  checkpoints: async () => (await import('../../../plugins/checkpoints/tui')).module,
+  'file-history': async () => (await import('../../../plugins/file-history/tui')).module,
 }, TUI_PLUGIN_SERVICES)

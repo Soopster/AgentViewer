@@ -7,10 +7,13 @@ import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
 import { manifest as editor } from '../../plugins/editor/manifest'
+import { manifest as pullRequests } from '../../plugins/pull-requests/manifest'
+import { manifest as checkpoints } from '../../plugins/checkpoints/manifest'
+import { manifest as fileHistory } from '../../plugins/file-history/manifest'
 import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, pullRequests, checkpoints, fileHistory] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

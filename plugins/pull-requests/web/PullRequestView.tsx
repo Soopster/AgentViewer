@@ -22,9 +22,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from './surfaceVariant'
-import { PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/PierreDiffView'
-import { DIFF_WORKER_POOL_OPTIONS } from '@/components/pierreDiffWorker'
+import { isDocked, shouldIgnoreDockedKey, type SurfaceVariant } from '@/components/shell/sdk'
+import { DIFF_WORKER_POOL_OPTIONS, PierreBuiltInIconSprite, PierreFileTypeIcon } from '@/components/shell/sdkDiff'
 import type {
   PullRequestComment, PullRequestDetail, PullRequestFile, PullRequestMutation,
   PullRequestReviewComment, PullRequestWorkspace,

@@ -64,7 +64,8 @@ export function transcriptWindowCommand(key: ShortcutKeyEvent, context: {
   if (key.name === 'tab') return action('tab')
   if (key.name === 'w' && !key.ctrl && !key.shift && !key.meta && context.hasSession) return action('close')
   if (!context.primaryFrame && !key.ctrl && !key.shift && (key.name === 'left' || key.name === 'right')) return { type: 'stripStep', direction: key.name === 'left' ? -1 : 1 }
-  if (isCtrlKey(key, 'g')) return action('git')
+  // ⌃⇧G is pull requests (a global plugin binding); only a plain ⌃G is Git.
+  if (isCtrlKey(key, 'g') && !key.shift) return action('git')
   if (letter === 'D') return action('diagnostics')
   if (isCtrlShiftKey(key, 'a')) return action('coordination')
   if (isCtrlKey(key, 'c')) return action('interrupt')

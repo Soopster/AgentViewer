@@ -465,15 +465,14 @@ const COMPOSER_WAITING_MESSAGES = [
 // Plugin commands with a TUI binding, matched by the global key router.
 // The plugin choice of this workspace, before the first frame offers any command.
 applyPluginSettings(readPluginSettingsFile())
+// A chord that names Shift is tried before the plain one it extends: ⌃⇧G also reads as ⌃G.
 const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): command is ResolvedPluginCommand & { tuiKey: PluginKeyChord } => Boolean(command.tuiKey))
+  .sort((a, b) => Number(Boolean(b.tuiKey.shift)) - Number(Boolean(a.tuiKey.shift)))
 
 // Overlays load when first opened — see lazyComponent.tsx.
-const PullRequestPopover = lazyComponent(() => import('./PullRequestPopover').then((module) => module.PullRequestPopover))
 const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
 const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
-const CheckpointPopover = lazyComponent(() => import('./CheckpointPopover').then((module) => module.CheckpointPopover))
-const FileHistoryPopover = lazyComponent(() => import('./FileHistoryPopover').then((module) => module.FileHistoryPopover))
 const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) => module.ContextMenu))
 const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
@@ -5789,7 +5788,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
-  { id: 'pull-requests', label: 'Review pull requests', key: '⌃K g / ⌃⇧G', category: 'Session'   },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
@@ -5810,7 +5808,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
   { id: 'fleet-prev', label: 'Previous fleet page',     key: '{', category: 'View'       },
   { id: 'fleet-next', label: 'Next fleet page',         key: '}', category: 'View'       },
-  { id: 'checkpoints', label: 'Checkpoints & review',   key: '⇧U', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: '⇧H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
   { id: 'diagnostics', label: 'Session diagnostics',   key: '⇧D',  category: 'Session'    },
@@ -10043,7 +10040,6 @@ function OpenTuiWorkspace() {
   // The side panel's plugin surface (Git): its key handler and its claim on input.
   const surfacePluginKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const surfacePluginKeyCaptureRef = useRef(false)
-  const surfacePrKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The Terminal tab's claim on keys: `input` while a command is typed (keys
   // reach its <input>), `terminal` while a shell has the keyboard (every key
@@ -10080,8 +10076,6 @@ function OpenTuiWorkspace() {
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
-  const [pullRequestOpen, setPullRequestOpen] = useState(false)
-  const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // The new-session folder picker: the Files plugin's view, asked to choose a directory.
   const folderPickerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   // The file the editor plugin opens on (its target), kept per workspace.
@@ -10214,15 +10208,15 @@ function OpenTuiWorkspace() {
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
   const [fleetPage, setFleetPage] = useState(0)
-  // Checkpoints & review popover (⇧U): turn snapshots + per-hunk review.
-  const [checkpointOpen, setCheckpointOpen] = useState(false)
+  // The turn the checkpoints plugin overlay (⇧U) opened on, when a turn summary opened it.
   const [checkpointFocusPrompt, setCheckpointFocusPrompt] = useState<{ sessionId: string; text: string; timestamp?: string } | null>(null)
-  const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  // Sits above whichever surface opened it (the editor, the checkpoints popover), which stay mounted beneath.
+  // The file-history plugin's overlay. It is a slot of its own rather than the
+  // plugin overlay: it sits above whichever surface opened it (the editor, the
+  // checkpoints overlay), which stay mounted beneath and get the keys back.
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null)
   const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
   const dailySummaryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -10622,7 +10616,6 @@ function OpenTuiWorkspace() {
     || exitConfirmOpen
     || searchMode
     || sessionSearchMode
-    || pullRequestOpen
     || pluginOverlay !== null
     || deskOpen
     || pluginManagerOpen
@@ -19673,8 +19666,12 @@ function OpenTuiWorkspace() {
     }
     const sessionId = sessionDetail?.info?.sessionId
     const prompt = rewindCandidates(sessionDetail?.rawMessages ?? []).find((candidate) => candidate.uuid === promptKey)
+    if (!isPluginEnabled('checkpoints')) {
+      showNotice('info', 'Checkpoints are off · turn them on in Plugins (⌃K palette)')
+      return
+    }
     setCheckpointFocusPrompt(sessionId && prompt ? { sessionId, text: prompt.text, timestamp: prompt.timestamp } : null)
-    setCheckpointOpen(true)
+    setPluginOverlay('checkpoints')
   })
   useEffect(() => {
     turnSummaryOpener = openTurnCheckpoint
@@ -20872,8 +20869,8 @@ function OpenTuiWorkspace() {
   // The popover of a kind, open or closed: what a window of it replaces.
   // `pin` reopens a path-pinned popover (file history) on its path.
   const setPopoverOpen = (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => {
-    // Git, Files and pull requests are surface kinds with a popover of their own.
-    if (kind === 'pull-request') setPullRequestOpen(open)
+    // File history has an overlay slot of its own, above the plugin overlay.
+    if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
     else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'coordination') setCoordBoardOpen(open)
@@ -20883,8 +20880,6 @@ function OpenTuiWorkspace() {
     else if (kind === 'messaging') setCrossSessionMessagingOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
     else if (kind === 'tasks') setTaskPopoverOpen(open)
-    else if (kind === 'checkpoints') setCheckpointOpen(open)
-    else if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
     else if (kind === 'channel-bridge') setChannelBridgeOpen(open)
     else if (kind === 'ide-bridge') setIdeBridgeOpen(open)
     else if (kind === 'desk') setDeskOpen(open)
@@ -20894,10 +20889,10 @@ function OpenTuiWorkspace() {
   // The popover open now, if it can become a window. Order is the popovers' own
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
-    pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
+    fileHistoryPath && gitRepoCwd ? 'file-history'
+    : pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
     : crossSessionMessagingOpen ? 'messaging' : handoffBriefOpen ? 'handoff' : taskPopoverOpen ? 'tasks'
-    : fileHistoryPath && gitRepoCwd ? 'file-history' : checkpointOpen && gitRepoCwd ? 'checkpoints'
     : channelBridgeOpen && canUseChannelBridge ? 'channel-bridge' : ideBridgeOpen && canUseIdeBridge ? 'ide-bridge'
     : deskOpen ? 'desk' : teammatesModalOpen ? 'teammates' : diagnosticsModalOpen ? 'diagnostics' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
@@ -21038,8 +21033,13 @@ function OpenTuiWorkspace() {
       showNotice('info', `${command.label} is off · turn its plugin on in Plugins (⌃K palette)`)
       return
     }
-    // A command names no file, so the editor opens where it was.
+    if (command.requires === 'repository' && !gitRepoCwd) {
+      showNotice('info', 'Selected session has no working directory', 3000)
+      return
+    }
+    // A command names no file, so the editor opens where it was; nor a turn.
     if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
+    if (command.opens === 'checkpoints') setCheckpointFocusPrompt(null)
     setPluginOverlay(command.opens)
   })
   const runPluginCommandId = useStableEvent((id: string) => {
@@ -21051,11 +21051,6 @@ function OpenTuiWorkspace() {
   const runCommandForPlugin = useStableEvent((id: string): boolean => {
     const command = getPluginCommand(id)
     if (command) { runPluginCommand(command); return true }
-    if (id === 'pull-requests') {
-      setPluginOverlay(null)
-      setPullRequestOpen(true)
-      return true
-    }
     return false
   })
   const toggleVelocityScroll = useStableEvent(() => {
@@ -21069,21 +21064,21 @@ function OpenTuiWorkspace() {
   // What the root offers plugin views. Each surface receives only the services it declares.
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     composer: {
-      appendDiffNote: (prompt: string) => {
+      appendDiffNote: (prompt: string, notice?: string) => {
         appendDiffCommentPromptToComposer(prompt)
-        showNotice('info', 'Diff comment added to composer')
+        showNotice('info', notice ?? 'Diff comment added to composer')
       },
       askAboutSelection: (request: SelectionAskInput) => { void askAgentAboutSelection(request) },
-      insertText: (text: string) => {
+      insertText: (text: string, notice?: string) => {
         insertComposerTextAtCursor(text)
         setComposerActive(true)
-        showNotice('info', 'Added to composer')
+        showNotice('info', notice ?? 'Added to composer')
       },
     },
     clipboard: { write: (text: string) => writeClipboard(text, renderer), read: readClipboardText },
     'open-file': { open: (path: string, line?: number | null) => openEditorAt(path, line ?? null) },
-    notices: { show: (kind: 'info' | 'error', text: string) => showNotice(kind, text) },
-    ...(gitRepoCwd ? { 'file-history': { open: (path: string) => setFileHistoryPath(path) } } : {}),
+    notices: { show: (kind: 'info' | 'error', text: string, durationMs?: number) => showNotice(kind, text, durationMs) },
+    ...(gitRepoCwd ? { 'file-history': { open: (path: string, where?: 'overlay' | 'window') => openFileHistory(path, where) } } : {}),
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -21099,8 +21094,35 @@ function OpenTuiWorkspace() {
   const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
   const closePluginOverlay = useStableEvent(() => {
     if (pluginOverlay === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
+    if (pluginOverlay === 'checkpoints') setCheckpointFocusPrompt(null)
     setPluginOverlay(null)
   })
+  // The file-history plugin, on a file: over the asking view, or as a window beside the layout.
+  const openFileHistory = useStableEvent((path: string, where: 'overlay' | 'window' = 'overlay') => {
+    if (!isPluginEnabled('file-history')) {
+      showNotice('info', 'File history is off · turn it on in Plugins (⌃K palette)')
+      return
+    }
+    if (where === 'window') openPopoverWindow('file-history', { path })
+    else setFileHistoryPath(path)
+  })
+  const closeFileHistory = useStableEvent(() => setFileHistoryPath(null))
+  const registerFileHistoryKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
+    fileHistoryKeyHandlerRef.current = handler
+  })
+  // Asking about a step leaves for the composer: the checkpoints overlay under
+  // it goes too; the editor is left to its own close, which guards unsaved buffers.
+  const fileHistoryServices = useMemo((): TuiProvidedPluginServices => ({
+    ...pluginServices,
+    composer: {
+      ...pluginServices.composer!,
+      askAboutSelection: (request: SelectionAskInput) => {
+        void askAgentAboutSelection(request)
+        setPluginOverlay((current) => (current === 'checkpoints' ? null : current))
+      },
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [pluginServices])
   // Opens the editor on a file (1-based line, or null for its remembered place):
   // in its window when it has one (the open-popover effect routes it), else full screen.
   const openEditorAt = useStableEvent((path: string | null, line: number | null) => {
@@ -21115,7 +21137,8 @@ function OpenTuiWorkspace() {
   // Turning a plugin off closes its overlay; its windows say it is off.
   useEffect(() => {
     if (pluginOverlay && disabledPlugins.has(getPluginSurface(pluginOverlay).pluginId)) setPluginOverlay(null)
-  }, [pluginOverlay, disabledPlugins])
+    if (fileHistoryPath && disabledPlugins.has('file-history')) setFileHistoryPath(null)
+  }, [pluginOverlay, fileHistoryPath, disabledPlugins])
   const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
     pluginOverlayKeyHandlerRef.current = handler
   })
@@ -22098,7 +22121,7 @@ function OpenTuiWorkspace() {
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
   }, [pluginOverlay, dailySummaryOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
-    crossSessionMessagingOpen, handoffBriefOpen, taskPopoverOpen, checkpointOpen, fileHistoryPath, channelBridgeOpen, ideBridgeOpen, deskOpen])
+    crossSessionMessagingOpen, handoffBriefOpen, taskPopoverOpen, fileHistoryPath, channelBridgeOpen, ideBridgeOpen, deskOpen])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
     if (!diagnosticsOpen && windowedPopoverKinds.has('diagnostics')) closeSurfaceWindow('diagnostics')
@@ -22545,10 +22568,6 @@ function OpenTuiWorkspace() {
       case 'fleet-next':
         if (fleetPageCount > 1) setFleetPage((current) => (current + 1) % fleetPageCount)
         break
-      case 'checkpoints':
-        if (gitRepoCwd) setCheckpointOpen(true)
-        else showNotice('info', 'Selected session has no working directory', 3000)
-        break
       case 'theme': {
         openThemeMenu()
         break
@@ -22935,9 +22954,6 @@ function OpenTuiWorkspace() {
       case 'plugins':
         setPluginManagerOpen(true)
         break
-      case 'pull-requests':
-        setPullRequestOpen(true)
-        break
       case 'handoff-brief':
         openHandoffBrief()
         break
@@ -23138,7 +23154,7 @@ function OpenTuiWorkspace() {
     ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, coordination: coordBoardOpen,
     playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
     messaging: crossSessionMessagingOpen, handoff: handoffBriefOpen, tasks: taskPopoverOpen,
-    'file-history': Boolean(fileHistoryPath && gitRepoCwd), checkpoints: checkpointOpen,
+    'file-history': Boolean(fileHistoryPath && gitRepoCwd),
     'channel-bridge': channelBridgeOpen && canUseChannelBridge, 'ide-bridge': ideBridgeOpen && canUseIdeBridge,
     desk: deskOpen, teammates: teammatesModalOpen, diagnostics: diagnosticsModalOpen,
   }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))
@@ -23147,7 +23163,7 @@ function OpenTuiWorkspace() {
     || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen || coordModalOpen || remoteCoordinatorTarget
     || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
     || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
-    || pullRequestOpen || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
+    || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
   )
   const endWindowResizeGroup = () => {
     windowResizeGroupRef.current = false
@@ -23424,11 +23440,10 @@ function OpenTuiWorkspace() {
       const popover = openPopoverKind()
       if (popover) { handled(() => openPopoverWindow(popover)); return }
       // Git, Files and pull requests already have window kinds of their own.
-      const surfaceKind: WindowSurfaceKind | null = pluginOverlay && isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : pullRequestOpen ? 'pull-request' : null
+      const surfaceKind: WindowSurfaceKind | null = pluginOverlay && isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : null
       if (surfaceKind && gitRepoCwd) {
         handled(() => {
           setPluginOverlay(null)
-          setPullRequestOpen(false)
           openSurfaceWindow(surfaceKind as RightPanelSurfaceKind)
         })
         return
@@ -23771,12 +23786,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (pullRequestOpen) {
-      const consumed = pullRequestKeyHandlerRef.current?.(key) ?? true
-      if (consumed) handled(() => {})
-      return
-    }
-
     if (folderPickerForNewSession) {
       if (folderPickerKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
@@ -23957,11 +23966,6 @@ function OpenTuiWorkspace() {
     if (crossSessionMessagingOpen) {
       const consumed = crossSessionMessagingKeyHandlerRef.current?.(key) ?? true
       if (consumed) handled(() => {})
-      return
-    }
-
-    if (checkpointOpen) {
-      handled(() => { checkpointKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -24850,11 +24854,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (isCtrlShift('g')) {
-      handled(() => setPullRequestOpen(true))
-      return
-    }
-
 
     // Enhanced terminals preserve this direct modifier chord; ⌃K a is the
     // portable path when Ctrl+Shift cannot be represented independently.
@@ -24873,7 +24872,9 @@ function OpenTuiWorkspace() {
     // Plugin commands' own bindings (a manifest's `tuiKey`), at global precedence.
     const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(({ tuiKey }) => tuiKey.ctrl
       ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))
-      : key.name === tuiKey.name && !key.ctrl && Boolean(key.shift) === Boolean(tuiKey.shift))
+      // A shifted letter arrives as `U`, or as `u` with shift, by terminal.
+      : tuiKey.shift ? !key.ctrl && !key.meta && isShifted(tuiKey.name)
+      : key.name === tuiKey.name && !key.ctrl && !key.shift)
     if (pluginChord) {
       handled(() => runPluginCommand(pluginChord))
       return
@@ -24938,15 +24939,6 @@ function OpenTuiWorkspace() {
       handled(() => {
         setWorktreeDraft('')
         setWorktreeModalOpen(true)
-      })
-      return
-    }
-
-    // Checkpoints & review: turn snapshots, per-hunk review, commit, PR
-    if (isShifted('U')) {
-      handled(() => {
-        if (gitRepoCwd) setCheckpointOpen(true)
-        else showNotice('info', 'Selected session has no working directory', 3000)
       })
       return
     }
@@ -26822,6 +26814,8 @@ function OpenTuiWorkspace() {
     // (Esc, q) leaves its window; a side-panel kind's closes it, as Files' does.
     if (isPluginSurfaceId(kind)) {
       const pinned = slot ? pinnedSessionOf(slot) : selectedSession
+      // A file-pinned window shows its own file; the editor opens where it was asked to.
+      const pathPinned = getPluginSurface(kind).pin === 'path'
       return (
         <PluginSurfaceHost
           surfaceId={kind}
@@ -26834,11 +26828,12 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={surfaceCwd}
           repositorySessionId={gitSessionId}
-          provided={pluginServices}
+          provided={kind === 'file-history' ? fileHistoryServices : pluginServices}
           syntaxStyle={handoffBriefSyntaxStyle}
-          path={editorInitialPath}
-          line={editorInitialLine}
+          path={pathPinned ? (slot ? windowSurfaceMeta[slot]?.path : fileHistoryPath) ?? null : editorInitialPath}
+          line={pathPinned ? null : editorInitialLine}
           theme={theme}
+          accent={composerAccentColor}
           width={box.width}
           height={box.height}
           focused={focused}
@@ -26882,27 +26877,6 @@ function OpenTuiWorkspace() {
               // The composer takes the keys from here; the process keeps running.
               setSurfacePanelFocused(false)
               showNotice('info', 'Error added to composer')
-            }}
-          />
-        )
-      case 'pull-request':
-        return (
-          <PullRequestPopover
-            docked
-            cwd={surfaceCwd}
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            onClose={close}
-            onKeyHandlerReady={keysReady(surfacePrKeyRef as { current: SurfaceKeyHandler | null })}
-            onAskAgent={(prompt) => {
-              insertComposerTextAtCursor(prompt)
-              setComposerActive(true)
-              showNotice('info', 'PR question added to composer')
-            }}
-            onSendDiffNoteToComposer={(prompt) => {
-              appendDiffCommentPromptToComposer(prompt)
-              showNotice('info', 'PR diff comment added to composer')
             }}
           />
         )
@@ -26984,20 +26958,6 @@ function OpenTuiWorkspace() {
             )}
           </PinnedSessionDetail>
         )
-      case 'checkpoints':
-        return surfaceCwd ? (
-          <CheckpointPopover docked cwd={surfaceCwd} theme={theme} accentColor={composerAccentColor} width={box.width} height={box.height}
-            onClose={leave} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })}
-            focusPrompt={null} onOpenFileHistory={(path) => openPopoverWindow('file-history', { path })} />
-        ) : <text fg={theme.dim}>  Checkpoints need a git repository.</text>
-      case 'file-history': {
-        const path = slot ? windowSurfaceMeta[slot]?.path : fileHistoryPath
-        return surfaceCwd && path ? (
-          <FileHistoryPopover docked cwd={surfaceCwd} path={path} theme={theme} accentColor={composerAccentColor} width={box.width} height={box.height}
-            onClose={leave} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })}
-            onAskAgent={(request) => { void askAgentAboutSelection(request) }} />
-        ) : <text fg={theme.dim}>  No file to show.</text>
-      }
       case 'channel-bridge': {
         const session = slot ? pinnedSessionOf(slot) : selectedSessionTarget
         return session ? (
@@ -27304,7 +27264,6 @@ function OpenTuiWorkspace() {
         const surface = activeSurface(surfacePanel)
         if (!surface) return
         if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
-        else if (surface.kind === 'pull-request') surfacePrKeyRef.current?.(key)
         else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
         // browser/agents own their own <input> or are read-only.
       }}
@@ -27313,7 +27272,7 @@ function OpenTuiWorkspace() {
   ) : null
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
-  const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || pullRequestOpen || folderPickerForNewSession || deskOpen
+  const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession || deskOpen
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
@@ -28796,30 +28755,6 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {pullRequestOpen ? (
-        <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={49} />
-      ) : null}
-
-      {pullRequestOpen ? (
-        <PullRequestPopover
-          cwd={gitRepoCwd}
-          theme={theme}
-          width={width}
-          height={height}
-          onClose={() => setPullRequestOpen(false)}
-          onKeyHandlerReady={(handler) => { pullRequestKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('pull-request')}
-          onAskAgent={(prompt) => {
-            insertComposerTextAtCursor(prompt)
-            setComposerActive(true)
-            showNotice('info', 'PR question added to composer')
-          }}
-          onSendDiffNoteToComposer={(prompt) => {
-            appendDiffCommentPromptToComposer(prompt)
-            showNotice('info', 'PR diff comment added to composer')
-          }}
-        />
-      ) : null}
 
       {folderPickerForNewSession ? (
         <PluginSurfaceHost
@@ -28881,8 +28816,10 @@ function OpenTuiWorkspace() {
           syntaxStyle={handoffBriefSyntaxStyle}
           path={editorInitialPath}
           line={editorInitialLine}
+          turn={pluginOverlay === 'checkpoints' ? checkpointFocusPrompt : null}
           runCommand={runCommandForPlugin}
           theme={theme}
+          accent={composerAccentColor}
           width={width}
           height={height}
           focused
@@ -28947,55 +28884,26 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {checkpointOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {checkpointOpen && gitRepoCwd ? (
-        <CheckpointPopover
-          cwd={gitRepoCwd}
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={width}
-          height={height}
-          onClose={() => {
-            setCheckpointOpen(false)
-            setCheckpointFocusPrompt(null)
-          }}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { checkpointKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('checkpoints')}
-          focusPrompt={checkpointFocusPrompt}
-          onOpenFileHistory={(path) => setFileHistoryPath(path)}
-        />
-      ) : null}
-
       {fileHistoryPath && gitRepoCwd ? (
-        <FileHistoryPopover
+        <PluginSurfaceHost
+          surfaceId="file-history"
+          placement="overlay"
           cwd={gitRepoCwd}
+          repositorySessionId={gitSessionId}
           path={fileHistoryPath}
+          provided={fileHistoryServices}
+          runCommand={runCommandForPlugin}
           theme={theme}
-          accentColor={composerAccentColor}
+          accent={composerAccentColor}
           width={width}
           height={height}
-          onClose={() => setFileHistoryPath(null)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { fileHistoryKeyHandlerRef.current = handler }}
+          focused
+          // Above whichever overlay opened it; the root's modal scrim dims what is beneath.
+          zIndex={MODAL_CONTENT_Z_INDEX}
+          scrim={false}
+          onClose={closeFileHistory}
           onDetach={() => offerPopoverPlacement('file-history')}
-          onAskAgent={(request) => {
-            void askAgentAboutSelection(request)
-            // The editor is left to its own close, which guards unsaved buffers.
-            setFileHistoryPath(null)
-            setCheckpointOpen(false)
-          }}
+          onKeyHandlerReady={registerFileHistoryKeys}
         />
       ) : null}
 

@@ -6,11 +6,10 @@
 //  REVIEW tab: the current working diff as individually rejectable hunks
 //    (plus untracked files), then commit everything and open a PR — without
 //    leaving the terminal.
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
-import { checkpointForPrompt } from '../../lib/rewindCheckpoint'
+import { checkpointForPrompt } from '../../../lib/rewindCheckpoint'
 import {
   commitTuiAllChanges,
   createTuiReviewPullRequest,
@@ -24,7 +23,7 @@ import {
   type CheckpointFileChange,
   type TurnCheckpoint,
   type WorkingDiffHunk,
-} from '../../lib/tui/service'
+} from '../../../lib/tui/service'
 
 type CheckpointKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 

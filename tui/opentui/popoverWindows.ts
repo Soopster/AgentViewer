@@ -18,7 +18,7 @@ import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugi
 type BuiltinPopoverWindowKind =
   | 'daily-summary' | 'coordination'
   | 'attention' | 'prompt-library' | 'playbooks' | 'messaging' | 'handoff' | 'tasks'
-  | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
+  | 'channel-bridge' | 'ide-bridge'
   | 'teammates' | 'desk' | 'diagnostics'
 
 /**
@@ -46,9 +46,6 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
   messaging: { title: '✉ Messaging', pin: 'session', single: false, keys: 'window', palette: 'Cross-session messaging in a window' },
   handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
   tasks: { title: '☑ Tasks', pin: 'session', single: false, keys: 'window', palette: 'Task list in a window' },
-  // Checkpoints are the repository's, not a session's.
-  checkpoints: { title: '⟲ Checkpoints', pin: null, single: true, keys: 'window', palette: 'Checkpoints & review in a window' },
-  'file-history': { title: '⌚ File history', pin: 'path', single: false, keys: 'window', palette: 'File history in a window' },
   'channel-bridge': { title: '⇄ CLI bridge', pin: 'session', single: false, keys: 'window', palette: 'Live CLI bridge in a window' },
   'ide-bridge': { title: '⌨ IDE bridge', pin: null, single: true, keys: 'window', palette: 'IDE bridge in a window' },
   // The interactive coordinator's store holds one conversation's team.
