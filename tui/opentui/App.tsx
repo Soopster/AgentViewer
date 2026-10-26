@@ -397,6 +397,7 @@ import { streamDiffPreviewData, StreamDiffPreview } from './app/StreamDiffPrevie
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, nextTranscriptDiffRowIndex, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './app/transcriptDiffSelection'
 import { type CoordModalFocus, sessionProviderLabel, filterModelPickerOptions, effortPickerOptions, PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL, QUESTION_PREVIEW_MAX_LINES, QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS, providerOptionIndex, providerSelectOptions, parseCoordContractLines, moveCoordModalFocus, cycleCoordProvider, coordRunProviders, cycleCoordAutonomy, TUI_PROVIDER_TAG } from './app/pickers'
 import { FLEET_PAGE_SIZE, TRANSCRIPT_VIEWS, COMMANDS, COMMAND_CATEGORY_ORDER, tuiCommandEquivalent, RUNNING_INSIDE_TMUX, TRANSCRIPT_VIEW_LABELS, TRANSCRIPT_VIEW_DESCRIPTIONS } from './app/commands'
+import { createLazyTranscriptIndexLookup } from './app/transcriptIndex'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2188,34 +2189,6 @@ export function selectTranscriptCardVariants<T extends TranscriptCardSelectionVa
     : variant.idle)
 }
 
-type TranscriptIndexLookup = {
-  get: (key: string) => number | undefined
-}
-
-// Build an index only if a detached reader actually asks for one. When the
-// visible list is a stable persisted prefix plus a tiny live suffix, reuse the
-// prefix lookup across streamed-token arrays and index only that suffix. The
-// suffix is checked first to preserve Map's last-key-wins behavior.
-export function createLazyTranscriptIndexLookup(
-  cards: readonly TuiTranscriptCard[],
-  stablePrefix?: { length: number; lookup: TranscriptIndexLookup },
-): TranscriptIndexLookup {
-  let indexByKey: Map<string, number> | null = null
-  return {
-    get(key: string): number | undefined {
-      if (!indexByKey) {
-        const start = stablePrefix?.length ?? 0
-        indexByKey = new Map<string, number>()
-        for (let index = start; index < cards.length; index += 1) {
-          indexByKey.set(cards[index].key, index)
-        }
-      }
-      const suffixIndex = indexByKey.get(key)
-      if (suffixIndex !== undefined) return suffixIndex
-      return stablePrefix?.lookup.get(key)
-    },
-  }
-}
 // A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
 // A surface window's id is its kind, or `kind#n` for a further one of a kind
 // that can have several (shells, browsers, file views).
