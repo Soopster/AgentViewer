@@ -67,7 +67,7 @@ function fitTerminalText(text: string, width: number): string {
   return `${text.slice(0, width - 1)}…`
 }
 
-const SURFACE_GLYPH: Record<RightPanelSurfaceKind, string> = {
+const SURFACE_GLYPH: Partial<Record<RightPanelSurfaceKind, string>> = {
   browser: '◍',
   terminal: '❯',
   files: '▤',
@@ -238,7 +238,7 @@ export function SurfacePanel({
                   }}
                 >
                   <text fg={selected ? theme.text : theme.dim} wrapMode="none">
-                    {` ${SURFACE_GLYPH[surface.kind]} ${surfaceKindLabel(surface.kind)} `}
+                    {` ${SURFACE_GLYPH[surface.kind] ?? '◇'} ${surfaceKindLabel(surface.kind)} `}
                   </text>
                 </box>
                 <box
@@ -348,7 +348,7 @@ function Launcher({
             <box flexDirection="row" backgroundColor={selected ? theme.surface3 : undefined}>
               <text fg={available ? theme.cyan : theme.dim} wrapMode="none">{` ${surfaceKindShortcut(kind)} `}</text>
               <text fg={available ? theme.text : theme.dim} wrapMode="none">
-                {fitTerminalText(`${SURFACE_GLYPH[kind]} ${surfaceKindLabel(kind)}${badge}${compact ? ` — ${detail}` : ''}`, rowWidth - 4)}
+                {fitTerminalText(`${SURFACE_GLYPH[kind] ?? '◇'} ${surfaceKindLabel(kind)}${badge}${compact ? ` — ${detail}` : ''}`, rowWidth - 4)}
               </text>
             </box>
             {compact ? null : <text fg={theme.dim} wrapMode="none">{fitTerminalText(`    ${detail}`, rowWidth)}</text>}

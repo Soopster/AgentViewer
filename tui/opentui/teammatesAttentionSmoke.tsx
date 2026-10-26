@@ -28,7 +28,13 @@ let select!: (session: Session | null) => void
 function ReaderFixture() {
   const [current, setCurrent] = useState<Session | null>(null)
   select = setCurrent
-  return <TeammatesAttention session={current} width={100} theme={LIGHT_THEME} />
+  return <box flexDirection="column">
+    <box height={1}><text>Session tabs</text></box>
+    <box height={1} flexDirection="row">
+      <box flexGrow={1}><text>Status</text></box>
+      <TeammatesAttention inline session={current} width={48} theme={LIGHT_THEME} />
+    </box>
+  </box>
 }
 const setup = await testRender(<ReaderFixture />, { width: 100, height: 8 })
 async function settle(check: () => boolean, label: string) {
@@ -45,6 +51,9 @@ try {
   assert.equal(store.getInteractiveCoordinatorAttention(), '', 'an unsent conversation must not be observed')
   await act(async () => select(session))
   await settle(() => setup.captureCharFrame().includes('1 need attention'), 'Selecting a conversation must discover its existing team')
+  const rows = setup.captureCharFrame().split('\n')
+  assert.ok(rows[0].includes('Session tabs') && !rows[0].includes('Teammates'), 'attention must leave the tab strip clear')
+  assert.ok(rows[1].includes('Status') && rows[1].includes('1 need attention'), 'attention shares the status row without covering its text')
   assert.equal(store.getInteractiveCoordinatorState().open, false, 'attention must not open the panel')
   assert.equal(store.getInteractiveCoordinatorState().session, null, 'attention must not change panel focus')
   await act(async () => select({ sessionId: 'ordinary-chat', provider: 'codex', cwd: fixture }))

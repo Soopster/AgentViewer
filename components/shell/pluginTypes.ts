@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import type { AnalyticsInput } from '@/lib/analytics'
 import type { PluginPlacement, PluginTarget } from '@/lib/plugins/types'
+import type { SendAttachment } from '@/lib/types'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
@@ -17,12 +18,19 @@ export type WebPluginServices = {
     readonly insertPath?: (path: string) => void
     /** Insert text (a question for the agent) into the composer the user is writing in. */
     readonly insertText?: (text: string) => void
+    /** Attach a piece of context (a terminal selection, a page) to the message being written. */
+    readonly attachContext?: (attachment: SendAttachment) => void
   }
   'session-pull-request'?: {
     /** The pull request already linked to the selected session, if any. */
     readonly linkedNumber?: number
     /** Link a pull request to the selected session; absent with no session selected. */
     readonly link?: (pr: { repo: string; number: number; url: string; cwd: string }) => void
+  }
+  'browser-location'?: {
+    /** Where this browser tab is pointed, kept by the host with the panel layout. */
+    readonly url: string | null
+    readonly navigate: (url: string) => void
   }
 }
 

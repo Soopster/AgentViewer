@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import {
   advanceChannelDeliveryState,
   channelPermissionToPending,
@@ -13,15 +13,15 @@ import {
   type ChannelDeliveryState,
   type ChannelEvent,
   type ChannelPermissionRequestEvent,
-} from '../../lib/channelBridge'
+} from '../../../lib/channelBridge'
 import {
   createChannelBridgeMessageId,
   flushChannelBridgeOutbox,
   sendDurableChannelMessage,
-} from '../../lib/channelBridgeOutbox'
-import { channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
+} from '../../../lib/channelBridgeOutbox'
+import { channelBridgeFileOutboxStorage } from '../../../lib/bridgeMessages'
 
-type ChannelBridgeKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }
+type ChannelBridgeKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }
 
 type LogEntry =
   | { kind: 'sent'; id: string; text: string; messageId: string; delivery: ChannelDeliveryState }

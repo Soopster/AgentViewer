@@ -568,6 +568,10 @@ async function asSessionInstance<T>(
 ): Promise<T> {
   if (!session.provider) return run()
   noteTuiSessionInstance(session)
+  if (session.providerInstanceId) {
+    const { withProviderInstance } = await import('../providerInstances')
+    return withProviderInstance(session.providerInstanceId, session.provider, run)
+  }
   return withSessionInstance(session.provider, session.sessionId, run)
 }
 
@@ -609,12 +613,13 @@ export async function streamTuiSessionTurn(
  * messages that survive the interrupt (Claude interrupt_receipt_v1), when the
  * provider reports them.
  */
-export async function interruptTuiSessionTurn(session: { sessionId: string; provider?: AgentProvider; turnRequestId?: string }): Promise<string[] | undefined> {
+export async function interruptTuiSessionTurn(session: { sessionId: string; provider?: AgentProvider; providerInstanceId?: string; turnRequestId?: string }): Promise<string[] | undefined> {
   if (isRemoteAttached()) {
     const response = await remoteJson<{ stillQueued?: unknown }>(encodeSessionPath(session.sessionId, '/interrupt'), {
       method: 'POST',
       body: JSON.stringify({
         provider: session.provider,
+        providerInstanceId: session.providerInstanceId,
         turnRequestId: session.turnRequestId,
         cancelQueued: true,
       }),
@@ -623,7 +628,7 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
       ? response.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
       : undefined
   }
-  return await (await sendPath()).interruptViewSession(session.sessionId, session.turnRequestId)
+  return asSessionInstance(session, async () => (await sendPath()).interruptViewSession(session.sessionId, session.turnRequestId, true))
 }
 
 /**

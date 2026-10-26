@@ -67,6 +67,8 @@ import { getPluginCommand, getPluginSurface, isPluginSurfaceId, listPluginComman
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
+import { sameUserMessage, upsertComposerMessage } from '@/lib/composerTranscript'
+import { createComposerSessions, useComposerSessionState } from '@/lib/composerSessions'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
@@ -181,7 +183,7 @@ type Props = {
   targetMessageId?: string | null
   targetMessageRequestId?: number
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
-  onFork?: (newSessionId: string) => void
+  onFork?: (newSessionId: string, sourceSession?: Session) => void
   onDelete?: (sessionId: string, provider?: Session['provider']) => void
   openTabs?: Session[]
   selectedTabId?: string | null
@@ -635,7 +637,7 @@ function permissionDenialReason(permission: PendingPermission): string {
 
 function composerDraftStorageKey(session: Session | null): string | null {
   if (!session) return null
-  return `${COMPOSER_DRAFT_STORAGE_PREFIX}${session.provider ?? 'claude'}:${session.sessionId}`
+  return `${COMPOSER_DRAFT_STORAGE_PREFIX}${sessionIdentityKey(session)}`
 }
 
 function normalizeDraftAttachments(value: unknown): SendAttachment[] {
@@ -1007,14 +1009,7 @@ function extractStreamingReasoningText(payload: unknown): string | null {
   return null
 }
 
-function upsertThreadedMessage(
-  messages: ThreadedMessage[],
-  nextMessage: ThreadedMessage,
-): ThreadedMessage[] {
-  const existingIndex = messages.findIndex((message) => message.uuid === nextMessage.uuid)
-  if (existingIndex === -1) return [...messages, nextMessage]
-  return messages.map((message, index) => index === existingIndex ? nextMessage : message)
-}
+const upsertThreadedMessage = upsertComposerMessage
 
 function completeLiveToolThread(messages: ThreadedMessage[], key: string): ThreadedMessage[] {
   const targetUuid = `live-tool:${key}`
@@ -3025,36 +3020,40 @@ function MessageViewInner({
   const [composerDock, setComposerDock] = useState({ sessionId: '', tab: 'chat' })
   const composerTab = composerDock.sessionId === session?.sessionId ? composerDock.tab : 'chat'
   const returnToChat = useCallback(() => setComposerDock({ sessionId: session?.sessionId ?? '', tab: 'chat' }), [session?.sessionId])
-  const [inputText, setInputText] = useState('')
-  const [sendState, setSendState] = useState<SendState>('idle')
-  const [sendError, setSendError] = useState<string | null>(null)
-  const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
-  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
+  const [composerSessions] = useState(createComposerSessions)
+  const composerOwnerKey = session ? sessionIdentityKey(session) : 'unselected'
+  const activeWebComposerOwnerRef = useRef(composerOwnerKey)
+  useLayoutEffect(() => { activeWebComposerOwnerRef.current = composerOwnerKey }, [composerOwnerKey])
+  const [inputText, setInputText] = useComposerSessionState(composerSessions, composerOwnerKey, 'inputText', '')
+  const [sendState, setSendState] = useComposerSessionState<SendState>(composerSessions, composerOwnerKey, 'sendState', 'idle')
+  const [sendError, setSendError] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'sendError', null)
+  const [livePromptSuggestion, setLivePromptSuggestion] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'livePromptSuggestion', null)
+  const [liveStatus, setLiveStatus] = useComposerSessionState<'requesting' | 'compacting' | 'retrying' | null>(composerSessions, composerOwnerKey, 'liveStatus', null)
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   const [enableWorkflow, setEnableWorkflow] = useState(false)
-  const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
-  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
-  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [liveSubagentText, setLiveSubagentText] = useComposerSessionState<Record<string, string>>(composerSessions, composerOwnerKey, 'liveSubagentText', {})
+  const [contextUsage, setContextUsage] = useComposerSessionState<ContextUsage | null>(composerSessions, composerOwnerKey, 'contextUsage', null)
+  const [sessionInfo, setSessionInfo] = useComposerSessionState<SessionInfo | null>(composerSessions, composerOwnerKey, 'sessionInfo', null)
   const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false)
-  const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
-  const [modelsLoading, setModelsLoading] = useState(false)
-  const [selectedModel, setSelectedModel] = useState('')
-  const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  const [availableModels, setAvailableModels] = useComposerSessionState<SessionModelInfo[]>(composerSessions, composerOwnerKey, 'availableModels', [])
+  const [modelsLoading, setModelsLoading] = useComposerSessionState(composerSessions, composerOwnerKey, 'modelsLoading', false)
+  const [selectedModel, setSelectedModel] = useComposerSessionState(composerSessions, composerOwnerKey, 'selectedModel', '')
+  const [selectedEffort, setSelectedEffort] = useComposerSessionState<'auto' | ReasoningEffortLevel>(composerSessions, composerOwnerKey, 'selectedEffort', 'auto')
   // null means "not known yet", not "default". A cold Copilot session answers
   // its model read from the event journal rather than starting its runtime
   // (lib/adapters/copilot.ts), and the journal does not record the context
   // tier — so the composer must not send a tier it never learned, or the first
   // send would quietly downgrade a long-context session to default.
-  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier | null>(null)
-  const [composerOptions, setComposerOptions] = useState<SessionComposerOptions>({})
-  const [selectedAgent, setSelectedAgent] = useState('')
-  const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
+  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useComposerSessionState<CopilotContextTier | null>(composerSessions, composerOwnerKey, 'selectedCopilotContextTier', null)
+  const [composerOptions, setComposerOptions] = useComposerSessionState<SessionComposerOptions>(composerSessions, composerOwnerKey, 'composerOptions', {})
+  const [selectedAgent, setSelectedAgent] = useComposerSessionState(composerSessions, composerOwnerKey, 'selectedAgent', '')
+  const [selectedCopilotMode, setSelectedCopilotMode] = useComposerSessionState(composerSessions, composerOwnerKey, 'selectedCopilotMode', 'interactive')
   // Claude `/permissions` modes — passed through to body.permissionMode on send.
-  const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'>('auto')
+  const [selectedPermissionMode, setSelectedPermissionMode] = useComposerSessionState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'>(composerSessions, composerOwnerKey, 'selectedPermissionMode', 'auto')
   // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
   // 'auto' leaves the app-server's configured default untouched.
-  const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'never'>('auto')
+  const [selectedCodexApproval, setSelectedCodexApproval] = useComposerSessionState<'auto' | 'untrusted' | 'on-request' | 'never'>(composerSessions, composerOwnerKey, 'selectedCodexApproval', 'auto')
   // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
   // fires while one is in flight, the draft is captured here and flushed by an
   // effect once the active turn finishes.
@@ -3082,7 +3081,7 @@ function MessageViewInner({
     void commit.settled.then((durability) => {
       if (composerQueueCommitCounterRef.current === commitNumber) setComposerQueueDurability(durability)
     })
-  }, [])
+  }, [setInputText, setSendState, setSendError, setLivePromptSuggestion, setLiveStatus, setLiveSubagentText, setContextUsage, setSessionInfo, setAvailableModels, setModelsLoading, setSelectedModel, setSelectedEffort, setSelectedCopilotContextTier, setComposerOptions, setSelectedAgent, setSelectedCopilotMode, setSelectedPermissionMode, setSelectedCodexApproval])
   useEffect(() => {
     let cancelled = false
     composerQueueMountedRef.current = true
@@ -3106,7 +3105,7 @@ function MessageViewInner({
     }
   }, [])
   const composerQueueTargetKey = session
-    ? `${session.provider ?? 'claude'}:${session.sessionId}`
+    ? sessionIdentityKey(session)
     : null
   const composerQueueTargetKeyRef = useRef(composerQueueTargetKey)
   useLayoutEffect(() => {
@@ -3118,12 +3117,12 @@ function MessageViewInner({
   )
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
-  const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
-  const [attachments, setAttachments] = useState<SendAttachment[]>([])
+  const [steeredNotice, setSteeredNotice] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'steeredNotice', null)
+  const [attachments, setAttachments] = useComposerSessionState<SendAttachment[]>(composerSessions, composerOwnerKey, 'attachments', [])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
   const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false)
-  const [failedSend, setFailedSend] = useState<FailedSend | null>(null)
+  const [failedSend, setFailedSend] = useComposerSessionState<FailedSend | null>(composerSessions, composerOwnerKey, 'failedSend', null)
   const [rewindTargetId, setRewindTargetId] = useState('')
   const [rollbackTurns, setRollbackTurns] = useState(1)
   const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
@@ -3276,43 +3275,43 @@ function MessageViewInner({
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
-  const [optimisticContextText, setOptimisticContextText] = useState<string | null>(null)
-  const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  const [optimisticContextText, setOptimisticContextText] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'optimisticContextText', null)
+  const [optimisticUserText, setOptimisticUserText] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'optimisticUserText', null)
   // Messages steered INTO the running turn — echoed in the live overlay until
   // the persisted transcript reconciles (same lifecycle as optimisticUserText).
   // `messageUuid` is the server's uuid stamp; command_lifecycle frames
   // correlate on it and drive `state` (queued/started/completed) or drop the
   // entry entirely (cancelled/discarded).
-  const [steeredUserTexts, setSteeredUserTexts] = useState<SteeredSendEntry[]>([])
-  const steeredUserTextsRef = useRef<SteeredSendEntry[]>([])
+  const [steeredUserTexts, setSteeredUserTexts] = useComposerSessionState<SteeredSendEntry[]>(composerSessions, composerOwnerKey, 'steeredUserTexts', [])
+  const steeredUserTextsRef = composerSessions.ref<SteeredSendEntry[]>(composerOwnerKey, 'steeredUserTextsRef', [])
   useEffect(() => { steeredUserTextsRef.current = steeredUserTexts }, [steeredUserTexts])
   const [backgroundingTasks, setBackgroundingTasks] = useState(false)
   // True from when the user hits stop until the interrupted turn's partial
   // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
   // the composer show a definite "Interrupting…" instead of snapping to idle
   // while the agent is still wrapping up server-side.
-  const [interrupting, setInterrupting] = useState(false)
+  const [interrupting, setInterrupting] = useComposerSessionState(composerSessions, composerOwnerKey, 'interrupting', false)
   // Reattach: a turn is running server-side that this client does NOT own (it
   // was started before a navigation/reload — turns keep running via
   // detachOnClientAbort). Detected by polling /running while we're otherwise
   // idle. When set, the composer reflects the live turn (stop button, steer on
   // send) and the persisted poll surfaces output until the turn finishes.
-  const [reattachedRunning, setReattachedRunning] = useState(false)
+  const [reattachedRunning, setReattachedRunning] = useComposerSessionState(composerSessions, composerOwnerKey, 'reattachedRunning', false)
   const [runningProbeReadyKey, setRunningProbeReadyKey] = useState<string | null>(null)
-  const reattachedRunningRef = useRef(false)
+  const reattachedRunningRef = composerSessions.ref(composerOwnerKey, 'reattachedRunningRef', false)
   useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
-  const [liveAssistantText, setLiveAssistantText] = useState('')
+  const [liveAssistantText, setLiveAssistantText] = useComposerSessionState(composerSessions, composerOwnerKey, 'liveAssistantText', '')
   // Reasoning/thinking streams on its own channel so it renders as a distinct
   // dim block above the answer (like the native CLIs) instead of being folded
   // into the reply text.
-  const [liveReasoningText, setLiveReasoningText] = useState('')
+  const [liveReasoningText, setLiveReasoningText] = useComposerSessionState(composerSessions, composerOwnerKey, 'liveReasoningText', '')
   // Live estimate of thinking tokens for the current turn, streamed by the SDK
   // as `thinking_tokens` system messages. Surfaced on the THINKING preview only.
-  const [liveThinkingTokens, setLiveThinkingTokens] = useState(0)
-  const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
-  const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
+  const [liveThinkingTokens, setLiveThinkingTokens] = useComposerSessionState(composerSessions, composerOwnerKey, 'liveThinkingTokens', 0)
+  const [liveToolActivities, setLiveToolActivities] = useComposerSessionState<LiveToolActivity[]>(composerSessions, composerOwnerKey, 'liveToolActivities', [])
+  const [liveThreadedMessages, setLiveThreadedMessages] = useComposerSessionState<ThreadedMessage[]>(composerSessions, composerOwnerKey, 'liveThreadedMessages', [])
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
-  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
+  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useComposerSessionState(composerSessions, composerOwnerKey, 'awaitingPersistedTurn', false)
   const [autoFollow, setAutoFollow] = useState(false)
   // Approximate: may trail the live node.scrollTop by up to
   // TIMELINE_SCROLL_COMMIT_PX during user scrolls (see
@@ -3402,48 +3401,48 @@ function MessageViewInner({
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
-  const textareaRef = useRef<ContextComposerHandle>(null)
+  const textareaRef = composerSessions.ref<ContextComposerHandle | null>(composerOwnerKey, 'textareaRef', null)
   const composerPrewarmInFlightRef = useRef(new Set<string>())
   const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const activeTurnRequestIdRef = useRef<string | null>(null)
-  const inputTextRef = useRef(inputText)
+  const abortControllerRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'abortControllerRef', null)
+  const activeTurnRequestIdRef = composerSessions.ref<string | null>(composerOwnerKey, 'activeTurnRequestIdRef', null)
+  const inputTextRef = composerSessions.ref(composerOwnerKey, 'inputTextRef', inputText)
   const suppressDraftSaveRef = useRef(false)
-  const sendInFlightRef = useRef(false)
-  const awaitingPersistedTurnRef = useRef(false)
-  const pushedCopilotAttachmentsRef = useRef<SendAttachment[]>([])
+  const sendInFlightRef = composerSessions.ref(composerOwnerKey, 'sendInFlightRef', false)
+  const awaitingPersistedTurnRef = composerSessions.ref(composerOwnerKey, 'awaitingPersistedTurnRef', false)
+  const pushedCopilotAttachmentsRef = composerSessions.ref<SendAttachment[]>(composerOwnerKey, 'pushedCopilotAttachmentsRef', [])
   // Transient auto-retry bookkeeping. turnProducedOutputRef gates retries to
   // turns that streamed nothing yet (so a retry can't duplicate work);
   // transientRetryCountRef counts attempts within one logical send;
   // transientRetryTimerRef holds the pending backoff so cancel can clear it.
-  const turnProducedOutputRef = useRef(false)
-  const transientRetryCountRef = useRef(0)
-  const transientRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const turnProducedOutputRef = composerSessions.ref(composerOwnerKey, 'turnProducedOutputRef', false)
+  const transientRetryCountRef = composerSessions.ref(composerOwnerKey, 'transientRetryCountRef', 0)
+  const transientRetryTimerRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'transientRetryTimerRef', null)
   // Set when a send was blocked because the model list hadn't resolved yet
   // (see the modelsLoading guard in sendMessage). The composer draft is left
   // untouched in that case — this just re-fires the send once the fetch
   // settles, so a cold custom-model connection reads as "sending" rather than
   // making the user notice the error and hit enter again.
-  const pendingSendOnModelsReadyRef = useRef<string | null>(null)
-  const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
-  const liveTurnSessionHandoffRef = useRef<string | null>(null)
-  const liveAssistantTextRef = useRef('')
-  const pendingLiveAssistantTextRef = useRef<string | null>(null)
-  const liveAssistantFlushFrameRef = useRef<number | null>(null)
+  const pendingSendOnModelsReadyRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingSendOnModelsReadyRef', null)
+  const pendingMessageBaselineRef = composerSessions.ref<PendingMessageBaseline | null>(composerOwnerKey, 'pendingMessageBaselineRef', null)
+  const liveTurnSessionHandoffRef = composerSessions.ref<string | null>(composerOwnerKey, 'liveTurnSessionHandoffRef', null)
+  const liveAssistantTextRef = composerSessions.ref(composerOwnerKey, 'liveAssistantTextRef', '')
+  const pendingLiveAssistantTextRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingLiveAssistantTextRef', null)
+  const liveAssistantFlushFrameRef = composerSessions.ref<number | null>(composerOwnerKey, 'liveAssistantFlushFrameRef', null)
   // Reasoning shares the assistant flush frame (one RAF flushes both buffers).
-  const liveReasoningTextRef = useRef('')
-  const pendingLiveReasoningTextRef = useRef<string | null>(null)
+  const liveReasoningTextRef = composerSessions.ref(composerOwnerKey, 'liveReasoningTextRef', '')
+  const pendingLiveReasoningTextRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingLiveReasoningTextRef', null)
   // Ref-backed source of truth for per-subagent streamed text. Deltas mutate
   // this ref and a single RAF flushes a fresh snapshot into state, so a burst
   // of subagent tokens collapses to one re-render per frame instead of one per
   // token re-rendering every mounted AgentCard via LiveSubagentTextContext.
-  const liveSubagentTextRef = useRef<Record<string, string>>({})
-  const liveSubagentFlushFrameRef = useRef<number | null>(null)
-  const liveToolIndexesRef = useLazyRef(() => new Map<number, string>())
-  const liveToolInputJsonRef = useLazyRef(() => new Map<number, string>())
+  const liveSubagentTextRef = composerSessions.ref<Record<string, string>>(composerOwnerKey, 'liveSubagentTextRef', {})
+  const liveSubagentFlushFrameRef = composerSessions.ref<number | null>(composerOwnerKey, 'liveSubagentFlushFrameRef', null)
+  const liveToolIndexesRef = composerSessions.ref(composerOwnerKey, 'liveToolIndexesRef', new Map<number, string>())
+  const liveToolInputJsonRef = composerSessions.ref(composerOwnerKey, 'liveToolInputJsonRef', new Map<number, string>())
   const rowHeightsRef = useLazyRef(() => new Map<string, number>())
   const timelineEstimateCalibrationRef = useLazyRef(
     () => new Map<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>(),
@@ -3531,7 +3530,7 @@ function MessageViewInner({
     if (activeProvider === 'codex') return ['low', 'medium', 'high']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])
-  const [loadedComposerDraftKey, setLoadedComposerDraftKey] = useState<string | null>(null)
+  const [loadedComposerDraftKey, setLoadedComposerDraftKey] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'loadedComposerDraftKey', null)
   const attachmentReadsRef = useRef(0)
   const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
 
@@ -3555,7 +3554,7 @@ function MessageViewInner({
       pendingLiveReasoningTextRef.current = null
       setLiveReasoningText(nextReasoning)
     }
-  }, [])
+  }, [pendingLiveAssistantTextRef, liveAssistantFlushFrameRef, pendingLiveReasoningTextRef, setLiveAssistantText, setLiveReasoningText])
 
   const flushLiveAssistantTextNow = useCallback(() => {
     if (liveAssistantFlushFrameRef.current != null) {
@@ -3563,7 +3562,7 @@ function MessageViewInner({
       liveAssistantFlushFrameRef.current = null
     }
     flushLiveAssistantText()
-  }, [flushLiveAssistantText])
+  }, [flushLiveAssistantText, liveAssistantFlushFrameRef])
 
   const clearLiveAssistantText = useCallback(() => {
     if (liveAssistantFlushFrameRef.current != null) {
@@ -3577,7 +3576,7 @@ function MessageViewInner({
     pendingLiveReasoningTextRef.current = null
     setLiveReasoningText('')
     setLiveThinkingTokens(0)
-  }, [])
+  }, [liveAssistantTextRef, pendingLiveAssistantTextRef, liveAssistantFlushFrameRef, liveReasoningTextRef, pendingLiveReasoningTextRef, setLiveAssistantText, setLiveReasoningText, setLiveThinkingTokens])
 
   const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
     const nextText = replace ? deltaText : `${liveAssistantTextRef.current}${deltaText}`
@@ -3586,7 +3585,7 @@ function MessageViewInner({
     if (liveAssistantFlushFrameRef.current == null) {
       liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
     }
-  }, [flushLiveAssistantText])
+  }, [flushLiveAssistantText, liveAssistantTextRef, pendingLiveAssistantTextRef, liveAssistantFlushFrameRef])
 
   // Reasoning is always append-only (no replace semantics like the codex
   // realtime answer transcript), and piggybacks on the assistant flush frame.
@@ -3597,33 +3596,33 @@ function MessageViewInner({
     if (liveAssistantFlushFrameRef.current == null) {
       liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
     }
-  }, [flushLiveAssistantText])
+  }, [flushLiveAssistantText, liveAssistantFlushFrameRef, liveReasoningTextRef, pendingLiveReasoningTextRef])
 
   const flushLiveSubagentText = useCallback(() => {
     liveSubagentFlushFrameRef.current = null
     // Snapshot the ref into a fresh object so context consumers see one new
     // identity per frame; the ref keeps mutating in place between flushes.
     setLiveSubagentText({ ...liveSubagentTextRef.current })
-  }, [])
+  }, [liveSubagentTextRef, liveSubagentFlushFrameRef, setLiveSubagentText])
 
   const scheduleLiveSubagentFlush = useCallback(() => {
     if (liveSubagentFlushFrameRef.current == null) {
       liveSubagentFlushFrameRef.current = window.requestAnimationFrame(flushLiveSubagentText)
     }
-  }, [flushLiveSubagentText])
+  }, [flushLiveSubagentText, liveSubagentFlushFrameRef])
 
   const queueLiveSubagentDelta = useCallback((parentId: string, delta: string) => {
     const map = liveSubagentTextRef.current
     map[parentId] = (map[parentId] ?? '') + delta
     scheduleLiveSubagentFlush()
-  }, [scheduleLiveSubagentFlush])
+  }, [scheduleLiveSubagentFlush, liveSubagentTextRef])
 
   const removeLiveSubagentEntry = useCallback((parentId: string) => {
     const map = liveSubagentTextRef.current
     if (!(parentId in map)) return
     delete map[parentId]
     scheduleLiveSubagentFlush()
-  }, [scheduleLiveSubagentFlush])
+  }, [scheduleLiveSubagentFlush, liveSubagentTextRef])
 
   const clearLiveSubagentText = useCallback(() => {
     if (liveSubagentFlushFrameRef.current != null) {
@@ -3632,7 +3631,7 @@ function MessageViewInner({
     }
     liveSubagentTextRef.current = {}
     setLiveSubagentText({})
-  }, [])
+  }, [liveSubagentTextRef, liveSubagentFlushFrameRef, setLiveSubagentText])
 
   useEffect(() => {
     if (!cliPopoverOpen) return
@@ -3671,7 +3670,7 @@ function MessageViewInner({
     const next = Math.min(textarea.scrollHeight, 260)
     textarea.style.height = `${next}px`
     textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden'
-  }, [])
+  }, [textareaRef])
 
   // Fire-and-forget push of model/permission changes through the actions
   // route. For warm Claude sessions the server's claudePool applies these
@@ -3689,7 +3688,7 @@ function MessageViewInner({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: 'claude', action: 'setModel', model: nextModel }),
     }).catch(() => { /* swallow; next send carries body.model */ })
-  }, [session, selectedModel])
+  }, [session, selectedModel, setSelectedModel])
 
   const commitClaudePermissionSelection = useCallback((nextMode: typeof selectedPermissionMode) => {
     setSelectedPermissionMode(nextMode)
@@ -3700,7 +3699,7 @@ function MessageViewInner({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: 'claude', action: 'setPermissionMode', permissionMode: nextMode }),
     }).catch(() => { /* swallow; next send carries body.permissionMode */ })
-  }, [session, selectedPermissionMode])
+  }, [session, selectedPermissionMode, setSelectedPermissionMode])
 
   const commitCopilotModeSelection = useCallback((nextMode: string) => {
     setSelectedCopilotMode(nextMode)
@@ -3711,7 +3710,7 @@ function MessageViewInner({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: 'copilot', action: 'setMode', mode: nextMode }),
     }).catch(() => { /* swallow; next send carries body.mode */ })
-  }, [session, selectedCopilotMode])
+  }, [session, selectedCopilotMode, setSelectedCopilotMode])
 
   useLayoutEffect(() => {
     resizeComposer()
@@ -3734,7 +3733,7 @@ function MessageViewInner({
   const handleComposerBranchSwitched = useCallback((summary: GitSummary) => {
     setComposerGitSummary(summary)
     setSessionInfo((current) => current ? { ...current, gitBranch: summary.branch } : current)
-  }, [])
+  }, [setSessionInfo])
 
   useEffect(() => {
     if (!composerWorkingDirectory) {
@@ -3916,7 +3915,7 @@ function MessageViewInner({
       })
       .catch(() => {})
       .finally(() => setModelsLoading(false))
-  }, [modelSessionId, modelSessionProvider, modelSessionProviderInstanceId])
+  }, [modelSessionId, modelSessionProvider, modelSessionProviderInstanceId, setAvailableModels, setModelsLoading, setSelectedModel, setSelectedCopilotContextTier])
 
   useEffect(() => {
     if (!session) {
@@ -4030,36 +4029,33 @@ function MessageViewInner({
       return
     }
     liveTurnSessionHandoffRef.current = null
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
-    activeTurnRequestIdRef.current = null
-    sendInFlightRef.current = false
-    awaitingPersistedTurnRef.current = false
-    setContextUsage(null)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    setResumeFromMessageId(null)
-    setRewindPreview(null)
-    setRollbackPreview(null)
-    setShowDiagnostics(false)
-    setDiagnosticSections([])
-    setAttachments([])
-    setAttachmentPath('')
-    setSelectedEffort('auto')
-    setSelectedAgent('')
-    setSelectedCopilotMode('interactive')
-    setComposerOptions({})
-    setPendingPermissions([])
-    setOptimisticUserText(null)
-    setSteeredUserTexts([])
-    clearLiveAssistantText()
-    setLiveToolActivities([])
-    setLiveThreadedMessages([])
-    clearLiveSubagentText()
-    setAwaitingPersistedTurn(false)
-    setSendState('idle')
-    setSendError(null)
-    setFailedSend(null)
+    if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
+      setContextUsage(null)
+      setSessionActionError(null)
+      setSessionActionNotice(null)
+      setResumeFromMessageId(null)
+      setRewindPreview(null)
+      setRollbackPreview(null)
+      setShowDiagnostics(false)
+      setDiagnosticSections([])
+      setAttachments([])
+      setAttachmentPath('')
+      setSelectedEffort('auto')
+      setSelectedAgent('')
+      setSelectedCopilotMode('interactive')
+      setComposerOptions({})
+      setPendingPermissions([])
+      setOptimisticUserText(null)
+      setSteeredUserTexts([])
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      setAwaitingPersistedTurn(false)
+      setSendState('idle')
+      setSendError(null)
+      setFailedSend(null)
+    }
     setAutoFollow(false)
     commitTimelineScrollTop(0)
     setTimelineViewportHeight(0)
@@ -4083,15 +4079,17 @@ function MessageViewInner({
     setTimelineHeightOverride(null)
     setRowMeasurementVersion(0)
     setPersistedMeasurementVersion(0)
-    pendingMessageBaselineRef.current = null
-    liveToolIndexesRef.current.clear()
-    liveToolInputJsonRef.current.clear()
+    if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
+    }
     initialScrollDoneRef.current = false
-  }, [clearLiveAssistantText, commitTimelineScrollTop, session?.sessionId])
+  }, [clearLiveAssistantText, commitTimelineScrollTop, composerOwnerKey])
 
   useEffect(() => {
     suppressDraftSaveRef.current = true
-    const draft = readComposerDraft(composerDraftKey)
+    const draft = loadedComposerDraftKey === composerDraftKey ? { text: inputTextRef.current, attachments } : readComposerDraft(composerDraftKey)
     setInputText(draft.text)
     inputTextRef.current = draft.text
     setAttachments(draft.attachments)
@@ -4152,6 +4150,15 @@ function MessageViewInner({
   }, [composerDraftKey, flushComposerDraft])
 
   useEffect(() => () => {
+    for (const key of composerSessions.keys()) {
+      composerSessions.peekRef<AbortController | null>(key, 'abortControllerRef')?.current?.abort()
+      const retry = composerSessions.peekRef<ReturnType<typeof setTimeout> | null>(key, 'transientRetryTimerRef')?.current
+      if (retry) clearTimeout(retry)
+      for (const name of ['liveAssistantFlushFrameRef', 'liveSubagentFlushFrameRef']) {
+        const frame = composerSessions.peekRef<number | null>(key, name)?.current
+        if (frame != null) window.cancelAnimationFrame(frame)
+      }
+    }
     if (measurementFrameRef.current != null) {
       window.cancelAnimationFrame(measurementFrameRef.current)
     }
@@ -4649,7 +4656,7 @@ function MessageViewInner({
       liveToolInputJsonRef.current.clear()
     }
     textareaRef.current?.focus()
-  }, [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, transientRetryCountRef, transientRetryTimerRef, pendingMessageBaselineRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setAttachments, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
 
   const backgroundClaudeTasks = useCallback(async () => {
     if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
@@ -4672,7 +4679,7 @@ function MessageViewInner({
       setBackgroundingTasks(false)
       textareaRef.current?.focus()
     }
-  }, [backgroundingTasks, session])
+  }, [backgroundingTasks, session, textareaRef])
 
   // Cancel a running Claude SDK background task via query.stopTask(). Routes at
   // the live warm pool entry server-side, so it only works while the session is
@@ -4696,11 +4703,11 @@ function MessageViewInner({
     }
   }, [session])
 
-  const sendMessage = useCallback(async (retryOverride?: {
+  const sendMessage = useCallback(async function sendForSession(retryOverride?: {
     text: string
     attachments: SendAttachment[]
     turnRequestId?: string
-  }) => {
+  }) {
     if (!session) return
     setSendError(null)
 
@@ -4838,7 +4845,7 @@ function MessageViewInner({
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
-      const targetKey = `${session.provider ?? 'claude'}:${session.sessionId}`
+      const targetKey = sessionIdentityKey(session)
       commitQueuedSends([...queuedSendsRef.current, {
         id: createComposerQueueItemId(targetKey),
         targetKey,
@@ -5028,20 +5035,22 @@ function MessageViewInner({
               const parsed = JSON.parse(frame.data)
               if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
                 liveTurnSessionHandoffRef.current = parsed.sessionId
+                composerSessions.rekey(composerOwnerKey, sessionIdentityKey({ ...session, sessionId: parsed.sessionId }))
                 if (pendingMessageBaselineRef.current) {
                   pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId)
                 }
-                onFork?.(parsed.sessionId)
+                onFork?.(parsed.sessionId, session)
                 setSessionActionNotice('Forked a continuation from the selected point.')
               } else if (session.isPending && parsed.sessionId) {
                 // Swap to the real SDK session id silently. Real CLI shows no
                 // "new session created" banner — the streaming reply itself
                 // signals that the session is live.
                 liveTurnSessionHandoffRef.current = parsed.sessionId
+                composerSessions.rekey(composerOwnerKey, sessionIdentityKey({ ...session, sessionId: parsed.sessionId }))
                 if (pendingMessageBaselineRef.current) {
                   pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId, true)
                 }
-                onFork?.(parsed.sessionId)
+                onFork?.(parsed.sessionId, session)
               }
             } catch { /* ignore */ }
             continue
@@ -5321,12 +5330,12 @@ function MessageViewInner({
               }
               const threaded = normalizeClaudeStreamThreadedMessage(parsed)
               if (threaded) {
-                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, { ...threaded, providerInstanceId: session.providerInstanceId }))
               }
             } else if (session.provider === 'codex') {
               const threaded = normalizeCodexStreamArtifactMessage(parsed, session.sessionId)
               if (threaded) {
-                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, { ...threaded, providerInstanceId: session.providerInstanceId }))
               }
             }
           } catch {
@@ -5433,7 +5442,7 @@ function MessageViewInner({
         if (transientRetryTimerRef.current) clearTimeout(transientRetryTimerRef.current)
         transientRetryTimerRef.current = setTimeout(() => {
           transientRetryTimerRef.current = null
-          void sendMessage({ text, attachments: sendAttachments, turnRequestId })
+          void sendForSession({ text, attachments: sendAttachments, turnRequestId })
         }, transientRetryBackoffMs(attempt))
         return
       }
@@ -5475,8 +5484,25 @@ function MessageViewInner({
       abortControllerRef.current = null
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
+      // The inactive session's queue must advance without borrowing the active composer.
+      if (composerQueueTargetKey && !composerSessions.same(activeWebComposerOwnerRef.current, composerOwnerKey)
+        && !controller.signal.aborted && transientRetryTimerRef.current == null
+        && composerSessions.get<SendState>(composerOwnerKey, 'sendState', 'idle') === 'idle'
+        && !reattachedRunningRef.current) {
+        const next = queuedSendsRef.current.find(entry => entry.targetKey === composerQueueTargetKey)
+        if (next && !composerQueueClaimInFlightRef.current.has(next.id)) {
+          composerQueueClaimInFlightRef.current.add(next.id)
+          void getWebComposerQueueStore().claim(composerQueueTargetKey, next.id).then(claim => {
+            queuedSendsRef.current = claim.entries
+            setQueuedSends(claim.entries)
+            if (!claim.claimed) return
+            if (sendInFlightRef.current) { commitQueuedSends([next, ...claim.entries]); return }
+            void sendForSession({ text: next.text, attachments: next.attachments })
+          }).catch(error => { setSendError(error instanceof Error ? error.message : 'Could not claim the queued prompt') }).finally(() => composerQueueClaimInFlightRef.current.delete(next.id))
+        }
+      }
     }
-  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, pushedCopilotAttachmentsRef, turnProducedOutputRef, transientRetryCountRef, transientRetryTimerRef, pendingSendOnModelsReadyRef, pendingMessageBaselineRef, liveTurnSessionHandoffRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setLivePromptSuggestion, setLiveStatus, setContextUsage, setSessionInfo, setSelectedCopilotMode, setSteeredNotice, setAttachments, setFailedSend, setOptimisticContextText, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThinkingTokens, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -5572,7 +5598,7 @@ function MessageViewInner({
       }
       resizeComposer()
     })
-  }, [commitQueuedSends, resizeComposer])
+  }, [commitQueuedSends, resizeComposer, inputTextRef, textareaRef, setInputText, setAttachments])
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)
@@ -5709,7 +5735,7 @@ function MessageViewInner({
       textareaRef.current?.setSelectionRange(start + insertion.length, start + insertion.length)
       resizeComposer()
     })
-  }, [resizeComposer])
+  }, [resizeComposer, inputTextRef, textareaRef, setInputText, setAttachments])
 
   useEffect(() => {
     const receive = (event: Event) => {
@@ -5753,7 +5779,7 @@ function MessageViewInner({
       ta.focus()
       resizeComposer()
     })
-  }, [mentionQuery, resizeComposer, insertContextAttachments])
+  }, [mentionQuery, resizeComposer, insertContextAttachments, inputTextRef, textareaRef, setInputText, setAttachments])
 
   const insertPromptText = useCallback((text: string) => {
     const trimmed = text.trim()
@@ -5776,7 +5802,7 @@ function MessageViewInner({
       ta.focus()
       resizeComposer()
     })
-  }, [resizeComposer])
+  }, [resizeComposer, inputTextRef, textareaRef, setInputText])
 
   const handledComposerInsertRequestRef = useRef(0)
   useEffect(() => {
@@ -5806,7 +5832,7 @@ function MessageViewInner({
       ta.focus()
       resizeComposer()
     })
-  }, [inputText, resizeComposer])
+  }, [inputText, resizeComposer, inputTextRef, textareaRef, setInputText])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing || isComposingRef.current) return
@@ -5942,7 +5968,7 @@ function MessageViewInner({
       })
       return
     }
-  }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand])
+  }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand, inputTextRef, textareaRef, setInputText, setAttachments])
 
   const handleExport = useCallback(async () => {
     if (!session) return
@@ -5993,7 +6019,7 @@ function MessageViewInner({
       insertContextAttachments([{ ...createContextAttachment(attachmentType === 'image' ? 'image' : 'file', path.split('/').pop() || path, undefined, path), type: attachmentType }])
     }
     setAttachmentPath('')
-  }, [attachmentPath, attachmentType, insertContextAttachments])
+  }, [attachmentPath, attachmentType, insertContextAttachments, setAttachments])
 
   const activeComposerDraftKeyRef = useRef(composerDraftKey)
   useLayoutEffect(() => { activeComposerDraftKeyRef.current = composerDraftKey }, [composerDraftKey])
@@ -6047,7 +6073,7 @@ function MessageViewInner({
     if (next.length === 0) return
     if (owner !== activeComposerDraftKeyRef.current) return
     insertContextAttachments(next.map(a => ({ ...a, id: crypto.randomUUID(), contextKind: a.type === 'blob' || a.type === 'image' ? 'image' : 'file' })))
-  }, [insertContextAttachments])
+  }, [insertContextAttachments, setSendError])
 
   const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLDivElement>) => {
     const items = event.clipboardData?.items
@@ -6102,7 +6128,7 @@ function MessageViewInner({
     setAttachments((prev) => prev.filter((attachment, attachmentIndex) => (
       id ? attachment.id !== id : attachmentIndex !== index
     )))
-  }, [])
+  }, [inputTextRef, setInputText, setAttachments])
 
   const restoreFailedSend = useCallback(() => {
     if (!failedSend || sendInFlightRef.current || awaitingPersistedTurnRef.current) return
@@ -6115,7 +6141,7 @@ function MessageViewInner({
       resizeComposer()
       textareaRef.current?.focus()
     })
-  }, [failedSend, resizeComposer])
+  }, [failedSend, resizeComposer, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, textareaRef, setInputText, setSendError, setAttachments, setFailedSend])
 
   const handleDeleteSession = useCallback(async () => {
     if (!session || deleting || !sessionCapabilities?.deleteSession) return
@@ -6341,7 +6367,7 @@ function MessageViewInner({
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
-  }, [resizeComposer])
+  }, [resizeComposer, textareaRef])
 
   const handleReusePrompt = useCallback((text: string) => {
     const restoredContext = readComposerContext(text)
@@ -6353,7 +6379,7 @@ function MessageViewInner({
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     focusComposer()
-  }, [focusComposer])
+  }, [focusComposer, inputTextRef, setInputText, setAttachments])
 
   const handleQuoteMessage = useCallback((text: string) => {
     const trimmed = text.trim()
@@ -6370,7 +6396,7 @@ function MessageViewInner({
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     focusComposer()
-  }, [focusComposer])
+  }, [focusComposer, inputTextRef, setInputText])
 
   const handleQuestionAnswerToComposer = useCallback((answer: string) => {
     const existing = inputTextRef.current
@@ -6380,7 +6406,7 @@ function MessageViewInner({
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     focusComposer()
-  }, [focusComposer])
+  }, [focusComposer, inputTextRef, setInputText])
 
   const handleDiffCommentToComposer = useCallback((prompt: string) => {
     if (!prompt.trim()) return
@@ -6402,7 +6428,7 @@ function MessageViewInner({
       setSessionActionNotice('Editing — safe resume armed; the next send will replace from this point in a guarded fork.')
     }
     focusComposer()
-  }, [focusComposer, sessionCapabilities?.resumeAtMessage])
+  }, [focusComposer, sessionCapabilities?.resumeAtMessage, inputTextRef, setInputText, setAttachments])
 
   const refreshDiagnostics = useCallback(async () => {
     if (!session) return
@@ -6419,7 +6445,7 @@ function MessageViewInner({
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [selectedModelValue, session])
+  }, [selectedModelValue, session, setSelectedModel])
 
   const [claudeMcpBusy, setClaudeMcpBusy] = useState<string | null>(null)
   const [claudeHookQuery, setClaudeHookQuery] = useState('')
@@ -6552,7 +6578,7 @@ function MessageViewInner({
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
+  }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics, setSelectedModel])
 
   const threadedFull = useMemo(() => measureSync('threading.build', () => {
     const prev = prevThreadingRef.current
@@ -6811,7 +6837,7 @@ function MessageViewInner({
   useEffect(() => {
     if (!session || session.isPending !== true) return
     if (isProject) return
-    const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    const key = sessionIdentityKey(session)
     if (autoFocusedSessionsRef.current.has(key)) return
     autoFocusedSessionsRef.current.add(key)
     window.requestAnimationFrame(() => {
@@ -6945,9 +6971,10 @@ function MessageViewInner({
         uuid: 'live-user',
         sessionId: session?.sessionId,
         provider: session?.provider,
+        providerInstanceId: session?.providerInstanceId,
         blocks: [{ type: 'text', text: optimisticContextText || optimisticUserText }],
       }
-    : null), [optimisticUserText, optimisticContextText, session?.provider, session?.sessionId, showLiveTimelineOverlay])
+    : null), [optimisticUserText, optimisticContextText, session?.provider, session?.providerInstanceId, session?.sessionId, showLiveTimelineOverlay])
   const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
@@ -6994,7 +7021,7 @@ function MessageViewInner({
         content: extractTextContent(msg.message.content),
         timestamp: msg.timestamp,
       }))
-  , [messages, sessionCapabilities?.fileRewind])
+ , [messages, sessionCapabilities?.fileRewind])
   const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null
   const rollbackCandidates = useMemo(() => {
     if (!sessionCapabilities?.rollback) return []
@@ -7032,7 +7059,7 @@ function MessageViewInner({
   // intentionally NOT deps: they are delivered to rows as per-row booleans at
   // render time so an interaction doesn't rebuild this whole array (and the
   // timelineRows / transcriptTimelineRows / virtualTimeline cascade below it).
-  , [
+ , [
     isProject,
     lastUserMessageUuid,
     sessionCapabilities?.messageFork,
@@ -7047,7 +7074,7 @@ function MessageViewInner({
   const liveTimelineRows = useMemo<TimelineRow[]>(() => {
     if (!showLiveTimelineOverlay) return []
     const rows: TimelineRow[] = []
-    if (liveUserMessage) {
+    if (liveUserMessage && !liveThreadedVisible.some(message => sameUserMessage(message, liveUserMessage))) {
       rows.push({
         key: 'live:user',
         message: liveUserMessage,
@@ -10702,7 +10729,7 @@ const MemoMessageViewInner = memo(MessageViewInner)
 const CoordinatorInspector = dynamic(() => import('./CoordinatorInspector'))
 
 function MessageViewShell(props: Props) {
-  const owner = `${props.session?.provider}:${props.session?.sessionId}`
+  const owner = props.session ? sessionIdentityKey(props.session) : 'unselected'
   const [inspection, setInspection] = useState<{ owner: string; agent: ProtocolAgent } | null>(null)
   const inspect = useCallback((agent: ProtocolAgent) => setInspection({ owner, agent }), [owner])
   const close = useCallback(() => setInspection(null), [])

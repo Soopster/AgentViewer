@@ -14,7 +14,7 @@ export type PluginRenderer = 'web' | 'tui'
 /**
  * Where a surface may be presented. 'panel' is the side panel (TUI surface
  * panel, Web right panel): a surface offering it is also a side-panel kind,
- * so its id must be one of the hosts' `RightPanelSurfaceKind`s.
+ * so its stable id automatically joins the hosts' panel registry.
  */
 export type PluginPlacement = 'overlay' | 'window' | 'panel'
 
@@ -30,9 +30,15 @@ export type PluginSurfaceSpec = {
   readonly pin: 'session' | 'cwd' | 'path' | null
   /** The surface's state is a singleton, so it exists once in any form. */
   readonly single: boolean
-  /** 'window': routed after the global keys. 'capture': every key but ⌃B. */
-  readonly keys: 'window' | 'capture'
+  /**
+   * 'window': routed after the global keys. 'capture': every key but ⌃B.
+   * 'field': the view's own text field (a browser's address bar) takes typing
+   * as a panel or window; Escape and the ⌃B prefix stay the host's.
+   */
+  readonly keys: 'window' | 'capture' | 'field'
   readonly placements: readonly PluginPlacement[]
+  /** Optional launcher order for panel contributions; unranked panels follow. */
+  readonly panelOrder?: number
   /** Palette label for opening the surface as a window. */
   readonly windowLabel: string
   /** Services the view needs; activation fails when a host lacks one. */
@@ -49,9 +55,11 @@ export type PluginCommandSpec = {
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
-  readonly category: 'Session' | 'View'
+  readonly category: 'Session' | 'View' | 'Transcript'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
+  /** Where the command shows its surface: an overlay (the default) or a side-panel tab, reusing an open one. */
+  readonly placement?: 'overlay' | 'panel'
   /** What the command must have before it can run: a selected session, or a repository to work in. */
   readonly requires: 'session' | 'repository' | null
   readonly renderers: readonly PluginRenderer[]
@@ -101,6 +109,23 @@ export type PluginServiceId =
   | 'file-history'
   /** Web: the pull request linked to the selected session, and linking one to it. */
   | 'session-pull-request'
+  | 'subagent-transcript'
+  /** The session the view was opened for: its identity, not its transcript. */
+  | 'session'
+  /** The selected session's in-flight turn, before it reaches the transcript. */
+  | 'live-transcript'
+  /** Jump to a task's card in the reader, and stop a background task. */
+  | 'task-control'
+  /** Read a session's diagnostics and run its runtime controls (MCP, hooks, reloads). */
+  | 'session-diagnostics'
+  /** The live CLI channel bridge: whether the composer routes to it, and the toggle. */
+  | 'channel-bridge'
+  /** The IDE bridge: whether the composer routes to it, the toggle, and diff comments. */
+  | 'ide-bridge'
+  /** Where a browser view is pointed, and what it opened, kept by the host with the layout. */
+  | 'browser-location'
+  /** Which item a window was showing, kept by the host so a remounted window comes back on it. */
+  | 'window-selection'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host
@@ -119,6 +144,11 @@ export type PluginTarget = {
   readonly line?: number | null
   /** An agent turn the view opened on, named by the prompt that started it. */
   readonly turn?: { readonly sessionId: string; readonly text: string; readonly timestamp?: string } | null
+  /**
+   * Counts the host's requests to open this surface. A view that loads once per
+   * open (rather than following the selection) treats a change as a new open.
+   */
+  readonly request?: number
 }
 
 /** A renderer's lazy entry: one view component per declared surface. */
@@ -126,4 +156,6 @@ export type PluginViewModule<View> = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
   readonly pluginId: string
   readonly views: Readonly<Record<string, View>>
+  /** Release module-owned caches and resources. Must be idempotent; runs on disable. */
+  readonly deactivate?: () => void
 }

@@ -25,7 +25,7 @@ import {
  * terminal or reloads a page.
  */
 
-const SURFACE_ICONS: Record<RightPanelSurfaceKind, typeof Globe2> = {
+const SURFACE_ICONS: Partial<Record<RightPanelSurfaceKind, typeof Globe2>> = {
   browser: Globe2,
   terminal: TerminalSquare,
   files: Files,
@@ -147,7 +147,7 @@ function TabStrip(props: RightPanelProps) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, minWidth: 0, overflowX: 'auto' }}>
         {props.surfaces.map((surface) => {
-          const Icon = SURFACE_ICONS[surface.kind]
+          const Icon = SURFACE_ICONS[surface.kind] ?? Files
           const selected = surface.id === props.activeId
           return (
             <div
@@ -243,7 +243,7 @@ function TabStrip(props: RightPanelProps) {
             }}
           >
             {RIGHT_PANEL_SURFACE_KINDS.map((kind) => {
-              const Icon = SURFACE_ICONS[kind]
+              const Icon = SURFACE_ICONS[kind] ?? Files
               const available = props.availability[kind]
               return (
                 <button
@@ -392,7 +392,7 @@ function Launcher(props: RightPanelProps) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
           {actions.map((action) => {
-            const Icon = SURFACE_ICONS[action.kind]
+            const Icon = SURFACE_ICONS[action.kind] ?? Files
             const highlighted = highlightIndex !== -1 && availableActions[highlightIndex]?.kind === action.kind
             const shell: React.CSSProperties = {
               position: 'relative',

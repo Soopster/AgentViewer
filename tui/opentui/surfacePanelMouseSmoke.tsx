@@ -21,7 +21,7 @@ process.chdir(workspace)
 process.env.SHELL = '/bin/sh'
 const { default: OpenTuiApp } = await import('./App')
 const { getShells, shellTerminal, resetShellsForTest } = await import('./shellStore')
-const { readAllScreenText } = await import('./shellScreen')
+const { readAllScreenText } = await import('../../plugins/terminal/tui/shellScreen')
 const { getProcesses, resetProcessesForTest } = await import('./processStore')
 
 const WIDTH = 160

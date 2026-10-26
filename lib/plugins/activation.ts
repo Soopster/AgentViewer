@@ -2,6 +2,8 @@
 // layout or switching sessions reads manifests only; a view module loads the
 // first time one of its surfaces is shown, once per isolate, with concurrent
 // loads deduplicated and a failed load or validation evicted so Retry works.
+import { disposePluginResources } from './lifecycle'
+import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { createLazyRegistry } from '../extensions/lazyRegistry'
 import { PLUGIN_MANIFESTS, type PluginId } from './catalog'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginRenderer, type PluginServiceId, type PluginViewModule } from './types'
@@ -20,8 +22,26 @@ export function createPluginViewRegistry<View>(
     loaders as Record<string, () => Promise<PluginViewModule<View>>>,
     (id, module) => validatePluginViewModule(renderer, manifests.find(manifest => manifest.id === id), module, hostServices),
   )
+  const deactivate = (id: string) => {
+    const loaded = registry.peek(id)
+    registry.evict(id)
+    disposePluginResources(id)
+    try { loaded?.deactivate?.() } catch (error) { console.error(`Plugin ${id} deactivation failed:`, error) }
+  }
+  let disposed = false
+  const unsubscribe = subscribePluginEnablement(() => {
+    for (const manifest of supported) if (!isPluginEnabled(manifest.id)) deactivate(manifest.id)
+  })
   return {
-    load: registry.get,
+    dispose() { if (disposed) return; disposed = true; unsubscribe(); for (const manifest of supported) deactivate(manifest.id) },
+    load(id: string) {
+      if (disposed || !isPluginEnabled(id)) {
+        const error = new Error(`Plugin ${id} is disabled or its registry was disposed`)
+        error.name = 'AbortError'
+        return Promise.reject(error)
+      }
+      return registry.get(id)
+    },
     peek: registry.peek,
     /** True once a plugin's views are in memory: a smoke's proof of laziness. */
     isLoaded: (id: string) => registry.peek(id) !== undefined,
@@ -34,6 +54,7 @@ export function validatePluginViewModule<View>(renderer: PluginRenderer, manifes
   if (!module || module.apiVersion !== PLUGIN_API_VERSION || manifest.apiVersion !== PLUGIN_API_VERSION) {
     throw new Error(`Plugin ${manifest.id} targets API ${String(module?.apiVersion)}; this host supports ${PLUGIN_API_VERSION}`)
   }
+  if (module.deactivate !== undefined && typeof module.deactivate !== 'function') throw new Error(`Plugin ${manifest.id} has an invalid deactivation hook`)
   if (module.pluginId !== manifest.id) throw new Error(`Plugin module identity mismatch: ${manifest.id} / ${module.pluginId}`)
   for (const surface of manifest.surfaces) {
     const view = module.views[surface.id] as unknown
@@ -46,4 +67,12 @@ export function validatePluginViewModule<View>(renderer: PluginRenderer, manifes
 
 export function pluginStateVersions(manifests: readonly PluginManifest[] = PLUGIN_MANIFESTS): Record<string, number> {
   return Object.fromEntries(manifests.map(manifest => [manifest.id, manifest.stateVersion]))
+}
+
+/** Resolve the capabilities actually offered to one mounted view. Optional services stay optional. */
+export function resolvePluginServices<T extends object>(surface: { id: string; services: readonly PluginServiceId[]; optionalServices?: readonly PluginServiceId[] }, offered: T): { services: T; error: Error | null } {
+  const declared = new Set<string>([...surface.services, ...(surface.optionalServices ?? [])])
+  const services = Object.fromEntries(Object.entries(offered).filter(([id, value]) => declared.has(id) && value != null)) as T
+  const missing = surface.services.filter(id => !(id in services))
+  return { services, error: missing.length ? new Error(`Surface ${surface.id} needs services this view lacks: ${missing.join(', ')}`) : null }
 }

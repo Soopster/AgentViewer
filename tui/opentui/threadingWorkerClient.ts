@@ -83,6 +83,7 @@ type Pending =
       resolve: (affordances: TuiComposerAffordances) => void
       reject: (error: Error) => void
     }
+  | { kind: 'subagent-transcript'; resolve: (cards: TuiTranscriptCard[]) => void; reject: (error: Error) => void }
   | {
       kind: 'subagents'
       resolve: (subagents: SubagentSummary[]) => void
@@ -90,6 +91,7 @@ type Pending =
     }
 
 type WorkerResponse = (
+  | { id: number; ok: true; subagentCards: TuiTranscriptCard[] }
   | {
       id: number
       ok: true
@@ -483,6 +485,8 @@ function ensureWorker(): Worker {
       entry.resolve(data.metadata)
     } else if (entry.kind === 'affordances' && 'affordances' in data) {
       entry.resolve(data.affordances)
+    } else if (entry.kind === 'subagent-transcript' && 'subagentCards' in data) {
+      entry.resolve(data.subagentCards)
     } else if (entry.kind === 'subagents' && 'subagents' in data) {
       entry.resolve(data.subagents)
     }
@@ -929,4 +933,16 @@ export function getTranscriptCardsSync(
   const cached = threadingCacheByKey.get(key)
   if (!cached || cached.threadedMessages !== threaded) return null
   return cached.cardsByVariant.get(variantKey(density, showToolCalls, options)) ?? null
+}
+
+export function readTuiSubagentTranscriptAsync(session: Session, agentId: string, density: TuiDensity, signal?: AbortSignal): Promise<TuiTranscriptCard[]> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  const abort = () => { const entry = pending.get(id); pending.delete(id); const error = new Error('Subagent read cancelled'); error.name = 'AbortError'; entry?.reject(error) }
+  return new Promise<TuiTranscriptCard[]>((resolve, reject) => {
+    pending.set(id, { kind: 'subagent-transcript', resolve, reject })
+    if (signal?.aborted) { abort(); return }
+    signal?.addEventListener('abort', abort, { once: true })
+    w.postMessage({ kind: 'subagent-transcript', id, session, agentId, density })
+  }).finally(() => { signal?.removeEventListener('abort', abort) })
 }

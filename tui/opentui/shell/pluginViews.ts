@@ -4,9 +4,10 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
+  subagents: async () => (await import('../../../plugins/subagents/tui')).module,
   analytics: async () => (await import('../../../plugins/analytics/tui')).module,
   git: async () => (await import('../../../plugins/git/tui')).module,
   files: async () => (await import('../../../plugins/files/tui')).module,
@@ -14,4 +15,10 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'pull-requests': async () => (await import('../../../plugins/pull-requests/tui')).module,
   checkpoints: async () => (await import('../../../plugins/checkpoints/tui')).module,
   'file-history': async () => (await import('../../../plugins/file-history/tui')).module,
+  messaging: async () => (await import('../../../plugins/messaging/tui')).module,
+  tasks: async () => (await import('../../../plugins/tasks/tui')).module,
+  bridges: async () => (await import('../../../plugins/bridges/tui')).module,
+  diagnostics: async () => (await import('../../../plugins/diagnostics/tui')).module,
+  terminal: async () => (await import('../../../plugins/terminal/tui')).module,
+  browser: async () => (await import('../../../plugins/browser/tui')).module,
 }, TUI_PLUGIN_SERVICES)

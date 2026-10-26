@@ -18,6 +18,7 @@ export const manifest = {
     single: false,
     keys: 'window',
     placements: ['overlay', 'window', 'panel'],
+    panelOrder: 20,
     windowLabel: 'Git in a window',
     services: ['repository'],
     // Review notes and "ask an agent" go to the composer; the Web view has neither yet.

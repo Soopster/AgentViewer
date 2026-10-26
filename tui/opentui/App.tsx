@@ -1,5 +1,8 @@
 /** @jsxImportSource @opentui/react */
+import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
+import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
+import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
 import { SessionTabConnection } from './SessionTabConnection'
 import { sessionIdentityKey } from './sessionIdentity'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
@@ -13,22 +16,20 @@ import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
-import type { TuiProvidedPluginServices } from './shell/pluginTypes'
+import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
-import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
-import type { PluginKeyChord } from '../../lib/plugins/types'
+import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginPanelSurfaceId, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
+import type { PluginKeyChord, PluginServiceId } from '../../lib/plugins/types'
 import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
-import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { readBridgeConfigFromEnv, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import {
   createChannelBridgeMessageId,
   flushChannelBridgeOutbox,
   sendDurableChannelMessage,
 } from '../../lib/channelBridgeOutbox'
-import { IdeBridgePopover } from './IdeBridgePopover'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { ToastOverlay, toastStackTop, useToasts } from './ToastOverlay'
 import { PiActivityPopover } from './PiActivityPopover'
@@ -40,7 +41,6 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
 import { hasTuiLinkTarget, parseTuiLineTokens, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
-import { BrowserSurfaceView } from './SurfaceViews'
 import { WindowButton } from './WindowButton'
 import { transcriptViewportPosition, useTranscriptWindowPositions } from './transcriptWindowState'
 import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree, type WindowSplitNode } from './windowSplitTree'
@@ -82,7 +82,6 @@ import {
   type TuiSurface,
 } from './surfacePanelState'
 import type { RightPanelSurfaceKind } from '../../lib/rightPanel'
-import { TaskPanelPopover } from './TaskPanelPopover'
 import {
   appendComposerSentHistory,
   flushComposerStashWrites,
@@ -285,6 +284,7 @@ import {
   attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
   readTuiSubagentSummariesAsync,
+  readTuiSubagentTranscriptAsync,
   formatTranscriptCardsAsync,
   readTuiComposerAffordancesAsync,
   getTranscriptCardsSync,
@@ -306,7 +306,6 @@ import {
 import { getTeamAttention, startTeamAttentionFeed, subscribeTeamAttention } from './teamAttentionStore'
 import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
-import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
 import { MODAL_CONTENT_Z_INDEX, MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
@@ -381,7 +380,6 @@ import {
   SPLIT_CHORD_MAP,
   type ChordMap,
 } from './chordHelp'
-import { DiagnosticsTable, diagnosticRuns } from './DiagnosticsTable'
 import {
   isAltKey,
   isCtrlKey,
@@ -477,7 +475,6 @@ const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) =>
 const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
-const ProcessPane = lazyComponent(() => import('./ProcessPane').then((module) => module.ProcessPane))
 const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
 const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
 const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
@@ -3342,13 +3339,14 @@ export function createSidebarRowElements<Entry extends { key: string }, Element>
 
 function sidebarEntrySessionKey(entry: SidebarEntry): string | null {
   const session = sidebarEntrySession(entry)
-  return session ? sessionKey(session) : null
+  return session ? sessionKey(session) : entry.type === 'subagent' ? entry.key : null
 }
 
 function buildSidebarEntries(
   sessions: Session[],
   sort: TuiSidebarSort,
   childrenByParentId?: Map<string, SidebarSubagentEntry[]>,
+  collapsedSubagents: ReadonlySet<string> = new Set(),
 ): SidebarEntry[] {
   const entries: SidebarEntry[] = []
   // Real child sessions are nested under their parent instead of
@@ -3357,7 +3355,7 @@ function buildSidebarEntries(
   const presentIds = new Set(sessions.map(sessionKey))
   const isNestedChild = (session: Session) =>
     !!session.parentSessionId
-    && presentIds.has(sessionKey({ sessionId: session.parentSessionId, provider: session.provider }))
+    && presentIds.has(sessionKey({ sessionId: session.parentSessionId, provider: session.provider, providerInstanceId: session.providerInstanceId }))
   const pushSubagents = (
     parentSession: Session,
     parentKey: string,
@@ -3365,7 +3363,7 @@ function buildSidebarEntries(
     lineage = new Set<string>(),
   ) => {
     const parentIdentity = sessionKey(parentSession)
-    if (lineage.has(parentIdentity)) return
+    if (lineage.has(parentIdentity) || collapsedSubagents.has(parentIdentity)) return
     const nextLineage = new Set(lineage).add(parentIdentity)
     const children = childrenByParentId?.get(parentIdentity)
     if (!children || children.length === 0) return
@@ -5768,7 +5766,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'surface-placement', label: 'Surface panel beside / under the panes', key: '|', category: 'Transcript' },
   { id: 'surface-narrow', label: 'Narrow surface panel', key: '<', category: 'Transcript' },
   { id: 'surface-wide',   label: 'Widen surface panel',  key: '>', category: 'Transcript' },
-  { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
   { id: 'tasks-expand', label: 'Expand/restore task panel', key: '=', category: 'Transcript' },
   { id: 'tasks-narrow', label: 'Narrow task panel',    key: '-/_', category: 'Transcript' },
   { id: 'tasks-wide', label: 'Widen task panel',       key: '+', category: 'Transcript' },
@@ -5784,9 +5781,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'reuse',      label: 'Reuse last prompt',      key: '⇧R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '⌃R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: '',  category: 'Session'    },
-  { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
-  { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
@@ -5794,9 +5789,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
   { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
-  { id: 'processes',  label: 'Processes and logs (dev server, watchers)', key: '⌃K l', category: 'Session' },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
-  { id: 'messaging',  label: 'Cross-session messaging', key: '⇧M', category: 'Session'   },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
@@ -5810,7 +5803,6 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'fleet-next', label: 'Next fleet page',         key: '}', category: 'View'       },
   { id: 'handoff-brief', label: 'Handoff brief',       key: '⇧H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
-  { id: 'diagnostics', label: 'Session diagnostics',   key: '⇧D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: '⇧S',  category: 'Session'    },
   { id: 'scratch',    label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
@@ -7929,6 +7921,7 @@ type SplitTranscriptPaneProps = {
   activeSearchKey: string | null
   // Live overlay for THIS pane's session, sliced from the app-wide live stream.
   liveMessages: ThreadedMessage[]
+  liveBaselineCount?: number
   running: boolean
   attentionBadge: string | null
   coordinatorLabel?: string
@@ -7992,6 +7985,7 @@ function SplitTranscriptPaneInner({
   searchQuery,
   activeSearchKey,
   liveMessages,
+  liveBaselineCount,
   running,
   attentionBadge,
   coordinatorLabel,
@@ -8025,7 +8019,7 @@ function SplitTranscriptPaneInner({
   const titleClickRef = useRef<{ x: number; y: number; at: number } | null>(null)
   const promoteThisPane = useCallback(() => onPromotePane(session), [onPromotePane, session])
   const closeThisPane = useCallback(() => onClosePane(paneIndex), [onClosePane, paneIndex])
-  const { cards, status, error } = useTranscriptCards({
+  const { cards, status, error, detail: persistedPaneDetail } = useTranscriptCards({
     session, density, showToolCalls, focused,
     active: running || liveMessages.length > 0 || Boolean(liveText),
     shouldYield: shouldYieldToForeground,
@@ -8048,19 +8042,27 @@ function SplitTranscriptPaneInner({
     return store
   })
 
+  const paneMessageIndex = useMemo(() => {
+    let at = 0
+    const recent = new Set((persistedPaneDetail?.rawMessages ?? []).filter(message => {
+      if (!isDurableSessionMessage(message)) return false
+      return at++ >= (liveBaselineCount ?? Number.POSITIVE_INFINITY) && message.type === 'user'
+    }).map(message => message.uuid))
+    return indexComposerMessages(persistedPaneDetail?.threadedMessages ?? [], recent)
+  }, [persistedPaneDetail, liveBaselineCount])
   // Live overlay: the pane polls persisted state every few seconds, but a
   // running turn streams through the app-wide live list — formatting that here
   // is what makes a pane a real-time window instead of a stale snapshot. Live
   // cards win over persisted ones with the same key, so the poll that finally
   // lands the message doesn't render it twice.
   const liveCards = useMemo(
-    () => liveMessages.map((message) => {
+    () => visibleComposerMessages(liveMessages, paneMessageIndex).map((message) => {
       const formatted = formatTranscriptCard(message, density)
       return isLiveAssistantTextMessage(message)
         ? { ...formatted, markdownContent: undefined }
         : formatted
     }),
-    [liveMessages, density],
+    [liveMessages, density, paneMessageIndex],
   )
   // A pane reads in the reader's own view. For the stream views that means the
   // reader's shaping too: bookkeeping rows dropped, tool calls grouped into
@@ -9989,10 +9991,7 @@ function OpenTuiWorkspace() {
   // Declared here (not derived from splitPaneSessions, which the layout
   // computes much later) so the composer target memo can read it.
   const [composerPaneTargetKey, setComposerPaneTargetKey] = useWorkspaceState<string | null>('composerPaneTargetKey', null)
-  // Creating a session is an explicit routing choice. Keep that target pinned
-  // while its composer is open so the sole-running-session convenience fallback
-  // cannot redirect the first prompt into an older OpenCode (or other provider)
-  // turn.
+  // Retain the explicit creation target while its session is being prepared.
   const [composerPreferredTargetKey, setComposerPreferredTargetKey] = useWorkspaceState<string | null>('composerPreferredTargetKey', null)
   const [composerPreparingTargetKey, setComposerPreparingTargetKey] = useState<string | null>(null)
   const composerPreparingTargetKeyRef = useRef<string | null>(null)
@@ -10037,14 +10036,12 @@ function OpenTuiWorkspace() {
   const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
   const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  // The side panel's plugin surface (Git): its key handler and its claim on input.
+  // The side panel's plugin surface: its key handler and its claim on input
+  // (TuiPluginCapture). The Terminal claims `input` while a command is typed
+  // (keys reach its <input>) and `terminal` while a shell has the keyboard
+  // (every key goes to the shell, the panel's own chords included, until ⌃]).
   const surfacePluginKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
-  const surfacePluginKeyCaptureRef = useRef(false)
-  const surfaceProcessKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  // The Terminal tab's claim on keys: `input` while a command is typed (keys
-  // reach its <input>), `terminal` while a shell has the keyboard (every key
-  // goes to the shell, the panel's own chords included, until ⌃]).
-  const surfaceProcessCaptureRef = useRef<'none' | 'input' | 'terminal'>('none')
+  const surfacePluginKeyCaptureRef = useRef<TuiPluginCapture>(false)
   const [sessions, setSessions] = useWorkspaceState<Session[]>('sessions', [], false)
   const sessionsRef = useRef<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
@@ -10095,6 +10092,8 @@ function OpenTuiWorkspace() {
   const newSessionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
   const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
+  // Each plugin surface's open requests: how many, and the session the latest named.
+  const [pluginOpenRequests, setPluginOpenRequests] = useState<Partial<Record<PluginSurfaceId, { count: number; session: Session | null }>>>({})
   const [deskOpen, setDeskOpen] = useState(false)
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
   const pluginManagerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -10105,8 +10104,8 @@ function OpenTuiWorkspace() {
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const promptLibraryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
-  const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
-  const channelBridgeKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
+  // The bridge panels are the bridges plugin's; the bridges and routing are the composer's.
+  const channelBridgeOpen = pluginOverlay === 'channel-bridge'
   // Global Channel Bridge binding: when on, the main composer's send routes to
   // the live `claude` CLI session instead of the active provider (mirrors the
   // web "route composer through bridge" toggle).
@@ -10114,8 +10113,6 @@ function OpenTuiWorkspace() {
   const routeComposerToBridgeRef = useRef(false)
   // IDE bridge — third Claude composer flow (agentViewer hosts a Claude Code IDE
   // endpoint a `claude` CLI connects to; see channels/agentviewer-ide.ts).
-  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
-  const ideBridgeKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
   // When on, the main composer pushes its line as an @file mention into the
   // connected `claude` session instead of sending a provider turn.
   const [routeComposerToIde, setRouteComposerToIde] = useState(false)
@@ -10135,8 +10132,6 @@ function OpenTuiWorkspace() {
   // background turns that finished while the user was elsewhere.
   const [attentionOpen, setAttentionOpen] = useState(false)
   const attentionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const [crossSessionMessagingOpen, setCrossSessionMessagingOpen] = useState(false)
-  const crossSessionMessagingKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // Pending Claude prompts from running sessions OTHER than the selected one
   // (the selected session's prompts live in pendingPermissions). Fed by the
   // registry poll.
@@ -10219,21 +10214,10 @@ function OpenTuiWorkspace() {
   const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
-  const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
-  const taskPopoverKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
-  const [diagnosticsOpen, setDiagnosticsOpen] = useWorkspaceState('diagnosticsOpen', false, false)
-  // Kept current below, once the window state exists: diagnostics stays open
-  // while it is a window, so only its modal form is suppressed.
-  const diagnosticsWindowedRef = useRef(false)
-  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
-  const [diagnosticsSections, setDiagnosticsSections] = useWorkspaceState<import('../../lib/types').SessionDiagnosticSection[]>('diagnosticsSections', [], false)
-  const [diagnosticsError, setDiagnosticsError] = useWorkspaceState<string | null>('diagnosticsError', null, false)
-  const [diagnosticsNotice, setDiagnosticsNotice] = useWorkspaceState<string | null>('diagnosticsNotice', null, false)
-  const [diagnosticsBusy, setDiagnosticsBusy] = useState<string | null>(null)
-  const [diagnosticsMcpIndex, setDiagnosticsMcpIndex] = useWorkspaceState('diagnosticsMcpIndex', 0, false)
-  const diagnosticsScrollRef = useRef<ScrollBoxRenderable | null>(null)
-  const [diagnosticsMcpPermissionModes, setDiagnosticsMcpPermissionModes] = useWorkspaceState<Record<string, 'default' | 'auto'>>('diagnosticsMcpPermissionModes', {}, false)
+  const [composerSessions] = useState(createComposerSessions)
+  const composerOwnerKey = composerPaneTargetKey ?? selectedSessionKey ?? (sessions[0] ? sessionKey(sessions[0]) : 'unselected')
+  const ownsComposerStream = useCallback((key: string) => Boolean(composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current), [composerSessions])
+  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useComposerSessionState(composerSessions, composerOwnerKey, 'awaitingPersistedTurn', false)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useWorkspaceState('searchQuery', '')
   const [searchMatchIndex, setSearchMatchIndex] = useWorkspaceState('searchMatchIndex', 0)
@@ -10293,7 +10277,7 @@ function OpenTuiWorkspace() {
   const [composerHidden, setComposerHidden] = useWorkspaceState('composerHidden', false)
   const [composerDraft, setComposerDraft] = useWorkspaceState('composerDraft', '')
   const composerDraftStorageKeyRef = useRef<string | null>(null)
-  const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
+  const [composerLiveTodos, setComposerLiveTodos] = useComposerSessionState<import('../../lib/taskRegistry').OpenCodeTodo[]>(composerSessions, composerOwnerKey, 'composerLiveTodos', [])
   const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
   const [composerMentionResults, setComposerMentionResults] = useState<TuiMentionResult[]>([])
   const [composerAgentOptions, setComposerAgentOptions] = useState<SessionComposerAgentOption[]>([])
@@ -10319,16 +10303,16 @@ function OpenTuiWorkspace() {
   const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
   const [composerHistoryOpen, setComposerHistoryOpen] = useState(false)
   const [composerHistoryIndex, setComposerHistoryIndex] = useState(0)
-  const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
-  const [composerSendState, setComposerSendState] = useState<SendState>('idle')
+  const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useComposerSessionState<SlashCommandSuggestion[]>(composerSessions, composerOwnerKey, 'composerLiveSlashCommands', [])
+  const [composerSendState, setComposerSendState] = useComposerSessionState<SendState>(composerSessions, composerOwnerKey, 'composerSendState', 'idle')
   // Transient stream UI belongs to the session that started the turn, not the
   // tab selected later. Keep the owner through persisted-transcript reconcile
   // so the final syncing spinner cannot jump across tabs either.
-  const [composerActivitySessionKey, setComposerActivitySessionKey] = useState<string | null>(null)
-  const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
-  const [interruptPressActive, setInterruptPressActive] = useState(false)
+  const [composerActivitySessionKey, setComposerActivitySessionKey] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'composerActivitySessionKey', null)
+  const [composerSendStartedAt, setComposerSendStartedAt] = useComposerSessionState<number | null>(composerSessions, composerOwnerKey, 'composerSendStartedAt', null)
+  const [interruptPressActive, setInterruptPressActive] = useComposerSessionState(composerSessions, composerOwnerKey, 'interruptPressActive', false)
   const [backgroundingTasks, setBackgroundingTasks] = useState(false)
-  const interruptPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const interruptPressTimeoutRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'interruptPressTimeoutRef', null)
   // Pending tool-approval requests surfaced from the live SSE stream (Claude
   // canUseTool, Copilot/OpenCode permission events, Codex approvals). The
   // overlay below the composer lets the user allow/reject them, matching native.
@@ -10360,19 +10344,19 @@ function OpenTuiWorkspace() {
   // decoupled from their stream), or a turn from another view is still
   // finishing. Detected by polling the in-process running registry while idle;
   // mirrors the web composer's reattach flow.
-  const [reattachedRunning, setReattachedRunning] = useState(false)
-  const reattachedRunningRef = useRef(false)
+  const [reattachedRunning, setReattachedRunning] = useComposerSessionState(composerSessions, composerOwnerKey, 'reattachedRunning', false)
+  const reattachedRunningRef = composerSessions.ref(composerOwnerKey, 'reattachedRunningRef', false)
   useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
   // Session key the registry poll currently reports as running-but-unowned.
   // The detail poll consults this to keep refreshing a session whose leftover
   // live baseline would otherwise pause background polls (the dead-stream case).
-  const reattachedRunningKeyRef = useRef<string | null>(null)
+  const reattachedRunningKeyRef = composerSessions.ref<string | null>(composerOwnerKey, 'reattachedRunningKeyRef', null)
   // Sidebar running marks added by the registry poll (as opposed to the send
   // loop's own mark), so the poll only clears marks it added itself.
   const reattachMarksRef = useRef(new Map<string, RunningSessionRef>())
   // Session key of the turn the local send stream currently owns; the registry
   // poll never treats that session as reattached.
-  const ownedTurnKeyRef = useRef<string | null>(null)
+  const ownedTurnKeyRef = composerSessions.ref<string | null>(composerOwnerKey, 'ownedTurnKeyRef', null)
   // AskUserQuestion picker state (keyed off the active pending permission's id).
   const [questionFocusIndex, setQuestionFocusIndex] = useState(0)
   const [questionOptionIndex, setQuestionOptionIndex] = useState(0)
@@ -10380,14 +10364,14 @@ function OpenTuiWorkspace() {
   const [questionFreeformAnswers, setQuestionFreeformAnswers] = useState<Record<number, string>>({})
   const [questionFreeformEditing, setQuestionFreeformEditing] = useState(false)
   const questionPermissionIdRef = useRef<string | null>(null)
-  const [composerWaitingSeed, setComposerWaitingSeed] = useState('')
-  const [composerError, setComposerError] = useState<string | null>(null)
-  const [composerLiveText, setComposerLiveText] = useState('')
+  const [composerWaitingSeed, setComposerWaitingSeed] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerWaitingSeed', '')
+  const [composerError, setComposerError] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'composerError', null)
+  const [composerLiveText, setComposerLiveText] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerLiveText', '')
   // Reasoning streams on its own dim channel (see liveReasoning render below).
-  const [composerLiveReasoning, setComposerLiveReasoning] = useState('')
+  const [composerLiveReasoning, setComposerLiveReasoning] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerLiveReasoning', '')
   // Live thinking-token estimate (SDK `thinking_tokens` messages); shown on the
   // THINKING preview header, reset each turn.
-  const [composerThinkingTokens, setComposerThinkingTokens] = useState(0)
+  const [composerThinkingTokens, setComposerThinkingTokens] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerThinkingTokens', 0)
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Output of a Claude local slash command (/context, /usage, …). The CLI
   // persists it as a system row the SDK returns without content, so the
@@ -10410,17 +10394,17 @@ function OpenTuiWorkspace() {
     setQueuedComposerSends(next)
     try { workspaceContext.controller.flush(); setComposerQueueDurable(true) } catch { setComposerQueueDurable(false) }
   })
-  const activeComposerTurnRequestIdRef = useRef<string | null>(null)
+  const activeComposerTurnRequestIdRef = composerSessions.ref<string | null>(composerOwnerKey, 'activeComposerTurnRequestIdRef', null)
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
-  const [steeredSendNotice, setSteeredSendNotice] = useState<string | null>(null)
+  const [steeredSendNotice, setSteeredSendNotice] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'steeredSendNotice', null)
   const steeredEchoCounterRef = useRef(0)
-  const steeredComposerSendsRef = useRef<SteeredComposerSend[]>([])
-  const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
-  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
-  const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
-  const [liveOutputTokens, setLiveOutputTokens] = useState(0)
-  const [liveToolActivities, setLiveToolActivities] = useState<TuiLiveToolActivity[]>([])
+  const steeredComposerSendsRef = composerSessions.ref<SteeredComposerSend[]>(composerOwnerKey, 'steeredComposerSendsRef', [])
+  const [livePromptSuggestion, setLivePromptSuggestion] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'livePromptSuggestion', null)
+  const [liveStatus, setLiveStatus] = useComposerSessionState<'requesting' | 'compacting' | 'retrying' | null>(composerSessions, composerOwnerKey, 'liveStatus', null)
+  const [liveSubagentText, setLiveSubagentText] = useComposerSessionState<Record<string, string>>(composerSessions, composerOwnerKey, 'liveSubagentText', {})
+  const [liveOutputTokens, setLiveOutputTokens] = useComposerSessionState(composerSessions, composerOwnerKey, 'liveOutputTokens', 0)
+  const [liveToolActivities, setLiveToolActivities] = useComposerSessionState<TuiLiveToolActivity[]>(composerSessions, composerOwnerKey, 'liveToolActivities', [])
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   const [composerEnableWorkflow, setComposerEnableWorkflow] = useState(false)
   // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
@@ -10519,26 +10503,32 @@ function OpenTuiWorkspace() {
   const sessionContextUsageCacheRef = useRef(new Map<string, ContextUsage | null>())
   const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
   const sessionMetadataInFlightRef = useRef(new Set<string>())
-  const composerAbortRef = useRef<AbortController | null>(null)
-  const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
+  const composerAbortRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'composerAbortRef', null)
+  const activeComposerSendCleanupRef = composerSessions.ref<Promise<void> | null>(composerOwnerKey, 'activeComposerSendCleanupRef', null)
   // Transient auto-retry bookkeeping (mirrors the web composer): only retry a
   // turn that streamed no output yet, bounded attempts, timer cleared on cancel.
-  const composerTurnProducedOutputRef = useRef(false)
-  const composerRetryCountRef = useRef(0)
-  const composerRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const composerTurnProducedOutputRef = composerSessions.ref(composerOwnerKey, 'composerTurnProducedOutputRef', false)
+  const composerRetryCountRef = composerSessions.ref(composerOwnerKey, 'composerRetryCountRef', 0)
+  const composerRetryTimerRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'composerRetryTimerRef', null)
   useEffect(() => () => {
-    if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
-  }, [])
+    for (const key of composerSessions.keys()) {
+      composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
+      for (const name of ['composerRetryTimerRef', 'liveTextFlushTimerRef', 'interruptPressTimeoutRef']) {
+        const timer = composerSessions.peekRef<ReturnType<typeof setTimeout> | null>(key, name)
+        if (timer?.current) { clearTimeout(timer.current); timer.current = null }
+      }
+    }
+  }, [composerSessions])
   // Set by cancelComposerSend so the send's AbortError handler transitions into
   // the awaitingPersistedTurn 'Syncing…' reconcile (confirmed interrupt) rather
   // than discarding the interrupted turn's partial output outright.
-  const composerInterruptPendingRef = useRef(false)
+  const composerInterruptPendingRef = composerSessions.ref(composerOwnerKey, 'composerInterruptPendingRef', false)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const composerPastePartTypeIdRef = useRef<number | null>(null)
   const composerCursorOffsetRef = useRef<number | null>(null)
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
-  const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
-  const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
+  const liveToolIndexesRef = composerSessions.ref<Map<number, string>>(composerOwnerKey, 'liveToolIndexesRef', new Map())
+  const liveToolInputJsonRef = composerSessions.ref<Map<number, string>>(composerOwnerKey, 'liveToolInputJsonRef', new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, {
     count: number
     lastFingerprint: string | null
@@ -10546,11 +10536,11 @@ function OpenTuiWorkspace() {
     startedAt: number
   }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
-  const awaitingPersistedTurnRef = useRef(false)
-  const liveTextFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingLiveTextRef = useRef('')
-  const pendingLiveReasoningRef = useRef('')
-  const liveTextTargetSessionRef = useRef<Session | null>(null)
+  const awaitingPersistedTurnRef = composerSessions.ref(composerOwnerKey, 'awaitingPersistedTurnRef', false)
+  const liveTextFlushTimerRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'liveTextFlushTimerRef', null)
+  const pendingLiveTextRef = composerSessions.ref(composerOwnerKey, 'pendingLiveTextRef', '')
+  const pendingLiveReasoningRef = composerSessions.ref(composerOwnerKey, 'pendingLiveReasoningRef', '')
+  const liveTextTargetSessionRef = composerSessions.ref<Session | null>(composerOwnerKey, 'liveTextTargetSessionRef', null)
   const loadingDetailRef = useRef(false)
   // Single-flight coalescing for foreground detail loads. The threading worker
   // processes transcripts serially and can't cancel in-flight work, so firing a
@@ -10606,8 +10596,6 @@ function OpenTuiWorkspace() {
     ...(floatingWindow && isSurfaceWindowKey(floatingWindow.key) ? [surfaceIdOfKey(floatingWindow.key)] : []),
   ].map(surfaceKindOf))
   const teammatesModalOpen = teammatesOpen && !windowedPopoverKinds.has('teammates')
-  diagnosticsWindowedRef.current = windowedPopoverKinds.has('diagnostics')
-  const diagnosticsModalOpen = diagnosticsOpen && !diagnosticsWindowedRef.current
   const [remoteCoordinatorTarget, setRemoteCoordinatorTarget] = useState<RemoteCoordinatorTarget | null>(null)
   const remoteCoordinatorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
 
@@ -10619,16 +10607,11 @@ function OpenTuiWorkspace() {
     || pluginOverlay !== null
     || deskOpen
     || pluginManagerOpen
-    || crossSessionMessagingOpen
     || windowSwitcherOpen
     || windowBroadcastOpen
     || handoffBriefOpen
     || promptLibraryOpen
-    || channelBridgeOpen
-    || ideBridgeOpen
     || bookmarksOverlayOpen
-    || taskPopoverOpen
-    || diagnosticsModalOpen
     || coordModalOpen
     || coordBoardOpen
     || teammatesModalOpen
@@ -10996,7 +10979,7 @@ function OpenTuiWorkspace() {
     && providerRunningSessions.some((running) => sessionKey(running) === composerTargetSessionIdentity),
   )
   const composerTargetSessionRef = useRef<Session | null>(null)
-  useEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
+  useLayoutEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
   const canUseChannelBridge = Boolean(
     selectedSessionTarget
     && (selectedSessionTarget.provider ?? 'claude') === 'claude'
@@ -11340,7 +11323,6 @@ function OpenTuiWorkspace() {
 
   useEffect(() => {
     if (canUseChannelBridge) return
-    setChannelBridgeOpen(false)
     setRouteComposerToBridge(false)
     setBridgeTranscriptEntries(keepEmpty)
     persistedBridgeCountRef.current = 0
@@ -11349,7 +11331,6 @@ function OpenTuiWorkspace() {
 
   useEffect(() => {
     if (canUseIdeBridge) return
-    setIdeBridgeOpen(false)
     setRouteComposerToIde(false)
   }, [canUseIdeBridge])
 
@@ -11427,19 +11408,30 @@ function OpenTuiWorkspace() {
   }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
 
   const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
+  const persistedComposerMessages = useMemo(() => {
+    const key = selectedSessionTarget ? sessionKey(selectedSessionTarget) : ''
+    const baseline = liveTranscriptBaselineRef.current.get(key)
+    let durableIndex = 0
+    const recentUsers = new Set((sessionDetail?.rawMessages ?? []).filter(message => {
+      if (!isDurableSessionMessage(message)) return false
+      return durableIndex++ >= (baseline?.count ?? Number.POSITIVE_INFINITY) && message.type === 'user'
+    }).map(message => message.uuid))
+    return indexComposerMessages(sessionDetail?.threadedMessages ?? [], recentUsers)
+  }, [sessionDetail, selectedSessionIdentity, composerSendStartedAt])
   const liveTranscriptMessagesForSession = useMemo(() => {
     if (!selectedSessionTarget) return []
     const key = sessionKey(selectedSessionTarget)
-    const filtered = [
+    const live = [
       ...liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key),
       ...localCommandOutputs.filter((message) => liveMessageSessionKey(message) === key),
     ]
+    const filtered = visibleComposerMessages(live, persistedComposerMessages)
     const prev = liveTranscriptMessagesCacheRef.current
     if (prev && prev.length === filtered.length && prev.every((m, i) => m === filtered[i])) {
       return prev
     }
     return filtered
-  }, [liveTranscriptMessages, localCommandOutputs, selectedSessionTarget])
+  }, [liveTranscriptMessages, localCommandOutputs, selectedSessionTarget, persistedComposerMessages])
   useLayoutEffect(() => {
     liveTranscriptMessagesCacheRef.current = liveTranscriptMessagesForSession
   }, [liveTranscriptMessagesForSession])
@@ -11653,7 +11645,7 @@ function OpenTuiWorkspace() {
       ? persistedTurnSettled(sessionDetail.rawMessages, baseline.count)
       : hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)
     // See refreshSelectedSessionDetail: never finalize under a live stream.
-    const streamStillOwned = ownedTurnKeyRef.current === key && composerAbortRef.current !== null
+    const streamStillOwned = ownsComposerStream(key)
     if (streamStillOwned || (liveAssistantVisible && !turnLanded)) {
       // The assistant is still streaming. Swap the live user echo for the real
       // persisted row ONLY once that row has actually landed as a durable
@@ -11665,7 +11657,7 @@ function OpenTuiWorkspace() {
       // duplicate, since echo and persisted row have different uuids).
       if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
         setLiveTranscriptMessages((prev) => {
-          const next = prev.filter((message) => !(liveMessageSessionKey(message) === key && message.role === 'user'))
+          const next = visibleComposerMessages(prev, persistedComposerMessages)
           return next.length === prev.length ? prev : next
         })
       }
@@ -11797,6 +11789,7 @@ function OpenTuiWorkspace() {
 
 
   const selectSidebarSession = useStableEvent((session: Session) => {
+    setSidebarSubagentCursor(null)
     const existing = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === sessionKey(session))
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === sessionKey(session)) { focusSplitPane(FLOATING_PANE_INDEX); return }
@@ -11992,6 +11985,13 @@ function OpenTuiWorkspace() {
   // Read in the transcript worker, which already holds the provider graph. A
   // session that turns out to have none is remembered outside state: most have
   // none, and a new map per selection rebuilt every sidebar row.
+  const [collapsedSubagentParents, setCollapsedSubagentParents] = useWorkspaceState<string[]>('collapsedSubagentParents', [])
+  const collapsedSubagentSet = useMemo(() => new Set(collapsedSubagentParents), [collapsedSubagentParents])
+  const [subagentTranscriptSelection, setSubagentTranscriptSelection] = useState<{ parent: Session; agent: SubagentSummary } | null>(null)
+  const toggleSidebarSubagents = useStableEvent((parent: Session) => {
+    const key = sessionKey(parent)
+    setCollapsedSubagentParents(previous => previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key])
+  })
   const [providerSubagentSummaries, setProviderSubagentSummaries] = useState<Map<string, SubagentSummary[]>>(new Map())
   const subagentSummariesReadRef = useRef(new Set<string>())
   useEffect(() => {
@@ -12019,7 +12019,7 @@ function OpenTuiWorkspace() {
     const map = new Map<string, SidebarSubagentEntry[]>()
     for (const session of filteredSessionsForSidebar) {
       if (!session.parentSessionId) continue
-      const parentKey = sessionKey({ sessionId: session.parentSessionId, provider: session.provider })
+      const parentKey = sessionKey({ sessionId: session.parentSessionId, provider: session.provider, providerInstanceId: session.providerInstanceId })
       const siblings = map.get(parentKey)
       const entry: SidebarSubagentEntry = { kind: 'session', session }
       if (siblings) siblings.push(entry)
@@ -12038,7 +12038,7 @@ function OpenTuiWorkspace() {
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
   const sidebarEntries = useMemo(() => {
-    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId)
+    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
     if (filteredSessionsForSidebar === sessions) return entries
     const originalIndex = new Map<string, number>()
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
@@ -12047,7 +12047,7 @@ function OpenTuiWorkspace() {
       const idx = originalIndex.get(sessionKey(entry.session))
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
-  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId])
+  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId, collapsedSubagentSet])
   // Keep keyboard navigation and neighbour prefetch on the same flattened
   // session order as the rendered sidebar. Rebuilding this array inside every
   // j/k handler was needlessly allocating one wrapper array per keypress.
@@ -12069,7 +12069,11 @@ function OpenTuiWorkspace() {
     sidebarSessionEntriesRef.current = sidebarSessionEntries
   }, [sidebarEntries, sidebarSessionEntries])
   const sidebarSortLabel = sidebarSort === 'project' ? 'PROJECT' : 'TIME'
+  const [sidebarSubagentCursor, setSidebarSubagentCursor] = useState<string | null>(null)
+  useEffect(() => { setSidebarSubagentCursor(null) }, [selectedSessionKey])
+  useEffect(() => { if (sidebarSubagentCursor && !sidebarEntries.some(entry => entry.key === sidebarSubagentCursor)) setSidebarSubagentCursor(null) }, [sidebarEntries, sidebarSubagentCursor])
   const selectedSidebarEntryIndex = useMemo(() => {
+    if (sidebarSubagentCursor) { const child = sidebarEntries.findIndex(entry => entry.key === sidebarSubagentCursor); if (child >= 0) return child }
     const selected = selectedIndex >= 0 ? sessions[selectedIndex] : null
     const idx = selected
       ? sidebarEntries.findIndex((entry) => {
@@ -12078,7 +12082,7 @@ function OpenTuiWorkspace() {
         })
       : -1
     return idx >= 0 ? idx : 0
-  }, [sidebarEntries, selectedIndex, sessions])
+  }, [sidebarEntries, selectedIndex, sessions, sidebarSubagentCursor])
 
 
   // The rail owns this state now (coordinatorStore). The root needs only the
@@ -14114,7 +14118,7 @@ function OpenTuiWorkspace() {
     ])
       .then((metadata) => {
         // Metadata reads are session-scoped and may legitimately overlap (the
-        // reader can show one session while the composer auto-targets another).
+        // reader can show one session while the composer targets another pane).
         // A single global request id made the newer request discard the older
         // session's valid result, leaving that composer's chip on "loading".
         const isStillSelectedTab = cacheKey === selectedSessionKeyRef.current
@@ -14206,8 +14210,8 @@ function OpenTuiWorkspace() {
       })
   }, [])
 
-  // The composer can target a different session from the reader (most often
-  // the provider's sole running turn). Resolve metadata for that actual target
+  // The composer can explicitly target another window's session. Resolve
+  // metadata for that actual target
   // instead of waiting for a reader-detail load that may never happen.
   useEffect(() => {
     const targetKey = composerTargetSessionIdentity
@@ -14379,7 +14383,7 @@ function OpenTuiWorkspace() {
           // row at turn start, and finalizing on it dropped the baseline and
           // the live overlay mid-turn — so the stream's end had nothing left
           // to reconcile and sat in Syncing until the escape hatch.
-          const streamStillOwned = ownedTurnKeyRef.current === cacheKeyForGuards && composerAbortRef.current !== null
+          const streamStillOwned = ownsComposerStream(cacheKeyForGuards)
           reconcileLiveOverlay = streamStillOwned || (liveAssistantVisible && !turnLanded)
             ? () => {
                 if (!hasPersistedUserAfterBaseline(detail.rawMessages, liveBaseline.count)) return
@@ -14513,21 +14517,23 @@ function OpenTuiWorkspace() {
     if (index >= 0) jumpToTranscriptIndex(index)
   })
 
-  const moveSelection = useStableEvent((delta: number) => {
-    if (sessions.length === 0) return
-    // Navigate in sidebar visual order (grouped by project), not raw time-sort order.
-    const sessionEntries = sidebarSessionEntries
-    if (sessionEntries.length === 0) return
-    const selected = selectedIndex >= 0 ? sessions[selectedIndex] : null
-    const currentPos = selected
-      ? sessionEntries.findIndex((session) => sessionKey(session) === sessionKey(selected))
-      : -1
-    const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, sessionEntries.length - 1)
-    const next = sessionEntries[nextPos]
-    if (next) {
-      setSelectedSessionKey(sessionKey(next))
-      setError(null)
+  const focusSidebarEntry = useStableEvent((entry: SidebarEntry | undefined) => {
+    if (!entry) return
+    if (entry.type === 'subagent' && entry.entry.kind === 'summary') setSidebarSubagentCursor(entry.key)
+    else {
+      setSidebarSubagentCursor(null)
+      const session = sidebarEntrySession(entry)
+      if (session) { const key = sessionKey(session); setSelectedSessionKey(key); setComposerPaneTargetKey(key) }
     }
+    setError(null)
+  })
+  const moveSelection = useStableEvent((delta: number) => {
+    const rows = sidebarEntries.filter(entry => entry.type === 'session' || entry.type === 'subagent')
+    if (!rows.length) return
+    const current = sidebarSubagentCursor ?? (selectedSession ? sessionKey(selectedSession) : null)
+    const at = rows.findIndex(entry => sidebarEntrySessionKey(entry) === current)
+    const next = rows[clamp((at >= 0 ? at : 0) + delta, 0, rows.length - 1)]!
+    focusSidebarEntry(next)
   })
 
   const moveCursor = useStableEvent((delta: number) => {
@@ -14848,7 +14854,7 @@ function OpenTuiWorkspace() {
     const activeTurnRequestId = activeComposerTurnRequestIdRef.current
     const activeTurnTarget = composerTargetSessionRef.current
     const runningRefs = [...runningSessionsRef.current]
-    if (controller && !controller.signal.aborted) controller.abort()
+    for (const key of composerSessions.keys()) composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
 
     void (async () => {
       const cleanupTasks: Promise<unknown>[] = []
@@ -14859,14 +14865,16 @@ function OpenTuiWorkspace() {
         cleanupTasks.push(interruptTuiSessionTurn({
           sessionId: activeTurnTarget.sessionId,
           provider: activeTurnTarget.provider,
+          providerInstanceId: activeTurnTarget.providerInstanceId,
           turnRequestId: activeTurnRequestId,
         }).catch(() => undefined))
       }
       if (!ATTACHED_DAEMON_HOST && runningRefs.length > 0) {
         cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
       }
-      if (cleanupPromise) {
-        cleanupTasks.push(cleanupPromise.catch(() => undefined))
+      for (const key of composerSessions.keys()) {
+        const cleanup = composerSessions.peekRef<Promise<void> | null>(key, 'activeComposerSendCleanupRef')?.current
+        if (cleanup) cleanupTasks.push(cleanup.catch(() => undefined))
       }
       if (cleanupTasks.length > 0) {
         await Promise.race([
@@ -15105,7 +15113,7 @@ function OpenTuiWorkspace() {
   ) => {
     if (nextProvider === provider && nextInstanceId === providerInstanceIdRef.current) {
       closeProviderMenu()
-      if (targetSession) setSelectedSessionKey(sessionKey(targetSession))
+      if (targetSession) { setComposerPaneTargetKey(sessionKey(targetSession)); setSelectedSessionKey(sessionKey(targetSession)) }
       return
     }
 
@@ -15115,6 +15123,7 @@ function OpenTuiWorkspace() {
     setProviderInstanceId(nextInstanceId)
     setProvider(nextProvider)
     setSessionDetail(null)
+    setComposerPaneTargetKey(targetSession ? sessionKey(targetSession) : null)
     setSelectedSessionKey(targetSession ? sessionKey(targetSession) : null)
     setTranscriptCursorKey(null)
     setExpandedCardKeys(new Set())
@@ -15158,6 +15167,7 @@ function OpenTuiWorkspace() {
   const selectTabSession = useStableEvent((session: Session) => {
     setActivePopoverTab(null)
     const key = sessionKey(session)
+    setComposerPaneTargetKey(key)
     const existing = windowItems.findIndex(item => windowItemKey(item) === key)
     if (existing >= 0) { focusSplitPane(existing); return }
     if (floatingKey === key) { focusSplitPane(FLOATING_PANE_INDEX); return }
@@ -15174,205 +15184,8 @@ function OpenTuiWorkspace() {
     setSelectedSessionKey(sessionKey(session))
   })
 
-  const refreshDiagnostics = useStableEvent(async (sessionOverride?: Session) => {
-    const target = sessionOverride ?? selectedSession
-    if (!target) return
-    setDiagnosticsLoading(true)
-    setDiagnosticsError(null)
-    try {
-      const data = await readTuiSessionDiagnostics(target)
-      setDiagnosticsSections(data.sections ?? [])
-    } catch (err) {
-      setDiagnosticsError(err instanceof Error ? err.message : 'Failed to load diagnostics')
-    } finally {
-      setDiagnosticsLoading(false)
-    }
-  })
-
-  const openDiagnostics = useStableEvent((sessionOverride?: Session) => {
-    setDiagnosticsOpen(true)
-    setDiagnosticsMcpIndex(0)
-    void refreshDiagnostics(sessionOverride)
-  })
-
-  const closeDiagnostics = useCallback(() => {
-    setDiagnosticsOpen(false)
-    setDiagnosticsError(null)
-    setDiagnosticsNotice(null)
-    setDiagnosticsBusy(null)
-  }, [])
-
-  // Diagnostics' keys, for its modal and for its window alike.
-  const diagnosticsKey = useStableEvent((key: ShortcutKeyEvent) => {
-      if (key.name === 'escape' || isShiftedKey(key, 'D') || isCtrlKey(key, 'c')) {
-        closeDiagnostics()
-        return
-      }
-      // Scrolling is bound before the Claude-only branch below: the sections
-      // that overflow (context window, permission rules) exist for Claude, but
-      // every provider's diagnostics can outgrow the panel, and a panel that
-      // silently clips is worse than one that scrolls.
-      const scroll = diagnosticsScrollRef.current
-      if (scroll) {
-        const page = Math.max(Math.floor(scroll.height / 2), 1)
-        if (isCtrlKey(key, 'd') || key.name === 'pagedown') {
-          scroll.scrollTo(scroll.scrollTop + page)
-          return
-        }
-        if (isCtrlKey(key, 'u') || key.name === 'pageup') {
-          scroll.scrollTo(Math.max(scroll.scrollTop - page, 0))
-          return
-        }
-      }
-      if (selectedSession?.provider !== 'claude') return
-      const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
-      const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
-      if (mcpRows.length === 0 && key.name !== 'p' && key.name !== 's' && key.name !== 'g') return
-      if (key.name === 'up' || key.name === 'k') {
-        setDiagnosticsMcpIndex((i) => Math.max(0, i - 1))
-        return
-      }
-      if (key.name === 'down' || key.name === 'j') {
-        setDiagnosticsMcpIndex((i) => Math.min(mcpRows.length - 1, i + 1))
-        return
-      }
-      if (key.name === 'r' && mcpRows[diagnosticsMcpIndex]) {
-        const item = mcpRows[diagnosticsMcpIndex]
-        const name = item.split(' · ')[0]?.trim() ?? ''
-        if (name) void runDiagnosticsAction('reconnectMcpServer', { serverName: name }, `mcp:${name}`)
-        return
-      }
-      if (key.name === 't' && mcpRows[diagnosticsMcpIndex]) {
-        const item = mcpRows[diagnosticsMcpIndex]
-        const [rawName, rawStatus] = item.split(' · ')
-        const name = rawName?.trim() ?? ''
-        const status = rawStatus?.trim() ?? ''
-        if (name) void runDiagnosticsAction('toggleMcpServer', { serverName: name, enabled: status === 'disabled' }, `mcp:toggle:${name}`)
-        return
-      }
-      if (key.name === 'o' && mcpRows[diagnosticsMcpIndex]) {
-        const item = mcpRows[diagnosticsMcpIndex]
-        const name = item.split(' · ')[0]?.trim() ?? ''
-        if (name) {
-          const policyKey = `${selectedSession.sessionId}:${name}`
-          const previous: 'default' | 'auto' | undefined = diagnosticsMcpPermissionModes[policyKey]
-          const mode: 'default' | 'auto' | null = previous == null
-            ? 'default'
-            : previous === 'default' ? 'auto' : null
-          setDiagnosticsMcpPermissionModes((current) => {
-            const next = { ...current }
-            if (mode === null) delete next[policyKey]
-            else next[policyKey] = mode
-            return next
-          })
-          void runDiagnosticsAction(
-            'setMcpPermissionModeOverride',
-            { serverName: name, mode },
-            `mcp:permission:${name}`,
-          ).then((result) => {
-            if (!result) {
-              setDiagnosticsMcpPermissionModes((current) => {
-                const next = { ...current }
-                if (previous) next[policyKey] = previous
-                else delete next[policyKey]
-                return next
-              })
-            }
-          })
-        }
-        return
-      }
-      if (key.name === 'd' && mcpRows[diagnosticsMcpIndex]?.endsWith(' · dynamic')) {
-        const name = mcpRows[diagnosticsMcpIndex]!.split(' · ')[0]?.trim() ?? ''
-        if (name) void runDiagnosticsAction('setMcpServers', { operation: 'remove', serverName: name }, `mcp:remove:${name}`)
-        return
-      }
-      if (key.name === 'a') {
-        const source = composerDraftRef.current.trim()
-        if (!source) {
-          setDiagnosticsError('Put a JSON object of MCP servers in the composer first')
-          return
-        }
-        try {
-          const servers = JSON.parse(source) as unknown
-          void runDiagnosticsAction('setMcpServers', { servers }, 'mcp:set')
-        } catch (err) {
-          setDiagnosticsError(err instanceof Error ? err.message : 'Invalid MCP JSON')
-        }
-        return
-      }
-      if (key.name === 'f') {
-        void runDiagnosticsAction('listHookEvents', { query: composerDraftRef.current.trim(), limit: 100 }, 'hooks:search')
-        return
-      }
-      if (key.name === 'p') {
-        void runDiagnosticsAction('reloadPlugins', {}, 'reload-plugins')
-        return
-      }
-      if (key.name === 's') {
-        void runDiagnosticsAction('reloadSkills', {}, 'reload-skills')
-        return
-      }
-      if (key.name === 'g') {
-        void runDiagnosticsAction('resolveSettings', {}, 'resolve-settings')
-        return
-      }
-  })
-
-  const runDiagnosticsAction = useStableEvent(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
-    if (!selectedSession || selectedSession.provider !== 'claude') return null
-    setDiagnosticsBusy(busyKey)
-    setDiagnosticsError(null)
-    setDiagnosticsNotice(null)
-    try {
-      const result = await runTuiSessionAction(selectedSession, { action, ...extra })
-      if (action === 'resolveSettings') {
-        const sources = typeof result.sourceCount === 'number'
-          ? result.sourceCount
-          : Array.isArray(result.sources) ? result.sources.length : null
-        const effective = typeof result.effectiveKeyCount === 'number'
-          ? result.effectiveKeyCount
-          : Array.isArray(result.effectiveKeys) ? result.effectiveKeys.length : null
-        setDiagnosticsNotice(`Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`)
-      } else if (action === 'reloadSkills') {
-        setDiagnosticsNotice('Skills reloaded')
-      } else if (action === 'reloadPlugins') {
-        setDiagnosticsNotice('Plugins reloaded')
-      } else if (action === 'setMcpPermissionModeOverride') {
-        const mode = extra.mode == null ? 'cleared' : `set to ${String(extra.mode)}`
-        setDiagnosticsNotice(`MCP policy ${mode}`)
-      } else if (action === 'setMcpServers') {
-        const dynamicServers = Array.isArray(result.dynamicServers) ? result.dynamicServers.length : 0
-        const authRequired = Array.isArray(result.authRequired)
-          ? result.authRequired.filter((name): name is string => typeof name === 'string')
-          : []
-        const errors = result.errors && typeof result.errors === 'object' && !Array.isArray(result.errors)
-          ? Object.keys(result.errors)
-          : []
-        setDiagnosticsNotice(
-          authRequired.length > 0
-            ? `Dynamic MCP updated · authentication required: ${authRequired.join(', ')}`
-            : errors.length > 0
-              ? `Dynamic MCP updated · connection failed: ${errors.join(', ')}`
-              : `Dynamic MCP updated · ${dynamicServers} server${dynamicServers === 1 ? '' : 's'}`,
-        )
-      } else if (action === 'listHookEvents') {
-        const events = Array.isArray(result.events) ? result.events as Array<Record<string, unknown>> : []
-        const items = events.map((event) => `${String(event.timestamp ?? '')} · ${String(event.summary ?? event.event ?? 'Hook')}`)
-        setDiagnosticsSections((sections) => sections.map((section) => section.id === 'hooks'
-          ? { ...section, items: items.length > 0 ? items : ['None'] }
-          : section))
-        setDiagnosticsNotice(`Hook timeline · ${events.length} match${events.length === 1 ? '' : 'es'}`)
-      }
-      if (action !== 'listHookEvents') await refreshDiagnostics()
-      return result
-    } catch (err) {
-      setDiagnosticsError(err instanceof Error ? err.message : 'Action failed')
-      return null
-    } finally {
-      setDiagnosticsBusy(null)
-    }
-  })
+  // Diagnostics is the diagnostics plugin's; every opener names the session to read.
+  const openDiagnostics = useStableEvent((session?: Session | null) => { runPluginCommandId('diagnostics', session ?? selectedSession) })
 
   // Fire-and-forget push of model/permission changes through the actions
   // route, mirroring MessageView.tsx. For warm Claude sessions the server's
@@ -15420,6 +15233,7 @@ function OpenTuiWorkspace() {
       void interruptTuiSessionTurn({
         sessionId: target.sessionId,
         provider: target.provider,
+        providerInstanceId: target.providerInstanceId,
         turnRequestId: interruptTurnRequestId,
       }).then((stillQueued) => {
         if (stillQueued) {
@@ -15897,6 +15711,7 @@ function OpenTuiWorkspace() {
       }
       setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
       setSelectedSessionKey(sessionKey(draft))
+      setComposerPaneTargetKey(sessionKey(draft))
       setComposerPreferredTargetKey(sessionKey(draft))
       await prepareCreatedSessionForComposer(draft)
       setWorktreeModalOpen(false)
@@ -16121,6 +15936,7 @@ function OpenTuiWorkspace() {
   const openCreatedSession = useStableEvent(async (draft: Session) => {
     setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
     setSelectedSessionKey(sessionKey(draft))
+    setComposerPaneTargetKey(sessionKey(draft))
     setComposerPreferredTargetKey(sessionKey(draft))
     await prepareCreatedSessionForComposer(draft)
     setComposerActive(true)
@@ -16522,7 +16338,7 @@ function OpenTuiWorkspace() {
     }
     // /bashes: background shells are SDK background tasks, listed with the todos.
     if (command === 'todos' || command === 'bashes') {
-      setTaskPopoverOpen(true)
+      runPluginCommandId('tasks-full')
       return true
     }
     if (command === 'memory') {
@@ -17033,7 +16849,12 @@ function OpenTuiWorkspace() {
           onMouseDown={(event) => {
             if (event.button !== 0) return
             event.stopPropagation()
-            selectSidebarSession(subagentEntry.kind === 'session' ? subagentEntry.session : entry.parentSession)
+            if (subagentEntry.kind === 'session') selectSidebarSession(subagentEntry.session)
+            else {
+              setSidebarSubagentCursor(entry.key)
+              setSubagentTranscriptSelection({ parent: entry.parentSession, agent: subagentEntry.summary })
+              setPluginOverlay('subagents')
+            }
           }}
         >
           <text fg={selected ? accent : theme.muted} wrapMode="none">
@@ -17096,8 +16917,9 @@ function OpenTuiWorkspace() {
     // earns a glyph. Marks sit before the age so the ages stay one flush column.
     const settled = Boolean(entry.session.inbox?.settledAt)
     const rowGlyph = activity ? activityGlyph : settled ? '✓' : null
+    const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
     const rowTitleWidth = Math.max(
-      sidebarInnerWidth - 3 - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0),
+      sidebarInnerWidth - 3 - subagentDisclosureWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0),
       4,
     )
 
@@ -17143,9 +16965,13 @@ function OpenTuiWorkspace() {
         ) : (
           <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
             <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+            {(childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? <text
+              id={`sidebar-subagents-toggle:${sessionKey(entry.session)}`} fg={sessionAccent} selectable={false}
+              onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); toggleSidebarSubagents(entry.session) } }}
+            >{collapsedSubagentSet.has(sessionKey(entry.session)) ? '▸ ' : '▾ '}</text> : null}
             {/* Keep the title readable; provider identity belongs to the rail. */}
             <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
-              {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : sidebarInnerWidth - 3)}
+              {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : sidebarInnerWidth - 3 - subagentDisclosureWidth)}
             </text>
             {singleRow ? (
               <>
@@ -17168,7 +16994,7 @@ function OpenTuiWorkspace() {
         )}
       </box>
     )
-  }, [theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, [collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -17182,8 +17008,8 @@ function OpenTuiWorkspace() {
   if (!sidebarRowCacheRef.current) sidebarRowCacheRef.current = createSidebarRowElements(sidebarEntrySessionKey)
   const sidebarRowElements = useMemo(() => {
     const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] : null
-    return sidebarRowCacheRef.current!(sidebarEntries, selectedSession ? sessionKey(selectedSession) : null, buildSidebarRow)
-  }, [sidebarEntries, selectedIndex, sessions, buildSidebarRow])
+    return sidebarRowCacheRef.current!(sidebarEntries, sidebarSubagentCursor ?? (selectedSession ? sessionKey(selectedSession) : null), buildSidebarRow)
+  }, [sidebarEntries, selectedIndex, sessions, sidebarSubagentCursor, buildSidebarRow])
 
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
@@ -17203,15 +17029,46 @@ function OpenTuiWorkspace() {
     if (!session) return
     setComposerLiveText(text)
     setComposerLiveReasoning(pendingLiveReasoningRef.current)
-  }, [])
+  }, [liveTextFlushTimerRef, pendingLiveTextRef, liveTextTargetSessionRef, pendingLiveReasoningRef, setComposerLiveText, setComposerLiveReasoning])
 
-  const sendComposerMessage = useStableEvent(async (
+  const composerViewActions = { setComposerDraft, setComposerMentionAttachments, setComposerPromptParts, setComposerMention, setComposerMentionResults, setComposerMentionDismissedStart, setComposerSlashIndex, setComposerSlashDismissed, setComposerHistoryIndex, setComposerHistoryOpen, setDraftBeforeHistory, setFollowTail, setPendingNewCount, setUnreadBoundaryKey, setHistoryIndex, setPermissionOptionIndex, setContextUsage, setSessionDetail, setTuiCopilotMode }
+  const composerViewRefs = { textarea: composerTextareaRef, storage: composerDraftStorageKeyRef, attachments: composerMentionAttachmentsRef, parts: composerPromptPartsRef }
+  const sendComposerMessage = useStableEvent(async function sendForSession(
     draftOverride?: string,
     attachmentsOverride?: SendAttachment[],
     isRetry?: boolean,
     promptPartsOverride?: ComposerPromptPart[],
     retryTurnRequestId?: string,
-  ): Promise<void> => {
+  ): Promise<void> {
+    const isCurrentTarget = () => Boolean(composerTargetSessionRef.current && composerTargetSession && composerSessions.same(sessionKey(composerTargetSessionRef.current), sessionKey(composerTargetSession)))
+    const project = <Args extends unknown[]>(action: (...args: Args) => void) => (...args: Args) => { if (isCurrentTarget()) action(...args) }
+    const setComposerDraft = project(composerViewActions.setComposerDraft)
+    const setComposerMentionAttachments = project(composerViewActions.setComposerMentionAttachments)
+    const setComposerPromptParts = project(composerViewActions.setComposerPromptParts)
+    const setComposerMention = project(composerViewActions.setComposerMention)
+    const setComposerMentionResults = project(composerViewActions.setComposerMentionResults)
+    const setComposerMentionDismissedStart = project(composerViewActions.setComposerMentionDismissedStart)
+    const setComposerSlashIndex = project(composerViewActions.setComposerSlashIndex)
+    const setComposerSlashDismissed = project(composerViewActions.setComposerSlashDismissed)
+    const setComposerHistoryIndex = project(composerViewActions.setComposerHistoryIndex)
+    const setComposerHistoryOpen = project(composerViewActions.setComposerHistoryOpen)
+    const setDraftBeforeHistory = project(composerViewActions.setDraftBeforeHistory)
+    const setFollowTail = project(composerViewActions.setFollowTail)
+    const setPendingNewCount = project(composerViewActions.setPendingNewCount)
+    const setUnreadBoundaryKey = project(composerViewActions.setUnreadBoundaryKey)
+    const setHistoryIndex = project(composerViewActions.setHistoryIndex)
+    const setPermissionOptionIndex = project(composerViewActions.setPermissionOptionIndex)
+    const setContextUsage = project(composerViewActions.setContextUsage)
+    const setSessionDetail = project(composerViewActions.setSessionDetail)
+    const setTuiCopilotMode = project(composerViewActions.setTuiCopilotMode)
+    const composerTextareaRef = { get current() { return isCurrentTarget() ? composerViewRefs.textarea.current : null } }
+    const composerDraftStorageKeyRef = { current: composerViewRefs.storage.current }
+    const scopedRef = <T,>(source: { current: T }) => {
+      let saved = source.current
+      return { get current() { return isCurrentTarget() ? source.current : saved }, set current(value: T) { saved = value; if (isCurrentTarget()) source.current = value } }
+    }
+    const composerMentionAttachmentsRef = scopedRef(composerViewRefs.attachments)
+    const composerPromptPartsRef = scopedRef(composerViewRefs.parts)
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
       ? {
@@ -17387,7 +17244,7 @@ function OpenTuiWorkspace() {
     // — starting a fresh turn now would run two concurrently. A transient
     // auto-retry bypasses the queue — the prior (failed) turn already settled,
     // composerSendState just hasn't been cleared yet across the backoff.
-    if (!isRetry && (composerSendState === 'sending' || reattachedRunningRef.current)) {
+    if (!isRetry && (composerAbortRef.current !== null || composerRetryTimerRef.current !== null || reattachedRunningRef.current)) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments(keepEmpty)
@@ -17511,7 +17368,7 @@ function OpenTuiWorkspace() {
     setLiveSubagentText({})
     setLiveOutputTokens(0)
     setLiveToolActivities(keepEmpty)
-    setPendingPermissions(keepEmpty)
+    setPendingPermissions(previous => keepFiltered(previous, entry => entry.sessionId !== targetSession.sessionId || (entry.provider ?? 'claude') !== (targetSession.provider ?? 'claude')))
     setPermissionOptionIndex(0)
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
@@ -17692,6 +17549,7 @@ function OpenTuiWorkspace() {
               liveTranscriptBaselineRef.current.delete(oldKey)
               liveTranscriptBaselineRef.current.set(newKey, baseline)
             }
+            composerSessions.rekey(oldKey, newKey)
             if (ownedTurnKeyRef.current === oldKey) ownedTurnKeyRef.current = newKey
             setComposerActivitySessionKey((current) => current === oldKey ? newKey : current)
             commitQueuedComposerSends(rekeyComposerQueueTarget(queuedComposerSendsRef.current, oldKey, newKey))
@@ -17711,6 +17569,7 @@ function OpenTuiWorkspace() {
             }
             setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
+            setComposerPaneTargetKey(current => current === oldKey ? newKey : current)
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
           }
           return
@@ -18045,7 +17904,7 @@ function OpenTuiWorkspace() {
         if (targetSession.provider === 'claude') {
           const threaded = normalizeClaudeStreamThreadedMessage(parsed)
           if (threaded) {
-            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, { ...threaded, providerInstanceId: targetSession.providerInstanceId }))
           }
         } else if (targetSession.provider === 'codex') {
           const threaded = normalizeCodexStreamThreadedMessage(parsed, targetSession.sessionId)
@@ -18355,8 +18214,8 @@ function OpenTuiWorkspace() {
         && composerRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES) {
         composerRetryCountRef.current += 1
         const attempt = composerRetryCountRef.current
-        const retryDraft = draftOverride ?? composerDraft
-        const retryAttachments = attachmentsOverride
+        const retryDraft = submission.visibleText
+        const retryAttachments = sendAttachments
         setLiveStatus('retrying')
         setComposerLiveText('')
         setLiveToolActivities(keepEmpty)
@@ -18367,7 +18226,7 @@ function OpenTuiWorkspace() {
         if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
         composerRetryTimerRef.current = setTimeout(() => {
           composerRetryTimerRef.current = null
-          void sendComposerMessage(retryDraft, retryAttachments, true, submission.promptParts, turnRequestId)
+          void sendForSession(retryDraft, retryAttachments, true, submission.promptParts, turnRequestId)
         }, transientRetryBackoffMs(attempt))
         return
       }
@@ -18417,6 +18276,14 @@ function OpenTuiWorkspace() {
       commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
+      if (!isCurrentTarget()) {
+        const key = sessionKey(targetSession)
+        const restored = restoreComposerDraftPayload({ text: readWorkspaceDraft(key), attachments: [] }, failedQueue, { text: failedDraft, attachments: sendAttachments })
+        writeWorkspaceDraft(key, restored.text)
+        writeWorkspaceDraftParts(key, [...submission.promptParts, ...failedQueue.flatMap(entry => entry.promptParts), ...readWorkspaceDraftParts(key)])
+        showNotice('error', `${formatSessionTitle(targetSession)}: ${errorMessage}`)
+        return
+      }
       const restoredPayload = restoreComposerDraftPayload(
         {
           text: composerTextareaRef.current?.plainText ?? '',
@@ -18439,7 +18306,7 @@ function OpenTuiWorkspace() {
       setComposerPromptParts(restoredParts)
       restoreComposerPromptPartExtmarks(restoredParts, restoredDraft)
     } finally {
-      void reader?.cancel()
+      void reader?.cancel().catch(() => {})
       composerAbortRef.current = null
       if (activeComposerTurnRequestIdRef.current === turnRequestId) {
         activeComposerTurnRequestIdRef.current = null
@@ -18459,13 +18326,19 @@ function OpenTuiWorkspace() {
       setLiveToolActivities(keepEmpty)
       setComposerSendStartedAt(null)
       clearSessionRunning(runningRef)
-      // Single stream at a time, so an unconditional clear is safe (targetKey
-      // may be stale after a pending→real session-id rename).
+      // Ownership is scoped to this session, including pending-id aliases.
       ownedTurnKeyRef.current = null
       if (activeComposerSendCleanupRef.current === turnCleanupPromise) {
         activeComposerSendCleanupRef.current = null
       }
       resolveTurnCleanup()
+      if (composerSessions.get<SendState>(targetKey, 'composerSendState', 'idle') === 'idle' && !reattachedRunningRef.current && !exitInProgressRef.current) {
+        const next = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)[0]
+        if (next) {
+          commitQueuedComposerSends(removeComposerQueueItem(queuedComposerSendsRef.current, next.id))
+          queueMicrotask(() => { void sendForSession(next.text, next.attachments, false, next.promptParts) })
+        }
+      }
     }
   })
 
@@ -18477,7 +18350,7 @@ function OpenTuiWorkspace() {
   useEffect(() => {
     if (activeQueuedComposerSends.length === 0) return
     if (!runningRegistryReady) return
-    if (composerSendState !== 'idle') return
+    if (composerSendState !== 'idle' || composerAbortRef.current || composerRetryTimerRef.current) return
     // A turn we reattached to is still running server-side — flushing now
     // would start a second concurrent turn. The registry poll clears the flag
     // when the turn ends.
@@ -18506,11 +18379,11 @@ function OpenTuiWorkspace() {
   ) => {
     const selectedKey = selectedSessionKeyRef.current
     const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
-    const reattached = Boolean(selectedEntry) && selectedKey !== ownedKey && !awaitingPersistedTurnRef.current
+    const reattached = Boolean(selectedEntry) && !ownsComposerStream(selectedKey!) && !awaitingPersistedTurnRef.current
     reattachedRunningKeyRef.current = reattached && selectedKey ? selectedKey : null
     setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
 
-    if (!selectedKey || selectedKey === ownedKey) return
+    if (!selectedKey || ownsComposerStream(selectedKey)) return
     if (selectedEntry) {
       // While idle for this session, the registry is authoritative for every
       // provider's still-answerable approvals/questions, not only Claude's.
@@ -18569,7 +18442,7 @@ function OpenTuiWorkspace() {
       // Sidebar liveness for turns nobody owns (started before a session
       // switch, or surviving a dead stream).
       for (const [key, entry] of runningByKey) {
-        if (key === ownedKey || reattachMarksRef.current.has(key)) continue
+        if (ownsComposerStream(key) || reattachMarksRef.current.has(key)) continue
         const ref: RunningSessionRef = { sessionId: entry.sessionId, provider: entry.provider, providerInstanceId: entry.providerInstanceId }
         reattachMarksRef.current.set(key, ref)
         markSessionRunning(ref)
@@ -18591,7 +18464,7 @@ function OpenTuiWorkspace() {
       // the "an agent is waiting on you and you can't see it" moments.
       const background: PendingPermission[] = []
       for (const [key, entry] of runningByKey) {
-        if (key === ownedKey || key === selectedKey) continue
+        if (ownsComposerStream(key) || key === selectedKey) continue
         const permissionPayloads = entry.pendingPermissions.length > 0
           ? entry.pendingPermissions
           : entry.pendingPrompts.map((data) => ({
@@ -20102,16 +19975,17 @@ function OpenTuiWorkspace() {
     if (spacesMenuOpen || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen) return // the focused window input owns bracketed paste
     // A shell with the keyboard takes the paste too, bracketed if it asked.
     const pasteKey = { name: 'paste', ctrl: false, shift: false, sequence: Buffer.from(event.bytes).toString('utf8') }
-    if (pendingPermissions.length === 0 && focusedWindowSurface && focusedWindowSurfaceKind === 'terminal' && windowSurfaceCaptureRef.current.get(focusedWindowSurface) === 'terminal') {
+    if (pendingPermissions.length === 0 && focusedWindowSurface && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && windowSurfaceCaptureRef.current.get(focusedWindowSurface) === 'terminal') {
       event.preventDefault()
       event.stopPropagation()
       windowSurfaceKeysRef.current.get(focusedWindowSurface)?.(pasteKey)
       return
     }
-    if (pendingPermissions.length === 0 && surfaceProcessCaptureRef.current === 'terminal' && surfacePanelOpen && surfacePanelFocused && activeSurface(surfacePanel)?.kind === 'terminal') {
+    const pastePanelKind = activeSurface(surfacePanel)?.kind
+    if (pendingPermissions.length === 0 && surfacePluginKeyCaptureRef.current === 'terminal' && surfacePanelOpen && surfacePanelFocused && pastePanelKind && isPluginSurfaceId(pastePanelKind)) {
       event.preventDefault()
       event.stopPropagation()
-      surfaceProcessKeyRef.current?.(pasteKey)
+      surfacePluginKeyRef.current?.(pasteKey)
       return
     }
     if (isInteractiveCoordinatorOpen()) {
@@ -20313,14 +20187,6 @@ function OpenTuiWorkspace() {
     setPromptLibraryOpen(true)
   })
 
-  const openChannelBridge = useStableEvent(() => {
-    if (!canUseChannelBridge) {
-      showNotice('error', 'Select a Claude session to use the channel bridge')
-      return
-    }
-    setChannelBridgeOpen(true)
-  })
-
   const toggleComposerBridgeRoute = useStableEvent(() => {
     if (!canUseChannelBridge) {
       showNotice('error', 'Select a Claude session to route the composer through the channel bridge')
@@ -20331,14 +20197,6 @@ function OpenTuiWorkspace() {
       showNotice('info', next ? 'Composer now routes to the live CLI bridge' : 'Composer back to the active provider')
       return next
     })
-  })
-
-  const openIdeBridge = useStableEvent(() => {
-    if (!canUseIdeBridge) {
-      showNotice('error', 'Select a Claude session to use the IDE bridge')
-      return
-    }
-    setIdeBridgeOpen(true)
   })
 
   const toggleComposerIdeRoute = useStableEvent(() => {
@@ -20514,7 +20372,6 @@ function OpenTuiWorkspace() {
       setPopoverTabs(current => current.includes(id) ? current : [...current, id])
       setWindowSurfaceMeta(current => ({ ...current, [id]: saved.layout.surfaceMeta[id] ?? {} }))
       setActivePopoverTab(id); setSplitFocusIndex(null)
-      if (surfaceKindOf(id) === 'diagnostics') setDiagnosticsOpen(true)
       if (surfaceKindOf(id) === 'teammates' && !teammatesOpen) openTeammatesPanel()
       showNotice('info', 'Closed tab reopened')
       return
@@ -20799,6 +20656,10 @@ function OpenTuiWorkspace() {
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
   const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => {
+    if (isPluginSurfaceId(kind) && !isPluginEnabled(getPluginSurface(kind).pluginId)) {
+      showNotice('info', `${getPluginSurface(kind).title.slice(2)} is off · turn its plugin on in Plugins (⌃K palette)`)
+      return
+    }
     const activePanel = activeSurface(surfacePanel)
     const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
     const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
@@ -20813,6 +20674,7 @@ function OpenTuiWorkspace() {
     const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
     for (let instance = 2; taken.has(surface); instance += 1) surface = `${kind}#${instance}`
     checkpointWindowLayout()
+    if (!movingPanel && pluginOverlay === kind) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
     const remaining = surfacePanel.surfaces.filter((entry) => entry.id !== movingPanel?.id)
     if (movingPanel) {
       copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, undefined, movingPanel.id), surfaceViewNamespace(kind, surface))
@@ -20837,7 +20699,6 @@ function OpenTuiWorkspace() {
   const closeSurfaceWindow = useStableEvent((surface: WindowSurfaceId, moving = false) => {
     if (!moving && !returningPopoverRef.current) {
       if (surfaceKindOf(surface) === 'teammates' && teammatesOpen) closeInteractiveCoordinator()
-      if (surfaceKindOf(surface) === 'diagnostics' && diagnosticsOpen) closeDiagnostics()
     }
     if (floatingKey === surfaceWindowKey(surface)) { closeFloatingWindow(!moving); return }
     if (windowStackFor(surfaceWindowKey(surface))) { closeWindowTab(surfaceWindowKey(surface), !moving); return }
@@ -20877,11 +20738,7 @@ function OpenTuiWorkspace() {
     else if (kind === 'attention') setAttentionOpen(open)
     else if (kind === 'prompt-library') setPromptLibraryOpen(open)
     else if (kind === 'playbooks') setPlaybookManagerOpen(open)
-    else if (kind === 'messaging') setCrossSessionMessagingOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
-    else if (kind === 'tasks') setTaskPopoverOpen(open)
-    else if (kind === 'channel-bridge') setChannelBridgeOpen(open)
-    else if (kind === 'ide-bridge') setIdeBridgeOpen(open)
     else if (kind === 'desk') setDeskOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
     // suppressed), so moving between the two forms changes nothing here.
@@ -20890,11 +20747,10 @@ function OpenTuiWorkspace() {
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
     fileHistoryPath && gitRepoCwd ? 'file-history'
-    : pluginOverlay && !isPluginPanelSurfaceId(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
+    : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
-    : crossSessionMessagingOpen ? 'messaging' : handoffBriefOpen ? 'handoff' : taskPopoverOpen ? 'tasks'
-    : channelBridgeOpen && canUseChannelBridge ? 'channel-bridge' : ideBridgeOpen && canUseIdeBridge ? 'ide-bridge'
-    : deskOpen ? 'desk' : teammatesModalOpen ? 'teammates' : diagnosticsModalOpen ? 'diagnostics' : null)
+    : handoffBriefOpen ? 'handoff'
+    : deskOpen ? 'desk' : teammatesModalOpen ? 'teammates' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
   // A popover into a window, pinned to the reader's session (or nothing),
   // focused. A window already showing it for that pin is focused instead.
@@ -20904,7 +20760,6 @@ function OpenTuiWorkspace() {
   const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
     // Store-backed panels stay open while windowed: opened as a window straight
     // from the palette, they must be opened first or their window closes at once.
-    if (kind === 'diagnostics' && !diagnosticsOpen) openDiagnostics()
     if (kind === 'teammates' && !teammatesOpen) openTeammatesPanel()
     setPopoverOpen(kind, false)
     if (placement === 'tab') { openPopoverInNewTab(kind, pin); return }
@@ -20920,6 +20775,7 @@ function OpenTuiWorkspace() {
     }
     const surface = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked]))
     checkpointWindowLayout()
+    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
     setWindowSurfaceMeta((current) => ({ ...current, [surface]: pin }))
     setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
     if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
@@ -20965,6 +20821,7 @@ function OpenTuiWorkspace() {
     if (existing) { showPopoverTab(existing); return }
     const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
     const id = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked, ...popoverTabs]))
+    if (isPluginSurfaceId(kind) && (!isPopoverWindowKind(kind) || !POPOVER_WINDOWS[kind].single)) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, id), getPluginSurface(kind).pluginId)
     setWindowSurfaceMeta((current) => ({ ...current, [id]: pin }))
     setPopoverTabs((current) => [...current, id])
     showPopoverTab(id)
@@ -20975,7 +20832,6 @@ function OpenTuiWorkspace() {
     const kind = surfaceKindOf(id)
     if (!keep) {
       if (kind === 'teammates' && teammatesOpen) closeInteractiveCoordinator()
-      if (kind === 'diagnostics' && diagnosticsOpen) closeDiagnostics()
     }
     setPopoverTabs((current) => keepFiltered(current, (entry) => entry !== id))
     if (!keep) setWindowSurfaceMeta((current) => { if (!(id in current)) return current; const next = { ...current }; delete next[id]; return next })
@@ -21027,12 +20883,18 @@ function OpenTuiWorkspace() {
   // and pull requests included, which are side-panel surface kinds as well.
   // A plugin command opens its surface: in the window already showing it for
   // this pin when there is one (the open-popover effect routes it), else as an overlay.
-  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand) => {
+  // `session` is the one the command is for (a pane's, a slash command's
+  // target); by default the selected one.
+  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand, session: Session | null = selectedSession) => {
     if (!isPluginSurfaceId(command.opens)) return
     if (!isPluginEnabled(command.pluginId)) {
       showNotice('info', `${command.label} is off · turn its plugin on in Plugins (⌃K palette)`)
       return
     }
+    // A service the host cannot offer right now says why, rather than opening an empty view.
+    const gap = getPluginSurface(command.opens).services.map((id) => pluginServiceGaps[id]).find(Boolean)
+    if (gap) { showNotice('error', gap); return }
+    if (command.requires === 'session' && !session) { showNotice('info', `${command.label} needs a session`); return }
     if (command.requires === 'repository' && !gitRepoCwd) {
       showNotice('info', 'Selected session has no working directory', 3000)
       return
@@ -21040,11 +20902,25 @@ function OpenTuiWorkspace() {
     // A command names no file, so the editor opens where it was; nor a turn.
     if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
     if (command.opens === 'checkpoints') setCheckpointFocusPrompt(null)
-    setPluginOverlay(command.opens)
+    if (command.placement === 'panel') {
+      // A side-panel tab: the one already open, or a new one. Several may exist
+      // (shells); one in a window is its own and stays where it is.
+      const kind = command.opens as RightPanelSurfaceKind
+      setSurfacePanelOpen(true)
+      setSurfacePanelFocused(true)
+      setSurfacePanel((current) => {
+        const existing = current.surfaces.find((surface) => surface.kind === kind)
+        return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, kind)
+      })
+      return
+    }
+    const opens = command.opens
+    setPluginOpenRequests((current) => ({ ...current, [opens]: { count: (current[opens]?.count ?? 0) + 1, session } }))
+    setPluginOverlay(opens)
   })
-  const runPluginCommandId = useStableEvent((id: string) => {
+  const runPluginCommandId = useStableEvent((id: string, session?: Session | null) => {
     const command = getPluginCommand(id)
-    if (command) runPluginCommand(command)
+    if (command) runPluginCommand(command, session === undefined ? selectedSession : session)
   })
   // What a plugin view's runCommand reaches: another plugin's command, or a host
   // command a plugin may ask for by id. Plugins never import each other.
@@ -21061,8 +20937,19 @@ function OpenTuiWorkspace() {
       return next
     })
   })
+  const jumpToTaskCard = useStableEvent((uuid: string) => {
+    const idx = visibleTranscriptCards.findIndex((card) => card.key === uuid)
+    if (idx >= 0) jumpToTranscriptIndex(idx)
+  })
+  // Only a warm Claude session can stop its background tasks (query.stopTask()).
+  const composerCanStopTasks = composerTargetSession?.provider === 'claude'
   // What the root offers plugin views. Each surface receives only the services it declares.
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
+    ...(subagentTranscriptSelection ? { 'subagent-transcript': {
+      label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,
+      agentId: subagentTranscriptSelection.agent.agentId,
+      load: (signal: AbortSignal) => readTuiSubagentTranscriptAsync(subagentTranscriptSelection.parent, subagentTranscriptSelection.agent.agentId, density, signal),
+    } } : {}),
     composer: {
       appendDiffNote: (prompt: string, notice?: string) => {
         appendDiffCommentPromptToComposer(prompt)
@@ -21074,15 +20961,68 @@ function OpenTuiWorkspace() {
         setComposerActive(true)
         showNotice('info', notice ?? 'Added to composer')
       },
+      appendPrompt: (prompt: string, notice: string) => {
+        appendDiffCommentPromptToComposer(prompt)
+        setSurfacePanelFocused(false)
+        showNotice('info', notice)
+      },
     },
     clipboard: { write: (text: string) => writeClipboard(text, renderer), read: readClipboardText },
     'open-file': { open: (path: string, line?: number | null) => openEditorAt(path, line ?? null) },
     notices: { show: (kind: 'info' | 'error', text: string, durationMs?: number) => showNotice(kind, text, durationMs) },
+    'browser-location': {
+      recent: surfaceBrowserRecent,
+      opened: (url: string) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12)),
+    },
     ...(gitRepoCwd ? { 'file-history': { open: (path: string, where?: 'overlay' | 'window') => openFileHistory(path, where) } } : {}),
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
+    'task-control': {
+      jumpTo: jumpToTaskCard,
+      ...(composerCanStopTasks ? { stop: (taskId: string) => { void stopComposerTask(taskId) } } : {}),
+    },
+    'session-diagnostics': {
+      read: async (session: Session) => (await readTuiSessionDiagnostics(session)).sections ?? [],
+      run: (session: Session, action: string, extra: Record<string, unknown>) => runTuiSessionAction(session, { action, ...extra }),
+      hasControls: (session: Session) => session.provider === 'claude',
+    },
+    // The bridges are offered only while a Claude session can use one (pluginServiceGaps says so otherwise).
+    ...(canUseChannelBridge ? { 'channel-bridge': { routed: routeComposerToBridge, toggleRoute: toggleComposerBridgeRoute, accentColor: composerAccentColor } } : {}),
+    ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [renderer, velocityScrollEnabled, Boolean(gitRepoCwd)])
+  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent])
+  // Why a service the root offers only sometimes is missing right now.
+  const pluginServiceGaps = useMemo((): Partial<Record<PluginServiceId, string>> => ({
+    ...(canUseChannelBridge ? {} : { 'channel-bridge': 'Select a Claude session to use the channel bridge' }),
+    ...(canUseIdeBridge ? {} : { 'ide-bridge': 'Select a Claude session to use the IDE bridge' }),
+  }), [canUseChannelBridge, canUseIdeBridge])
+  // An overlay whose service went away closes, as the bridge panels did when the session stopped being Claude's.
+  useEffect(() => {
+    if (pluginOverlay && getPluginSurface(pluginOverlay).services.some((id) => pluginServiceGaps[id])) setPluginOverlay(null)
+  }, [pluginOverlay, pluginServiceGaps])
+  // The session a surface shows: a session-pinned window its pin, otherwise the
+  // one its latest open named, else the selection.
+  const pluginSessionFor = (surfaceId: PluginSurfaceId, slot?: WindowSurfaceId): Session | null => {
+    if (getPluginSurface(surfaceId).pin === 'session') return slot ? pinnedSessionOf(slot) : selectedSession
+    return pluginOpenRequests[surfaceId]?.session ?? selectedSession
+  }
+  const pluginLiveTranscript = useMemo(() => ({ key: selectedSessionKey, messages: liveTranscriptMessagesForSession }), [selectedSessionKey, liveTranscriptMessagesForSession])
+  // A window's plugin services: the shared ones, plus what that window showed
+  // before a remount. Cached per window so a view's services keep their identity.
+  const windowPluginServicesRef = useRef(new Map<WindowSurfaceId, { base: TuiProvidedPluginServices; value: TuiProvidedPluginServices }>())
+  const windowPluginServices = (slot: WindowSurfaceId): TuiProvidedPluginServices => {
+    const cached = windowPluginServicesRef.current.get(slot)
+    if (cached?.base === pluginServices) return cached.value
+    const value: TuiProvidedPluginServices = {
+      ...pluginServices,
+      'window-selection': {
+        get initial() { return windowShellSelectionRef.current.get(slot) ?? null },
+        changed: (id: string | null) => { windowShellSelectionRef.current.set(slot, id) },
+      },
+    }
+    windowPluginServicesRef.current.set(slot, { base: pluginServices, value })
+    return value
+  }
   const closeFolderPicker = useStableEvent(() => setFolderPickerForNewSession(false))
   const folderPickerServices = useMemo((): TuiProvidedPluginServices => ({
     'directory-picker': { choose: (path: string) => handleNewSessionFolderSelected(path) },
@@ -21091,7 +21031,7 @@ function OpenTuiWorkspace() {
   const registerFolderPickerKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
     folderPickerKeyHandlerRef.current = handler
   })
-  const surfacePluginCaptureChange = useStableEvent((capture: boolean) => { surfacePluginKeyCaptureRef.current = capture })
+  const surfacePluginCaptureChange = useStableEvent((capture: TuiPluginCapture) => { surfacePluginKeyCaptureRef.current = capture })
   const closePluginOverlay = useStableEvent(() => {
     if (pluginOverlay === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
     if (pluginOverlay === 'checkpoints') setCheckpointFocusPrompt(null)
@@ -21143,7 +21083,7 @@ function OpenTuiWorkspace() {
     pluginOverlayKeyHandlerRef.current = handler
   })
   const pluginSelectedDetail = useMemo(() => ({ key: selectedSessionKey, detail: sessionDetail }), [selectedSessionKey, sessionDetail])
-  const offerPopoverPlacement = useStableEvent((kind: PopoverWindowKind | 'diff' | 'files' | 'pull-request') => {
+  const offerPopoverPlacement = useStableEvent((kind: WindowSurfaceKind) => {
     const beside = () => {
       if (isPopoverWindowKind(kind)) { openPopoverWindow(kind); return }
       setPopoverOpen(kind, false)
@@ -21161,6 +21101,7 @@ function OpenTuiWorkspace() {
     if (!isPopoverWindowKind(kind)) return
     const pinned = pinnedSessionOf(surface)
     const meta = windowSurfaceMeta[surface]
+    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, surface), 'root', getPluginSurface(kind).pluginId)
     returningPopoverRef.current = true
     closeSurfaceWindow(surface, true)
     returningPopoverRef.current = false
@@ -21310,6 +21251,13 @@ function OpenTuiWorkspace() {
     if (!stack || !frame || frame === key) return
     checkpointWindowLayout()
     commitWindowKeys(replaceWindowKey(shownFirstWindowKeys(), frame, key))
+    if (!isSurfaceWindowKey(key)) {
+      setComposerPaneTargetKey(key)
+      setSelectedSessionKey(key)
+      const index = windowItems.findIndex(item => windowItemKey(item) === frame)
+      if (index >= 0) setSplitFocusIndex(index)
+      setFocusedPane('messages')
+    }
   })
   const stepWindowTab = useStableEvent((delta: number) => {
     const item = focusedWindowItem
@@ -22053,6 +22001,8 @@ function OpenTuiWorkspace() {
     const focused = paneIndex === FLOATING_PANE_INDEX ? floatingItem : windowItems[paneIndex]
     if (focused?.kind === 'session') {
       const key = sessionKey(focused.session)
+      setComposerPaneTargetKey(key)
+      setSelectedSessionKey(key)
       // Entering a previewed session's window keeps it: it becomes a tab.
       setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, focused.session])
     }
@@ -22121,12 +22071,11 @@ function OpenTuiWorkspace() {
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
   }, [pluginOverlay, dailySummaryOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
-    crossSessionMessagingOpen, handoffBriefOpen, taskPopoverOpen, fileHistoryPath, channelBridgeOpen, ideBridgeOpen, deskOpen])
+    handoffBriefOpen, fileHistoryPath, deskOpen])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
-    if (!diagnosticsOpen && windowedPopoverKinds.has('diagnostics')) closeSurfaceWindow('diagnostics')
     if (!teammatesOpen && windowedPopoverKinds.has('teammates')) closeSurfaceWindow('teammates')
-  }, [diagnosticsOpen, teammatesOpen, windowSurfaces])
+  }, [teammatesOpen, windowSurfaces])
 
   // A surface window just opened takes focus once it has a place in the layout.
   useEffect(() => {
@@ -22442,7 +22391,8 @@ function OpenTuiWorkspace() {
     }
     const pluginCommand = getPluginCommand(id)
     if (pluginCommand) {
-      runPluginCommand(pluginCommand)
+      // For the focused window's session, as the palette's own session commands are.
+      runPluginCommand(pluginCommand, focusedSession ?? selectedSession)
       return
     }
     switch (id) {
@@ -22457,9 +22407,6 @@ function OpenTuiWorkspace() {
         break
       case 'attention':
         setAttentionOpen(true)
-        break
-      case 'messaging':
-        setCrossSessionMessagingOpen(true)
         break
       case 'next-attention':
         jumpToNextAttention()
@@ -22533,16 +22480,6 @@ function OpenTuiWorkspace() {
         break
       case 'window-float-shell':
         floatNewShell()
-        break
-      case 'processes':
-        setSurfacePanelOpen(true)
-        setSurfacePanelFocused(true)
-        // Terminal surfaces are multi-instance; this goes to the one already open.
-        // A shell in a window is its own process and stays where it is.
-        setSurfacePanel((current) => {
-          const existing = current.surfaces.find((surface) => surface.kind === 'terminal')
-          return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, 'terminal')
-        })
         break
       case 'coord-teammates':
         openTeammatesPanel()
@@ -22799,9 +22736,6 @@ function OpenTuiWorkspace() {
         setTaskPanelOpen(true)
         setTaskPanelTab('tasks')
         break
-      case 'tasks-full':
-        setTaskPopoverOpen(true)
-        break
       case 'tasks-expand':
         setTaskPanelExpanded((current) => !current)
         break
@@ -22960,9 +22894,6 @@ function OpenTuiWorkspace() {
       case 'prompt-library':
         openPromptLibrary()
         break
-      case 'diagnostics':
-        if (focusedSession) openDiagnostics(focusedSession)
-        break
       case 'rename':
         if (focusedSession) {
           setRenameSessionKey(sessionKey(focusedSession))
@@ -22972,14 +22903,8 @@ function OpenTuiWorkspace() {
       case 'cli':
         void copyCliCommand()
         break
-      case 'channel-bridge':
-        openChannelBridge()
-        break
       case 'channel-bridge-route':
         toggleComposerBridgeRoute()
-        break
-      case 'ide-bridge':
-        openIdeBridge()
         break
       case 'ide-bridge-route':
         toggleComposerIdeRoute()
@@ -23153,10 +23078,9 @@ function OpenTuiWorkspace() {
   const blockingWindowPopover = Object.entries({
     ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, coordination: coordBoardOpen,
     playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
-    messaging: crossSessionMessagingOpen, handoff: handoffBriefOpen, tasks: taskPopoverOpen,
+    handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),
-    'channel-bridge': channelBridgeOpen && canUseChannelBridge, 'ide-bridge': ideBridgeOpen && canUseIdeBridge,
-    desk: deskOpen, teammates: teammatesModalOpen, diagnostics: diagnosticsModalOpen,
+    desk: deskOpen, teammates: teammatesModalOpen,
   }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))
   const windowControlsBlocked = Boolean(
     pendingPermissions.length || blockingWindowPopover || contextMenu || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen
@@ -23807,7 +23731,7 @@ function OpenTuiWorkspace() {
       if (consumed !== false) handled(() => {})
       return
     }
-    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind === 'terminal' && windowCapture && windowCapture !== 'none') {
+    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && (windowCapture === 'terminal' || windowCapture === 'input')) {
       if (windowCapture === 'terminal' || key.name === 'escape') {
         handled(() => { windowKeys?.(key) })
       }
@@ -23819,14 +23743,14 @@ function OpenTuiWorkspace() {
     }
     // A browser window's address field takes typing; Escape and the ⌃B prefix
     // still reach the window controls.
-    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind === 'browser' && !splitChordPending && !(key.ctrl && key.name === 'b')) {
+    if (pendingPermissions.length === 0 && focusedWindowSurfaceKind && isPluginSurfaceId(focusedWindowSurfaceKind) && getPluginSurface(focusedWindowSurfaceKind).keys === 'field' && !splitChordPending && !(key.ctrl && key.name === 'b')) {
       if (key.name === 'escape') handled(focusReaderFromSplit)
       return
     }
 
     const panelSurfaceKind = activeSurface(surfacePanel)?.kind
     if (pendingPermissions.length === 0 && surfacePanelVisible && surfacePanelFocused && panelSurfaceKind && isPluginSurfaceId(panelSurfaceKind)
-      && surfacePluginKeyCaptureRef.current && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
+      && surfacePluginKeyCaptureRef.current === true && !(key.ctrl && ['w', 'n', 'p', 't'].includes(key.name))) {
       if (surfacePluginKeyRef.current?.(key) !== false) handled(() => {})
       return
     }
@@ -23836,14 +23760,16 @@ function OpenTuiWorkspace() {
       // Browser and shell surfaces own a focused <input>; swallowing their keys
       // here would make them untypeable, so only the panel's own chords are
       // intercepted and everything else falls through to the renderer.
-      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'terminal') {
-        handled(() => { surfaceProcessKeyRef.current?.(key) })
+      const pluginSurface = surface && isPluginSurfaceId(surface.kind) ? getPluginSurface(surface.kind) : null
+      const pluginCapture = pluginSurface ? surfacePluginKeyCaptureRef.current : false
+      if (pluginCapture === 'terminal') {
+        handled(() => { surfacePluginKeyRef.current?.(key) })
         return
       }
-      const inputOwned = surface?.kind === 'browser' || (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input')
+      const inputOwned = pluginSurface?.keys === 'field' || pluginCapture === 'input'
       // Escape cancels a command being typed rather than leaving the panel.
-      if (surface?.kind === 'terminal' && surfaceProcessCaptureRef.current === 'input' && key.name === 'escape') {
-        handled(() => { surfaceProcessKeyRef.current?.(key) })
+      if (pluginCapture === 'input' && key.name === 'escape') {
+        handled(() => { surfacePluginKeyRef.current?.(key) })
         return
       }
       // Tab is deliberately absent: the docked surfaces use it for their own
@@ -23911,16 +23837,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (channelBridgeOpen) {
-      handled(() => { channelBridgeKeyHandlerRef.current?.(key) })
-      return
-    }
-
-    if (ideBridgeOpen) {
-      handled(() => { ideBridgeKeyHandlerRef.current?.(key) })
-      return
-    }
-
     // Reference card, not a picker: any key dismisses it rather than leaving
     // the user hunting for the one that does. Only when it was opened on
     // purpose — a self-revealed panel sits above a pending chord, and eating
@@ -23953,24 +23869,8 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (taskPopoverOpen) {
-      handled(() => { taskPopoverKeyHandlerRef.current?.(key) })
-      return
-    }
-
     if (attentionOpen) {
       handled(() => { attentionKeyHandlerRef.current?.(key) })
-      return
-    }
-
-    if (crossSessionMessagingOpen) {
-      const consumed = crossSessionMessagingKeyHandlerRef.current?.(key) ?? true
-      if (consumed) handled(() => {})
-      return
-    }
-
-    if (diagnosticsModalOpen) {
-      handled(() => { diagnosticsKey(key) })
       return
     }
 
@@ -24525,7 +24425,7 @@ function OpenTuiWorkspace() {
       }
       if (isCtrl('t')) {
         // Claude Code's ⌃T: the task list.
-        handled(() => setTaskPopoverOpen((open) => !open))
+        handled(() => { if (pluginOverlay === 'tasks') closePluginOverlay(); else runPluginCommandId('tasks-full') })
         return
       }
       // Opt this turn into the Workflow tool (settings.enableWorkflows) —
@@ -24767,7 +24667,7 @@ function OpenTuiWorkspace() {
       && selectedInteractiveTranscriptCard?.category === 'diff' && Boolean(selectedInteractiveTranscriptCardDisplay?.diffView)
       && (['v', 'n', 'm', '{', '}', 'a', 'x', 'A'].includes(sequence)
         || (key.shift && (key.name === 'j' || key.name === 'k' || key.name === 'up' || key.name === 'down')))
-    if (splitFocusIndex !== null && !diffCardKey) {
+    if (splitFocusIndex !== null && effectiveFocus === 'messages' && !diffCardKey) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
       const paneSession = paneHandle?.getSession() ?? null
       const command = transcriptWindowCommand(key, {
@@ -24870,11 +24770,11 @@ function OpenTuiWorkspace() {
     }
 
     // Plugin commands' own bindings (a manifest's `tuiKey`), at global precedence.
+    // A shifted letter is matched as the host's own ⇧ bindings are (isShiftedKey), so
+    // terminals that report `M` rather than shift+`m` still reach it.
     const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(({ tuiKey }) => tuiKey.ctrl
       ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))
-      // A shifted letter arrives as `U`, or as `u` with shift, by terminal.
-      : tuiKey.shift ? !key.ctrl && !key.meta && isShifted(tuiKey.name)
-      : key.name === tuiKey.name && !key.ctrl && !key.shift)
+      : !key.ctrl && !key.meta && (tuiKey.shift ? isShifted(tuiKey.name) : key.name === tuiKey.name && !key.shift))
     if (pluginChord) {
       handled(() => runPluginCommand(pluginChord))
       return
@@ -24883,12 +24783,6 @@ function OpenTuiWorkspace() {
     // Global attention inbox — everything blocked on a human, across sessions
     if (sequence === '!') {
       handled(() => setAttentionOpen(true))
-      return
-    }
-
-    // Cross-session messaging popover — discovery + direct handoff composer.
-    if (isShifted('M') || sequence === 'M') {
-      handled(() => setCrossSessionMessagingOpen(true))
       return
     }
 
@@ -24949,18 +24843,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // Global live CLI channel bridge — push composer messages into a side-by-side `claude` session
-    if (isShifted('C') && canUseChannelBridge) {
-      handled(openChannelBridge)
-      return
-    }
-
-    // Global IDE bridge — host a Claude Code IDE endpoint a `claude` session connects to
-    if (isShifted('I') && canUseIdeBridge) {
-      handled(openIdeBridge)
-      return
-    }
-
     // Global task panel toggle — cycles: closed → tasks → agents → closed
     if (isShifted('T')) {
       handled(() => {
@@ -24990,21 +24872,9 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // Global task lineage popover
-    if (isShifted('L')) {
-      handled(() => setTaskPopoverOpen(true))
-      return
-    }
-
     // Show/hide composer
     if (isShifted('E')) {
       handled(toggleComposerHidden)
-      return
-    }
-
-    // Global diagnostics popover
-    if (isShifted('D') && selectedSession) {
-      handled(() => openDiagnostics())
       return
     }
 
@@ -25022,6 +24892,11 @@ function OpenTuiWorkspace() {
       return
     }
 
+    if (effectiveFocus === 'sessions' && sidebarSubagentCursor && !key.ctrl && !key.meta
+      && ['x', 'd', 'r', 't', 'b'].includes(key.name.toLowerCase())) {
+      handled(() => showNotice('info', 'Captured subagent transcripts are read only · Enter to view'))
+      return
+    }
     if (effectiveFocus === 'sessions' && key.name === 'a' && !key.ctrl && !key.shift && !key.meta) {
       handled(() => {
         setSidebarView((current) => {
@@ -25081,16 +24956,16 @@ function OpenTuiWorkspace() {
 
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'g' && !key.shift) {
       handled(() => {
-        const first = sidebarEntries.map(sidebarEntrySession).find((session): session is Session => Boolean(session))
-        if (first) setSelectedSessionKey(sessionKey(first))
+        const first = sidebarEntries.find(entry => entry.type === 'session' || entry.type === 'subagent')
+        focusSidebarEntry(first)
       })
       return
     }
 
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('G')) {
       handled(() => {
-        const last = [...sidebarEntries].reverse().map(sidebarEntrySession).find((session): session is Session => Boolean(session))
-        if (last) setSelectedSessionKey(sessionKey(last))
+        const last = [...sidebarEntries].reverse().find(entry => entry.type === 'session' || entry.type === 'subagent')
+        focusSidebarEntry(last)
       })
       return
     }
@@ -25139,8 +25014,22 @@ function OpenTuiWorkspace() {
       return
     }
 
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && selectedSession
+      && (key.name === 'left' || key.name === 'right') && (childrenByParentId.get(sessionKey(selectedSession))?.length ?? 0) > 0) {
+      handled(() => {
+        const parent = sessionKey(selectedSession)
+        setCollapsedSubagentParents(previous => key.name === 'left' ? previous.includes(parent) ? previous : [...previous, parent] : previous.filter(value => value !== parent))
+      })
+      return
+    }
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'return') {
       handled(() => {
+        const entry = sidebarEntries[selectedSidebarEntryIndex]
+        if (entry?.type === 'subagent' && entry.entry.kind === 'summary') {
+          setSubagentTranscriptSelection({ parent: entry.parentSession, agent: entry.entry.summary })
+          setPluginOverlay('subagents')
+          return
+        }
         promotePreviewToTab()
         setFocusedPane('messages')
       })
@@ -26646,6 +26535,7 @@ function OpenTuiWorkspace() {
         width={size.width}
         height={size.height}
         liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
+        liveBaselineCount={liveTranscriptBaselineRef.current.get(sessionKey(splitSession))?.count}
         running={splitPaneRunningKeys.has(sessionKey(splitSession))}
         attentionBadge={badgeForWindow(sessionKey(splitSession))}
         coordinatorLabel={watchedCoordinator?.agents.find(agent => agent.sessionId === splitSession.sessionId && (agent.provider ?? 'claude') === (splitSession.provider ?? 'claude'))?.name}
@@ -26767,10 +26657,13 @@ function OpenTuiWorkspace() {
     }
     const leave = () => {
       capture()
-      surfaceProcessCaptureRef.current = 'none'
+      // A shell gives the keys back on leaving; a view's own text input keeps its claim.
+      if (typeof surfacePluginKeyCaptureRef.current === 'string') surfacePluginKeyCaptureRef.current = false
       windowSurfaceCaptureRef.current.clear()
-      composerAbortRef.current?.abort()
-      setComposerSendState('idle')
+      for (const key of composerSessions.keys()) {
+        composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
+        composerSessions.set(key, 'composerSendState', 'idle', 'idle')
+      }
       try { workspaceContext.controller.flush() } catch { /* next update retries */ }
     }
     workspaceContext.runtime.flushers.add(capture)
@@ -26813,7 +26706,7 @@ function OpenTuiWorkspace() {
     // Plugin surfaces in windows and the side panel. A popover kind's close
     // (Esc, q) leaves its window; a side-panel kind's closes it, as Files' does.
     if (isPluginSurfaceId(kind)) {
-      const pinned = slot ? pinnedSessionOf(slot) : selectedSession
+      const pinned = pluginSessionFor(kind, slot)
       // A file-pinned window shows its own file; the editor opens where it was asked to.
       const pathPinned = getPluginSurface(kind).pin === 'path'
       return (
@@ -26823,12 +26716,14 @@ function OpenTuiWorkspace() {
           session={pinned}
           sessionKey={pinned ? sessionKey(pinned) : null}
           selected={pluginSelectedDetail}
+          live={pluginLiveTranscript}
+          request={pluginOpenRequests[kind]?.count}
           density={density}
           showToolCalls={showToolCalls}
           shouldYield={splitPaneShouldYield}
           cwd={surfaceCwd}
           repositorySessionId={gitSessionId}
-          provided={kind === 'file-history' ? fileHistoryServices : pluginServices}
+          provided={slot ? windowPluginServices(slot) : kind === 'file-history' ? fileHistoryServices : pluginServices}
           syntaxStyle={handoffBriefSyntaxStyle}
           path={pathPinned ? (slot ? windowSurfaceMeta[slot]?.path : fileHistoryPath) ?? null : editorInitialPath}
           line={pathPinned ? null : editorInitialLine}
@@ -26839,47 +26734,12 @@ function OpenTuiWorkspace() {
           focused={focused}
           onClose={isPluginPanelSurfaceId(kind) ? close : leave}
           onKeyHandlerReady={keysReady(surfacePluginKeyRef as { current: SurfaceKeyHandler | null })}
-          onCaptureChange={slot ? captureChange({ current: false }) : surfacePluginCaptureChange}
+          onCaptureChange={slot ? captureChange<TuiPluginCapture>({ current: false }) : surfacePluginCaptureChange}
           runCommand={runCommandForPlugin}
         />
       )
     }
     switch (kind) {
-      case 'browser':
-        return (
-          <BrowserSurfaceView
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            focused={focused}
-            recent={surfaceBrowserRecent}
-            onOpened={(url) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12))}
-          />
-        )
-      case 'terminal':
-        return (
-          <ProcessPane
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            focused={focused}
-            cwd={surfaceCwd || process.cwd()}
-            onKeyHandlerReady={keysReady(surfaceProcessKeyRef as { current: SurfaceKeyHandler | null })}
-            onCaptureChange={captureChange(surfaceProcessCaptureRef)}
-            initialSelectedId={slot ? windowShellSelectionRef.current.get(slot) ?? null : null}
-            onSelectedChange={slot ? (id) => { windowShellSelectionRef.current.set(slot, id) } : undefined}
-            onNotice={showNotice}
-            onOpenFile={(path, line) => {
-              openEditorAt(path, line ?? null)
-            }}
-            onAskAgent={(prompt) => {
-              appendDiffCommentPromptToComposer(prompt)
-              // The composer takes the keys from here; the process keeps running.
-              setSurfacePanelFocused(false)
-              showNotice('info', 'Error added to composer')
-            }}
-          />
-        )
       case 'agents':
         return (
           <TaskSidePanel
@@ -26922,12 +26782,6 @@ function OpenTuiWorkspace() {
             onClose={leave} onChanged={handleCoordPlaybooksChanged} onNotice={showNotice}
             onKeyHandlerReady={keysReady({ current: null })} />
         )
-      case 'messaging':
-        return (
-          <CrossSessionMessagingPopover docked currentSession={slot ? pinnedSessionOf(slot) : selectedSession}
-            theme={theme} width={box.width} height={box.height}
-            onClose={leave} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })} />
-        )
       case 'handoff':
         return (
           <PinnedSessionDetail session={slot ? pinnedSessionOf(slot) : selectedSession} density={density} showToolCalls={showToolCalls} shouldYield={splitPaneShouldYield} theme={theme}>
@@ -26947,32 +26801,6 @@ function OpenTuiWorkspace() {
             )}
           </PinnedSessionDetail>
         )
-      case 'tasks':
-        return (
-          <PinnedSessionDetail session={slot ? pinnedSessionOf(slot) : selectedSession} density={density} showToolCalls={showToolCalls} shouldYield={splitPaneShouldYield} theme={theme}>
-            {(detail) => (
-              <TaskPanelPopover docked messages={detail.threadedMessages} theme={theme} width={box.width} height={box.height}
-                onClose={leave}
-                onSelectTask={() => {}}
-                onKeyHandlerReady={keysReady({ current: null })} />
-            )}
-          </PinnedSessionDetail>
-        )
-      case 'channel-bridge': {
-        const session = slot ? pinnedSessionOf(slot) : selectedSessionTarget
-        return session ? (
-          <ChannelBridgePopover docked theme={theme} accentColor={composerAccentColor} width={box.width} height={box.height}
-            routeComposer={routeComposerToBridge} targetSessionId={session.sessionId} onToggleRoute={toggleComposerBridgeRoute}
-            onClose={leave} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })} />
-        ) : <text fg={theme.dim}>  That session is no longer available.</text>
-      }
-      case 'ide-bridge':
-        return (
-          <IdeBridgePopover docked theme={theme} accentColor={composerAccentColor} width={box.width} height={box.height}
-            routeComposer={routeComposerToIde} onToggleRoute={toggleComposerIdeRoute}
-            onClose={leave} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })}
-            onSendComment={(text) => insertComposerPromptText(text)} />
-        )
       case 'teammates':
         return (
           <TeammatesPopover docked theme={theme} width={box.width} height={box.height}
@@ -26981,8 +26809,6 @@ function OpenTuiWorkspace() {
         )
       case 'desk':
         return renderDesk(true, box.width, box.height, leave, keysReady({ current: null }))
-      case 'diagnostics':
-        return diagnosticsOpen ? renderDiagnosticsPanel(true, box.width, box.height) : <text fg={theme.dim}>  Diagnostics closed.</text>
       case 'coordination':
         return (
           <CoordinationPopover
@@ -27026,116 +26852,6 @@ function OpenTuiWorkspace() {
   // A single popover kind keeps the root's state namespace, so its window and its
   // full-screen form are one view (the editor's buffers survive either move).
   const renderSurfaceBody = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => <WorkspaceViewContext.Provider key={`${kind}:${slot ?? panelId ?? 'panel'}`} value={isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].single ? 'root' : surfaceViewNamespace(kind, slot, panelId)}>{renderSurfaceBodyInner(kind, box, close, focused, slot, panelCwd)}</WorkspaceViewContext.Provider>
-
-  // The diagnostics panel: a modal near the top, or docked in a window.
-  const renderDiagnosticsPanel = (docked: boolean, boxWidth: number, boxHeight: number) => {
-        const overlayWidth = docked ? boxWidth : Math.min(76, Math.max(boxWidth - 4, 40))
-        const overlayHeight = docked ? boxHeight : Math.min(boxHeight - 2, 28)
-        const isClaude = selectedSession?.provider === 'claude'
-        const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
-        const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
-        return (
-          <box
-            {...popoverRootProps(docked, { top: 1, left: Math.max(1, Math.floor((boxWidth - overlayWidth) / 2)), width: overlayWidth, height: overlayHeight }, 30)}
-            // borderStyle alone turns a border on, so a docked panel passes none.
-            {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
-            backgroundColor={theme.surface}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1} flexDirection="row" gap={1}>
-              <text fg={theme.text}>DIAGNOSTICS</text>
-              {diagnosticsLoading ? <text fg={theme.dim}>· loading…</text> : null}
-              {diagnosticsBusy ? <text fg={theme.cyan}>· {diagnosticsBusy}</text> : null}
-            </box>
-            {diagnosticsError ? (
-              <box paddingX={1}>
-                <text fg={theme.red} wrapMode="none">{fitText(diagnosticsError, overlayWidth - 4)}</text>
-              </box>
-            ) : null}
-            {diagnosticsNotice ? (
-              <box paddingX={1}>
-                <text fg={theme.green} wrapMode="none">{fitText(diagnosticsNotice, overlayWidth - 4)}</text>
-              </box>
-            ) : null}
-            {/* Scrollable, not clipped. Fifteen sections never fitted the 28-row
-                panel, so everything past roughly the MCP list was invisible with
-                nothing on screen to say so — the panel looked complete. */}
-            <scrollbox
-              ref={diagnosticsScrollRef}
-              // An explicit row budget, not flexGrow: a scrollbox measures its
-              // own viewport, and given flexGrow it laid itself over the title
-              // row instead of sitting under it. Border (2) + title block (2) +
-              // footer block (2), plus the error and notice rows when present.
-              style={{ height: Math.max(
-                overlayHeight - 6 - (diagnosticsError ? 1 : 0) - (diagnosticsNotice ? 1 : 0),
-                3,
-              ) }}
-              paddingX={1}
-              paddingBottom={1}
-              backgroundColor={theme.surface}
-              scrollY
-              scrollbarOptions={transcriptScrollbarOptions}
-            >
-              {diagnosticsSections.map((section) => (
-                <box key={section.id} flexDirection="column" marginTop={1} flexShrink={0}>
-                  <box flexShrink={0} height={1}><text fg={theme.dim}>{section.title}</text></box>
-                  {section.items.length === 0 || (section.items.length === 1 && section.items[0] === 'None') ? (
-                    <box flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>
-                  ) : section.id === 'mcp' && isClaude ? (
-                    section.items.map((item, idx) => {
-                      if (item === 'None') return <box key={idx} flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>
-                      const [, rawStatus] = item.split(' · ')
-                      const status = rawStatus?.trim() ?? ''
-                      const selected = idx === diagnosticsMcpIndex
-                      const serverName = item.split(' · ')[0]?.trim() ?? ''
-                      const policy = diagnosticsMcpPermissionModes[`${selectedSession?.sessionId ?? ''}:${serverName}`]
-                      return (
-                        <box key={idx} flexShrink={0} height={1}>
-                          <text
-                            fg={selected ? theme.cyan : (status === 'disabled' ? theme.dim : theme.text)}
-                            wrapMode="none"
-                          >
-                            {fitText(`  ${selected ? '▶' : ' '} ${item} · ${policy ? `applied ${policy}` : 'policy —'}`, overlayWidth - 4)}
-                          </text>
-                        </box>
-                      )
-                    })
-                  ) : (
-                    // No slice. This used to cap every section at 10 rows
-                    // because the panel clipped anyway; now that it scrolls, a
-                    // cap here would be a SECOND, silent truncation on top of
-                    // the one the adapter already applies and announces. One
-                    // place truncates, and it says so.
-                    // Rows that share fields are a table: aligned columns, and
-                    // a long field wraps instead of being cut at the edge.
-                    diagnosticRuns(section.items).map((run) => (run.kind === 'table' ? (
-                      <box key={run.start} flexShrink={0} paddingLeft={2}>
-                        <DiagnosticsTable rows={run.rows} theme={theme} width={overlayWidth - 7} />
-                      </box>
-                    ) : run.items.map((item, idx) => (
-                      <box key={run.start + idx} flexShrink={0} height={1}>
-                        <text fg={theme.text} wrapMode="none">
-                          {fitText(`  ${item}`, overlayWidth - 4)}
-                        </text>
-                      </box>
-                    ))))
-                  )}
-                </box>
-              ))}
-            </scrollbox>
-            <box paddingX={1} paddingBottom={1}>
-              <text fg={theme.dim} wrapMode="none">
-                {fitText(
-                  isClaude
-                    ? `${mcpRows.length > 0 ? '↑↓ MCP · r reconnect · t toggle · o policy · d remove · ' : ''}⌃u/⌃d scroll · a set MCP JSON · f filter hooks · p/s/g reload · Esc close`
-                    : '⌃u/⌃d scroll · Esc close',
-                  overlayWidth - 4,
-                )}
-              </text>
-            </box>
-          </box>
-        )
-  }
 
   // The desk: full screen, or docked in a window.
   const renderDesk = (docked: boolean, boxWidth: number, boxHeight: number, onClose: () => void, onKeyHandlerReady: (handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => void) => {
@@ -27228,14 +26944,14 @@ function OpenTuiWorkspace() {
       placement={surfacePanelPlacement}
       height={surfacePanelAtBottom ? effectiveSurfacePanelRows : surfacePanelHeight}
       focused={surfacePanelFocused}
-      availability={{
+      availability={panelSurfaceAvailability('tui', {
         browser: true,
         terminal: true,
         files: !!gitRepoCwd,
         diff: !!gitRepoCwd,
         'pull-request': !!gitRepoCwd,
         agents: true,
-      }}
+      })}
       unavailableHints={{
         files: 'Available when a project is open.',
         diff: 'Available for Git repositories.',
@@ -27264,8 +26980,7 @@ function OpenTuiWorkspace() {
         const surface = activeSurface(surfacePanel)
         if (!surface) return
         if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
-        else if (surface.kind === 'terminal') surfaceProcessKeyRef.current?.(key)
-        // browser/agents own their own <input> or are read-only.
+        // agents is read-only.
       }}
       renderSurface={(surface: TuiSurface, box) => renderSurfaceBody(surface.kind, box, () => setSurfacePanel((current) => closeSurfaceIn(current, surface.id)), surfacePanelFocused, undefined, surface.id, surface.cwd)}
     />
@@ -27307,7 +27022,6 @@ function OpenTuiWorkspace() {
               </box>
             )
           })() : null}
-      <TeammatesAttention theme={theme} width={width} top={1} session={selectedSession} />
       <box
         flexGrow={surfacePanelAtBottom ? 0 : 1}
         flexShrink={surfacePanelAtBottom ? 0 : undefined}
@@ -27419,17 +27133,21 @@ function OpenTuiWorkspace() {
         <box width={readerAreaWidth} flexDirection="column">
           {showTabs ? (
             <box
+              id="session-tab-strip"
+              height={TAB_BAR_HEIGHT}
+              flexShrink={0}
               paddingX={1}
               overflow="hidden"
-              backgroundColor={theme.surface2}
+              backgroundColor={theme.bg}
             >
               <tab-select
                 id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
-                width={readerAreaWidth - 2}
+                width={Math.max(readerAreaWidth - 2, 1)}
+                height={TAB_BAR_HEIGHT}
                 tabWidth={tabWidth}
-                backgroundColor={theme.surface2}
+                backgroundColor={theme.bg}
                 focusedBackgroundColor={theme.surface3}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
@@ -28735,8 +28453,9 @@ function OpenTuiWorkspace() {
                   )}
               </text>
             </box>
+            {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
             <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
+            <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {dockShowsStatusBar
                   ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)
@@ -28750,8 +28469,11 @@ function OpenTuiWorkspace() {
       ) : null}
 
       {!searchMode && !fullscreenMode && !statusBarInDock ? (
-        <box backgroundColor={theme.surface2} paddingX={1}>
-          <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
+        <box backgroundColor={theme.surface2} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
+          <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+            <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
+          </box>
+          <TeammatesAttention inline theme={theme} width={Math.floor(width / 3)} session={selectedSession} />
         </box>
       ) : null}
 
@@ -28804,9 +28526,11 @@ function OpenTuiWorkspace() {
         <PluginSurfaceHost
           surfaceId={pluginOverlay}
           placement="overlay"
-          session={selectedSession}
-          sessionKey={selectedSessionKey}
+          session={pluginSessionFor(pluginOverlay)}
+          sessionKey={pluginSessionFor(pluginOverlay) ? sessionKey(pluginSessionFor(pluginOverlay)!) : null}
           selected={pluginSelectedDetail}
+          live={pluginLiveTranscript}
+          request={pluginOpenRequests[pluginOverlay]?.count}
           density={density}
           showToolCalls={showToolCalls}
           shouldYield={splitPaneShouldYield}
@@ -28856,31 +28580,6 @@ function OpenTuiWorkspace() {
           onClose={() => setAttentionOpen(false)}
           onKeyHandlerReady={(handler) => { attentionKeyHandlerRef.current = handler }}
           onDetach={() => offerPopoverPlacement('attention')}
-        />
-      ) : null}
-
-      {crossSessionMessagingOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {crossSessionMessagingOpen ? (
-        <CrossSessionMessagingPopover
-          currentSession={composerTargetSession ?? selectedSession}
-          theme={theme}
-          width={width}
-          height={height}
-          onClose={() => setCrossSessionMessagingOpen(false)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { crossSessionMessagingKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('messaging')}
         />
       ) : null}
 
@@ -28992,94 +28691,6 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {canUseChannelBridge && selectedSessionTarget && channelBridgeOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {canUseChannelBridge && selectedSessionTarget && channelBridgeOpen ? (
-        <ChannelBridgePopover
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={width}
-          height={height}
-          routeComposer={routeComposerToBridge}
-          targetSessionId={selectedSessionTarget.sessionId}
-          onToggleRoute={toggleComposerBridgeRoute}
-          onClose={() => setChannelBridgeOpen(false)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { channelBridgeKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('channel-bridge')}
-        />
-      ) : null}
-
-      {canUseIdeBridge && ideBridgeOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {canUseIdeBridge && ideBridgeOpen ? (
-        <IdeBridgePopover
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={width}
-          height={height}
-          routeComposer={routeComposerToIde}
-          onToggleRoute={toggleComposerIdeRoute}
-          onClose={() => setIdeBridgeOpen(false)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { ideBridgeKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('ide-bridge')}
-          onSendComment={(text) => insertComposerPromptText(text)}
-        />
-      ) : null}
-
-      {taskPopoverOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {taskPopoverOpen ? (
-        <TaskPanelPopover
-          messages={taskPanelMessages}
-          theme={theme}
-          width={width}
-          height={height}
-          onClose={() => setTaskPopoverOpen(false)}
-          onSelectTask={(uuid) => {
-            const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
-            if (idx >= 0) jumpToTranscriptIndex(idx)
-          }}
-          onKeyHandlerReady={(handler) => { taskPopoverKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('tasks')}
-          onStopTask={
-            composerTargetSession?.provider === 'claude'
-              ? (taskId) => { void stopComposerTask(taskId) }
-              : undefined
-          }
-        />
-      ) : null}
 
       {composerWindowOpen ? (
         <box
@@ -29179,7 +28790,6 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {diagnosticsModalOpen ? renderDiagnosticsPanel(false, width, height) : null}
 
       {(() => {
         // The second divider: the grid's row split (the reader's bottom border).

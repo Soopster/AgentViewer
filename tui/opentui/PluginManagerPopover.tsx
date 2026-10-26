@@ -60,6 +60,11 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
   const panelWidth = Math.min(Math.max(width - 6, 40), 76)
   // Three rows a plugin, the footer, and the border.
   const panelHeight = Math.min(height - 2, manifests.length * 3 + 4)
+  // More plugins than rows: a window of whole rows that keeps the cursor in view.
+  const fitting = Math.max(1, Math.floor((panelHeight - 4) / 3))
+  const first = Math.min(Math.max(0, cursor - fitting + 1), Math.max(0, manifests.length - fitting))
+  const shown = manifests.slice(first, first + fitting)
+  const hidden = manifests.length - shown.length
   return (
     <box
       id="plugin-manager"
@@ -77,11 +82,12 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       flexDirection="column"
       paddingX={1}
     >
-      {manifests.map((manifest, index) => {
+      {shown.map((manifest, offset) => {
+        const index = first + offset
         const on = !disabled.has(manifest.id)
         const selected = index === cursor
         return (
-          <box key={manifest.id} id={`plugin-row:${manifest.id}`} flexDirection="column" backgroundColor={selected ? theme.surface2 : undefined} onMouseDown={() => { setCursor(index); toggle(manifest) }}>
+          <box key={manifest.id} id={`plugin-row:${manifest.id}`} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined} onMouseDown={() => { setCursor(index); toggle(manifest) }}>
             <text wrapMode="none">
               <span fg={on ? theme.green : theme.dim}>{on ? '●' : '○'} </span>
               <span fg={theme.text}>{manifest.title}</span>
@@ -95,6 +101,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       <box flexGrow={1} />
       <text fg={theme.muted} wrapMode="none">
         <span fg={theme.cyan}>↑↓</span> move · <span fg={theme.cyan}>space</span> turn on/off · <span fg={theme.cyan}>esc</span> close
+        {hidden > 0 ? ` · ${first + 1}–${first + shown.length} of ${manifests.length}` : ''}
       </text>
     </box>
   )

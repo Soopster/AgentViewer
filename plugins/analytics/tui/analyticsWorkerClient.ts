@@ -1,5 +1,5 @@
 import type { Analytics, AnalyticsInput } from '../../../lib/analytics'
-import { tuiWorkerUrl } from '../../../tui/opentui/shell/sdk'
+import { createPluginResourceScope, tuiWorkerUrl } from '../../../tui/opentui/shell/sdk'
 
 type Pending = {
   resolve: (analytics: Analytics) => void
@@ -11,13 +11,19 @@ type WorkerResponse =
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
+let resources: ReturnType<typeof createPluginResourceScope> | null = null
 let requestCounter = 0
 const pending = new Map<number, Pending>()
 
 function ensureWorker(): Worker {
   if (worker) return worker
-  const w = new Worker(tuiWorkerUrl('plugins/analytics/tui/analyticsWorker'), { type: 'module' })
+  resources = createPluginResourceScope('analytics')
+  if (resources.signal.aborted) { resources = null; throw cancellationError() }
+  let w: Worker
+  try { w = new Worker(tuiWorkerUrl('plugins/analytics/tui/analyticsWorker'), { type: 'module' }) }
+  catch (error) { resources.dispose(); resources = null; throw error }
   w.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    if (worker !== w) return
     const data = event.data
     const entry = pending.get(data.id)
     if (!entry) return
@@ -29,21 +35,40 @@ function ensureWorker(): Worker {
     const message = typeof event === 'object' && event && 'message' in event
       ? String((event as { message?: unknown }).message ?? 'analytics worker error')
       : 'analytics worker error'
-    const err = new Error(message)
-    for (const entry of pending.values()) entry.reject(err)
-    pending.clear()
-    worker?.terminate()
-    worker = null
+    if (worker === w) disposeAnalyticsWorker(new Error(message))
   }
   worker = w
+  resources.defer(() => { if (worker === w) disposeAnalyticsWorker() })
   return w
 }
 
-export function computeAnalyticsAsync(detail: AnalyticsInput | null): Promise<Analytics> {
+export async function computeAnalyticsAsync(detail: AnalyticsInput | null): Promise<Analytics> {
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject })
-    w.postMessage({ id, detail })
+    try { w.postMessage({ id, detail }) }
+    catch (error) { pending.delete(id); reject(error) }
   })
+}
+
+function cancellationError(): Error {
+  const error = new Error('Analytics cancelled: plugin deactivated')
+  error.name = 'AbortError'
+  return error
+}
+
+export function disposeAnalyticsWorker(error: Error = cancellationError()): void {
+  const previous = worker
+  worker = null
+  const scope = resources
+  resources = null
+  scope?.dispose()
+  if (previous) {
+    previous.onmessage = null
+    previous.onerror = null
+    previous.terminate()
+  }
+  for (const entry of pending.values()) entry.reject(error)
+  pending.clear()
 }

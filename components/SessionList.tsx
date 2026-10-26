@@ -767,7 +767,7 @@ const SessionRowGroup = memo(function SessionRowGroup({
     if (!expanded || !canHaveClaudeSubagents || claudeSubagents !== null || loadingSubagents) return
     let cancelled = false
     setLoadingSubagents(true)
-    fetch(`/api/sessions/${session.sessionId}/subagents${session.provider ? `?provider=${session.provider}` : ''}`)
+    fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/subagents?${new URLSearchParams({ ...(session.provider ? { provider: session.provider } : {}), ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}) })}`)
       .then((res) => (res.ok ? res.json() : { subagents: [] }))
       .then((data: { subagents?: SubagentSummary[] }) => {
         if (!cancelled) setClaudeSubagents(data.subagents ?? [])
@@ -779,7 +779,7 @@ const SessionRowGroup = memo(function SessionRowGroup({
         if (!cancelled) setLoadingSubagents(false)
       })
     return () => { cancelled = true }
-  }, [expanded, canHaveClaudeSubagents, claudeSubagents, loadingSubagents, session.sessionId, session.provider])
+  }, [expanded, canHaveClaudeSubagents, claudeSubagents, loadingSubagents, session.sessionId, session.provider, session.providerInstanceId])
 
   const subagentCount = (claudeSubagents?.length ?? 0) + knownChildren.length
 

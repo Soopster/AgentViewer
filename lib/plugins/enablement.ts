@@ -3,7 +3,7 @@
 // persisted differs (lib/plugins/settingsFile.ts on disk, /api/plugins on the web).
 // No React here: the API route imports it; the hook is useDisabledPlugins.ts.
 //
-// A disabled plugin is not loaded: its commands are not offered or bound, and a
+// A disabled plugin is not activated: its commands are not offered or bound, and a
 // surface left open in a window, panel or saved layout says it is off instead of
 // activating. Disabling is a preference, not an uninstall, so an id that names
 // no bundled plugin is kept — a build that drops a plugin and a later one that

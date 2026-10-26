@@ -1,8 +1,10 @@
 'use client'
 
+import { panelSurfaceAvailability } from '@/lib/rightPanel'
+
 import { beginProviderLoading } from '@/lib/providerLoading'
 
-import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
@@ -39,8 +41,6 @@ const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordin
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
-const BrowserSurface = dynamic(() => import('@/components/BrowserSurface'), { ssr: false })
-const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -436,7 +436,7 @@ export default function Home() {
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
   const dashboardSelected = selectedTabKey === RUN_DASHBOARD_KEY && !selectedProject
-  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
+  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : 'reader'
   // Bundle the projectView prop so it only gets a new identity when one of
   // its fields actually changes — otherwise <MessageView /> sees a new object
   // on every parent render.
@@ -1293,12 +1293,14 @@ export default function Home() {
 
   // Navigate to a newly forked session, or materialize a provider-created
   // pending tab after its first streamed session event.
-  const handleFork = useCallback((newSessionId: string) => {
-    if (!selectedSession?.provider) return
-    if (selectedSession.isPending) {
-      const oldKey = projectSessionKey(selectedSession)
+  const selectedComposerSessionRef = useRef<string | null>(null)
+  useLayoutEffect(() => { selectedComposerSessionRef.current = selectedSession ? projectSessionKey(selectedSession) : null }, [selectedSession])
+  const handleFork = useCallback((newSessionId: string, sourceSession: Session | null = selectedSession) => {
+    if (!sourceSession?.provider) return
+    if (sourceSession.isPending) {
+      const oldKey = projectSessionKey(sourceSession)
       const materialized: Session = {
-        ...selectedSession,
+        ...sourceSession,
         sessionId: newSessionId,
         isPending: false,
         lastModified: Date.now(),
@@ -1329,17 +1331,18 @@ export default function Home() {
           }
         : prev
       )
-      setSelectedTabKey(newKey)
-      void selectSession(materialized)
+      if (selectedComposerSessionRef.current === oldKey) { setSelectedTabKey(newKey); void selectSession(materialized) }
       return
     }
-    void selectSession({
+    const forked = {
       sessionId: newSessionId,
-      provider: selectedSession.provider,
-      providerInstanceId: selectedSession.providerInstanceId,
-      providerDisplayName: selectedSession.providerDisplayName,
-      providerAccentColor: selectedSession.providerAccentColor,
-    } as Session)
+      provider: sourceSession.provider,
+      providerInstanceId: sourceSession.providerInstanceId,
+      providerDisplayName: sourceSession.providerDisplayName,
+      providerAccentColor: sourceSession.providerAccentColor,
+    } as Session
+    if (selectedComposerSessionRef.current === projectSessionKey(sourceSession)) void selectSession(forked)
+    else setOpenTabSessions(previous => dedupeSessionsByKey([...previous, forked]))
   }, [selectSession, selectedSession])
 
   const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
@@ -1452,7 +1455,7 @@ export default function Home() {
   // Additive: every surface here is the same component the full-screen overlay
   // renders, in a docked shell. The overlay entry points (⌃G, ⌃F, the command
   // palette) are untouched.
-  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => ({
+  const rightPanelAvailability = useMemo<Record<RightPanelSurfaceKind, boolean>>(() => panelSurfaceAvailability('web', {
     browser: true,
     terminal: true,
     files: !!activeProjectDir,
@@ -1478,22 +1481,26 @@ export default function Home() {
   }, [])
 
   const { setBrowserUrl: setRightPanelBrowserUrl, close: closeRightPanelSurface } = rightPanel
+  // What the Terminal and Browser views are given: a way to attach what they
+  // show to the message being written, when there is one.
+  const contextServices = useMemo<WebPluginServices>(() => (!selectedProject && selectedSession ? {
+    composer: {
+      insertPath: insertFilePathToComposer,
+      attachContext: (attachment) => { window.dispatchEvent(new CustomEvent('agent-viewer:insert-context', { detail: attachment })) },
+    },
+  } : {}), [selectedProject, selectedSession, insertFilePathToComposer])
   const renderRightPanelSurface = useCallback((surface: RightPanelSurface) => {
     switch (surface.kind) {
       case 'browser':
+        // Each browser tab keeps its own URL with the panel layout.
         return (
-          <BrowserSurface
-            canInsert={!selectedProject && !!selectedSession}
-            url={surface.url ?? null}
-            onUrlChange={(url) => setRightPanelBrowserUrl(surface.id, url)}
-          />
+          <PluginSurfaceHost surfaceId="browser" placement="panel" sessionKey={null} onClose={() => closeRightPanelSurface(surface.id)} services={{
+            ...contextServices,
+            'browser-location': { url: surface.url ?? null, navigate: (url) => setRightPanelBrowserUrl(surface.id, url) },
+          }} />
         )
       case 'terminal':
-        return (
-          <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-            <TerminalView canInsert={!selectedProject && !!selectedSession} />
-          </div>
-        )
+        return <PluginSurfaceHost surfaceId="terminal" placement="panel" sessionKey={null} services={contextServices} onClose={() => closeRightPanelSurface(surface.id)} />
       case 'files':
       case 'diff':
       case 'pull-request':
@@ -1517,6 +1524,7 @@ export default function Home() {
   }, [
     activeProjectDir,
     closeRightPanelSurface,
+    contextServices,
     insertFilePathToComposer,
     loadSessionsForProvider,
     provider,

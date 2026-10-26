@@ -48,3 +48,21 @@ export function copilotSubagentSummaries(events: CopilotSessionEvent[]): Subagen
     return [...summaries.values()];
 }
 
+
+/** SDK events annotate captured child activity with its agent ID; never include the parent's prose. */
+export function copilotSubagentEvents(events: CopilotSessionEvent[], agentId: string): CopilotSessionEvent[] {
+  const identities = new Set([agentId])
+  for (const event of events) {
+    if (!event.type.startsWith('subagent.')) continue
+    const child = event as unknown as { agentId?: string; data: { toolCallId?: string } }
+    if (child.agentId === agentId || child.data.toolCallId === agentId) {
+      if (child.agentId) identities.add(child.agentId)
+      if (child.data.toolCallId) identities.add(child.data.toolCallId)
+    }
+  }
+  return events.filter(event => {
+    if (event.agentId && identities.has(event.agentId)) return true
+    const toolCallId = (event.data as { toolCallId?: string }).toolCallId
+    return event.type.startsWith('subagent.') && Boolean(toolCallId && identities.has(toolCallId))
+  })
+}

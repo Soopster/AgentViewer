@@ -1,9 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback } from 'react'
 
-import { useWorkspaceState } from './workspaceContext'
-import type { TuiThemePalette } from '../theme'
-import { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalBrowserEnabled } from './terminalBrowser'
+import { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalBrowserEnabled, useWorkspaceState, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 
 /**
  * The browser surface the terminal has to build for itself.
@@ -11,7 +9,7 @@ import { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalB
  * A terminal cannot host a rendering engine the way the web panel hosts an
  * iframe, so this view does not pretend to: it hands the URL to
  * `terminal-browser`, which puts a real browser in a pane of the user's own
- * terminal beside the TUI. The Terminal surface is `ProcessPane.tsx`.
+ * terminal beside the TUI. The Terminal surface is the Terminal plugin's.
  */
 
 function clip(text: string, width: number): string {

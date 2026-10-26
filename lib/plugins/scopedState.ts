@@ -6,7 +6,8 @@
 // An instance is disposed when nothing has held it for a tick, so a move that
 // unmounts and remounts in one commit keeps it, while a closed view releases it
 // and its cleanups (timers, subscriptions a view registered) run then.
-import { useCallback, useSyncExternalStore } from 'react'
+import { isPluginEnabled, readDisabledPlugins, subscribePluginEnablement } from './enablement'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 
 type Instance = {
   values: Map<string, unknown>
@@ -23,6 +24,16 @@ export type PluginStateSnapshot = {
 }
 
 export type PluginStateStore = ReturnType<typeof createPluginStateStore>
+
+// Weak ownership: the lifecycle listener must not retain closed workspaces.
+const liveStores = new Set<WeakRef<{ disposePlugin(id: string): void }>>()
+subscribePluginEnablement(() => {
+  for (const reference of liveStores) {
+    const store = reference.deref()
+    if (!store) { liveStores.delete(reference); continue }
+    for (const id of readDisabledPlugins()) store.disposePlugin(id)
+  }
+})
 
 export function createPluginStateStore(options: { disposeDelayMs?: number } = {}) {
   const delay = options.disposeDelayMs ?? 0
@@ -47,6 +58,7 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
   const dispose = (key: string) => {
     const instance = instances.get(key)
     if (!instance) return
+    if (instance.disposeTimer) clearTimeout(instance.disposeTimer)
     instances.delete(key)
     for (const cleanup of instance.cleanups) {
       try { cleanup() } catch (error) { console.error('Plugin cleanup failed:', error) }
@@ -54,7 +66,7 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
     instance.cleanups.clear()
   }
 
-  return {
+  const store = {
     get<T>(pluginId: string, instanceId: string, name: string, initial: T): T {
       const instance = instances.get(keyOf(pluginId, instanceId))
       if (instance?.values.has(name)) return instance.values.get(name) as T
@@ -62,24 +74,31 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
       return pending?.has(name) ? pending.get(name) as T : initial
     },
     set(pluginId: string, instanceId: string, name: string, value: unknown): void {
+      if (!isPluginEnabled(pluginId)) return
       const instance = ensure(pluginId, instanceId)
       if (Object.is(instance.values.get(name), value)) return
       instance.values.set(name, value)
       for (const listener of instance.listeners) listener()
     },
     subscribe(pluginId: string, instanceId: string, listener: () => void): () => void {
+      if (!isPluginEnabled(pluginId)) return () => {}
       const instance = ensure(pluginId, instanceId)
       instance.listeners.add(listener)
       return () => { instance.listeners.delete(listener) }
     },
     /** Register work to undo when the instance is disposed. */
     onDispose(pluginId: string, instanceId: string, cleanup: () => void): () => void {
+      if (!isPluginEnabled(pluginId)) {
+        try { cleanup() } catch (error) { console.error('Plugin cleanup failed:', error) }
+        return () => {}
+      }
       const instance = ensure(pluginId, instanceId)
       instance.cleanups.add(cleanup)
       return () => { instance.cleanups.delete(cleanup) }
     },
     /** A mounted view holds its instance; the returned release lets it go. */
     hold(pluginId: string, instanceId: string): () => void {
+      if (!isPluginEnabled(pluginId)) return () => {}
       const key = keyOf(pluginId, instanceId)
       const instance = ensure(pluginId, instanceId)
       instance.holds += 1
@@ -89,20 +108,41 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
         if (released) return
         released = true
         const current = instances.get(key)
-        if (!current) return
+        if (current !== instance) return
         current.holds -= 1
         if (current.holds > 0) return
         current.disposeTimer = setTimeout(() => {
           current.disposeTimer = null
-          if (current.holds === 0) dispose(key)
+          if (instances.get(key) === current && current.holds === 0) dispose(key)
         }, delay)
       }
     },
     has(pluginId: string, instanceId: string): boolean {
       return instances.has(keyOf(pluginId, instanceId))
     },
+    /** Release active and parked view caches, leaving retained unknown snapshot data intact. */
+    disposePlugin(pluginId: string): void {
+      const prefix = `${pluginId}\u0000`
+      for (const key of instances.keys()) if (key.startsWith(prefix)) dispose(key)
+      for (const key of restored.keys()) if (key.startsWith(prefix)) restored.delete(key)
+    },
     disposeNow(pluginId: string, instanceId: string): void {
       dispose(keyOf(pluginId, instanceId))
+    },
+    /** Copy values only during an explicit layout relocation, never resource ownership. */
+    copyOwner(from: string, to: string, onlyPluginId?: string): void {
+      const source = `${from}:`, destination = `${to}:`
+      const values = new Map<string, Map<string, unknown>>()
+      for (const [key, instance] of instances) values.set(key, instance.values)
+      for (const [key, pending] of restored) if (!values.has(key)) values.set(key, pending)
+      for (const [key, fields] of values) {
+        const [pluginId, instanceId] = key.split('\u0000') as [string, string]
+        if ((!onlyPluginId || pluginId === onlyPluginId) && instanceId.startsWith(source)) {
+          const target = ensure(pluginId, destination + instanceId.slice(source.length))
+          target.values = new Map(fields)
+          for (const listener of target.listeners) listener()
+        }
+      }
     },
     snapshot(stateVersions: Readonly<Record<string, number>>): PluginStateSnapshot {
       const plugins: PluginStateSnapshot['plugins'] = structuredClone(retained)
@@ -129,6 +169,8 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
       }
     },
   }
+  liveStores.add(new WeakRef(store))
+  return store
 }
 
 /** Anything malformed reads as empty rather than throwing at boot. */
@@ -157,10 +199,12 @@ export const pluginState = createPluginStateStore()
 /** React binding: `[value, setValue]` for one named value of one view instance. */
 export function useScopedPluginState<T>(store: PluginStateStore, pluginId: string, instanceId: string, name: string, initial: T): [T, (next: T | ((previous: T) => T)) => void] {
   const subscribe = useCallback((listener: () => void) => store.subscribe(pluginId, instanceId, listener), [store, pluginId, instanceId])
-  const read = () => store.get(pluginId, instanceId, name, initial)
+  // Defaults have React state semantics, including object and array literals.
+  const defaultValue = useMemo(() => initial, [store, pluginId, instanceId, name])
+  const read = () => store.get(pluginId, instanceId, name, defaultValue)
   const value = useSyncExternalStore(subscribe, read, read)
   const set = useCallback((next: T | ((previous: T) => T)) => {
-    const previous = store.get(pluginId, instanceId, name, initial)
+    const previous = store.get(pluginId, instanceId, name, defaultValue)
     store.set(pluginId, instanceId, name, typeof next === 'function' ? (next as (previous: T) => T)(previous) : next)
     // `initial` is a default, not a dependency: a fresh literal per render must
     // not rebuild the setter.

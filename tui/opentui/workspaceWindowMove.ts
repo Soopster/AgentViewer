@@ -85,11 +85,10 @@ export function moveWorkspaceWindow(controller: SpacesController, sourceId: stri
       const sourceSpace = controller.getSnapshot().spaces.find(space => space.workspaces.some(workspace => workspace.id === sourceId))!
       destinationMeta[newId] = { cwd: readerSession?.cwd || sourceSpace.cwd, ...originalMeta }
       delete sourceMeta[oldId]
-      if (kind === 'editor' || kind === 'diagnostics') for (const [field, value] of [...source.values]) if (field.startsWith(kind === 'editor' ? 'editor:' : 'diagnostics')) {
+      if (kind === 'editor') for (const [field, value] of [...source.values]) if (field.startsWith('editor:')) {
         if (source.persistent.has(field)) write(destination, field, value); else destination.set(field, value)
         source.values.delete(field); source.persistent.delete(field); delete source.workspace.values[field]
       }
-      if (kind === 'diagnostics') { destination.set('diagnosticsOpen', true); source.set('diagnosticsOpen', false) }
       if (kind === 'editor') for (const field of ['editorInitialPath', 'editorInitialLine']) if (source.values.has(field)) write(destination, field, source.values.get(field))
       const dependency = originalMeta?.session
       if (typeof dependency === 'string') {
