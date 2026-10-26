@@ -17101,6 +17101,12 @@ function OpenTuiWorkspace() {
     }
     const composerMentionAttachmentsRef = scopedRef(composerViewRefs.attachments)
     const composerPromptPartsRef = scopedRef(composerViewRefs.parts)
+    // Notices raised while a turn streams can land after the user has moved to
+    // another session; name the session they are about so they are not misread.
+    const showTurnNotice = (tone: NoticeTone, text: string, durationMs?: number) => {
+      const target = composerTargetSession
+      showNotice(tone, target && !isCurrentTarget() ? `${formatSessionTitle(target)}: ${text}` : text, durationMs)
+    }
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
       ? {
@@ -17565,7 +17571,7 @@ function OpenTuiWorkspace() {
           const message = (parsed as { message?: unknown }).message
           if (typeof message === 'string' && message.trim()) {
             noteFirstOutput()
-            showNotice('info', message.trim())
+            showTurnNotice('info', message.trim())
           }
           return
         }
@@ -17693,7 +17699,7 @@ function OpenTuiWorkspace() {
                 blocks: [{ type: 'local_command_stdout', stdout: message }],
               }))
             } else {
-              showNotice('info', message)
+              showTurnNotice('info', message)
             }
           }
           return
@@ -18100,7 +18106,7 @@ function OpenTuiWorkspace() {
       }
 
       if (streamStalled) {
-        showNotice('info', 'Live stream stalled — turn still running; syncing transcript.')
+        showTurnNotice('info', 'Live stream stalled — turn still running; syncing transcript.')
         // The turn is still running server-side, but `finally` clears this
         // loop's running mark and the registry poll only re-marks it on its
         // next tick — in between, a queued follow-up would flush as a second
@@ -18168,7 +18174,7 @@ function OpenTuiWorkspace() {
       if (targetSession.provider === 'codex' && tuiCodexModeByKeyRef.current[targetKey] === 'plan') {
         // Codex asks "Implement this plan?" here; Plan mode never edits, so say
         // how to leave it rather than leave the user waiting on nothing.
-        showNotice('info', 'Plan mode · ⇧Tab to Default, then ask Codex to implement the plan', 10_000)
+        showTurnNotice('info', 'Plan mode · ⇧Tab to Default, then ask Codex to implement the plan', 10_000)
       }
 
       if (liveTextFlushTimerRef.current != null) {
@@ -18291,7 +18297,7 @@ function OpenTuiWorkspace() {
           reattachedRunningRef.current = true
           setReattachedRunning(true)
         }
-        showNotice('info', 'Send stream lost — reattached to the running turn', 3500)
+        showTurnNotice('info', 'Send stream lost — reattached to the running turn', 3500)
         return
       }
       const failedDraft = submission.visibleText
