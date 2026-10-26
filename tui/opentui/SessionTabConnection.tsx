@@ -15,11 +15,11 @@ export function tabConnectionGeometry(tabs: Rect, frame: Rect, index: number, of
   if (column < 0 || column + tabWidth > tabs.width || tabWidth < 4
     || tabs.height !== 1 || frame.y !== tabs.y + 1
     || left < frame.x + 1 || right >= borderEnd) return null
-  return { left, right, tabY: tabs.y, borderY: frame.y, borderStart: frame.x + 1, borderEnd }
+  return { left, right, topY: tabs.y - 1, tabY: tabs.y, borderY: frame.y, borderStart: frame.x + 1, borderEnd }
 }
 
 /** Native chrome only: no layout changes, timers, hit targets, or root updates.
- * Paint one title row using current native coordinates, so resize and tab
+ * Paint the cap, label sides and pane join using current native coordinates, so resize and tab
  * scrolling cannot leave a connector on yesterday's window. */
 export function SessionTabConnection(props: {
   tabs: React.RefObject<TabSelectRenderable | null>
@@ -45,14 +45,15 @@ export function SessionTabConnection(props: {
         || tabs.getSelectedOption()?.value !== current.ownerKey) return
       const connection = tabConnectionGeometry(tabs, frame, tabs.getSelectedIndex(),
         (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0, tabs.getTabWidth())
-      if (!connection || connection.left < 0 || connection.tabY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
+      if (!connection || connection.left < 0 || connection.topY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
       // A covering overlay must not acquire a hole in its own border/content.
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
       const { foreground, background } = palette.current
       buffer.drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
-      buffer.drawText('╭', connection.left, connection.tabY, foreground, background)
-      buffer.drawText('╮', connection.right, connection.tabY, foreground, background)
+      buffer.drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
+      buffer.drawText('│', connection.left, connection.tabY, foreground, background)
+      buffer.drawText('│', connection.right, connection.tabY, foreground, background)
       buffer.drawText('╯' + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
     }
     renderer.addPostProcessFn(paint)

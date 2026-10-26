@@ -1,5 +1,7 @@
 import { fitText } from './textLayout'
 
+export const HORIZONTAL_TAB_BAR_HEIGHT = 2
+
 // Keep the activity cell inside the tab's text budget. Prepending it to an
 // already padded name makes tab-select truncate the close button at the end.
 export function tabStripName(label: string, tabWidth: number, activity = ''): string {

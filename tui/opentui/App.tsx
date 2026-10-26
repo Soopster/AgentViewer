@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
-import { tabStripName, tabStripActivity, tabStripWidth } from './tabStrip'
+import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
@@ -13334,7 +13334,7 @@ function OpenTuiWorkspace() {
   // the strip cannot make the next measurement oscillate across a fit boundary.
   const windowBudgetHeight = measuredWindowAreaHeight > 0
     ? measuredWindowAreaHeight
-    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode && !verticalTabsWidth ? 1 : 0), 1)
+    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode && !verticalTabsWidth ? HORIZONTAL_TAB_BAR_HEIGHT : 0), 1)
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
   const pinnedWindowKeys = pinnedWindowSessions.map(sessionKey)
@@ -13782,7 +13782,7 @@ function OpenTuiWorkspace() {
 
   const showHorizontalTabs = showTabs && verticalTabsWidth === 0
   const showPreviewBar = false
-  const TAB_BAR_HEIGHT = 1
+  const TAB_BAR_HEIGHT = HORIZONTAL_TAB_BAR_HEIGHT
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
   // already in the status bar.
   const streamActionFooterRows = isChatLikeView && !isScrollbackView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0
@@ -27184,6 +27184,7 @@ function OpenTuiWorkspace() {
             <box
               id="session-tab-strip"
               height={TAB_BAR_HEIGHT}
+              paddingTop={1}
               flexShrink={0}
               paddingX={1}
               overflow="hidden"
@@ -27194,7 +27195,7 @@ function OpenTuiWorkspace() {
                 ref={tabSelectRef}
                 options={tabOptions}
                 width={tabStripWidth(readerAreaWidth)}
-                height={TAB_BAR_HEIGHT}
+                height={1}
                 tabWidth={tabWidth}
                 backgroundColor={theme.bg}
                 focusedBackgroundColor={theme.surface3}

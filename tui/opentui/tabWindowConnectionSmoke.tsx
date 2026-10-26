@@ -140,7 +140,11 @@ try {
   const left = tabs.x + (tabs.getSelectedIndex() - tabs.scrollOffset) * tabs.getTabWidth()
   const right = left + tabs.getTabWidth() - 1
   await waitFor('the selected tab joined to the window', () => row(reader.y)[left] === '╯' && row(reader.y)[right] === '╰')
-  if (row(tabs.y)[left] !== '╭' || row(tabs.y)[right] !== '╮') fail('the active tab has no connected outline')
+  if (row(tabs.y)[left] !== '│' || row(tabs.y)[right] !== '│') fail('the label is not enclosed by the tab sides')
+  const cap = row(tabs.y - 1).slice(left, right + 1)
+  if (cap !== `╭${'─'.repeat(right - left - 1)}╮`) fail('the active tab top border is not closed')
+  const tabStrip = rectOf('session-tab-strip')!
+  if (tabStrip.height !== 2 || tabs.y !== tabStrip.y + 1) fail('the separate cap and text must use exactly two rows')
   if (!row(reader.y).includes('layout')) fail('the connection overwrote title controls')
   if (process.env.TAB_CONNECTION_FRAME) writeFileSync(process.env.TAB_CONNECTION_FRAME, setup.captureCharFrame())
   // A native close hit keeps its original coordinates.
