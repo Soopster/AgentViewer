@@ -12371,6 +12371,9 @@ function OpenTuiWorkspace() {
     }
     return segments
   }
+  const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
+    && composerSendState === 'sending'
+    && liveToolActivities.some(activity => activity.status === 'running' && /^(Bash|Agent|Task)$/.test(activity.label))
   const composerWaitingSuffix = useMemo(() => {
     const parts: string[] = []
     // Model, context, and effort already live in the dock footer.
@@ -12383,8 +12386,9 @@ function OpenTuiWorkspace() {
     if (composerSendState === 'sending') {
       parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C cancel')
     }
+    if (canBackgroundClaudeCommand) parts.push('⌃B background')
     return parts.length > 0 ? parts.join(' · ') : null
-  }, [composerSendState, interruptPressActive, liveOutputTokens])
+  }, [canBackgroundClaudeCommand, composerSendState, interruptPressActive, liveOutputTokens])
 
   useEffect(() => {
     if (!modelPickerOpen) return
@@ -13021,9 +13025,6 @@ function OpenTuiWorkspace() {
     () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
     [liveToolActivities],
   )
-  const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
-    && composerSendState === 'sending'
-    && liveToolActivities.some(activity => activity.status === 'running' && /^(Bash|Agent|Task)$/.test(activity.label))
   const composerActivityVisible = Boolean(
     composerActivitySessionKey
     && selectedSessionIdentity === composerActivitySessionKey,
@@ -13202,7 +13203,6 @@ function OpenTuiWorkspace() {
     // entire turn, not just the pre-output window).
     // Embedded composers own a compact status row in the reader, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
-    if (composerActivityVisible && canBackgroundClaudeCommand) rows += 1
     if (visibleComposerSending && !embeddedComposer) rows += 1
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
@@ -28351,12 +28351,6 @@ function OpenTuiWorkspace() {
           <text fg={theme.muted} wrapMode="none">
             {fitText('● Open in another Codex client — transcript will lag until that turn finishes', Math.max(width - 6, 16))}
           </text>
-        </box>
-      ) : null}
-
-      {composerActivityVisible && canBackgroundClaudeCommand ? (
-        <box height={1} flexShrink={0} paddingX={1} backgroundColor={theme.surface2}>
-          <text fg={theme.muted} wrapMode="none">Ctrl+B in composer to run in background</text>
         </box>
       ) : null}
 
