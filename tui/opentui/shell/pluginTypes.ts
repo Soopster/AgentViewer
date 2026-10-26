@@ -34,12 +34,12 @@ export type TuiPluginServices = {
     readonly label?: string
   }
   composer?: {
-    /** Append a review note to the composer the user is writing in. */
-    readonly appendDiffNote: (prompt: string) => void
+    /** Append a review note to the composer the user is writing in; `notice` replaces the host's confirmation. */
+    readonly appendDiffNote: (prompt: string, notice?: string) => void
     /** Hand lines to an agent with what to do with them. */
     readonly askAboutSelection?: (request: SelectionAskInput) => void
-    /** Insert text at the composer's cursor and give it the keyboard. */
-    readonly insertText?: (text: string) => void
+    /** Insert text at the composer's cursor and give it the keyboard; `notice` replaces the host's confirmation. */
+    readonly insertText?: (text: string, notice?: string) => void
     /** What the user has typed into the composer, read when asked. */
     readonly readDraft?: () => string
     /** Append a prompt to the composer and hand it the keyboard, saying so with `notice`. */
@@ -53,7 +53,8 @@ export type TuiPluginServices = {
     readonly show: (kind: 'info' | 'error', text: string, durationMs?: number) => void
   }
   'file-history'?: {
-    readonly open: (path: string) => void
+    /** Opens over the asking view, or as a window beside the layout when `where` says so. */
+    readonly open: (path: string, where?: 'overlay' | 'window') => void
   }
   'open-file'?: {
     readonly open: (path: string, line?: number | null) => void
@@ -126,6 +127,8 @@ export type TuiPluginViewProps = {
   readonly target: PluginTarget
   readonly services: TuiPluginServices
   readonly theme: TuiThemePalette
+  /** The host's accent for titles and selection (the composer's provider colour). */
+  readonly accent: string
   /** Code highlighting styles, bound to this renderer's scene. */
   readonly syntaxStyle: SyntaxStyle | null
   readonly width: number

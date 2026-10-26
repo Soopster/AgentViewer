@@ -23,8 +23,11 @@ export type PluginSurfaceSpec = {
   readonly id: string
   /** Title with its leading glyph, as window chrome shows it. */
   readonly title: string
-  /** What a window keeps showing while the selection moves on: a session, a repository, or nothing. */
-  readonly pin: 'session' | 'cwd' | null
+  /**
+   * What a window keeps showing while the selection moves on: a session, a
+   * repository, a file (`PluginTarget.path`; one window per file), or nothing.
+   */
+  readonly pin: 'session' | 'cwd' | 'path' | null
   /** The surface's state is a singleton, so it exists once in any form. */
   readonly single: boolean
   /**
@@ -57,8 +60,8 @@ export type PluginCommandSpec = {
   readonly opens: string
   /** Where the command shows its surface: an overlay (the default) or a side-panel tab, reusing an open one. */
   readonly placement?: 'overlay' | 'panel'
-  /** What the command must have before it can run. */
-  readonly requires: 'session' | null
+  /** What the command must have before it can run: a selected session, or a repository to work in. */
+  readonly requires: 'session' | 'repository' | null
   readonly renderers: readonly PluginRenderer[]
   /** TUI binding, matched by the host's key router at global precedence. */
   readonly tuiKey?: PluginKeyChord
@@ -104,6 +107,8 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** Web: the pull request linked to the selected session, and linking one to it. */
+  | 'session-pull-request'
   | 'subagent-transcript'
   /** The session the view was opened for: its identity, not its transcript. */
   | 'session'
@@ -137,6 +142,8 @@ export type PluginTarget = {
    */
   readonly path?: string | null
   readonly line?: number | null
+  /** An agent turn the view opened on, named by the prompt that started it. */
+  readonly turn?: { readonly sessionId: string; readonly text: string; readonly timestamp?: string } | null
   /**
    * Counts the host's requests to open this surface. A view that loads once per
    * open (rather than following the selection) treats a change as a new open.

@@ -18,7 +18,6 @@ import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugi
 type BuiltinPopoverWindowKind =
   | 'daily-summary' | 'coordination'
   | 'attention' | 'prompt-library' | 'playbooks' | 'handoff'
-  | 'checkpoints' | 'file-history'
   | 'teammates' | 'desk'
 
 /**
@@ -44,9 +43,6 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
   'prompt-library': { title: '❝ Prompts', pin: null, single: true, keys: 'window', palette: 'Prompt library in a window' },
   playbooks: { title: '▦ Playbooks', pin: null, single: true, keys: 'window', palette: 'Playbook manager in a window' },
   handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
-  // Checkpoints are the repository's, not a session's.
-  checkpoints: { title: '⟲ Checkpoints', pin: null, single: true, keys: 'window', palette: 'Checkpoints & review in a window' },
-  'file-history': { title: '⌚ File history', pin: 'path', single: false, keys: 'window', palette: 'File history in a window' },
   // The interactive coordinator's store holds one conversation's team.
   teammates: { title: '◆ Teammates', pin: null, single: true, keys: 'window', palette: 'Teammates in a window' },
   // The desk's letters belong to its command line, as the editor's do to its buffer.

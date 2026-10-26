@@ -32,7 +32,6 @@ import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
-const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
@@ -376,7 +375,6 @@ export default function Home() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   // A repository-pinned plugin surface (Git) open as an overlay on the active project.
   const [repositoryOverlay, setRepositoryOverlay] = useState<PluginSurfaceId | null>(null)
-  const [pullRequestViewOpen, setPullRequestViewOpen] = useState(false)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
   const composerInsertRequestRef = useRef(0)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
@@ -521,10 +519,6 @@ export default function Home() {
     return true
   }), [activeProjectDir])
 
-  const openPullRequestView = useCallback(() => {
-    if (!activeProjectDir) return
-    setPullRequestViewOpen(true)
-  }, [activeProjectDir])
 
 
   const consumeComposerInsertRequest = useCallback((requestId: number) => {
@@ -538,12 +532,6 @@ export default function Home() {
       text: `@${path} `,
     })
   }, [])
-  // What a repository-pinned plugin surface (Git, Files) is given on the active project.
-  const liveSession = selectedSession && !selectedSession.isPending ? selectedSession : null
-  const repositoryServices = useMemo<WebPluginServices | null>(() => (activeProjectDir ? {
-    repository: { cwd: activeProjectDir, sessionId: liveSession?.sessionId ?? null, provider: liveSession?.provider ?? null },
-    ...(!selectedProject && selectedSession ? { composer: { insertPath: insertFilePathToComposer } } : {}),
-  } : null), [activeProjectDir, liveSession?.sessionId, liveSession?.provider, selectedProject, selectedSession, insertFilePathToComposer])
 
   const openRunDashboard = useCallback(() => {
     setDashboardContextSession(selectedSession)
@@ -659,6 +647,35 @@ export default function Home() {
   const fetchSessions = useCallback(async () => {
     await loadSessionsForProvider(provider)
   }, [loadSessionsForProvider, provider])
+
+  const insertTextToComposer = useCallback((text: string) => {
+    composerInsertRequestRef.current += 1
+    setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text })
+  }, [])
+  // Links a pull request to the selected session, which then settles itself when the PR merges.
+  const linkPullRequestToSession = useCallback((pr: { repo: string; number: number; url: string; cwd: string }) => {
+    const target = selectedSession
+    if (!target) return
+    void fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/inbox`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'link-pr',
+        provider: target.provider,
+        providerInstanceId: target.providerInstanceId,
+        linkedPr: pr,
+      }),
+    }).then(() => { void fetchSessions() }).catch(() => {})
+  }, [selectedSession, fetchSessions])
+  // What a repository-pinned plugin surface (Git, Files, pull requests) is given on the active project.
+  const liveSession = selectedSession && !selectedSession.isPending ? selectedSession : null
+  const linkedPrNumber = selectedSession?.inbox?.linkedPr?.number
+  const repositoryServices = useMemo<WebPluginServices | null>(() => (activeProjectDir ? {
+    repository: { cwd: activeProjectDir, sessionId: liveSession?.sessionId ?? null, provider: liveSession?.provider ?? null },
+    // A question for the agent always has a composer to go to; a file path only a session's.
+    composer: { insertText: insertTextToComposer, ...(!selectedProject && selectedSession ? { insertPath: insertFilePathToComposer } : {}) },
+    'session-pull-request': { linkedNumber: linkedPrNumber, ...(selectedSession ? { link: linkPullRequestToSession } : {}) },
+  } : null), [activeProjectDir, liveSession?.sessionId, liveSession?.provider, selectedProject, selectedSession, insertFilePathToComposer, insertTextToComposer, linkedPrNumber, linkPullRequestToSession])
 
   const fetchProjectMessageBatches = useCallback(async (
     dir: string,
@@ -828,7 +845,7 @@ export default function Home() {
       if (!event.ctrlKey || event.metaKey || event.altKey || !event.shiftKey) return
       if (event.key.toLowerCase() !== 'g' || !activeProjectDir) return
       event.preventDefault()
-      setPullRequestViewOpen(true)
+      dispatchPluginCommand('pull-requests')
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1486,22 +1503,9 @@ export default function Home() {
         return <PluginSurfaceHost surfaceId="terminal" placement="panel" sessionKey={null} services={contextServices} onClose={() => closeRightPanelSurface(surface.id)} />
       case 'files':
       case 'diff':
+      case 'pull-request':
         return activeProjectDir && repositoryServices ? (
           <PluginSurfaceHost surfaceId={surface.kind} placement="panel" sessionKey={null} cwd={activeProjectDir} services={repositoryServices} onClose={() => closeRightPanelSurface(surface.id)} />
-        ) : null
-      case 'pull-request':
-        return activeProjectDir ? (
-          <PullRequestView
-            variant="docked"
-            open
-            cwd={activeProjectDir}
-            onClose={() => closeRightPanelSurface(surface.id)}
-            onAskAgent={(prompt) => {
-              composerInsertRequestRef.current += 1
-              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
-            }}
-            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
-          />
         ) : null
       case 'agents':
         return (
@@ -1752,7 +1756,6 @@ export default function Home() {
                   onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
-                  onOpenPullRequests={openPullRequestView}
                   onOpenCoordinator={openCoordinator}
                   onOpenCrossSessionMessaging={openCrossSessionMessaging}
                   onOpenTasks={openTaskPanel}
@@ -1797,31 +1800,6 @@ export default function Home() {
             cwd={activeProjectDir}
             services={repositoryServices!}
             onClose={() => setRepositoryOverlay(null)}
-          />
-        ) : null}
-        {activeProjectDir && pullRequestViewOpen ? (
-          <PullRequestView
-            open={pullRequestViewOpen}
-            cwd={activeProjectDir}
-            onClose={() => setPullRequestViewOpen(false)}
-            onAskAgent={(prompt) => {
-              composerInsertRequestRef.current += 1
-              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
-            }}
-            linkedPrNumber={selectedSession?.inbox?.linkedPr?.number}
-            onLinkToSession={selectedSession ? (pr) => {
-              const target = selectedSession
-              void fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/inbox`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  action: 'link-pr',
-                  provider: target.provider,
-                  providerInstanceId: target.providerInstanceId,
-                  linkedPr: pr,
-                }),
-              }).then(() => { void fetchSessions() }).catch(() => {})
-            } : undefined}
           />
         ) : null}
         {provenanceOpen ? (

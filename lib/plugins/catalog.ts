@@ -14,9 +14,12 @@ import { manifest as bridges } from '../../plugins/bridges/manifest'
 import { manifest as diagnostics } from '../../plugins/diagnostics/manifest'
 import { manifest as terminal } from '../../plugins/terminal/manifest'
 import { manifest as browser } from '../../plugins/browser/manifest'
+import { manifest as pullRequests } from '../../plugins/pull-requests/manifest'
+import { manifest as checkpoints } from '../../plugins/checkpoints/manifest'
+import { manifest as fileHistory } from '../../plugins/file-history/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

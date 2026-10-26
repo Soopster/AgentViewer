@@ -10,6 +10,7 @@ export { createScrollVelocityState, velocityScrollStep } from '../scrollVelocity
 export { createSidebarSessionSearch } from '../sidebarSessionSearch'
 export { filterComposerMentionEntries, type ComposerMentionFileEntry } from '../composerMentionRanking'
 export { detectTuiCodeFiletypeFromPath } from '../../codeFiletypes'
+export { MODAL_CONTENT_Z_INDEX } from '../layers'
 export { getProviderAccent } from '../../theme'
 export { fitText } from '../textLayout'
 export { isCtrlKey, isShiftedKey } from '../shortcutKeys'

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testRender, act } from './testRender'
 import { DARK_THEME } from '../theme'
-import { FileHistoryPopover, fileHistoryTimeline, hunkNewLineRange } from './FileHistoryPopover'
+import { FileHistoryPopover, fileHistoryTimeline, hunkNewLineRange } from '../../plugins/file-history/tui/FileHistoryPopover'
 import {
   CHECKPOINT_REF_PREFIX,
   createTurnCheckpoint,

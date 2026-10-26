@@ -3,3 +3,4 @@
 // never pulls the Pierre renderers into its chunk.
 export * from '../PierreDiffView'
 export { ReviewBoard } from '../review/ReviewBoard'
+export { DIFF_WORKER_POOL_OPTIONS } from '../pierreDiffWorker'
