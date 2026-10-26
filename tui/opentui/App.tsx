@@ -25094,6 +25094,21 @@ function OpenTuiWorkspace() {
       return
     }
 
+    // ⇧← / ⇧→ step through this space's workspaces; plain ← / → step through tabs.
+    if (key.shift && !key.ctrl && !key.meta && (key.name === 'left' || key.name === 'right')) {
+      const controller = workspaceContext.controller
+      const state = controller.getSnapshot()
+      const space = state.spaces.find(candidate => candidate.id === state.activeSpaceId)
+      if (space && space.workspaces.length > 1) {
+        handled(() => {
+          const index = Math.max(0, space.workspaces.findIndex(workspace => workspace.id === space.activeWorkspaceId))
+          const next = space.workspaces[Math.min(space.workspaces.length - 1, Math.max(0, index + (key.name === 'left' ? -1 : 1)))]!
+          if (next.id !== space.activeWorkspaceId) controller.activate(space.id, next.id)
+        })
+        return
+      }
+    }
+
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && selectedSession
       && (key.name === 'left' || key.name === 'right') && (childrenByParentId.get(sessionKey(selectedSession))?.length ?? 0) > 0) {
       handled(() => {
