@@ -137,6 +137,16 @@ try {
   act(() => { setup.mockInput.pressEnter() })
   await settle(400)
 
+  const dock = setup.renderer.root.findDescendantById('composer-dock') as unknown as { y: number } | null
+  const turnStatus = setup.renderer.root.findDescendantById('composer-dock-turn-status') as unknown as { y: number; height: number } | null
+  if (!dock || !turnStatus || turnStatus.y !== dock.y || turnStatus.height !== 1) {
+    throw new Error(`Running status did not occupy the composer top border:\n${setup.captureCharFrame()}`)
+  }
+  const borderText = setup.captureCharFrame().split('\n')[dock.y] ?? ''
+  if (!borderText.includes('⌃C cancel') || !borderText.includes('To:')) {
+    throw new Error(`Top border lost running status or target: ${borderText}`)
+  }
+
   // The model emits the tool call: name, then its input, then the end of the
   // call — the tool has not run yet at this point.
   await emitFrame({

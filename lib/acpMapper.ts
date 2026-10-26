@@ -1,3 +1,4 @@
+import { inlineImageBlock } from './imageContent'
 // Maps ACP session/update notifications (from lib/acpClientPool.ts's
 // buffered ActiveSessionMessage stream) into the canonical SessionMessage
 // shape, following the same pattern as claudeMapper.ts/codexMapper.ts:
@@ -30,7 +31,12 @@ function stringify(value: unknown): string {
   }
 }
 
+function mappedAcpContentBlock(block: AcpContentBlock): ContentBlock {
+  return inlineImageBlock(block) ?? textBlock(textFromAcpContentBlock(block))
+}
+
 function textFromAcpContentBlock(block: AcpContentBlock): string {
+  if (block.type === 'image') return '[image attachment unavailable]'
   if (block.type === 'text') return block.text
   if (block.type === 'resource_link') return block.uri ?? block.name ?? ''
   if (block.type === 'resource') {
@@ -43,15 +49,15 @@ function textFromAcpContentBlock(block: AcpContentBlock): string {
 
 function toolResultContentFromToolCallContent(content: ToolCallContent[] | undefined): string | ContentBlock[] {
   if (!content || content.length === 0) return ''
-  const blocks: TextBlock[] = content.map((entry): TextBlock => {
-    if (entry.type === 'content') return { type: 'text', text: textFromAcpContentBlock(entry.content) }
+  const blocks: ContentBlock[] = content.map((entry): ContentBlock => {
+    if (entry.type === 'content') return mappedAcpContentBlock(entry.content)
     if (entry.type === 'diff') {
       return { type: 'text', text: `--- ${entry.path}\n${entry.oldText ?? ''}\n+++\n${entry.newText}` }
     }
     // terminal
     return { type: 'text', text: `[terminal ${entry.terminalId}]` }
   })
-  if (blocks.length === 1) return blocks[0].text
+  if (blocks.length === 1 && blocks[0]!.type === 'text') return (blocks[0] as TextBlock).text
   return blocks
 }
 
@@ -123,11 +129,11 @@ export function mapAcpBufferedMessage(
   let apiMsg: ApiMessage | null = null
 
   if (update.sessionUpdate === 'agent_message_chunk') {
-    apiMsg = apiMessage('assistant', [textBlock(textFromAcpContentBlock(update.content))])
+    apiMsg = apiMessage('assistant', [mappedAcpContentBlock(update.content)])
   } else if (update.sessionUpdate === 'agent_thought_chunk') {
     apiMsg = apiMessage('assistant', [{ type: 'thinking', thinking: textFromAcpContentBlock(update.content) }])
   } else if (update.sessionUpdate === 'user_message_chunk') {
-    apiMsg = apiMessage('user', [textBlock(textFromAcpContentBlock(update.content))])
+    apiMsg = apiMessage('user', [mappedAcpContentBlock(update.content)])
   } else if (update.sessionUpdate === 'tool_call') {
     apiMsg = toolUseMessage(update)
   } else if (update.sessionUpdate === 'tool_call_update') {

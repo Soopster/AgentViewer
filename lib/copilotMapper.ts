@@ -1,3 +1,4 @@
+import { inlineImageBlock } from './imageContent'
 import type {
   Citations,
   GetAuthStatusResponse,
@@ -69,6 +70,20 @@ function userMessageContent(event: Extract<SessionEvent, { type: 'user.message' 
     if (label) parts.push(label)
   }
   return parts.filter(Boolean).join('\n\n').trim()
+}
+
+function userMessageBlocks(event: Extract<SessionEvent, { type: 'user.message' }>, assets: Map<string, unknown>): ApiMessage['content'] {
+  const images = (event.data.attachments ?? []).flatMap(attachment => {
+    const image = inlineImageBlock(attachment) ?? inlineImageBlock('assetId' in attachment && attachment.assetId ? assets.get(attachment.assetId) : null)
+    return image ? [image] : []
+  })
+  return images.length ? [{ type: 'text', text: userMessageContent(event) }, ...images] : userMessageContent(event)
+}
+
+function toolResultBlocks(event: Extract<SessionEvent, { type: 'tool.execution_complete' }>, assets: Map<string, unknown>): string | ContentBlock[] {
+  const candidates = [...(event.data.result?.contents ?? []), ...(event.data.result?.binaryResultsForLlm ?? [])]
+  const images = candidates.flatMap(value => { const image = inlineImageBlock(value) ?? inlineImageBlock('assetId' in value ? assets.get(value.assetId) : null); return image ? [image] : [] })
+  return images.length ? [{ type: 'text', text: toolResultContent(event) }, ...images] : toolResultContent(event)
 }
 
 // Citations are experimental (Anthropic models only, opt-in via enableCitations) and give
@@ -349,6 +364,8 @@ export function mapCopilotSessionToInfo(
 
 export function mapCopilotEventsToSessionMessages(sessionId: string, events: SessionEvent[]): SessionMessage[] {
   const messages: SessionMessage[] = []
+  const assets = new Map<string, unknown>()
+  for (const event of events) if (event.type === 'session.binary_asset') assets.set(event.data.assetId, event.data)
   let currentTurnId: string | undefined
   const lastAssistantMessageIndexByTurn = new Map<string, number>()
   const pendingUsageByTurn = new Map<string, NonNullable<ApiMessage['usage']>>()
@@ -374,7 +391,7 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
           timestamp: event.timestamp,
           message: {
             role: 'user',
-            content: userMessageContent(event),
+            content: userMessageBlocks(event, assets),
           },
         })
         break
@@ -481,7 +498,7 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
             content: [{
               type: 'tool_result',
               tool_use_id: event.data.toolCallId,
-              content: toolResultContent(event),
+              content: toolResultBlocks(event, assets),
               is_error: event.data.success ? undefined : true,
             }],
           },

@@ -161,9 +161,16 @@ function mapItemToMessages(
 
   switch (item.type) {
     case 'userMessage': {
-      const text = codexUserInputToText(item.content)
-      return text
-        ? [makeMessage(threadId, baseId, 'user', text, turnId, timestamp)]
+      const content: import('./types').ContentBlock[] = item.content.flatMap((entry): import('./types').ContentBlock[] => {
+        if (entry.type === 'image' && 'url' in entry) {
+          const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(entry.url)
+          if (match) return [{ type: 'image', source: { type: 'base64', media_type: match[1]!, data: match[2]! } }]
+        }
+        const text = codexUserInputToText([entry])
+        return text ? [{ type: 'text', text }] : []
+      })
+      return content.length
+        ? [makeMessage(threadId, baseId, 'user', content, turnId, timestamp)]
         : []
     }
     case 'agentMessage': {

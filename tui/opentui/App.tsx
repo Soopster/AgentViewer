@@ -13,6 +13,7 @@ import { createSidebarSessionSearch } from './sidebarSessionSearch'
 import { hideScratchSessions } from './scratchSessions'
 import { readReaderLayout } from './readerLayout'
 import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
+import { TranscriptImages } from './TranscriptImages'
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { recordVoice } from './voiceRecorder'
 import { spawn } from 'node:child_process'
@@ -6536,7 +6537,7 @@ function TranscriptCardInner({
           )
         })}
         <box
-          id={`card:${card.key}`}
+          id={`${card.images?.length ? 'card-content' : 'card'}:${card.key}`}
           flexDirection="row"
           width={agentWidth}
           // Explicit edges clear native borders when keyed cards change views.
@@ -6870,7 +6871,7 @@ function TranscriptCardInner({
         : undefined
     return (
       <box
-        id={`card:${card.key}`}
+        id={`${card.images?.length ? 'card-content' : 'card'}:${card.key}`}
         flexDirection="column"
         // Agents mode uses this same keyed outer card with a top separator.
         // Keep the stream/chat edge set explicit so returning here clears the
@@ -7107,7 +7108,7 @@ function TranscriptCardInner({
           )
         })}
         <box
-          id={`card:${card.key}`}
+          id={`${card.images?.length ? 'card-content' : 'card'}:${card.key}`}
           paddingX={1}
           width={readableCardWidth}
           flexDirection="row"
@@ -7154,7 +7155,7 @@ function TranscriptCardInner({
       })}
 
       <box
-        id={`card:${card.key}`}
+        id={`${card.images?.length ? 'card-content' : 'card'}:${card.key}`}
         alignSelf={userBubble ? 'flex-end' : undefined}
         width={cardWidth}
         // Use an explicit empty edge set for the borderless stream/chat
@@ -7564,7 +7565,13 @@ function TranscriptCardInner({
   )
 }
 
-const TranscriptCard = React.memo(TranscriptCardInner)
+const TranscriptCard = React.memo(function TranscriptCardWithImages(props: TranscriptCardProps) {
+  if (!props.card.images?.length) return <TranscriptCardInner {...props} />
+  return <box id={`card:${props.card.key}`} flexDirection="column" flexShrink={0}>
+    <TranscriptCardInner {...props} />
+    <TranscriptImages sources={props.card.images} width={Math.max(1, props.rightPaneWidth - 8)} muted={props.theme.muted} />
+  </box>
+})
 
 export type TranscriptCardSelectionVariants = {
   cardKey: string
@@ -12386,7 +12393,7 @@ function OpenTuiWorkspace() {
     if (composerSendState === 'sending') {
       parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C cancel')
     }
-    if (canBackgroundClaudeCommand) parts.push('⌃B background')
+    if (canBackgroundClaudeCommand) parts.push('⌃B ⌃B background')
     return parts.length > 0 ? parts.join(' · ') : null
   }, [canBackgroundClaudeCommand, composerSendState, interruptPressActive, liveOutputTokens])
 
@@ -13030,6 +13037,7 @@ function OpenTuiWorkspace() {
     && selectedSessionIdentity === composerActivitySessionKey,
   )
   const visibleComposerSending = composerActivityVisible && composerSendState === 'sending'
+  const composerTurnStatusInBorder = visibleComposerSending && !embeddedComposer && !fullscreenMode && !composerWindowOpen && !composerHidden
   const visibleAwaitingPersistedTurn = composerActivityVisible && awaitingPersistedTurn
   const visibleComposerLiveText = composerActivityVisible ? composerLiveText : ''
   const visibleComposerError = composerActivityVisible ? composerError : null
@@ -13203,7 +13211,7 @@ function OpenTuiWorkspace() {
     // entire turn, not just the pre-output window).
     // Embedded composers own a compact status row in the reader, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
-    if (visibleComposerSending && !embeddedComposer) rows += 1
+    if (visibleComposerSending && !embeddedComposer && !composerTurnStatusInBorder) rows += 1
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -23415,6 +23423,11 @@ function OpenTuiWorkspace() {
           showNotice('info', 'Split chord cancelled')
           return
         }
+        if (isCtrl('b') && composerActive && composerTargetSession?.provider === 'claude'
+          && (composerSendState === 'sending' || reattachedRunning)) {
+          if (!isKeyRepeat) void backgroundComposerTasks()
+          return
+        }
         // % and " are tmux's split keys; v/s are the vim-shaped aliases.
         if (sequence === 'q') { enterWindowControls('identify'); return }
         if (sequence === 'e') { enterWindowControls('manage'); return }
@@ -23474,13 +23487,14 @@ function OpenTuiWorkspace() {
       return
     }
 
-    // Handle Claude's native shortcut before the window chord and textarea.
-    if (composerActive && isCtrl('b') && composerTargetSession?.provider === 'claude'
-      && (composerSendState === 'sending' || reattachedRunning)) {
-      handled(() => { if (!isKeyRepeat) void backgroundComposerTasks() })
+    // The window prefix works from the composer, including during a turn.
+    if (!windowControlsBlocked && composerActive && isCtrl('b')) {
+      handled(() => {
+        setCommandChordPending(false)
+        setSplitChordPending(true)
+      })
       return
     }
-    if (composerActive && composerSendState !== 'sending' && isCtrl('b')) { handled(() => setSplitChordPending(true)); return }
     if (isCtrlShift('v') && composerActive && !isKeyRepeat) {
       handled(() => toggleVoice())
       return
@@ -28314,7 +28328,7 @@ function OpenTuiWorkspace() {
       {/* Pinned for the whole turn — elapsed + token counter + interrupt hint
           must not vanish the moment the first delta or tool arrives, which is
           how the native Claude CLI status line behaves. */}
-      {visibleComposerSending && !embeddedComposer ? (
+      {visibleComposerSending && !embeddedComposer && !composerTurnStatusInBorder ? (
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
@@ -28451,7 +28465,7 @@ function OpenTuiWorkspace() {
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
-          title={fullscreenMode ? undefined : composerTargetMessage
+          title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage
             ? fitText(composerTargetMessage, composerDockTitleWidth)
             : isChatLikeView ? undefined : composerDockBorderTitle}
           titleColor={composerTargetMessage ? theme.cyan : composerDockEmphasized ? composerAccentColor : theme.dim}
@@ -28465,6 +28479,35 @@ function OpenTuiWorkspace() {
             composerTextareaRef.current?.focus()
           }}
         >
+          {composerTurnStatusInBorder ? (
+            <box
+              id="composer-dock-turn-status"
+              position="absolute"
+              top={-1}
+              left={1}
+              width={composerDockTextareaWidth}
+              height={1}
+              flexDirection="row"
+              backgroundColor={composerDockBackground}
+              overflow="hidden"
+            >
+              <box flexGrow={1} minWidth={0} overflow="hidden">
+                <ComposerWaitingStatus
+                  startedAt={composerSendStartedAt}
+                  seed={composerWaitingStatusSeed}
+                  suffix={composerWaitingSuffix}
+                  theme={theme}
+                  width={Math.max(1, composerDockTextareaWidth - (composerTargetMessage ? Math.min(36, Math.floor(composerDockTextareaWidth / 4)) + 3 : 0))}
+                  message={composerWaitingOnUser}
+                />
+              </box>
+              {composerTargetMessage ? (
+                <text fg={theme.cyan} wrapMode="none" width={Math.min(36, Math.floor(composerDockTextareaWidth / 4)) + 3}>
+                  {` · ${fitText(composerTargetMessage, Math.min(36, Math.floor(composerDockTextareaWidth / 4)))}`}
+                </text>
+              ) : null}
+            </box>
+          ) : null}
           {renderComposerTextarea(submitComposerFromDock, {
             height: composerDockTextareaHeight,
             width: composerDockTextareaWidth,

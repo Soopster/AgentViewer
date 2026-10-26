@@ -1,3 +1,5 @@
+import { inlineImageBlock } from '../lib/imageContent'
+import type { ToolResultBlock } from '../lib/types'
 import { readAsyncQuestions } from '../lib/asyncQuestions'
 import { mcpResourceLinks } from '../lib/mcpArtifacts'
 import { readableContextText } from '../lib/composerContext'
@@ -2372,6 +2374,7 @@ export function formatTranscriptLines(messages: ThreadedMessage[]): string[] {
 }
 
 export type TuiTranscriptCard = {
+  images?: string[]
   asyncQuestions?: import('../lib/permissions').PendingQuestion[]
   key: string
   role: ThreadedMessage['role']
@@ -2672,6 +2675,32 @@ export function withTranscriptCardPreview(card: TuiTranscriptCard, lines: TuiTra
 }
 
 export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry, durationMs?: number, deferSearchText = false): TuiTranscriptCard {
+  // Older Codex snapshots encoded attachments as text. Strip those payloads
+  // before formatting/searching and carry previews separately from prose.
+  const images: string[] = []
+  const cleanText = (text: string): string => text.replace(/(?:\[image\]\s*)?data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/g, (_match, mime: string, data: string) => {
+    images.push(`data:${mime};base64,${data.replace(/\s/g, '')}`)
+    return '[image attachment]'
+  })
+  const collectImage = (block: unknown): void => {
+    const image = inlineImageBlock(block)
+    if (image?.source) images.push(`data:${image.source.media_type};base64,${image.source.data.replace(/\s/g, '')}`)
+  }
+  const cleanResult = (result: ToolResultBlock): ToolResultBlock => ({
+    ...result,
+    content: typeof result.content === 'string' ? cleanText(result.content) : result.content.map((block): ContentBlock => {
+      collectImage(block)
+      if (block.type === 'text' && typeof block.text === 'string') return { ...block, text: cleanText(block.text) }
+      if (block.type === 'tool_result') return cleanResult(block as ToolResultBlock)
+      return block
+    }),
+  })
+  message = { ...message, blocks: message.blocks.map(block => {
+    collectImage(block)
+    if (block.type === 'tool_thread' && block.result) return { ...block, result: cleanResult(block.result) }
+    if (block.type === 'text') return { ...block, text: cleanText(block.text) }
+    return block
+  }) }
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
@@ -2710,6 +2739,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const searchText = deferSearchText ? '' : cardSearchText(expandedLines)
   return {
     asyncQuestions: asyncQuestions ? message.blocks.flatMap(block => block.type === 'tool_thread' ? readAsyncQuestions(block.toolUse.input) : []) : undefined,
+    images: images.length ? [...new Set(images)] : undefined,
     key: message.uuid,
     role: message.role,
     provider: message.provider,
@@ -2757,6 +2787,10 @@ function cardFileEdits(message: ThreadedMessage): FileEditStat[] | undefined {
 // share the expanded lines/code data between variants instead of rebuilding
 // and retaining another copy of that content.
 export function reformatTranscriptCardDensity(message: ThreadedMessage, density: TuiDensity, previous: TuiTranscriptCard, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCard {
+  if (previous.images?.length) {
+    const reformatted = formatTranscriptCard(message, density, activeForms, taskRegistry)
+    return { ...previous, lines: reformatted.lines, compactSummary: reformatted.compactSummary }
+  }
   if (previous.autoFold || previous.hasMermaidDiagrams) return previous
   const previewLines: TuiTranscriptCardLine[] = []
   for (const block of message.blocks) previewLines.push(...formatBlock(block, activeForms, taskRegistry))
