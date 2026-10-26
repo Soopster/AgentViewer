@@ -99,7 +99,7 @@ mock.module(fileURLToPath(new URL('../../plugins/analytics/tui/index.tsx', impor
     React.useEffect(() => { registerKeys((key) => { if (key.name === 'escape') close() }) }, [registerKeys, close])
     if (failing) throw new Error('fixture render failure')
     const overlay = placement === 'overlay'
-    return <text id="fixture-analytics" fg={theme.text} {...(overlay ? { position: 'absolute' as const, top: 3, left: 40, zIndex: 50 } : {})}>FIXTURE ANALYTICS visits={visits}</text>
+    return <text id="fixture-analytics" fg={theme.text} {...(overlay ? { position: 'absolute' as const, top: 14, left: 40, zIndex: 50 } : {})}>FIXTURE ANALYTICS visits={visits}</text>
   }
   return { module: { apiVersion: 1, pluginId: 'analytics', views: { analytics: FixtureAnalytics } } }
 })
@@ -147,7 +147,7 @@ await key('a', { ctrl: true })
 await waitFor('the failure view', () => screen().includes('Analytics stopped: fixture render failure'))
 check(moduleEvaluations === 1 && tuiPluginViews.isLoaded('analytics'), 'opening did not load the plugin exactly once')
 check(screen().includes('PLUG-ALPHA-BODY'), 'a plugin failure took the transcript down')
-check(screen().includes('Sending to'), 'a plugin failure took the composer down')
+check(screen().includes('To: Plug alpha'), 'a plugin failure took the composer down')
 // Retry remounts the view; the module is not evaluated again.
 failing = false
 await key('r')
@@ -227,9 +227,9 @@ await waitFor('Files closed', () => !screen().includes(' Files '))
 await key('n', { shift: true })
 await waitFor('the new-session modal', () => screen().includes('Folder') || screen().includes('folder'))
 await key('b')
-await waitFor('the folder picker', () => screen().includes(' Choose folder '))
+await waitFor('the folder picker', () => screen().includes(' Choose '))
 await key('o')
-await waitFor('back in the new-session modal', () => !screen().includes(' Choose folder ') && screen().includes(path.basename(CWD)))
+await waitFor('back in the new-session modal', () => !screen().includes(' Choose ') && screen().includes(path.basename(CWD)))
 await key('escape')
 const { applyPluginSettings, withPluginEnabled, DEFAULT_PLUGIN_SETTINGS } = await import('../../lib/plugins/enablement')
 applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'files', false))
@@ -238,7 +238,7 @@ await key('n', { shift: true })
 await settle(300)
 await key('b')
 await settle(300)
-check(!screen().includes(' Choose folder ') && screen().includes('Folder browsing needs Files'), 'the folder picker opened with Files off, or said nothing')
+check(!screen().includes(' Choose ') && screen().includes('Folder browsing needs Files'), 'the folder picker opened with Files off, or said nothing')
 await key('escape')
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('Files opens as a lazy plugin; the new-session folder picker is its view, and says so when Files is off.')
