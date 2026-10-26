@@ -86,17 +86,49 @@ const PENDING_INTERRUPT_TTL_MS = 30_000
 const STEER_RECEIPT_TTL_MS = 10 * 60 * 1000
 const MAX_STEER_RECEIPTS = 1_000
 
+/** Keys include the configured account. Unscoped legacy reads only resolve a unique session. */
+export type RuntimeSessionTarget = { provider: AgentProvider; providerInstanceId?: string }
+
+function runtimeKey(sessionId: string, entries: ReadonlyMap<string, unknown> = runningSessions, target?: RuntimeSessionTarget): string {
+  const active = currentProviderInstance()
+  const provider = target?.provider ?? active?.provider
+  const instance = target ? target.providerInstanceId ?? target.provider : active?.id ?? provider
+  if (provider) return JSON.stringify([provider, instance, sessionId])
+  let match: string | undefined
+  for (const key of entries.keys()) {
+    if (key === sessionId || (key.startsWith('[') && JSON.parse(key)[2] === sessionId)) {
+      if (match !== undefined) throw new Error('Provider instance context is required for an ambiguous session ID')
+      match = key
+    }
+  }
+  return match ?? sessionId
+}
+
+// Next development reloads retain this global registry across module versions.
+function migrateRuntimeKeys<T extends RuntimeSessionTarget>(entries: Map<string, T>): void {
+  for (const [key, value] of entries) {
+    if (key.startsWith('[')) continue
+    entries.delete(key)
+    entries.set(runtimeKey(key, entries, value), value)
+  }
+}
+migrateRuntimeKeys(runningSessions)
+migrateRuntimeKeys(waitingSessions)
+migrateRuntimeKeys(getSessionRuntimeState().waitingObservations!)
+
 export function setRunningSession(sessionId: string, session: RunningSession): void {
   // A new foreground turn supersedes the prior Stop-hook pause snapshot. The
   // next Stop callback will publish a fresh waiting state if work remains.
-  waitingSessions.delete(sessionId)
   const active = currentProviderInstance()
   const instance = session.providerInstanceId ?? (active?.provider === session.provider ? active.id : undefined)
-  runningSessions.set(sessionId, instance && instance !== session.provider ? { ...session, providerInstanceId: instance } : session)
-  const pending = pendingInterrupts.get(sessionId)
+  const key = runtimeKey(sessionId, runningSessions, { ...session, providerInstanceId: instance })
+  waitingSessions.delete(key)
+  runningSessions.set(key, instance && instance !== session.provider ? { ...session, providerInstanceId: instance } : session)
+  const pendingKey = currentProviderInstance() ? key : pendingInterrupts.has(key) ? key : sessionId
+  const pending = pendingInterrupts.get(pendingKey)
   if (pending && session.requestId === pending.requestId) {
     clearTimeout(pending.timer)
-    pendingInterrupts.delete(sessionId)
+    pendingInterrupts.delete(pendingKey)
     void session.interrupt().catch(() => {})
   }
 }
@@ -104,43 +136,44 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
 export function setWaitingSession(state: Omit<WaitingSession, 'updatedAt'>): void {
   const active = currentProviderInstance()
   const instance = state.providerInstanceId ?? (active?.provider === state.provider ? active.id : undefined)
-    ?? runningSessions.get(state.sessionId)?.providerInstanceId
+    ?? runningSessions.get(runtimeKey(state.sessionId, runningSessions, state))?.providerInstanceId
   if (instance && instance !== state.provider) state = { ...state, providerInstanceId: instance }
+  const key = runtimeKey(state.sessionId, waitingSessions, { ...state, providerInstanceId: instance })
   const observations = getSessionRuntimeState().waitingObservations!
-  observations.delete(state.sessionId)
-  observations.set(state.sessionId, { ...state, updatedAt: Date.now() })
+  observations.delete(key)
+  observations.set(key, { ...state, updatedAt: Date.now() })
   if (observations.size > 1000) observations.delete(observations.keys().next().value!)
   if (state.backgroundTasks.length === 0 && state.sessionCrons.length === 0) {
-    waitingSessions.delete(state.sessionId)
+    waitingSessions.delete(key)
     return
   }
-  waitingSessions.set(state.sessionId, { ...state, updatedAt: Date.now() })
+  waitingSessions.set(key, { ...state, updatedAt: Date.now() })
 }
 
 export function clearWaitingSession(sessionId: string): void {
-  waitingSessions.delete(sessionId)
+  waitingSessions.delete(runtimeKey(sessionId, waitingSessions))
 }
 
 /** Latest authoritative background snapshot; foreground start/marker clearing is not proof of completion. */
-export function readWaitingSessionObservation(sessionId: string): WaitingSession | undefined {
-  return getSessionRuntimeState().waitingObservations!.get(sessionId)
+export function readWaitingSessionObservation(sessionId: string, target?: RuntimeSessionTarget): WaitingSession | undefined {
+  return getSessionRuntimeState().waitingObservations!.get(runtimeKey(sessionId, getSessionRuntimeState().waitingObservations!, target))
 }
 
 export function listWaitingSessions(): WaitingSession[] {
   return [...waitingSessions.values()]
 }
 
-export function getRunningSession(sessionId: string): RunningSession | undefined {
-  return runningSessions.get(sessionId)
+export function getRunningSession(sessionId: string, target?: RuntimeSessionTarget): RunningSession | undefined {
+  return runningSessions.get(runtimeKey(sessionId, runningSessions, target))
 }
 
 export function clearRunningSession(sessionId: string, requestId?: string): boolean {
-  const running = runningSessions.get(sessionId)
+  const running = runningSessions.get(runtimeKey(sessionId))
   if (!running) return false
   // A stale stream can finish after a retry/new turn has replaced its registry
   // entry. Request-scoped cleanup must never erase that newer turn.
   if (requestId && running.requestId !== requestId) return false
-  return runningSessions.delete(sessionId)
+  return runningSessions.delete(runtimeKey(sessionId))
 }
 
 /**
@@ -148,8 +181,8 @@ export function clearRunningSession(sessionId: string, requestId?: string): bool
  * when it produces one (Claude interrupt_receipt_v1: `{ still_queued }` uuids
  * of queued async messages that survive the interrupt), undefined otherwise.
  */
-export async function interruptRunningSession(sessionId: string, requestId?: string, cancelQueued = false): Promise<unknown> {
-  const running = runningSessions.get(sessionId)
+export async function interruptRunningSession(sessionId: string, requestId?: string, cancelQueued = false, target?: RuntimeSessionTarget): Promise<unknown> {
+  const running = getRunningSession(sessionId, target)
   if (running) {
     // A caller carrying a turn id is intentionally targeting one exact turn.
     // An uncorrelated/legacy registry entry is not safe to interrupt on its
@@ -162,16 +195,17 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
     throw new Error('No running session for this session')
   }
 
-  const existing = pendingInterrupts.get(sessionId)
+  const key = runtimeKey(sessionId, pendingInterrupts, target)
+  const existing = pendingInterrupts.get(key)
   if (existing) clearTimeout(existing.timer)
   const timer = setTimeout(() => {
-    const pending = pendingInterrupts.get(sessionId)
-    if (pending?.requestId === requestId) pendingInterrupts.delete(sessionId)
+    const pending = pendingInterrupts.get(key)
+    if (pending?.requestId === requestId) pendingInterrupts.delete(key)
   }, PENDING_INTERRUPT_TTL_MS)
   if (typeof timer === 'object' && timer && 'unref' in timer) {
     (timer as { unref: () => void }).unref()
   }
-  pendingInterrupts.set(sessionId, { requestId, timer })
+  pendingInterrupts.set(key, { requestId, timer })
 }
 
 /**
@@ -181,8 +215,8 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
  * set when the provider stamps the delivered message (Claude), so clients can
  * correlate command_lifecycle frames and interrupt still_queued receipts.
  */
-export async function steerRunningSession(sessionId: string, text: string, requestId?: string): Promise<{ delivered: boolean; messageUuid?: string }> {
-  const running = runningSessions.get(sessionId)
+export async function steerRunningSession(sessionId: string, text: string, requestId?: string, target?: RuntimeSessionTarget): Promise<{ delivered: boolean; messageUuid?: string }> {
+  const running = getRunningSession(sessionId, target)
   if (!running?.steer) return { delivered: false }
   if (requestId && running.requestId !== requestId) return { delivered: false }
   const result = await running.steer(text)
@@ -218,11 +252,12 @@ export function steerRunningSessionIdempotent(
   text: string,
   turnRequestId: string | undefined,
   steerRequestId: string | undefined,
+  target?: RuntimeSessionTarget,
 ): Promise<{ delivered: boolean; messageUuid?: string }> {
-  if (!steerRequestId) return steerRunningSession(sessionId, text, turnRequestId)
+  if (!steerRequestId) return steerRunningSession(sessionId, text, turnRequestId, target)
   const now = Date.now()
   pruneSteerReceipts(now)
-  const key = `${sessionId}\u0000${steerRequestId}`
+  const key = `${runtimeKey(sessionId, runningSessions, target)}\u0000${steerRequestId}`
   const existing = steerReceipts!.get(key)
   if (existing) {
     if (existing.text !== text || existing.turnRequestId !== turnRequestId) {
@@ -241,7 +276,7 @@ export function steerRunningSessionIdempotent(
     settled: false,
     promise: Promise.resolve({ delivered: false }),
   }
-  receipt.promise = steerRunningSession(sessionId, text, turnRequestId).finally(() => {
+  receipt.promise = steerRunningSession(sessionId, text, turnRequestId, target).finally(() => {
     receipt.settled = true
   })
   steerReceipts!.set(key, receipt)
@@ -259,14 +294,14 @@ export function getSessionRuntimeDiagnostics(): { steerReceipts: number } {
  * (the turn keeps running with detachOnClientAbort). `process-local`: only
  * reflects turns started in this process.
  */
-export function getRunningSessionInfo(sessionId: string): {
+export function getRunningSessionInfo(sessionId: string, target?: RuntimeSessionTarget): {
   running: boolean
   provider?: AgentProvider
   canSteer: boolean
   canInterrupt: boolean
   canBackground: boolean
 } {
-  const running = runningSessions.get(sessionId)
+  const running = getRunningSession(sessionId, target)
   if (!running) return { running: false, canSteer: false, canInterrupt: false, canBackground: false }
   return {
     running: true,
@@ -282,12 +317,12 @@ export function getRunningSessionInfo(sessionId: string): {
  * that track liveness across sessions (reattach, attention inbox, fleet view).
  */
 export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider; providerInstanceId?: string }> {
-  return Array.from(runningSessions, ([sessionId, running]) => ({ sessionId, provider: running.provider,
+  return Array.from(runningSessions, ([key, running]) => ({ sessionId: key.startsWith('[') ? JSON.parse(key)[2] as string : key, provider: running.provider,
     ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) }))
 }
 
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {
-  const running = runningSessions.get(sessionId)
+  const running = runningSessions.get(runtimeKey(sessionId))
   if (!running) throw new Error('No running session for this session')
   if (!running.background) throw new Error(`${running.provider} sessions do not support backgrounding running tasks`)
   return Boolean(await running.background())

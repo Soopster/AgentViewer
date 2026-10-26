@@ -6,10 +6,10 @@
 // requests (^Y / ^N), and pushes @file mentions into the session. Mirrors
 // ChannelBridgePopover; uses lib/ideBridge.ts. The protocol streams no prose
 // back, so this is a tool-activity feed rather than a chat thread.
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import {
   readIdeBridgeConfigFromEnv,
   resolveIdeDiff,
@@ -18,10 +18,10 @@ import {
   type IdeBridgeStatus,
   type IdeEvent,
   type IdeOpenDiffEvent,
-} from '../../lib/ideBridge'
-import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
+} from '../../../lib/ideBridge'
+import { buildDiffCommentComposerPrompt } from '../../../lib/diffCommentComposer'
 
-type IdeBridgeKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }
+type IdeBridgeKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }
 
 type LogEntry =
   | { kind: 'mention'; id: string; label: string }

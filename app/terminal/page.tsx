@@ -1,11 +1,18 @@
 'use client'
 
 import Link from 'next/link'
-import TerminalView from '@/components/TerminalView'
+import { useRouter } from 'next/navigation'
+import PluginSurfaceHost from '@/components/shell/PluginSurfaceHost'
+import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const FONT_MONO = "'IBM Plex Mono', monospace"
 
+const NO_SERVICES = {}
+
 export default function TerminalPage() {
+  // The Terminal plugin's view, full page; turned off, it says so.
+  usePluginSettingsSync()
+  const router = useRouter()
   return (
     <div
       style={{
@@ -39,7 +46,7 @@ export default function TerminalPage() {
         ← Back to sessions
       </Link>
       <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', paddingTop: 44 }}>
-        <TerminalView />
+        <PluginSurfaceHost surfaceId="terminal" placement="window" sessionKey={null} services={NO_SERVICES} onClose={() => router.push('/')} />
       </div>
     </div>
   )

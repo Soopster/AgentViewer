@@ -17,6 +17,7 @@ export const manifest = {
     single: false,
     keys: 'window',
     placements: ['overlay', 'window', 'panel'],
+    panelOrder: 10,
     windowLabel: 'Files in a window',
     services: ['repository'],
     optionalServices: ['composer', 'open-file', 'directory-picker', 'scroll-preferences'],

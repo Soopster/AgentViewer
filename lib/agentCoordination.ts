@@ -1200,7 +1200,7 @@ function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgen
   return agents.map((agent) => {
     const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
     const turnActive = controller?.turnInFlight.has(agent.id) === true
-      || getRunningSessionInfo(sessionId).running
+      || getRunningSessionInfo(sessionId, agent).running
     const withTurn = turnActive
       ? {
           ...agent,
@@ -4286,9 +4286,9 @@ export async function recordCoordinatorBackgroundObservation(sessionId: string):
 }
 
 function assertNoPendingBackgroundSync(db: SqliteDatabase, runId: string, agentId: string): void {
-  const agent = db.prepare('SELECT session_id, pending_background_json FROM protocol_agents WHERE run_id = ? AND id = ?').get(runId, agentId) as Row | undefined
+  const agent = db.prepare('SELECT session_id, provider, pending_background_json FROM protocol_agents WHERE run_id = ? AND id = ?').get(runId, agentId) as Row | undefined
   if (!agent) return
-  const observation = readWaitingSessionObservation(String(agent.session_id))
+  const observation = readWaitingSessionObservation(String(agent.session_id), { provider: String(agent.provider) as AgentProvider })
   const persisted = parseJsonObject<{ sessionId: string; observedAt: number; tasks: number; wakeups: number }>(agent.pending_background_json)
   if (observation && (!persisted || observation.updatedAt >= persisted.observedAt)) {
     const work = coordinatorBackgroundWork(observation.backgroundTasks, observation.sessionCrons)
@@ -5301,7 +5301,7 @@ export async function finalizeExternalProtocolRun(
   await Promise.allSettled(agents.flatMap((agent) => {
     const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
     return [...ids].filter((id) => !callerSessionIds.has(id)).map((id) => Promise.race([
-      interruptRunningSession(id).catch(() => {}),
+      interruptRunningSession(id, undefined, false, agent).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
     ]))
   }))
@@ -6171,7 +6171,7 @@ function taskClaimableByAgent(task: ProtocolTask, agent: ProtocolAgent, agents: 
 
 function hasUnobservedDispatchSync(db: SqliteDatabase, runId: string, agent: ProtocolAgent): boolean {
   return Boolean(db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id))
-    && !controllers.get(runId)?.turnInFlight.has(agent.id) && !getRunningSessionInfo(agent.sessionId).running
+    && !controllers.get(runId)?.turnInFlight.has(agent.id) && !getRunningSessionInfo(agent.sessionId, agent).running
 }
 
 /** Atomic claim: only a role-compatible pending task with completed deps and no owner can be taken. */
@@ -7018,7 +7018,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
       // acknowledges it in that CLI's bridge process.
       const delivered = sessionId.startsWith('external:')
         ? false
-        : await steerRunningSession(sessionId, text)
+        : await steerRunningSession(sessionId, text, undefined, recipient)
           .then((result) => result.delivered)
           .catch(() => false)
       if (delivered) {
@@ -7927,7 +7927,7 @@ export async function setInteractiveCoordinatorEnabled(params: {
       if (!params.cwd) throw new Error('Open a local project conversation before enabling coordination')
       if (existing && existing.run.id !== runId && !['completed', 'failed', 'stopped'].includes(existing.run.status)) throw new Error('A newer team is active; this request belongs to an older team')
       if (existing && existing.run.id !== runId) {
-        if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running) throw new Error('Wait for the current chat turn to finish before starting a new team')
+        if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId, { provider }).running) throw new Error('Wait for the current chat turn to finish before starting a new team')
         await enqueueWrite(tx => { tx.prepare('DELETE FROM protocol_chat_delivery WHERE session_id = ? AND run_id = ?').run(sessionId, existing.run.id) })
       }
       await configureInteractiveCoordinator({ sessionId, provider, cwd: params.cwd, restartRunId: runId ?? undefined, autoContinue: params.autoContinue })
@@ -8170,7 +8170,7 @@ export async function readInteractiveTeardown(sessionId: string, provider: Agent
   }
   return {
     worktrees: worktrees.filter(entry => entry.changedFiles !== 0),
-    runningTurns: teammates.filter(agent => agent.turnActive || getRunningSessionInfo(agent.sessionId).running).map(agent => agent.name),
+    runningTurns: teammates.filter(agent => agent.turnActive || getRunningSessionInfo(agent.sessionId, agent).running).map(agent => agent.name),
   }
 }
 
@@ -8237,7 +8237,7 @@ export async function readInteractiveRecoveries(runId: string): Promise<string[]
 
 /** A stale reservation is separate from whatever task the scheduler later assigned. */
 function acknowledgeableDispatchSync(db: SqliteDatabase, snapshot: ProtocolRunSnapshot, agent: ProtocolAgent): Row | undefined {
-  if (agent.turnActive || controllers.get(snapshot.run.id)?.turnInFlight.has(agent.id) || getRunningSessionInfo(agent.sessionId).running) return
+  if (agent.turnActive || controllers.get(snapshot.run.id)?.turnInFlight.has(agent.id) || getRunningSessionInfo(agent.sessionId, agent).running) return
   const row = db.prepare('SELECT task_id, created_at FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(snapshot.run.id, agent.id) as Row | undefined
   const dispatched = row?.task_id ? snapshot.tasks.find(task => task.id === row.task_id) : undefined
   if (!dispatched) return
@@ -8350,11 +8350,11 @@ export async function interruptInteractiveAgent(identity: ExternalProtocolIdenti
   if (!agent) throw new Error(`Coordinator participant not found: ${agentId}`)
   if (agent.id === identity.agentId) throw new Error('Interrupt your own turn from the composer, not the roster')
   const controller = controllers.get(identity.runId)
-  if (!agent.sessionId.startsWith('external:') && (controller?.sessionIds.has(agent.id) || getRunningSessionInfo(agent.sessionId).running)) {
+  if (!agent.sessionId.startsWith('external:') && (controller?.sessionIds.has(agent.id) || getRunningSessionInfo(agent.sessionId, agent).running)) {
     await enqueueWrite(tx => claimInteractiveHostSync(tx, identity.runId))
     const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
-    if (!getRunningSessionInfo(sessionId).running) throw new Error(`${agent.name} has no turn running here`)
-    await interruptRunningSession(sessionId)
+    if (!getRunningSessionInfo(sessionId, agent).running) throw new Error(`${agent.name} has no turn running here`)
+    await interruptRunningSession(sessionId, undefined, false, agent)
     return
   }
   await cancelExternalProtocolTurn(identity, { agentId: agent.id })
@@ -8519,7 +8519,7 @@ async function sweepInteractiveCoordinator(runId: string): Promise<void> {
   const rows = sessions.filter(row => Boolean(row.auto_continue) && Number(row.remaining_turns) > 0)
   for (const row of rows) {
     const sessionId = String(row.session_id)
-    if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId).running) continue
+    if (activeChatDeliveries.has(sessionId) || getRunningSessionInfo(sessionId, { provider: String(row.provider) as AgentProvider }).running) continue
     if (db.prepare('SELECT 1 FROM protocol_chat_delivery WHERE session_id = ?').get(sessionId)) continue
     const snapshot = readSnapshotSync(db, runId)
     if (!snapshot || snapshot.run.status !== 'running') continue
@@ -8904,7 +8904,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
     if (sessionId) {
       await Promise.race([
-        interruptRunningSession(sessionId).catch(() => {}),
+        interruptRunningSession(sessionId, undefined, false, agent).catch(() => {}),
         new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
       ])
     }
@@ -10369,7 +10369,7 @@ export async function stopProtocolRun(runId: string, preserveSessionId?: string)
   await Promise.allSettled(agents.flatMap((agent) => {
     const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
     return [...ids].filter(id => id !== preserveSessionId).map((id) => Promise.race([
-      interruptRunningSession(id).catch(() => {}),
+      interruptRunningSession(id, undefined, false, agent).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
     ]))
   }))
@@ -10404,7 +10404,7 @@ export async function deleteProtocolRun(runId: string): Promise<{ deleted: boole
   await Promise.allSettled(agents.flatMap((agent) => {
     const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
     return [...ids].map((id) => Promise.race([
-      interruptRunningSession(id).catch(() => {}),
+      interruptRunningSession(id, undefined, false, agent).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
     ]))
   }))

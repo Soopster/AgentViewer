@@ -4,7 +4,8 @@
 // open, holds its scoped state, and contains its failures: a plugin that fails
 // to load or throws while rendering shows a local Retry/Close card, and the
 // transcript and composer around it keep working.
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { resolvePluginServices } from '@/lib/plugins/activation'
 import { getPluginSurface, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { pluginState, useScopedPluginState, type PluginStateStore } from '@/lib/plugins/scopedState'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
@@ -13,6 +14,7 @@ import type { WebPluginServices, WebPluginView, WebPluginViewProps } from './plu
 import { webPluginViews } from './pluginViews'
 
 type Props = {
+  ownerId?: string
   surfaceId: PluginSurfaceId
   placement: PluginPlacement
   sessionKey: string | null
@@ -32,6 +34,7 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 }
 
 export default function PluginSurfaceHost(props: Props) {
+  const localOwner = useId()
   const surface = getPluginSurface(props.surfaceId)
   if (useDisabledPlugins().has(surface.pluginId)) {
     // A panel tab or layout can outlive the choice to turn its plugin off; it says so and loads nothing.
@@ -42,24 +45,28 @@ export default function PluginSurfaceHost(props: Props) {
       </div>
     )
   }
-  return <ActivePluginSurface {...props} />
+  return <ActivePluginSurface key={props.surfaceId} {...props} ownerId={props.ownerId ?? localOwner} />
 }
 
-function ActivePluginSurface({ surfaceId, placement, sessionKey, cwd, services, onClose, registry = webPluginViews, store = pluginState }: Props) {
+function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, services: offered, onClose, registry = webPluginViews, store = pluginState }: Props) {
   const surface = getPluginSurface(surfaceId)
-  const instanceId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surface.pin === 'cwd' && cwd ? `${surfaceId}:${cwd}` : surfaceId
+  const targetId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surface.pin === 'cwd' && cwd ? `${surfaceId}:${cwd}` : surfaceId
+  const instanceId = `${ownerId}:${targetId}`
   const [attempt, setAttempt] = useState(0)
-  const [failure, setFailure] = useState<Error | null>(null)
+  const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
+  const resolved = useMemo(() => resolvePluginServices(surface, offered), [surface, offered])
+  const { services } = resolved
+  const failure = loadFailure ?? resolved.error
   useEffect(() => {
-    if (View) return undefined
+    if (View || resolved.error) return undefined
     let live = true
     registry.load(surface.pluginId).then(
       (module) => { if (live) setView(() => module.views[surfaceId]!) },
       (error: unknown) => { if (live) setFailure(error instanceof Error ? error : new Error(String(error))) },
     )
     return () => { live = false }
-  }, [View, attempt, registry, surface.pluginId, surfaceId])
+  }, [View, attempt, registry, surface.pluginId, surfaceId, resolved.error])
   useEffect(() => store.hold(surface.pluginId, instanceId), [store, surface.pluginId, instanceId])
 
   const target = useMemo(() => ({ sessionKey, cwd: cwd ?? null }), [sessionKey, cwd])

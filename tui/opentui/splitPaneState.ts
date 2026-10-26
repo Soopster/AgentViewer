@@ -374,15 +374,11 @@ export function resolveSelectedSession<S>(
 }
 
 /**
- * Resolve where the composer should send. A freshly-created session is an
- * explicit user target, so it must outrank the convenience fallback that
- * steers a composer toward the provider's sole running turn.
+ * Send to the explicitly activated session. Background activity is not a routing choice.
  */
 export function resolveComposerTargetSession({
   paneTargetKey,
-  preferredTargetKey,
   selectedSession,
-  runningSessions,
   sessions,
   openTabSessions,
   keyOf,
@@ -408,26 +404,7 @@ export function resolveComposerTargetSession({
       ?? null
   }
 
-  if (selectedSession && preferredTargetKey === keyOf(selectedSession)) {
-    return selectedSession
-  }
-
-  if (selectedSession) {
-    const selectedKey = keyOf(selectedSession)
-    if (runningSessions.some((running) => keyOf(running) === selectedKey)) {
-      return selectedSession
-    }
-  }
-
-  if (runningSessions.length === 1) {
-    const onlyRunning = runningSessions[0]!
-    const runningKey = keyOf(onlyRunning)
-    return sessions.find((session) => keyOf(session) === runningKey) ?? {
-      sessionId: onlyRunning.sessionId,
-      provider: onlyRunning.provider,
-    }
-  }
-
+  // Running status never changes the destination of a user-authored message.
   return selectedSession
 }
 

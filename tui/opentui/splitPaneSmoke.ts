@@ -223,8 +223,16 @@ for (const provider of newSessionProviders) {
     openTabSessions: [freshSession],
     keyOf: composerKey,
   })
-  assert.equal(automaticTarget, oldRunningSession, `${provider}: normal browsing should retain sole-running-session auto-targeting`)
+  assert.equal(automaticTarget, freshSession, `${provider}: the active session must win over another running session`)
 }
+
+// A running session is never an implicit destination when no window is active.
+assert.equal(resolveComposerTargetSession({ paneTargetKey: null, preferredTargetKey: null, selectedSession: null,
+  runningSessions: [{ sessionId: 'background', provider: 'codex' }], sessions: [], openTabSessions: [], keyOf: composerKey }), null)
+const activeAccount: Session = { sessionId: 'shared-native-id', provider: 'codex', providerInstanceId: 'work' }
+assert.equal(resolveComposerTargetSession({ paneTargetKey: null, preferredTargetKey: null, selectedSession: activeAccount,
+  runningSessions: [{ sessionId: 'shared-native-id', provider: 'codex', providerInstanceId: 'personal' }],
+  sessions: [activeAccount], openTabSessions: [activeAccount], keyOf: composerKey }), activeAccount)
 
 const preparationStages: string[] = []
 await runComposerSessionPreparation({

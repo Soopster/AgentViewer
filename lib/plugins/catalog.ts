@@ -3,16 +3,22 @@
 // each renderer's loader list (components/shell/pluginViews.ts,
 // tui/opentui/shell/pluginViews.ts); no root, palette or window-kind union
 // changes.
+import { manifest as subagents } from '../../plugins/subagents/manifest'
 import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
 import { manifest as editor } from '../../plugins/editor/manifest'
+import { manifest as messaging } from '../../plugins/messaging/manifest'
+import { manifest as tasks } from '../../plugins/tasks/manifest'
+import { manifest as bridges } from '../../plugins/bridges/manifest'
+import { manifest as diagnostics } from '../../plugins/diagnostics/manifest'
+import { manifest as terminal } from '../../plugins/terminal/manifest'
+import { manifest as browser } from '../../plugins/browser/manifest'
 import { manifest as coordination } from '../../plugins/coordination/manifest'
 import { manifest as desk } from '../../plugins/desk/manifest'
-import type { RightPanelSurfaceKind } from '../rightPanel'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, coordination, desk] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, coordination, desk] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
@@ -25,9 +31,7 @@ export type PluginPanelSurfaceId = BundledSurface extends infer S
   : never
 /** Surfaces that are popover kinds only (overlay and window). */
 export type PluginPopoverSurfaceId = Exclude<PluginSurfaceId, PluginPanelSurfaceId>
-// A panel surface's id is a saved-layout kind; a new one joins RIGHT_PANEL_SURFACE_KINDS first.
-type PanelKindsAreHostKinds<T extends RightPanelSurfaceKind> = T
-export type CheckedPanelSurfaceIds = PanelKindsAreHostKinds<PluginPanelSurfaceId>
+export type CheckedPanelSurfaceIds = PluginPanelSurfaceId
 
 export type ResolvedPluginSurface = PluginSurfaceSpec & { readonly pluginId: PluginId; readonly stateVersion: number }
 export type ResolvedPluginCommand = PluginCommandSpec & { readonly pluginId: PluginId }
@@ -42,6 +46,7 @@ for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
   for (const command of manifest.commands) {
     if (commands.has(command.id)) throw new Error(`Duplicate plugin command id: ${command.id}`)
     if (!manifest.surfaces.some(surface => surface.id === command.opens)) throw new Error(`Plugin command ${command.id} opens an undeclared surface: ${command.opens}`)
+    if (!manifest.surfaces.find(surface => surface.id === command.opens)!.placements.includes(command.placement ?? 'overlay')) throw new Error(`Plugin command ${command.id} opens ${command.opens} where it cannot be placed`)
     commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
   }
 }

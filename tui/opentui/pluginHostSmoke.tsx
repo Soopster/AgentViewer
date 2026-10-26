@@ -63,6 +63,25 @@ mock.module('../../lib/tui/service', () => ({
   readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
+  listTuiAddressableSessions: async () => [],
+  readTuiSessionDiagnostics: async () => {
+    diagnosticsReads += 1
+    return { sections: [{ id: 'commands', title: 'COMMANDS', items: ['PLUGIN-DIAG-MARKER'] }] }
+  },
+}))
+// The live CLI bridge's subscriptions, counted: the panel holds one and the
+// host one more while the panel is open or the composer routes to the bridge.
+// Only the panel's may end with the panel.
+let diagnosticsReads = 0
+let bridgeSubscriptions = 0
+const channelBridge = await import('../../lib/channelBridge')
+mock.module('../../lib/channelBridge', () => ({
+  ...channelBridge,
+  subscribeToChannelEvents: () => {
+    bridgeSubscriptions += 1
+    let live = true
+    return () => { if (live) { live = false; bridgeSubscriptions -= 1 } }
+  },
 }))
 
 // The Analytics plugin's view, instrumented: it throws on its first render, and
@@ -74,6 +93,8 @@ mock.module(fileURLToPath(new URL('../../plugins/analytics/tui/index.tsx', impor
   moduleEvaluations += 1
   function FixtureAnalytics({ theme, placement, useState, registerKeys, close }: TuiPluginViewProps) {
     const [visits, setVisits] = useState('visits', 0)
+    const [filters] = useState<string[]>('filters', [])
+    check(filters.length === 0, 'object defaults changed unexpectedly')
     React.useEffect(() => { setVisits((value) => value + 1) }, [])
     React.useEffect(() => { registerKeys((key) => { if (key.name === 'escape') close() }) }, [registerKeys, close])
     if (failing) throw new Error('fixture render failure')
@@ -256,6 +277,130 @@ check(!screen().includes('UNSAVEDEDIT') && screen().includes('Open project edito
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('The editor opens as a lazy plugin and keeps an unsaved edit across full screen → window → full screen.')
 
+// Messaging, the task list, the bridge panels and diagnostics are plugins:
+// none loads before it is opened, each opens from its old key.
+await settle(300)
+for (const id of ['messaging', 'tasks', 'bridges', 'diagnostics']) check(!tuiPluginViews.isLoaded(id), `the ${id} plugin loaded before it was opened`)
+await key('b', { ctrl: true }); await key('1')
+await key('m', { shift: true })
+await waitFor('the messaging overlay', () => screen().includes('Cross-session messaging') && screen().includes('reachable'))
+check(tuiPluginViews.isLoaded('messaging') && !tuiPluginViews.isLoaded('tasks'), 'opening messaging loaded the wrong plugins')
+await key('escape')
+await waitFor('messaging closed', () => !screen().includes('reachable'))
+await key('l', { shift: true })
+await waitFor('the task list overlay', () => screen().includes(' Tasks '))
+check(tuiPluginViews.isLoaded('tasks'), 'the task list opened without its plugin module')
+await key('escape')
+await waitFor('the task list closed', () => !screen().includes(' Tasks '))
+
+// Diagnostics reads once per open: breaking it out into a window keeps what
+// it read rather than reading again (a read can activate a session).
+await key('d', { shift: true })
+await waitFor('the diagnostics overlay', () => screen().includes('DIAGNOSTICS') && screen().includes('PLUGIN-DIAG-MARKER'))
+check(diagnosticsReads === 1, `opening diagnostics read ${diagnosticsReads} times`)
+await key('w', { ctrl: true, shift: true })
+await waitFor('placement choice or window', () => screen().includes('beside') || !!setup.renderer.root.findDescendantById('surface-frame:diagnostics'))
+if (!setup.renderer.root.findDescendantById('surface-frame:diagnostics')) await key('return')
+await waitFor('diagnostics in a window', () => !!setup.renderer.root.findDescendantById('surface-frame:diagnostics') && screen().includes('PLUGIN-DIAG-MARKER'))
+check(diagnosticsReads === 1, `moving diagnostics into a window read it again (${diagnosticsReads} reads)`)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'diagnostics', false))
+await waitFor('the window saying diagnostics is off', () => screen().includes('Diagnostics is turned off'))
+await key('b', { ctrl: true }); await key('1')
+await key('d', { shift: true })
+await waitFor('the refusal', () => screen().includes('Session diagnostics is off'))
+check(diagnosticsReads === 1, 'a disabled diagnostics plugin still read the session')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await settle(200)
+
+// The CLI bridge panel flips the composer's routing; turning the panel's
+// plugin off closes the panel but not the bridge the composer routes through.
+check(!screen().includes('→ live CLI bridge'), 'the composer was routed to the bridge before the test routed it')
+await key('c', { shift: true })
+await waitFor('the CLI bridge panel', () => screen().includes(' Live CLI bridge '))
+check(tuiPluginViews.isLoaded('bridges'), 'the bridge panel opened without its plugin module')
+check(bridgeSubscriptions === 2, `the open panel and host hold ${bridgeSubscriptions} bridge subscriptions, not 2`)
+await key('r', { ctrl: true })
+await waitFor('the composer routed to the bridge', () => screen().includes('→ live CLI bridge'))
+check(bridgeSubscriptions === 2, `routing did not hold its own bridge subscription (${bridgeSubscriptions})`)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'bridges', false))
+await waitFor('the panel closed', () => !screen().includes(' Live CLI bridge '))
+check(screen().includes('→ live CLI bridge'), 'turning the bridge panels off dropped the composer\'s routing')
+check(bridgeSubscriptions === 1, `turning the bridge panels off dropped the routed bridge connection (${bridgeSubscriptions} subscriptions)`)
+await key('c', { shift: true })
+await waitFor('the refusal', () => screen().includes('Channel bridge is off'))
+check(!screen().includes(' Live CLI bridge '), 'a disabled bridge panel still opened')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Messaging, tasks, the bridge panels and diagnostics load on first open; diagnostics reads once per open; a disabled bridge panel leaves the routed bridge running.')
+
+// Terminal is a plugin, and the processes and shells it shows are the host's:
+// ⌃K l loads it on demand, and neither closing its view nor turning the plugin
+// off stops a running process or shell.
+const { getProcesses, resetProcessesForTest } = await import('./processStore')
+const { getShells, resetShellsForTest } = await import('./shellStore')
+const { mkdirSync } = await import('node:fs')
+mkdirSync(path.join(CWD, '.agent-viewer'), { recursive: true })
+writeFileSync(path.join(CWD, '.agent-viewer', 'processes.json'), JSON.stringify({ processes: [{ name: 'sleeper', command: 'sleep 30' }] }))
+const alive = (pid: number | null | undefined) => { if (!pid) return false; try { process.kill(pid, 0); return true } catch { return false } }
+const sleeper = () => getProcesses().find((entry) => entry.name === 'sleeper')
+const sleeperRunning = () => sleeper()?.status === 'running' && alive(sleeper()?.pid)
+const shellRunning = () => getShells().some((entry) => entry.status === 'running')
+check(!tuiPluginViews.isLoaded('terminal') && !tuiPluginViews.isLoaded('browser'), 'the Terminal or Browser plugin loaded before it was opened')
+await key('k', { ctrl: true }); await key('l')
+await waitFor('the Terminal tab with the declared process', () => tuiPluginViews.isLoaded('terminal') && screen().includes('sleeper'))
+await key('s')
+await waitFor('the process running', sleeperRunning)
+await key('o')
+await waitFor('a shell running', shellRunning)
+await key(']', { ctrl: true })
+await settle(200)
+// ⇧O closes the focused panel: the view unmounts, the process and shell do not stop.
+await key('O', { shift: true })
+await waitFor('the panel closed', () => !screen().includes('sleeper'))
+await settle(400)
+check(sleeperRunning() && shellRunning(), 'closing the Terminal view stopped its process or shell')
+// Open again, then turn the plugin off under the mounted view.
+await key('k', { ctrl: true }); await key('l')
+await waitFor('the Terminal tab again', () => screen().includes('sleeper'))
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'terminal', false))
+await waitFor('the Terminal view turned off', () => screen().includes('Terminal is turned off'))
+await settle(400)
+check(sleeperRunning() && shellRunning(), 'turning the Terminal plugin off stopped its process or shell')
+await key('escape')
+await key('b', { ctrl: true }); await key('1')
+await key('k', { ctrl: true }); await key('l')
+await settle(300)
+check(screen().includes('● Processes and logs (dev server'), 'a disabled Terminal command opened, or said nothing')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await settle(200)
+check(sleeperRunning() && shellRunning(), 'turning the Terminal plugin back on disturbed its process or shell')
+await resetProcessesForTest()
+await resetShellsForTest()
+console.log('Terminal opens as a lazy plugin; its process and shell outlive closing the view and turning the plugin off, and a disabled command says so.')
+
+// Browser is a plugin too: a window of it loads on demand and its address
+// field takes typing; turned off, opening one says so.
+const openPalette = async (query: string) => {
+  await key('?')
+  await settle(250)
+  await act(async () => { await setup.mockInput.typeText(query) })
+  await settle(200)
+  await key('return')
+}
+await key('escape')
+await key('b', { ctrl: true }); await key('1')
+await openPalette('Browser in a window')
+await waitFor('the Browser window', () => tuiPluginViews.isLoaded('browser') && screen().includes('URL, host, or port'))
+await act(async () => { await setup.mockInput.typeText('localhost:5173') })
+await settle(200)
+check(screen().includes('localhost:5173'), 'typing did not reach the Browser address field')
+await key('escape')
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'browser', false))
+await waitFor('the Browser window turned off', () => !!setup.renderer.root.findDescendantById('plugin-disabled:browser'))
+await openPalette('Browser in a window')
+await settle(300)
+check(screen().includes('Browser is off'), 'opening a disabled Browser window said nothing')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Browser opens as a lazy plugin window whose address field takes typing, and says so when it is off.')
 // Coordination: the control center and the teammates panel are one lazy
 // plugin; the desk another. Closing or turning a view off leaves the team (the
 // interactive coordinator store, its session and feed) as it was, and calls
@@ -343,4 +488,25 @@ await act(async () => { hostKeys!({ name: 'escape', ctrl: false, shift: false, s
 check(closed === 1, 'Escape on a view without its own keys did not close it')
 check(pluginInstanceId('analytics', 'claude:a') !== pluginInstanceId('analytics', 'claude@work:a'), 'two instances of one native id share plugin state')
 console.log('A failed module load shows Retry/Close and reloads on r; pinned instances are keyed per provider instance.')
+
+// Reusing a host for a different surface must replace the cached component.
+let changeSurface: (id: 'analytics' | 'files') => void = () => {}
+const cache = {
+  analytics: { apiVersion: 1 as const, pluginId: 'analytics', views: { analytics: () => <text>SWITCH ANALYTICS</text> } },
+  files: { apiVersion: 1 as const, pluginId: 'files', views: { files: () => <text>SWITCH FILES</text> } },
+}
+const switchingRegistry = { peek: (id: string) => cache[id as keyof typeof cache], load: async (id: string) => cache[id as keyof typeof cache] }
+function SwitchingHost() {
+  const [surfaceId, setSurface] = React.useState<'analytics' | 'files'>('analytics')
+  changeSurface = setSurface
+  return <PluginSurfaceHost surfaceId={surfaceId} placement="window" theme={theme} width={60} height={6} focused onClose={() => {}} onKeyHandlerReady={() => {}} registry={switchingRegistry} />
+}
+const switching = await testRender(<SwitchingHost />, { width: 60, height: 6 })
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+check(switching.captureCharFrame().includes('SWITCH ANALYTICS'), 'initial cached view did not mount')
+await act(async () => { changeSurface('files'); await new Promise(resolve => setTimeout(resolve, 30)) })
+check(switching.captureCharFrame().includes('SWITCH FILES') && !switching.captureCharFrame().includes('SWITCH ANALYTICS'), 'changing surface retained the previous component')
+switching.renderer.destroy()
+console.log('Switching a mounted host replaces its cached plugin component')
+
 process.exit(0)

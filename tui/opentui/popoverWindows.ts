@@ -17,9 +17,8 @@ import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugi
 
 type BuiltinPopoverWindowKind =
   | 'daily-summary'
-  | 'attention' | 'prompt-library' | 'playbooks' | 'messaging' | 'handoff' | 'tasks'
-  | 'checkpoints' | 'file-history' | 'channel-bridge' | 'ide-bridge'
-  | 'diagnostics'
+  | 'attention' | 'prompt-library' | 'playbooks' | 'handoff'
+  | 'checkpoints' | 'file-history'
 
 /**
  * Built-in kinds plus every TUI plugin surface that is not also a side-panel
@@ -41,20 +40,15 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
   'prompt-library': { title: '❝ Prompts', pin: null, single: true, keys: 'window', palette: 'Prompt library in a window' },
   playbooks: { title: '▦ Playbooks', pin: null, single: true, keys: 'window', palette: 'Playbook manager in a window' },
-  messaging: { title: '✉ Messaging', pin: 'session', single: false, keys: 'window', palette: 'Cross-session messaging in a window' },
   handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
-  tasks: { title: '☑ Tasks', pin: 'session', single: false, keys: 'window', palette: 'Task list in a window' },
   // Checkpoints are the repository's, not a session's.
   checkpoints: { title: '⟲ Checkpoints', pin: null, single: true, keys: 'window', palette: 'Checkpoints & review in a window' },
   'file-history': { title: '⌚ File history', pin: 'path', single: false, keys: 'window', palette: 'File history in a window' },
-  'channel-bridge': { title: '⇄ CLI bridge', pin: 'session', single: false, keys: 'window', palette: 'Live CLI bridge in a window' },
-  'ide-bridge': { title: '⌨ IDE bridge', pin: null, single: true, keys: 'window', palette: 'IDE bridge in a window' },
-  diagnostics: { title: '⚕ Diagnostics', pin: null, single: true, keys: 'window', palette: 'Diagnostics in a window' },
 }
 
 export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {
   ...Object.fromEntries(listPluginSurfaces('tui').filter(surface => surface.placements.includes('window') && !surface.placements.includes('panel')).map(surface => [surface.id, {
-    title: surface.title, pin: surface.pin === 'cwd' ? null : surface.pin, single: surface.single, keys: surface.keys, palette: surface.windowLabel,
+    title: surface.title, pin: surface.pin === 'cwd' ? null : surface.pin, single: surface.single, keys: surface.keys === 'capture' ? 'capture' : 'window', palette: surface.windowLabel,
   } satisfies PopoverWindowSpec])) as Record<PluginPopoverSurfaceId, PopoverWindowSpec>,
   ...BUILTIN_POPOVER_WINDOWS,
 }

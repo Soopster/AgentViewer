@@ -4,7 +4,7 @@
 // state codec keeps what it cannot apply. Hermetic: no renderer, no network.
 import assert from 'node:assert/strict'
 import { PLUGIN_MANIFESTS, getPluginCommand, isPluginSurfaceId, listPluginCommands, listPluginSurfaces } from '../lib/plugins/catalog'
-import { createPluginViewRegistry, pluginStateVersions } from '../lib/plugins/activation'
+import { resolvePluginServices, createPluginViewRegistry, pluginStateVersions } from '../lib/plugins/activation'
 import { createPluginStateStore, decodePluginStateSnapshot } from '../lib/plugins/scopedState'
 import { dispatchPluginCommand, subscribePluginCommands } from '../lib/plugins/commandBus'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginViewModule } from '../lib/plugins/types'
@@ -184,3 +184,49 @@ writeFileSync(settingsFile, '{"version":1,"disabled":[')
 assert.deepEqual(readPluginSettingsFile(settingsFile), DEFAULT_PLUGIN_SETTINGS)
 
 console.log(JSON.stringify({ test: 'plugin host', passed: true, plugins: PLUGIN_MANIFESTS.length, metadataModules: graph.length }))
+
+// A retired generation must never release or dispose its replacement.
+const generations = createPluginStateStore({ disposeDelayMs: 10 })
+const oldRelease = generations.hold('fixture', 'generation')
+oldRelease()
+generations.disposeNow('fixture', 'generation')
+const newRelease = generations.hold('fixture', 'generation')
+let replacementCleanups = 0
+generations.onDispose('fixture', 'generation', () => { replacementCleanups++ })
+await new Promise(resolve => setTimeout(resolve, 30))
+assert.equal(generations.has('fixture', 'generation'), true, 'an old timer disposed a mounted replacement')
+assert.equal(replacementCleanups, 0)
+const staleRelease = generations.hold('fixture', 'generation')
+generations.disposeNow('fixture', 'generation')
+const finalRelease = generations.hold('fixture', 'generation')
+staleRelease()
+newRelease()
+await new Promise(resolve => setTimeout(resolve, 30))
+assert.equal(generations.has('fixture', 'generation'), true, 'a stale release decremented a replacement hold')
+finalRelease()
+await new Promise(resolve => setTimeout(resolve, 30))
+assert.equal(generations.has('fixture', 'generation'), false)
+
+// Service declarations are enforced against each view, not just renderer metadata.
+const required = fixture.surfaces[0]!
+assert.match(resolvePluginServices(required, {}).error!.message, /session-transcript/)
+const transcript = {}
+const scoped = resolvePluginServices(required, { 'session-transcript': transcript, secret: {} })
+assert.equal(scoped.error, null)
+assert.deepEqual(Object.keys(scoped.services), ['session-transcript'])
+assert.equal(scoped.services['session-transcript'], transcript)
+assert.equal(resolvePluginServices({ ...required, optionalServices: ['clipboard'] }, { 'session-transcript': transcript }).error, null)
+
+// Separate owners share values only after an explicit relocation.
+store.set('fixture', 'window-a:target', 'selection', 7)
+store.set('fixture', 'window-b:target', 'selection', 9)
+store.copyOwner('window-a', 'window-c')
+assert.equal(store.get('fixture', 'window-b:target', 'selection', 0), 9)
+assert.equal(store.get('fixture', 'window-c:target', 'selection', 0), 7)
+console.log('Plugin generation safety, per-view service validation and explicit ownership transfer passed')
+
+assert.deepEqual(RIGHT_PANEL_SURFACE_KINDS, ['browser', 'terminal', 'files', 'diff', 'pull-request', 'agents'], 'manifest registration preserves the existing panel order')
+store.set('other-plugin', 'window-a:target', 'private', 1)
+store.copyOwner('window-a', 'window-d', 'fixture')
+assert.equal(store.get('fixture', 'window-d:target', 'selection', 0), 7)
+assert.equal(store.has('other-plugin', 'window-d:target'), false, 'relocation copied another plugin into the destination')

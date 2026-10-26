@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// Composer model smoke: the reader may show an idle session while the composer
-// auto-targets the provider's sole running turn. Model metadata belongs to that
-// send target, and an overlapping reader metadata request must not discard it.
+// Composer metadata and submissions follow the active session even when another session is running.
 import React from 'react'
 import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
@@ -88,12 +86,15 @@ try {
     await setup.flush()
     await delay(3000)
   })
+  for (let attempt = 0; attempt < 25 && !setup.captureCharFrame().includes('model:gpt-5.4'); attempt++) {
+    await act(async () => { await setup.flush(); await delay(100) })
+  }
   const frame = setup.captureCharFrame()
-  if (!metadataRequests.includes(RUNNING_ID)) {
+  if (!metadataRequests.includes(IDLE_ID)) {
     throw new Error(`Composer target metadata was never requested: ${metadataRequests.join(', ')}`)
   }
-  if (!frame.includes('model:gpt-5.6-sol')) {
-    throw new Error(`Composer did not adopt its running target's reported model:\n${frame}`)
+  if (!frame.includes('model:gpt-5.4')) {
+    throw new Error(`Composer did not adopt its active window's reported model:\n${frame}`)
   }
   if (frame.includes('model:loading')) {
     throw new Error(`Composer model remained stuck loading after metadata resolved:\n${frame}`)

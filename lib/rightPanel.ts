@@ -1,3 +1,5 @@
+import { PLUGIN_MANIFESTS, getPluginSurface, isPluginPanelSurfaceId, type PluginPanelSurfaceId } from './plugins/catalog'
+
 /**
  * Right-hand surface panel: the set of auxiliary surfaces (browser, terminal,
  * files, diff, pull request, agents) that can be docked beside the transcript.
@@ -11,16 +13,15 @@
  * from the active project and a second copy would show the same bytes twice.
  */
 
-export const RIGHT_PANEL_SURFACE_KINDS = [
-  'browser',
-  'terminal',
-  'files',
-  'diff',
-  'pull-request',
-  'agents',
-] as const
-
-export type RightPanelSurfaceKind = (typeof RIGHT_PANEL_SURFACE_KINDS)[number]
+export const BUILTIN_PANEL_SURFACE_KINDS = ['browser', 'terminal', 'pull-request', 'agents'] as const
+export type RightPanelSurfaceKind = (typeof BUILTIN_PANEL_SURFACE_KINDS)[number] | PluginPanelSurfaceId
+export const RIGHT_PANEL_SURFACE_KINDS: readonly RightPanelSurfaceKind[] = [...new Set<RightPanelSurfaceKind>([
+  'browser', 'terminal',
+  ...PLUGIN_MANIFESTS.flatMap(manifest => manifest.surfaces.filter(surface => (surface.placements as readonly string[]).includes('panel')))
+    .sort((a, b) => ('panelOrder' in a ? a.panelOrder : 100) - ('panelOrder' in b ? b.panelOrder : 100))
+    .map(surface => surface.id as PluginPanelSurfaceId),
+  'pull-request', 'agents',
+])]
 
 /**
  * Kinds that may have more than one open surface at a time — two localhost
@@ -31,7 +32,7 @@ export type RightPanelSurfaceKind = (typeof RIGHT_PANEL_SURFACE_KINDS)[number]
 const MULTI_INSTANCE_KINDS: ReadonlySet<RightPanelSurfaceKind> = new Set(['browser', 'terminal', 'files'])
 
 export function isMultiInstanceSurface(kind: RightPanelSurfaceKind): boolean {
-  return MULTI_INSTANCE_KINDS.has(kind)
+  return isPluginPanelSurfaceId(kind) ? !getPluginSurface(kind).single : MULTI_INSTANCE_KINDS.has(kind)
 }
 
 export type RightPanelSurface = {
@@ -132,6 +133,7 @@ export function surfaceKindLabel(kind: RightPanelSurfaceKind): string {
     case 'diff': return 'Diff'
     case 'pull-request': return 'Pull request'
     case 'agents': return 'Agents'
+    default: return getPluginSurface(kind as PluginPanelSurfaceId).title.replace(/^\S+\s*/, '')
   }
 }
 
@@ -144,6 +146,7 @@ export function surfaceKindShortcut(kind: RightPanelSurfaceKind): string {
     case 'diff': return 'D'
     case 'pull-request': return 'P'
     case 'agents': return 'A'
+    default: return ''
   }
 }
 
@@ -155,5 +158,17 @@ export function surfaceKindDescription(kind: RightPanelSurfaceKind): string {
     case 'diff': return 'Review this repository’s changes.'
     case 'pull-request': return 'Open this branch’s pull request.'
     case 'agents': return 'Follow subagents and workflows.'
+    default: return PLUGIN_MANIFESTS.find(manifest => manifest.surfaces.some(surface => surface.id === kind))?.description ?? ''
   }
+}
+
+/** Metadata defaults are computed once; rendering only merges host overrides. */
+const PANEL_AVAILABILITY_DEFAULTS = Object.fromEntries((['web', 'tui'] as const).map(renderer => [renderer,
+  Object.fromEntries(RIGHT_PANEL_SURFACE_KINDS.map(kind => [kind,
+    isPluginPanelSurfaceId(kind) && PLUGIN_MANIFESTS.some(manifest => (manifest.renderers as readonly string[]).includes(renderer) && manifest.surfaces.some(surface => surface.id === kind)),
+  ])),
+])) as Record<'web' | 'tui', Record<RightPanelSurfaceKind, boolean>>
+
+export function panelSurfaceAvailability(renderer: 'web' | 'tui', overrides: Partial<Record<RightPanelSurfaceKind, boolean>>): Record<RightPanelSurfaceKind, boolean> {
+  return { ...PANEL_AVAILABILITY_DEFAULTS[renderer], ...overrides }
 }

@@ -16,7 +16,7 @@
 import * as core from '@opentui/core'
 import type { EditBuffer, WidthMethod } from '@opentui/core'
 
-export type CellMeasure = (grapheme: string) => number
+export type CellMeasure = ((grapheme: string) => number) & { dispose?: () => void }
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -38,12 +38,14 @@ export function graphemeWidthReader(widthMethod: WidthMethod, options: { viaBuff
   const measureEditText = (core as unknown as { measureEditText?: MeasureEditText }).measureEditText
   if (measureEditText && !options.viaBuffer) return (grapheme) => measureEditText(grapheme, { widthMethod })
   let scratch: EditBuffer | null = null
-  return (grapheme) => {
+  const read: CellMeasure = (grapheme) => {
     scratch ??= scratchBuffer(widthMethod)
     scratch.setText(grapheme)
     scratch.setCursor(0, 0)
     return scratch.getEOL().col
   }
+  read.dispose = () => { scratch?.destroy(); scratch = null }
+  return read
 }
 
 /** The width the edit buffer gives one grapheme, measured once per method. */
@@ -59,6 +61,7 @@ export function bufferCellMeasure(widthMethod: WidthMethod): CellMeasure {
     cache.set(grapheme, width)
     return width
   }
+  measure.dispose = () => { cache.clear(); read.dispose?.() }
   measures.set(widthMethod, measure)
   return measure
 }
@@ -156,4 +159,10 @@ export function indexAtDisplayOffset(content: string, displayOffset: number, lin
   if (!displayStarts) return Math.min(clamped, content.length)
   const line = lineAt(displayStarts, clamped)
   return lineStarts[line]! + indexAtCellColumn(lineText(content, lineStarts, line), clamped - displayStarts[line]!, measure)
+}
+
+/** Drop measured graphemes and any native scratch buffers when the editor is disabled. */
+export function clearEditorCellMeasureCache(): void {
+  for (const measure of measures.values()) measure.dispose?.()
+  measures.clear()
 }

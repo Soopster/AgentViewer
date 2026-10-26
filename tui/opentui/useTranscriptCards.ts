@@ -64,5 +64,5 @@ export function useTranscriptCards({ session, density, showToolCalls, active, fo
     })
     return () => { cancelled = true; release() }
   }, [visible, owner, density, showToolCalls, loader, shouldYield, current])
-  return state.owner === owner ? state : initial()
+  return { ...(state.owner === owner ? state : initial()), detail: loader.peek(session, density, showToolCalls)?.detail ?? null }
 }
