@@ -1725,11 +1725,30 @@ function fitHintText(value: string, width: number): string {
   return fitText(value, width)
 }
 
+/** What clicking a composer status segment does. */
+type ComposerStatusAction = 'model' | 'path' | 'git'
+
 type InlineTextSegment = {
   text: string
   fg: string
   bg?: string
   attributes?: number
+  action?: ComposerStatusAction
+}
+
+/** The action of the segment under a column of a row drawn by renderInlineTextSegments. */
+export function inlineSegmentActionAt(segments: readonly InlineTextSegment[], width: number, column: number): ComposerStatusAction | undefined {
+  let start = 0
+  let remaining = width
+  for (const segment of segments) {
+    if (remaining <= 0) break
+    const length = clipText(segment.text, remaining).length
+    if (length === 0) continue
+    if (column >= start && column < start + length) return segment.action
+    start += length
+    remaining -= length
+  }
+  return undefined
 }
 
 function composerSendingHintSegments(value: string, theme: TuiThemePalette): InlineTextSegment[] {
@@ -12252,13 +12271,13 @@ function OpenTuiWorkspace() {
     }
     const afterMode = parts.length
     if (composerCurrentModel) {
-      parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
+      parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor, action: 'model' })
     } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp' && composerTargetSession.provider !== 'acp') {
       // Custom-model providers (LM Studio, opencode/copilot custom endpoints,
       // Claude on a non-default deployment) can take a moment to report their
       // current model on a cold session. Show the in-flight state, then settle
       // on "auto" when the provider intentionally reports no concrete model.
-      parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim })
+      parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim, action: 'model' })
     }
     // Context and plan limit are meters: quiet while there is room, and moved
     // ahead of the model once either needs attention, since the border cuts
@@ -12277,7 +12296,7 @@ function OpenTuiWorkspace() {
     }
     if (metersUrgent) parts.splice(afterMode, 0, ...meters)
     else parts.push(...meters)
-    parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim })
+    parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim, action: 'model' })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
     }
@@ -12340,12 +12359,12 @@ function OpenTuiWorkspace() {
   }, [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
-    if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim })
+    if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path' })
     const branch = composerGitSummary?.branch ?? composerGitBranch
-    if (branch) parts.push({ text: branch, fg: theme.green })
-    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, fg: theme.amber })
-    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, fg: theme.dim })
-    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, fg: theme.amber })
+    if (branch) parts.push({ text: branch, fg: theme.green, action: 'git' })
+    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, fg: theme.amber, action: 'git' })
+    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, fg: theme.dim, action: 'git' })
+    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, fg: theme.amber, action: 'git' })
     if (selectedWorktreeTask) {
       const counts = [
         selectedWorktreeTask.dirtyFiles > 0 ? `${selectedWorktreeTask.dirtyFiles} dirty` : null,
@@ -15896,6 +15915,19 @@ function OpenTuiWorkspace() {
   useEffect(() => {
     if (provider !== 'all' && !isProviderEnabled(provider)) void chooseProvider('all')
   }, [provider, disabledPlugins, chooseProvider])
+
+  // A click on the composer's status row acts on the segment under the pointer:
+  // model and effort open the model picker, the folder shows its full path, and
+  // the branch and change counts open the Git view for the composer's session.
+  const clickComposerStatus = useStableEvent((event: { button: number; x: number; currentTarget: { x: number } | null; stopPropagation: () => void }, segments: InlineTextSegment[], width: number) => {
+    if (event.button !== 0) return
+    const action = inlineSegmentActionAt(segments, width, event.x - (event.currentTarget?.x ?? 0))
+    if (!action) return
+    event.stopPropagation()
+    if (action === 'model') void openModelPicker()
+    else if (action === 'path') showNotice('info', composerWorkingDirectory ?? 'No working directory', 10_000)
+    else runPluginCommandId('git', composerTargetSession)
+  })
 
   const openNewSessionModal = useStableEvent(() => {
     const defaultProvider: AgentProvider = provider === 'all'
@@ -25808,6 +25840,11 @@ function OpenTuiWorkspace() {
   // the keys reach: the reader's keys, a pending chord, the attention badge.
   const dockShowsStatusBar = statusBarInDock
     && (commandChordPending || splitChordPending || (!composerActive && !composerKeysTargetTurn && !routeComposerToBridge && !routeComposerToIde))
+  // The attention badge rides the stats while the composer holds the hint slot:
+  // it must stay visible in every mode.
+  const dockFooterStatsSegments = statusBarInDock && !dockShowsStatusBar && attentionNeedsInputCount > 0
+    ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsSegments]
+    : composerDockStatsSegments
   const dockStatusBarLength = dockShowsStatusBar ? footerSegments.reduce((n, segment) => n + segment.text.length, 0) : 0
   const composerDockFooterHintWidth = Math.max(
     18,
@@ -26243,8 +26280,8 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2}>
-              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsSegments, chatComposerStatsWidth) }}>
+              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {composerSlashHint
                   ? fitText(composerSlashHint, chatComposerStatsWidth)
                   : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
@@ -28527,16 +28564,12 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
-              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsSegments, composerDockFooterStatsWidth) }}>
+              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
                   : renderInlineTextSegments(
-                    // The attention badge rides the stats while the composer
-                    // holds the hint slot: it must stay visible in every mode.
-                    statusBarInDock && !dockShowsStatusBar && attentionNeedsInputCount > 0
-                      ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsSegments]
-                      : composerDockStatsSegments,
+                    dockFooterStatsSegments,
                     composerDockFooterStatsWidth,
                     theme.dim,
                   )}
