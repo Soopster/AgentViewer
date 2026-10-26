@@ -298,7 +298,7 @@ import {
   warmTranscriptAsync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, SubagentSummary, ToolResultBlock } from '../../lib/types'
+import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SubagentSummary, ToolResultBlock } from '../../lib/types'
 import { fitText, joinMeta } from './textLayout'
 import { Slot } from './slots'
 import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
@@ -334,7 +334,7 @@ import { buildContextHandoffPrompt } from '../../lib/contextHandoff'
 import { buildHandoffBriefMarkdown } from '../../lib/handoffBrief'
 import { recordContextTransfer } from '../../lib/contextTransfers'
 import { forkPointBefore, rewindCandidates, type RewindCandidate } from './rewindTargets'
-import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
+import { parseClaudeCommandLifecycle } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
 import type { GitSummary } from '../../lib/gitProvider'
@@ -394,13 +394,7 @@ import {
   isShiftedKey,
   PORTABLE_COMMAND_CHORDS,
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
-
-type SteeredComposerSend = {
-  text: string
-  messageUuid: string
-  liveMessageUuid: string
-  state?: Extract<ClaudeCommandLifecycleState, 'queued' | 'started' | 'completed'>
-}
+import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type PaletteCommand, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 // A tab for a session with a turn in flight spins, so work you are not looking
@@ -1095,51 +1089,12 @@ export function terminalSelectionCopyDestination(options: {
   return 'none'
 }
 
-type PaneFocus = 'sessions' | 'messages'
-
-type CardLandmark = {
-  // 'break' is a turn boundary with nothing to say: a blank row, not a rule.
-  kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn' | 'break'
-  text: string
-  /** A turn rule's prompt card: clicking the rule opens that turn's checkpoint. */
-  promptKey?: string
-}
-
-// Stable per-card data: expensive to compute, independent of landmark indices and search.
-type StableCardData = {
-  bodyLines: TuiTranscriptCardLine[]
-  diffView: TuiPierreDiffView | null
-  codeBlockLineCounts: number[]
-}
-
-type CardDisplayData = {
-  landmarks: CardLandmark[]
-  bodyLines: TuiTranscriptCardLine[]
-  diffView: TuiPierreDiffView | null
-  codeBlockLineCounts: number[]
-  // Query-independent header metadata. The match-tag is folded in at render
-  // time inside TranscriptCard so search-query changes don't invalidate
-  // this whole array (proposal 4).
-  headerMeta: string
-  accent: string
-  isThinkingCard: boolean
-  categoryEmoji: string
-  isInsight: boolean
-  markdownFallbackLines: string[] | null
-}
-
-type AgentToolGroupCard = TuiTranscriptCard & {
-  agentToolCards?: TuiTranscriptCard[]
-}
-
 // A TUI view, not a provider command: the web composer has no handoff, so it stays out of the shared catalog.
 const TUI_HANDOFF_COMMAND: SlashCommandSuggestion = {
   command: '/handoff',
   description: 'Continue this conversation on another provider',
   argumentHint: '<provider>',
 }
-
-type NoticeTone = 'info' | 'error'
 
 const PIERRE_DIFF_CACHE = new WeakMap<TuiTranscriptCard, {
   isExpanded: boolean
@@ -1148,25 +1103,6 @@ const PIERRE_DIFF_CACHE = new WeakMap<TuiTranscriptCard, {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
-}
-
-type ClipboardImage = { data: string; mimeType: string; displayName: string }
-type ComposerPromptPart =
-  | { id: string; kind: 'text'; marker: string; text: string }
-  | { id: string; kind: 'attachment'; marker: string; attachment: SendAttachment }
-type ComposerDraftSnapshot = {
-  text: string
-  attachments: SendAttachment[]
-  promptParts: ComposerPromptPart[]
-  cursorOffset?: number
-}
-type ComposerPromptPartRange = ComposerPromptPart & { start: number; end: number }
-type QueuedComposerSend = {
-  id: string
-  targetKey: string
-  text: string
-  attachments: SendAttachment[]
-  promptParts: ComposerPromptPart[]
 }
 
 function isSendAttachmentList(value: unknown): value is SendAttachment[] {
@@ -1202,12 +1138,6 @@ function isComposerDraftSnapshot(value: unknown): value is ComposerDraftSnapshot
   if (typeof entry.text !== 'string') return false
   if (entry.cursorOffset !== undefined && typeof entry.cursorOffset !== 'number') return false
   return isSendAttachmentList(entry.attachments) && isComposerPromptPartList(entry.promptParts)
-}
-type ComposerSubmission = {
-  visibleText: string
-  messageText: string
-  attachments: SendAttachment[]
-  promptParts: ComposerPromptPart[]
 }
 
 function parseFileUrlList(value: string): string[] {
@@ -2321,17 +2251,6 @@ const LIVE_TEXT_FLUSH_MS = 16
 const MAX_CODE_BLOCK_RENDER_LINES = 240
 const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
-type SseFrame = {
-  event: string
-  data: string
-}
-
-type TuiLiveToolActivity = {
-  key: string
-  label: string
-  status: 'running' | 'done'
-}
-
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
@@ -3161,10 +3080,6 @@ type OpenCodeLiveSubagentInfo = {
   type: 'agent' | 'subtask'
 }
 
-type TuiMentionResult =
-  | { kind: 'file'; path: string; basename: string }
-  | { kind: 'agent'; name: string; description?: string; mode?: string }
-
 function extractOpenCodeLiveSubagent(payload: unknown): OpenCodeLiveSubagentInfo | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -3298,16 +3213,6 @@ function compareSessionsByActivityDesc(a: Session, b: Session): number {
 // itself carries no identity, and two sessions can hold identical transcripts.
 const sessionDetailOwnerKeys = new WeakMap<TuiSessionDetail, string>()
 const sessionKey = sessionIdentityKey
-
-// Stable content-equality check for the sessions list. The sidebar refresh
-// fires every 5s and the running-session poll every 1.5s — returning the
-// same array reference when nothing materially changed avoids invalidating
-// the entire downstream memo chain (sidebarEntries, projectCount, tabs, …)
-// and, more importantly, avoids rebuilding callbacks/intervals that list
-// `sessions` or `runningSessions` in their deps.
-// A settle the rail has shown but a listing may not yet: a poll that started
-// before the write landed would otherwise put the row back for a cycle.
-type PendingInboxEdit = { settledAt: number | undefined; until: number }
 const PENDING_INBOX_EDIT_MS = 15_000
 
 function withPendingInboxEdits(sessions: Session[], pending: Map<string, PendingInboxEdit>): Session[] {
@@ -3353,18 +3258,6 @@ function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
 function isDurableSessionMessage(message: import('../../lib/types').SessionMessage): boolean {
   return message.ephemeral !== true
 }
-
-/** A nested sidebar row under a parent session: either a provider-native child
- * session keyed by parentSessionId or a synthesized summary for providers
- * whose subagents live only inside the parent transcript. */
-type SidebarSubagentEntry =
-  | { kind: 'session'; session: Session }
-  | { kind: 'summary'; summary: SubagentSummary }
-
-type SidebarEntry =
-  | { type: 'project'; key: string; projectName: string; count: number }
-  | { type: 'session'; key: string; session: Session; absoluteIndex: number }
-  | { type: 'subagent'; key: string; parentSession: Session; entry: SidebarSubagentEntry; depth: number }
 
 function sidebarEntrySession(entry: SidebarEntry): Session | null {
   if (entry.type === 'session') return entry.session
@@ -5402,13 +5295,6 @@ function parseCoordContractLines(value: string): string[] {
   return value.split(/\r?\n|;/).map((line) => line.trim()).filter(Boolean)
 }
 
-type TuiEffort = 'auto' | ReasoningEffortLevel
-type TuiCodexApproval = 'auto' | 'untrusted' | 'on-request' | 'never'
-type TuiCopilotPermissionMode = 'off' | 'auto' | 'on'
-type TuiCopilotContextTier = 'default' | 'long_context'
-type ModelPickerFocus = 'model' | 'effort' | 'permissions'
-type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels' | 'supportsLongContext'>
-
 function filterModelPickerOptions(options: ModelPickerOption[], query: string): ModelPickerOption[] {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return options
@@ -5457,9 +5343,6 @@ function effortPickerOptions(
     })),
   ]
 }
-
-const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
-type TuiPermissionMode = typeof CLAUDE_PERMISSION_MODE_ORDER[number]
 
 // Permission mode indicator in the composer dock — Claude Code's shift+tab style.
 const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
@@ -5817,11 +5700,6 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   ...PROCEDURAL_THEME_LABELS,
 } as Record<TuiThemeMode, string>
 
-type PaletteCommand = { id: string; label: string; key: string; category: string }
-type PaletteRow =
-  | { kind: 'header'; label: string }
-  | { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number }
-
 const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
 
 const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
@@ -6093,8 +5971,6 @@ function pruneSessionCaches(
     if (evictableCount <= limit) break
   }
 }
-
-type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bodyPad: number; streamGap: number; streamUserGap: number }
 
 // Conversation prose becomes difficult to scan when cards stretch across an
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
