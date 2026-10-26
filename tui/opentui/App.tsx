@@ -385,7 +385,7 @@ import {
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
 import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type PaletteCommand, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
 import { NATIVE_OSC_ENABLED, MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
-import { READER_CARD_SEARCH_DEPTH, SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
+import { SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
 import { PERF_LOG, PERF_LOG_PATH, CARD_PROFILE, noteRootRender, FRAME_TIMING_NEEDED, recordFramePerf, sameJson } from './app/perf'
 import { type ThemeMenuGroup, THEMES, isLightThemeMode, OMZ_MODES, TERMINAL_PALETTE_MODE, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from './app/themes'
@@ -398,6 +398,8 @@ import { Spinner, TuiErrorBoundary, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS,
 import { formatTimeGap, isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
 import { sessionKey, sessionActivityMs, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 import { turnSummaryText, EMPTY_LANDMARKS, transcriptToolColor, streamToolCardMarker, streamStatusColor, toolNameFromTranscriptLine, transcriptColor, streamToolGroupMarker, transcriptAccent, diffRowColor, formatDiffLineNumber, diffRowIndicator, terminalSelectionColors, turnSummaryMouseProps, streamLandmarkText, streamLineMarker, mixHexColor, continuousUserBackground, streamUserBackground, streamContinuationMarker, transcriptBackground, diffRowBackground, diffGutterBar, SplitDiffSide, streamCompletedTurnHint, continuousTurnFooter, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
+import { readerRowCard, findReaderCard, readerLayoutOffset, readerRowKey } from './app/readerRows'
+import { extractDiffText, PIERRE_DIFF_CACHE } from './app/diffCache'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -442,61 +444,6 @@ const TUI_PROVIDER_TAG: Record<string, string> = {
   copilot: 'copilot',
   pi: 'pi',
 }
-// OpenTUI's `findDescendantById` is a recursive walk of the WHOLE subtree, and
-// it sorts each level's children on the way down. Under a mounted transcript
-// that is every renderable inside every card — and the fixup executors below
-// call it on a 16ms timer, each time a
-// window slides or a tab is restored. Profiled during tab switching against
-// real sessions it was 9.7% of all CPU, landing squarely in the window between
-// the switch and the first paint. A card box is never deeper than
-// READER_CARD_SEARCH_DEPTH, so stopping there skips every card's interior
-// while still finding the card. The full search stays as a fallback: a missed
-// card would silently drop a scroll restore, not fail loudly.
-function findReaderCard(content: Renderable | undefined | null, id: string): Renderable | undefined {
-  if (!content) return undefined
-  const scan = (node: Renderable, depth: number): Renderable | undefined => {
-    for (const child of node.getChildren()) {
-      if (child.id === id) return child as Renderable
-      if (depth > 1) {
-        const found = scan(child as Renderable, depth - 1)
-        if (found) return found
-      }
-    }
-    return undefined
-  }
-  return scan(content, READER_CARD_SEARCH_DEPTH) ?? content.findDescendantById(id)
-}
-// The card key a scrollbox row holds, at whatever depth its `card:` box sits.
-function readerRowKey(row: Renderable, depth = READER_CARD_SEARCH_DEPTH): string | null {
-  if (row.id?.startsWith('card:')) return row.id.slice('card:'.length)
-  if (depth <= 1) return null
-  for (const child of row.getChildren()) {
-    const key = readerRowKey(child as Renderable, depth - 1)
-    if (key) return key
-  }
-  return null
-}
-// A renderable's offset inside the scrollbox content as Yoga just computed it.
-// `el.y` is only refreshed later in the frame (updateFromLayout), so inside the
-// layout pass this is the one place the new position can be read.
-function readerLayoutOffset(el: Renderable, content: Renderable): number | null {
-  let offset = 0
-  let node: Renderable | null = el
-  while (node && node !== content) {
-    const layout = readReaderLayout(node)
-    if (!layout) return null
-    offset += layout.top
-    node = node.parent as Renderable | null
-  }
-  return node === content ? offset : null
-}
-// A transcript row's card box: the row itself, or — for tool rows, whose keyed
-// box sits inside a centering wrapper — its child.
-function readerRowCard(row: Renderable): Renderable | undefined {
-  if (row.id?.startsWith('card:')) return row
-  return row.getChildren().find((child) => child.id?.startsWith('card:')) as Renderable | undefined
-}
-
 export type TerminalSelectionCopyDestination = 'none' | 'osc52' | 'host'
 
 export function terminalSelectionCopyDestination(options: {
@@ -517,11 +464,6 @@ const TUI_HANDOFF_COMMAND: SlashCommandSuggestion = {
   description: 'Continue this conversation on another provider',
   argumentHint: '<provider>',
 }
-
-const PIERRE_DIFF_CACHE = new WeakMap<TuiTranscriptCard, {
-  isExpanded: boolean
-  value: TuiPierreDiffView | null
-}>()
 
 const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
 const CLAUDE_LIVE_ASSISTANT_UUID_PREFIX = 'live-claude-assistant:'
@@ -2105,21 +2047,6 @@ function tuiCommandEquivalent(provider: AgentProvider, command: string): TuiComm
   const entry = TUI_COMMAND_EQUIVALENTS[command]
   if (!entry || (entry.providers && !entry.providers.includes(provider))) return null
   return entry.equivalent
-}
-
-function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
-  const diffLines = lines
-    .filter((line) => {
-      if (line.tone === 'diff_add' || line.tone === 'diff_remove') return true
-      if (line.tone === 'diff_meta') {
-        const t = line.text
-        return t.startsWith('@@') || t.startsWith('--- ') || t.startsWith('+++ ')
-          || t.startsWith('diff --git') || t.startsWith('index ')
-      }
-      return false
-    })
-    .map((line) => line.text)
-  return diffLines.length > 0 ? diffLines.join('\n') : null
 }
 
 function currentProjectName(session: Session | null): string {
