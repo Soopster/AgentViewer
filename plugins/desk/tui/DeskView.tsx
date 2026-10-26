@@ -16,12 +16,12 @@
 // What renders here is cheap to re-render and isolated from the root: the clock
 // and the tape own their timers, so neither ticks the root or the panels; the
 // panels repaint on a 30s `now` and on their inputs.
-import { popoverRootProps } from './dockedPopover'
+import { popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
-import type { ContextUsage, Session } from '../../lib/types'
-import type { TuiTranscriptCard } from '../format'
-import { BLOOMBERG_THEME } from '../theme'
+import type { ContextUsage, Session } from '../../../lib/types'
+import type { TuiTranscriptCard } from '../../../tui/format'
+import { BLOOMBERG_THEME } from '../../../tui/theme'
 import {
   DEFAULT_PANEL_FUNCTIONS,
   DESK_FUNCTIONS,

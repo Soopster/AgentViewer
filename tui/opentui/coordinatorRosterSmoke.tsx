@@ -27,7 +27,7 @@ let mutations = 0
 mock.module('./interactiveCoordinatorStore', () => ({ ...store, getInteractiveCoordinatorState: () => state, subscribeInteractiveCoordinator: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
   runInteractiveCoordinatorAction: async () => { mutations++; return true },
 }))
-const { TeammatesPopover } = await import('./TeammatesPopover')
+const { TeammatesPopover } = await import('../../plugins/coordination/tui/TeammatesPopover')
 for (const [width, height] of [[110, 38], [44, 30]]) {
   let handler: (key: any) => void = () => {}
   const opened: string[] = []

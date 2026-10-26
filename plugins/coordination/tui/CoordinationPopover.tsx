@@ -4,11 +4,11 @@
 // same controls as numbered panes with stable geometry and contextual keys.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RGBA } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
+import type { TuiThemePalette } from '../../../tui/theme'
 import { CoordinationControlCenter } from './CoordinationControlCenter'
-import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
-import { AGENT_PROTOCOL_VERSION } from '../../lib/agentProtocol'
-import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../lib/agentProtocol'
+import { PluginSurfaceHost } from '../../../tui/opentui/shell/sdkCoordination'
+import { AGENT_PROTOCOL_VERSION } from '../../../lib/agentProtocol'
+import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../../lib/agentProtocol'
 import {
   appendTuiProtocolEvent,
   cleanupTuiProtocolRunWorktrees,
@@ -21,7 +21,7 @@ import {
   stopTuiProtocolRun,
   subscribeTuiProtocolRunChanges,
   type WorktreeTask,
-} from '../../lib/tui/service'
+} from '../../../lib/tui/service'
 
 type CoordinationKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 

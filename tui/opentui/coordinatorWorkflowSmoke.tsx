@@ -27,7 +27,7 @@ mock.module('./interactiveCoordinatorStore', () => ({ ...store, getInteractiveCo
   subscribeInteractiveCoordinator: () => () => {},
   runInteractiveCoordinatorAction: async (request: unknown) => { submitted.push(request); return true },
 }))
-const { TeammatesPopover } = await import('./TeammatesPopover')
+const { TeammatesPopover } = await import('../../plugins/coordination/tui/TeammatesPopover')
 try {
   for (const [width, height] of [[110, 36], [44, 28]]) {
     let handler: (key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => void = () => {}

@@ -16,9 +16,8 @@
 import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugins/catalog'
 
 type BuiltinPopoverWindowKind =
-  | 'daily-summary' | 'coordination'
+  | 'daily-summary'
   | 'attention' | 'prompt-library' | 'playbooks' | 'handoff'
-  | 'teammates' | 'desk'
 
 /**
  * Built-in kinds plus every TUI plugin surface that is not also a side-panel
@@ -37,16 +36,10 @@ export type PopoverWindowSpec = {
 
 const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpec> = {
   'daily-summary': { title: '☰ Daily summary', pin: null, single: true, keys: 'window', palette: 'Daily summary in a window' },
-  // The agent control center (⌃K a): one coordination store, so one view of it.
-  coordination: { title: '◆ Control center', pin: null, single: true, keys: 'window', palette: 'Agent control center in a window' },
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
   'prompt-library': { title: '❝ Prompts', pin: null, single: true, keys: 'window', palette: 'Prompt library in a window' },
   playbooks: { title: '▦ Playbooks', pin: null, single: true, keys: 'window', palette: 'Playbook manager in a window' },
   handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
-  // The interactive coordinator's store holds one conversation's team.
-  teammates: { title: '◆ Teammates', pin: null, single: true, keys: 'window', palette: 'Teammates in a window' },
-  // The desk's letters belong to its command line, as the editor's do to its buffer.
-  desk: { title: '▣ Desk', pin: null, single: true, keys: 'capture', palette: 'Desk in a window' },
 }
 
 export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {

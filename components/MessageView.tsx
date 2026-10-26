@@ -8,7 +8,6 @@ import ContextComposer, { type ContextComposerHandle } from './ContextComposer'
 import { contextReference, contextReferences, createContextAttachment, projectComposerContext, readComposerContext, restoreContextAttachments, referencedComposerAttachments, removeContextReference } from '@/lib/composerContext'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import CoordinatorConversation from './CoordinatorConversation'
 import type { ProtocolAgent } from '@/lib/agentProtocol'
 import Link from 'next/link'
 import { getAssistantDisplayName } from '@/lib/provider'
@@ -70,6 +69,7 @@ import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import { sameUserMessage, upsertComposerMessage } from '@/lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '@/lib/composerSessions'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
+import type { WebPluginServices } from './shell/pluginTypes'
 import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
@@ -3262,6 +3262,19 @@ function MessageViewInner({
   // The plugin surface open as an overlay, if any (lib/plugins/catalog.ts).
   const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
   const disabledPlugins = useDisabledPlugins()
+  // The conversation's Teammates tab is the Coordination plugin's view; with it
+  // off the tab is gone and the team keeps running server-side.
+  const teammatesTab = Boolean(session && !hideCoordinator && !disabledPlugins.has(getPluginSurface('teammates').pluginId))
+  const teammatesServices = useMemo<WebPluginServices>(() => ({
+    coordination: {
+      provider: session?.provider ?? 'claude',
+      selectedSession: session ?? null,
+      openSession: onOpenSession ?? (() => {}),
+      ...(onInspectTeammate ? { inspectTeammate: onInspectTeammate } : {}),
+      returnToChat,
+      attentionChanged: updateTeamAttention,
+    },
+  }), [session, onOpenSession, onInspectTeammate, returnToChat, updateTeamAttention])
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -9428,8 +9441,8 @@ function MessageViewInner({
           <CardHeader className="sr-only">
             <CardTitle>Message composer</CardTitle>
           </CardHeader>
-          <Tabs value={hideCoordinator ? 'chat' : composerTab} onValueChange={tab => setComposerDock({ sessionId: session?.sessionId ?? '', tab })} className="av-composer-dock">
-            {session && !hideCoordinator ? <TabsList variant="line" aria-label="Composer" className="av-composer-dock-tabs">
+          <Tabs value={teammatesTab ? composerTab : 'chat'} onValueChange={tab => setComposerDock({ sessionId: session?.sessionId ?? '', tab })} className="av-composer-dock">
+            {session && teammatesTab ? <TabsList variant="line" aria-label="Composer" className="av-composer-dock-tabs">
               <TabsTrigger value="chat">Chat</TabsTrigger>
               <TabsTrigger value="teammates">Teammates{teamAttention.sessionId === session.sessionId && teamAttention.count > 0 ? <span aria-label={`${teamAttention.count} need attention`} style={{ color: 'var(--amber)' }}> · {teamAttention.count}</span> : null}</TabsTrigger>
             </TabsList> : null}
@@ -10543,8 +10556,8 @@ function MessageViewInner({
             </div>
           </CardContent>
             </TabsContent>
-            {session && !hideCoordinator ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">
-              <CoordinatorConversation key={`${session.providerInstanceId ?? session.provider}:${session.sessionId}`} session={session} onInspect={onInspectTeammate!} onReturnToChat={returnToChat} onAttentionChange={updateTeamAttention} />
+            {session && teammatesTab ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">
+              <PluginSurfaceHost surfaceId="teammates" placement="panel" sessionKey={sessionIdentityKey(session)} services={teammatesServices} onClose={returnToChat} />
             </TabsContent> : null}
           </Tabs>
         </Card>

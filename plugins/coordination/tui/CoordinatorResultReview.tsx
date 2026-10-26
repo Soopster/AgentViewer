@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AgentProvider } from '../../lib/types'
-import type { TuiThemePalette } from '../theme'
-import { readTuiCoordinatorResult } from '../../lib/tui/service'
-import { coordinatorResultLines, type CoordinatorResultReview as ResultReview } from '../../lib/coordinatorResultReview'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
-import { runInteractiveCoordinatorAction } from './interactiveCoordinatorStore'
+import type { AgentProvider } from '../../../lib/types'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { readTuiCoordinatorResult } from '../../../lib/tui/service'
+import { coordinatorResultLines, type CoordinatorResultReview as ResultReview } from '../../../lib/coordinatorResultReview'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
+import { runInteractiveCoordinatorAction } from '../../../tui/opentui/shell/sdkCoordination'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 export function CoordinatorResultReview({ sessionId, provider, taskId, theme, width, height, onClose, onNotice, onKeyHandlerReady }: {
