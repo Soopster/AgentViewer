@@ -12,8 +12,9 @@ export { filterComposerMentionEntries, type ComposerMentionFileEntry } from '../
 export { detectTuiCodeFiletypeFromPath } from '../../codeFiletypes'
 export { MODAL_CONTENT_Z_INDEX } from '../layers'
 export { getProviderAccent } from '../../theme'
-export { fitText } from '../textLayout'
+export { fitText, joinMeta } from '../textLayout'
 export { isCtrlKey, isShiftedKey } from '../shortcutKeys'
 export { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalBrowserEnabled } from '../terminalBrowser'
+export { sessionIdentityKey } from '../sessionIdentity'
 
 export { createPluginResourceScope } from '../../../lib/plugins/lifecycle'

@@ -2,7 +2,7 @@
 // herdr's `agent start reviewer`. The server validates the name; the draft
 // only splits it off, and must never do so for a follow-up already addressed.
 import assert from 'node:assert/strict'
-import { __delegateTargetForSmoke as delegateTarget } from '../tui/opentui/TeammatesPopover'
+import { __delegateTargetForSmoke as delegateTarget } from '../plugins/coordination/tui/TeammatesPopover'
 
 assert.deepEqual(delegateTarget('@reviewer check the diff', null), { detail: 'check the diff', to: 'auto', teammateName: 'reviewer' })
 assert.deepEqual(delegateTarget('@Reviewer   check\nthe diff', null), { detail: 'check\nthe diff', to: 'auto', teammateName: 'reviewer' }, 'case folds, whitespace trims, body keeps its lines')

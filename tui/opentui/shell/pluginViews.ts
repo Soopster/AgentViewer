@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   subagents: async () => (await import('../../../plugins/subagents/tui')).module,
@@ -21,4 +21,6 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   diagnostics: async () => (await import('../../../plugins/diagnostics/tui')).module,
   terminal: async () => (await import('../../../plugins/terminal/tui')).module,
   browser: async () => (await import('../../../plugins/browser/tui')).module,
+  coordination: async () => (await import('../../../plugins/coordination/tui')).module,
+  desk: async () => (await import('../../../plugins/desk/tui')).module,
 }, TUI_PLUGIN_SERVICES)

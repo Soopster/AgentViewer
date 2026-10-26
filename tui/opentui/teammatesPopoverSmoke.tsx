@@ -26,7 +26,7 @@ writeFileSync('README.md', 'fixture\n')
 execFileSync('git', ['add', '.'])
 execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', 'commit', '-qm', 'fixture'])
 
-const { TeammatesPopover } = await import('./TeammatesPopover')
+const { TeammatesPopover } = await import('../../plugins/coordination/tui/TeammatesPopover')
 const { TeammatesAttention } = await import('./TeammatesAttention')
 const store = await import('./interactiveCoordinatorStore')
 const coordination = await import('../../lib/agentCoordination')

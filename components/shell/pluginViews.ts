@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   analytics: async () => (await import('@/plugins/analytics/web')).module,
@@ -13,4 +13,5 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'pull-requests': async () => (await import('@/plugins/pull-requests/web')).module,
   terminal: async () => (await import('@/plugins/terminal/web')).module,
   browser: async () => (await import('@/plugins/browser/web')).module,
+  coordination: async () => (await import('@/plugins/coordination/web')).module,
 }, WEB_PLUGIN_SERVICES)

@@ -26,7 +26,7 @@ for (const manifest of PLUGIN_MANIFESTS) {
   for (const command of manifest.commands) assert.equal(getPluginCommand(command.id)?.pluginId, manifest.id)
 }
 assert.equal(isPluginSurfaceId('__proto__'), false)
-assert.equal(isPluginSurfaceId('desk'), false, 'built-in kinds are not plugin surfaces')
+assert.equal(isPluginSurfaceId('daily-summary'), false, 'built-in kinds are not plugin surfaces')
 assert.deepEqual(listPluginCommands('tui').map(command => command.id).includes('analytics'), true)
 assert.deepEqual(listPluginSurfaces('web').map(surface => surface.id).includes('analytics'), true)
 

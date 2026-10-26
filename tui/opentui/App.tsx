@@ -464,20 +464,23 @@ const COMPOSER_WAITING_MESSAGES = [
 // Plugin commands with a TUI binding, matched by the global key router.
 // The plugin choice of this workspace, before the first frame offers any command.
 applyPluginSettings(readPluginSettingsFile())
-// A chord that names Shift is tried before the plain one it extends: ⌃⇧G also reads as ⌃G.
+// Whether a plugin surface declares a service, required or optional.
+function pluginSurfaceWants(id: PluginSurfaceId, service: PluginServiceId): boolean {
+  const surface = getPluginSurface(id)
+  return surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
+}
+// Shifted chords first: a terminal that cannot report Shift sends ⌃⇧A as ⌃A,
+// but one that can must reach ⌃⇧A's command, not ⌃A's.
 const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): command is ResolvedPluginCommand & { tuiKey: PluginKeyChord } => Boolean(command.tuiKey))
   .sort((a, b) => Number(Boolean(b.tuiKey.shift)) - Number(Boolean(a.tuiKey.shift)))
 
 // Overlays load when first opened — see lazyComponent.tsx.
 const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
-const DeskView = lazyComponent(() => import('./DeskView').then((module) => module.DeskView))
 const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
 const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) => module.ContextMenu))
 const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
 const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
-const CoordinationPopover = lazyComponent(() => import('./CoordinationPopover').then((module) => module.CoordinationPopover))
-const TeammatesPopover = lazyComponent(() => import('./TeammatesPopover').then((module) => module.TeammatesPopover))
 const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
 const PlaybookManagerPopover = lazyComponent(() => import('./PlaybookManagerPopover').then((module) => module.PlaybookManagerPopover))
 
@@ -5788,15 +5791,12 @@ const COMMANDS: PaletteCommand[] = [
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
   { id: 'plugins',    label: 'Plugins: turn features on or off', key: '', category: 'View' },
-  { id: 'desk',       label: 'Bloomberg-style desk',   key: '⌃K b', category: 'View'     },
   { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '⌃K n / ⌃⇧N', category: 'Coordination' },
-  { id: 'coord-board', label: 'Open Agent Operations', key: '⌃K a / ⌃⇧A', category: 'Coordination' },
-  { id: 'coord-teammates', label: 'Teammates for this conversation', key: '⌃K t', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: '', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
@@ -10095,11 +10095,9 @@ function OpenTuiWorkspace() {
   const [pluginOverlay, setPluginOverlay] = useState<PluginSurfaceId | null>(null)
   // Each plugin surface's open requests: how many, and the session the latest named.
   const [pluginOpenRequests, setPluginOpenRequests] = useState<Partial<Record<PluginSurfaceId, { count: number; session: Session | null }>>>({})
-  const [deskOpen, setDeskOpen] = useState(false)
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
   const pluginManagerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const disabledPlugins = useDisabledPlugins()
-  const deskKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }) => void) | null>(null)
   const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
@@ -10162,7 +10160,6 @@ function OpenTuiWorkspace() {
   const [worktreeConfirm, setWorktreeConfirm] = useState<'merge' | 'discard' | null>(null)
   const worktreeSubmitInFlightRef = useRef(false)
   const [coordModalOpen, setCoordModalOpen] = useState(false)
-  const [coordBoardOpen, setCoordBoardOpen] = useState(false)
   const [coordDraft, setCoordDraft] = useState('')
   const [coordAcceptanceDraft, setCoordAcceptanceDraft] = useState('')
   const [coordNonGoalsDraft, setCoordNonGoalsDraft] = useState('')
@@ -10199,7 +10196,6 @@ function OpenTuiWorkspace() {
   const [coordBoardRunId, setCoordBoardRunId] = useState<string | null>(null)
   const [coordError, setCoordError] = useState<string | null>(null)
   const coordStartInFlightRef = useRef(false)
-  const coordBoardKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
@@ -10606,7 +10602,6 @@ function OpenTuiWorkspace() {
     || searchMode
     || sessionSearchMode
     || pluginOverlay !== null
-    || deskOpen
     || pluginManagerOpen
     || windowSwitcherOpen
     || windowBroadcastOpen
@@ -10614,7 +10609,6 @@ function OpenTuiWorkspace() {
     || promptLibraryOpen
     || bookmarksOverlayOpen
     || coordModalOpen
-    || coordBoardOpen
     || teammatesModalOpen
     || remoteCoordinatorTarget
     || renameSessionKey
@@ -11161,9 +11155,12 @@ function OpenTuiWorkspace() {
     return activity
   }, [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
 
-  // The desk's alert book. Derived only while it is open: nothing else reads
-  // it, and the attention items change on every registry poll.
-  const deskAlerts = useMemo(() => (deskOpen ? attentionItems.map((item) => ({
+  // The session fleet a plugin view reads (the desk's alert book among it).
+  // Derived only while such a view is shown, full screen or in a window:
+  // nothing else reads it, and the attention items change on every registry poll.
+  const fleetViewShown = [...(pluginOverlay ? [pluginOverlay] : []), ...windowedPopoverKinds]
+    .some((id) => isPluginSurfaceId(id) && pluginSurfaceWants(id, 'session-fleet'))
+  const fleetAlerts = useMemo(() => (fleetViewShown ? attentionItems.map((item) => ({
     key: item.key,
     sessionKey: item.sessionKey,
     provider: item.provider,
@@ -11172,7 +11169,7 @@ function OpenTuiWorkspace() {
     detail: item.detail,
     needsInput: attentionItemNeedsInput(item),
     createdAt: item.createdAt,
-  })) : []), [attentionItems, deskOpen])
+  })) : []), [attentionItems, fleetViewShown])
 
   // Fleet strip: one cell per live session (running or blocked on input) plus
   // recent background completions — mission-control ambient awareness while
@@ -15768,11 +15765,8 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const openCoordinationBoard = useStableEvent(() => {
-    // The popover loads and polls its own data; null run id = latest.
-    setCoordBoardRunId(null)
-    setCoordBoardOpen(true)
-  })
+  // The control center loads and polls its own data; a command opens it on the latest run.
+  const openCoordinationBoard = useStableEvent(() => runPluginCommandId('coord-board'))
 
   const openSelectedTranscriptInPager = useStableEvent(() => {
     const persisted = sessionDetail?.threadedMessages ?? []
@@ -15790,6 +15784,10 @@ function OpenTuiWorkspace() {
   })
 
   const openTeammatesPanel = useStableEvent(() => {
+    if (!isPluginEnabled('coordination')) {
+      showNotice('info', 'Teammates are off · turn Coordination on in Plugins (⌃K palette)')
+      return
+    }
     const session = selectedSession
     if (!session) {
       showNotice('info', 'Open a conversation before giving it teammates', 3500)
@@ -16550,7 +16548,9 @@ function OpenTuiWorkspace() {
       if (first) setSelectedSessionKey(sessionKey(first))
       setCoordModalOpen(false)
       setCoordBoardRunId(result.snapshot.run.id)
-      setCoordBoardOpen(true)
+      // The run is started either way; only its view may be off.
+      if (isPluginEnabled('coordination')) setPluginOverlay('coordination')
+      else showNotice('info', 'Run started · the control center is off (Plugins, ⌃K palette)')
       setCoordDraft('')
       setCoordAcceptanceDraft('')
       setCoordNonGoalsDraft('')
@@ -20733,14 +20733,13 @@ function OpenTuiWorkspace() {
   const setPopoverOpen = (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => {
     // File history has an overlay slot of its own, above the plugin overlay.
     if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
-    else if (isPluginSurfaceId(kind)) setPluginOverlay((current) => open ? kind : current === kind ? null : current)
+    // Teammates stay open while windowed (below); every other plugin surface is the overlay.
+    else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
-    else if (kind === 'coordination') setCoordBoardOpen(open)
     else if (kind === 'attention') setAttentionOpen(open)
     else if (kind === 'prompt-library') setPromptLibraryOpen(open)
     else if (kind === 'playbooks') setPlaybookManagerOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
-    else if (kind === 'desk') setDeskOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
     // suppressed), so moving between the two forms changes nothing here.
   }
@@ -20748,10 +20747,10 @@ function OpenTuiWorkspace() {
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
     fileHistoryPath && gitRepoCwd ? 'file-history'
-    : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary' : coordBoardOpen ? 'coordination'
+    : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary'
     : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
     : handoffBriefOpen ? 'handoff'
-    : deskOpen ? 'desk' : teammatesModalOpen ? 'teammates' : null)
+    : teammatesModalOpen ? 'teammates' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
   // A popover into a window, pinned to the reader's session (or nothing),
   // focused. A window already showing it for that pin is focused instead.
@@ -20903,6 +20902,10 @@ function OpenTuiWorkspace() {
     // A command names no file, so the editor opens where it was; nor a turn.
     if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
     if (command.opens === 'checkpoints') setCheckpointFocusPrompt(null)
+    // A command opens the control center on the latest run.
+    if (command.opens === 'coordination') setCoordBoardRunId(null)
+    // Teammates are the store's: opening them is opening the conversation's team.
+    if (command.opens === 'teammates') { openTeammatesPanel(); return }
     if (command.placement === 'panel') {
       // A side-panel tab: the one already open, or a new one. Several may exist
       // (shells); one in a window is its own and stays where it is.
@@ -20938,6 +20941,9 @@ function OpenTuiWorkspace() {
       return next
     })
   })
+  // Declared further down, with the render helpers; a plugin calls it on a key press.
+  const newCoordinationRun = useStableEvent(() => startCoordinationRun())
+  const choosePluginTheme = useStableEvent((mode: TuiThemeMode) => chooseTheme(mode))
   const jumpToTaskCard = useStableEvent((uuid: string) => {
     const idx = visibleTranscriptCards.findIndex((card) => card.key === uuid)
     if (idx >= 0) jumpToTranscriptIndex(idx)
@@ -20977,6 +20983,15 @@ function OpenTuiWorkspace() {
     },
     ...(gitRepoCwd ? { 'file-history': { open: (path: string, where?: 'overlay' | 'window') => openFileHistory(path, where) } } : {}),
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
+    coordination: {
+      initialRunId: coordBoardRunId,
+      openAgentSession: openCoordinationAgentSession,
+      watchAgentSessions: watchCoordinationAgentSessions,
+      watchRun: watchCoordinatorRun,
+      newRun: newCoordinationRun,
+      copyJoinCommand: copyCoordinationJoinCommand,
+    },
+    themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     'task-control': {
       jumpTo: jumpToTaskCard,
       ...(composerCanStopTasks ? { stop: (taskId: string) => { void stopComposerTask(taskId) } } : {}),
@@ -20991,7 +21006,39 @@ function OpenTuiWorkspace() {
     ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent])
+  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode])
+  // The session fleet changes on every poll, so only a view that asks for it is
+  // handed a bag holding it; the rest keep the stable one above.
+  const fleetDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
+    && sessionKey(transcriptSession) === sessionKey(selectedSession))
+  const fleetPluginServices = useMemo((): TuiProvidedPluginServices => (fleetViewShown ? {
+    ...pluginServices,
+    'session-fleet': {
+      sessions,
+      activity: sidebarSessionActivity,
+      alerts: fleetAlerts,
+      selected: selectedSession,
+      // The selected session's transcript counts only once the detail on screen is that session's.
+      selectedCards: fleetDetailOwned ? transcriptCards : null,
+      selectedContext: fleetDetailOwned ? sessionDetail?.contextUsage ?? null : null,
+      selectedModel: fleetDetailOwned ? sessionDetail?.info?.currentModel ?? null : null,
+      selectedMessageCount: fleetDetailOwned ? sessionDetail?.rawMessages.length ?? null : null,
+      select: (session: Session) => selectTabSession(session),
+      open: (session: Session) => {
+        selectTabSession(session)
+        setFocusedPane('messages')
+      },
+      openAlert: (alertKey: string) => {
+        const item = attentionItems.find((candidate) => candidate.key === alertKey)
+        if (!item) return false
+        openAttentionSession(item)
+        return true
+      },
+    },
+  } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems])
+  const pluginServicesFor = (surfaceId: PluginSurfaceId): TuiProvidedPluginServices => (
+    pluginSurfaceWants(surfaceId, 'session-fleet') ? fleetPluginServices : pluginServices
+  )
   // Why a service the root offers only sometimes is missing right now.
   const pluginServiceGaps = useMemo((): Partial<Record<PluginServiceId, string>> => ({
     ...(canUseChannelBridge ? {} : { 'channel-bridge': 'Select a Claude session to use the channel bridge' }),
@@ -21080,6 +21127,18 @@ function OpenTuiWorkspace() {
     if (pluginOverlay && disabledPlugins.has(getPluginSurface(pluginOverlay).pluginId)) setPluginOverlay(null)
     if (fileHistoryPath && disabledPlugins.has('file-history')) setFileHistoryPath(null)
   }, [pluginOverlay, fileHistoryPath, disabledPlugins])
+  // The teammates panel is the store's, so any opener (⌃K t, the attention
+  // badge) can raise it: with its plugin off it closes again and says why. The
+  // team is untouched — closing the panel never stops a teammate.
+  useEffect(() => {
+    if (!teammatesModalOpen || !disabledPlugins.has(getPluginSurface('teammates').pluginId)) return
+    showNotice('info', 'Teammates are off · turn Coordination on in Plugins (⌃K palette)')
+    closeInteractiveCoordinator()
+  }, [teammatesModalOpen, disabledPlugins])
+  const registerTeammatesKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
+    teammatesKeyHandlerRef.current = handler
+  })
+  const offerTeammatesPlacement = useStableEvent(() => offerPopoverPlacement('teammates'))
   const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
     pluginOverlayKeyHandlerRef.current = handler
   })
@@ -22071,8 +22130,8 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [pluginOverlay, dailySummaryOpen, coordBoardOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
-    handoffBriefOpen, fileHistoryPath, deskOpen])
+  }, [pluginOverlay, dailySummaryOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
+    handoffBriefOpen, fileHistoryPath])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
     if (!teammatesOpen && windowedPopoverKinds.has('teammates')) closeSurfaceWindow('teammates')
@@ -22431,12 +22490,6 @@ function OpenTuiWorkspace() {
       case 'coord-start':
         openNewWorkflowModal()
         break
-      case 'coord-board':
-        void openCoordinationBoard()
-        break
-      case 'desk':
-        setDeskOpen(true)
-        break
       case 'daily-summary':
         setDailySummaryOpen(true)
         break
@@ -22481,9 +22534,6 @@ function OpenTuiWorkspace() {
         break
       case 'window-float-shell':
         floatNewShell()
-        break
-      case 'coord-teammates':
-        openTeammatesPanel()
         break
       case 'transcript-pager':
         openSelectedTranscriptInPager()
@@ -23077,11 +23127,11 @@ function OpenTuiWorkspace() {
   // Window controls are transient keyboard owners, never persisted workspace state.
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
-    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen, coordination: coordBoardOpen,
+    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen,
     playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
     handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),
-    desk: deskOpen, teammates: teammatesModalOpen,
+    teammates: teammatesModalOpen,
   }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))
   const windowControlsBlocked = Boolean(
     pendingPermissions.length || blockingWindowPopover || contextMenu || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen
@@ -23506,11 +23556,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-    if (deskOpen) {
-      handled(() => { deskKeyHandlerRef.current?.(key) })
-      return
-    }
-
     if (worktreeConfirm) {
       if (key.name === 'return' || key.name === 'y') {
         handled(() => {
@@ -23649,11 +23694,6 @@ function OpenTuiWorkspace() {
 
     if (teammatesModalOpen) {
       handled(() => { teammatesKeyHandlerRef.current?.(key) })
-      return
-    }
-
-    if (coordBoardOpen) {
-      if (coordBoardKeyHandlerRef.current?.(key) !== false) handled(() => {})
       return
     }
 
@@ -24755,13 +24795,6 @@ function OpenTuiWorkspace() {
       return
     }
 
-
-    // Enhanced terminals preserve this direct modifier chord; ⌃K a is the
-    // portable path when Ctrl+Shift cannot be represented independently.
-    if (isCtrlShift('a')) {
-      handled(openCoordinationBoard)
-      return
-    }
 
     // New coordinated workflow, reachable from anywhere — mirrors plain N
     // (new single-agent session) without requiring a trip through the board.
@@ -26724,7 +26757,7 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={surfaceCwd}
           repositorySessionId={gitSessionId}
-          provided={slot ? windowPluginServices(slot) : kind === 'file-history' ? fileHistoryServices : pluginServices}
+          provided={slot && !pluginSurfaceWants(kind, 'session-fleet') ? windowPluginServices(slot) : kind === 'file-history' ? fileHistoryServices : pluginServicesFor(kind)}
           syntaxStyle={handoffBriefSyntaxStyle}
           path={pathPinned ? (slot ? windowSurfaceMeta[slot]?.path : fileHistoryPath) ?? null : editorInitialPath}
           line={pathPinned ? null : editorInitialLine}
@@ -26802,35 +26835,6 @@ function OpenTuiWorkspace() {
             )}
           </PinnedSessionDetail>
         )
-      case 'teammates':
-        return (
-          <TeammatesPopover docked theme={theme} width={box.width} height={box.height}
-            onOpenSession={openCoordinationAgentSession} onWatchSessions={watchCoordinationAgentSessions}
-            onWatchRun={watchCoordinatorRun} onNotice={showNotice} onKeyHandlerReady={keysReady({ current: null })} />
-        )
-      case 'desk':
-        return renderDesk(true, box.width, box.height, leave, keysReady({ current: null }))
-      case 'coordination':
-        return (
-          <CoordinationPopover
-            docked
-            theme={theme}
-            width={box.width}
-            height={box.height}
-            initialRunId={coordBoardRunId}
-            onOpenSession={openCoordinationAgentSession}
-            onWatchRun={watchCoordinatorRun}
-            onNewRun={startCoordinationRun}
-            onClose={leave}
-            onNotice={showNotice}
-            onCopyJoinCommand={copyCoordinationJoinCommand}
-            onSendDiffNoteToComposer={(prompt) => {
-              appendDiffCommentPromptToComposer(prompt)
-              showNotice('info', 'Agent diff comment added to composer')
-            }}
-            onKeyHandlerReady={keysReady({ current: null })}
-          />
-        )
       case 'daily-summary':
         return (
           <DailySummaryPopover
@@ -26853,45 +26857,6 @@ function OpenTuiWorkspace() {
   // A single popover kind keeps the root's state namespace, so its window and its
   // full-screen form are one view (the editor's buffers survive either move).
   const renderSurfaceBody = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => <WorkspaceViewContext.Provider key={`${kind}:${slot ?? panelId ?? 'panel'}`} value={isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].single ? 'root' : surfaceViewNamespace(kind, slot, panelId)}>{renderSurfaceBodyInner(kind, box, close, focused, slot, panelCwd)}</WorkspaceViewContext.Provider>
-
-  // The desk: full screen, or docked in a window.
-  const renderDesk = (docked: boolean, boxWidth: number, boxHeight: number, onClose: () => void, onKeyHandlerReady: (handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => void) => {
-        // The desk links every panel to the selected session; its transcript
-        // counts only once the detail on screen is that session's.
-        const deskDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
-          && sessionKey(transcriptSession) === sessionKey(selectedSession))
-        return (
-          <DeskView
-            sessions={sessions}
-            activity={sidebarSessionActivity}
-            alerts={deskAlerts}
-            loaded={selectedSession}
-            loadedCards={deskDetailOwned ? transcriptCards : null}
-            loadedContext={deskDetailOwned ? sessionDetail?.contextUsage ?? null : null}
-            loadedModel={deskDetailOwned ? sessionDetail?.info?.currentModel ?? null : null}
-            loadedMessageCount={deskDetailOwned ? sessionDetail?.rawMessages.length ?? null : null}
-            themeActive={themeMode === 'bloomberg-dark' || themeMode === 'bloomberg-light'}
-            width={boxWidth}
-            height={boxHeight}
-            docked={docked}
-            onLoadSession={selectTabSession}
-            onOpenSession={(session) => {
-              setDeskOpen(false)
-              selectTabSession(session)
-              setFocusedPane('messages')
-            }}
-            onOpenAlert={(alertKey) => {
-              const item = attentionItems.find((candidate) => candidate.key === alertKey)
-              if (!item) return
-              setDeskOpen(false)
-              openAttentionSession(item)
-            }}
-            onApplyTheme={() => chooseTheme(isLightThemeMode(themeMode) ? 'bloomberg-light' : 'bloomberg-dark')}
-            onClose={onClose}
-            onKeyHandlerReady={onKeyHandlerReady}
-          />
-        )
-  }
 
   // The popover tab in the reader's place, reached by readerFrameNode through a
   // ref: that function is declared before renderSurfaceBody exists.
@@ -26988,7 +26953,7 @@ function OpenTuiWorkspace() {
   ) : null
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
-  const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession || deskOpen
+  const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
@@ -28537,7 +28502,7 @@ function OpenTuiWorkspace() {
           shouldYield={splitPaneShouldYield}
           cwd={gitRepoCwd}
           repositorySessionId={gitSessionId}
-          provided={pluginServices}
+          provided={pluginServicesFor(pluginOverlay)}
           syntaxStyle={handoffBriefSyntaxStyle}
           path={editorInitialPath}
           line={editorInitialLine}
@@ -28548,13 +28513,13 @@ function OpenTuiWorkspace() {
           width={width}
           height={height}
           focused
+          // The control center is a modal: the root's modal scrim dims behind it.
+          scrim={pluginOverlay !== 'coordination'}
           onClose={closePluginOverlay}
           onDetach={() => offerPopoverPlacement(pluginOverlay)}
           onKeyHandlerReady={registerPluginOverlayKeys}
         />
       ) : null}
-
-      {deskOpen ? renderDesk(false, width, height, () => setDeskOpen(false), (handler) => { deskKeyHandlerRef.current = handler }) : null}
 
       {attentionOpen ? (
         <box
@@ -29154,7 +29119,7 @@ function OpenTuiWorkspace() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || pluginOverlay === 'coordination' || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
         <box
           position="absolute"
           top={0}
@@ -29629,38 +29594,22 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {coordBoardOpen ? (
-        <CoordinationPopover
-          theme={theme}
-          width={width}
-          height={height}
-          initialRunId={coordBoardRunId}
-          onOpenSession={openCoordinationAgentSession}
-          onWatchRun={watchCoordinatorRun}
-          onNewRun={startCoordinationRun}
-          onClose={() => setCoordBoardOpen(false)}
-          onNotice={showNotice}
-          onCopyJoinCommand={copyCoordinationJoinCommand}
-          onSendDiffNoteToComposer={(prompt) => {
-            appendDiffCommentPromptToComposer(prompt)
-            showNotice('info', 'Agent diff comment added to composer')
-          }}
-          onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('coordination')}
-        />
-      ) : null}
-
       {teammatesModalOpen ? (
-        <TeammatesPopover
+        // Its state is the interactive coordinator store's: open while that is,
+        // and closing it closes the panel, not the team.
+        <PluginSurfaceHost
+          surfaceId="teammates"
+          placement="overlay"
+          scrim={false}
+          provided={pluginServices}
+          runCommand={runCommandForPlugin}
           theme={theme}
           width={width}
           height={height}
-          onOpenSession={openCoordinationAgentSession}
-          onWatchSessions={watchCoordinationAgentSessions}
-          onWatchRun={watchCoordinatorRun}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { teammatesKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('teammates')}
+          focused
+          onClose={closeInteractiveCoordinator}
+          onDetach={offerTeammatesPlacement}
+          onKeyHandlerReady={registerTeammatesKeys}
         />
       ) : null}
 

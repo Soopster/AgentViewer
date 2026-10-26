@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TuiThemePalette } from '../theme'
-import { fitText } from './textLayout'
-import type { AgentProvider } from '../../lib/types'
-import type { CoordinatorCapabilities } from '../../lib/coordinatorCapabilities'
-import { readTuiCoordinatorCapabilities } from '../../lib/tui/service'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { fitText } from '../../../tui/opentui/shell/sdk'
+import type { AgentProvider } from '../../../lib/types'
+import type { CoordinatorCapabilities } from '../../../lib/coordinatorCapabilities'
+import { readTuiCoordinatorCapabilities } from '../../../lib/tui/service'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
 
 export type DelegationOptions = { requestedProviderInstanceId?: string; requestedModel?: string; requestedEffort?: string }
 type Key = { name: string; sequence: string; ctrl: boolean; shift: boolean }

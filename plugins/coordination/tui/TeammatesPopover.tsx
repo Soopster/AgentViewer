@@ -9,7 +9,7 @@
 // It takes only layout props and reads everything else from
 // `interactiveCoordinatorStore`, which is what lets the `memo` hold — a
 // coordinator refresh repaints these rows and nothing else.
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { TextAttributes } from '@opentui/core'
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { CoordinatorRecovery } from './CoordinatorRecovery'
@@ -17,11 +17,11 @@ import { CoordinatorResources } from './CoordinatorResources'
 import { CoordinatorWorkflow } from './CoordinatorWorkflow'
 import { CoordinatorDelegationOptions, type DelegationOptions } from './CoordinatorDelegationOptions'
 import { CoordinatorResultReview } from './CoordinatorResultReview'
-import type { TuiThemePalette } from '../theme'
-import { getProviderAccent } from '../theme'
-import { formatProviderLabel } from '../format'
-import type { AgentProvider } from '../../lib/types'
-import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '../../lib/coordinatorRosterFilter'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { getProviderAccent } from '../../../tui/theme'
+import { formatProviderLabel } from '../../../tui/format'
+import type { AgentProvider } from '../../../lib/types'
+import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '../../../lib/coordinatorRosterFilter'
 
 /** Providers a chat can staff a NEW teammate from; cycled with `p`. */
 const COORDINATOR_TEAMMATE_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
@@ -92,13 +92,13 @@ function teardownWarning(teardown: InteractiveCoordinatorTeardown | null): strin
   if (parts.length === 0) return null
   return `Turn off coordination? ${parts.join(' · ')} — branches stay on disk.`
 }
-import { fitText, joinMeta } from './textLayout'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
-import type { ProtocolAgent, ProtocolRunSnapshot } from '../../lib/agentProtocol'
-import { describeRunRollup } from '../../lib/coordinatorRollup'
-import { coordinatorAttention, type CoordinatorAttentionItem } from '../../lib/coordinatorAttention'
-import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../lib/coordinatorSignals'
-import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorDeathReason, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorStaffingChoice } from '../../lib/coordinatorInteractiveState'
+import { fitText, joinMeta } from '../../../tui/opentui/shell/sdk'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
+import type { ProtocolAgent, ProtocolRunSnapshot } from '../../../lib/agentProtocol'
+import { describeRunRollup } from '../../../lib/coordinatorRollup'
+import { coordinatorAttention, type CoordinatorAttentionItem } from '../../../lib/coordinatorAttention'
+import { coordinatorPickerState, coordinatorResultIdsForAgent } from '../../../lib/coordinatorSignals'
+import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspace, coordinatorDeathReason, coordinatorInstanceLabel, coordinatorStalledAgentIds, type CoordinatorStaffingChoice } from '../../../lib/coordinatorInteractiveState'
 import {
   closeInteractiveCoordinator,
   readInteractiveCoordinatorTeardown,
@@ -111,7 +111,7 @@ import {
   runInteractiveCoordinatorAction,
   cycleInteractiveCoordinatorNotifications,
   subscribeInteractiveCoordinator,
-} from './interactiveCoordinatorStore'
+} from '../../../tui/opentui/shell/sdkCoordination'
 
 type TeammatesKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 

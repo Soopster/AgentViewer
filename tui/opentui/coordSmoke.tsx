@@ -25,7 +25,7 @@ execFileSync('git', ['-c', 'user.name=Agent Viewer', '-c', 'user.email=agent-vie
 writeFileSync(path.join(agentWorktreePath, 'agent-change.txt'), 'changed again by nova\n')
 process.chdir(smokeRepo)
 
-const { CoordinationPopover } = await import('./CoordinationPopover')
+const { CoordinationPopover } = await import('../../plugins/coordination/tui/CoordinationPopover')
 const { appendTuiProtocolEvent, listTuiProtocolRuns, readTuiProtocolRun } = await import('../../lib/tui/service')
 const { LIGHT_THEME } = await import('../theme')
 

@@ -23,7 +23,7 @@ import {
   parseDeskCommand,
   type DeskActivity,
   type DeskTableInput,
-} from './deskModel'
+} from '../../plugins/desk/tui/deskModel'
 
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-desk-smoke-')))
 
@@ -94,7 +94,7 @@ assert.ok(deskSuggestions('billing', sessions).some((suggestion) => suggestion.k
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-const { DeskView, DESK_COLORS } = await import('./DeskView')
+const { DeskView, DESK_COLORS } = await import('../../plugins/desk/tui/DeskView')
 const loads: string[] = []
 const opened: string[] = []
 let closed = 0

@@ -1,4 +1,4 @@
-import { sessionIdentityKey } from './sessionIdentity'
+import { sessionIdentityKey } from '../../../tui/opentui/shell/sdk'
 // The desk: a Bloomberg-Terminal-style workspace over the session list.
 //
 // Everything here is pure — the functions a panel can run, the launchpad
@@ -11,9 +11,9 @@ import { sessionIdentityKey } from './sessionIdentity'
 // <GO>, and a bare number <GO> picks that numbered row. A command that names no
 // function is a security search, as on the terminal.
 
-import type { AgentProvider, ContextUsage, Session } from '../../lib/types'
-import type { TuiTranscriptCard } from '../format'
-import { formatSessionTitle } from '../format'
+import type { AgentProvider, ContextUsage, Session } from '../../../lib/types'
+import type { TuiTranscriptCard } from '../../../tui/format'
+import { formatSessionTitle } from '../../../tui/format'
 
 export type DeskActivity = 'needs-input' | 'running' | 'waiting'
 

@@ -55,7 +55,7 @@ export type PluginCommandSpec = {
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
-  readonly category: 'Session' | 'View' | 'Transcript'
+  readonly category: 'Session' | 'View' | 'Transcript' | 'Coordination'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
   /** Where the command shows its surface: an overlay (the default) or a side-panel tab, reusing an open one. */
@@ -126,6 +126,12 @@ export type PluginServiceId =
   | 'browser-location'
   /** Which item a window was showing, kept by the host so a remounted window comes back on it. */
   | 'window-selection'
+  /** Act on Coordinator runs and their agents in the host: open a transcript, watch a team, start a run. */
+  | 'coordination'
+  /** Every session and its activity, the selected one's loaded detail, and moving the selection. */
+  | 'session-fleet'
+  /** The app theme, and choosing another. */
+  | 'themes'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host

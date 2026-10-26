@@ -61,7 +61,6 @@ type CommandPaletteProps = {
   onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
-  onOpenCoordinator: () => void
   onOpenCrossSessionMessaging: () => void
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
@@ -360,7 +359,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenCoordinator,
   onOpenCrossSessionMessaging,
   onOpenTasks,
   onOpenPromptLibrary,
@@ -502,7 +500,7 @@ export default function CommandPalette({
           id: `plugin:${command.id}`,
           label: command.label,
           description: command.requires === 'session' && selectedSession ? `For ${selectedSession.title || selectedSession.sessionId}` : command.label,
-          icon: <BarChart3 size={16} />,
+          icon: command.category === 'Coordination' ? <UsersRound size={16} /> : <BarChart3 size={16} />,
           group: 'actions',
           keywords: [...(command.keywords ?? []), command.pluginId],
           score: 0,
@@ -608,17 +606,6 @@ export default function CommandPalette({
           if (messageViewFullscreen) onToggleMessageViewMaximized()
           else onEnterMessageViewFullscreen()
         },
-      },
-      {
-        id: 'open-agent-team',
-        label: 'Open Agent Operations dashboard',
-        description: 'Open the multi-agent dashboard for teammates, tasks, messages, worktrees, and merge controls',
-        icon: <UsersRound size={16} />,
-        shortcut: 'Team',
-        group: 'actions',
-        keywords: ['agent', 'team', 'coordinator', 'coordination', 'teammate', 'task board', 'worktree', 'multiagent', 'multi-agent'],
-        score: 0,
-        run: onOpenCoordinator,
       },
       {
         id: 'open-task-panel',
@@ -842,7 +829,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenCoordinator, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

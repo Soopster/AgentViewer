@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AgentProvider } from '../../lib/types'
-import type { CoordinatorInteractiveState } from '../../lib/coordinatorInteractiveState'
-import { recoveryOverview, type RecoveryInspection } from '../../lib/coordinatorRecovery'
-import { inspectTuiCoordinatorRecovery } from '../../lib/tui/service'
-import { runInteractiveCoordinatorAction } from './interactiveCoordinatorStore'
-import type { TuiThemePalette } from '../theme'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+import type { AgentProvider } from '../../../lib/types'
+import type { CoordinatorInteractiveState } from '../../../lib/coordinatorInteractiveState'
+import { recoveryOverview, type RecoveryInspection } from '../../../lib/coordinatorRecovery'
+import { inspectTuiCoordinatorRecovery } from '../../../lib/tui/service'
+import { runInteractiveCoordinatorAction } from '../../../tui/opentui/shell/sdkCoordination'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
 
 function wrapRecoveryLine(value: string, width: number): string[] {
   const lines: string[] = []
