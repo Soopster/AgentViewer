@@ -35,7 +35,7 @@ const sent: any[] = []; const inspected: string[] = []
 mock.module('./interactiveCoordinatorStore', () => ({ ...store, subscribeInteractiveCoordinator: () => () => {}, getInteractiveCoordinatorState: () => storeState,
   runInteractiveCoordinatorAction: async (request: unknown) => { sent.push(request); return true },
 }))
-const { TeammatesPopover } = await import('./TeammatesPopover')
+const { TeammatesPopover } = await import('../../plugins/coordination/tui/TeammatesPopover')
 try {
   const disabledRows = recoveryOverview(state, inspection(), 'Pending exact request')
   assert.ok(disabledRows.every(row => !row.canResume && !row.canReconcile), 'an uncertain client submission blocks recovery mutations')

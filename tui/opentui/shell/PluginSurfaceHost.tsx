@@ -54,6 +54,8 @@ export type PluginSurfaceHostProps = {
   focused: boolean
   /** An overlay's layer, for one opened above another overlay. */
   zIndex?: number
+  /** False when the host dims behind this overlay itself (the root's modal scrim). */
+  scrim?: boolean
   onClose: () => void
   onDetach?: () => void
   onKeyHandlerReady: (handler: KeyHandler) => void
@@ -185,7 +187,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const registerKeys = useCallback((handler: KeyHandler | null) => { viewKeys.current = handler }, [])
 
   const overlay = placement === 'overlay'
-  const scrim = overlay ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
+  const scrim = overlay && props.scrim !== false ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
 
   if (failure) {
     const boxWidth = overlay ? Math.min(width - 4, 72) : width

@@ -46,7 +46,7 @@ export type PluginCommandSpec = {
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
-  readonly category: 'Session' | 'View'
+  readonly category: 'Session' | 'View' | 'Coordination'
   /** Opening this surface as an overlay is the command's action. */
   readonly opens: string
   /** What the command must have before it can run. */
@@ -96,6 +96,12 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** Act on Coordinator runs and their agents in the host: open a transcript, watch a team, start a run. */
+  | 'coordination'
+  /** Every session and its activity, the selected one's loaded detail, and moving the selection. */
+  | 'session-fleet'
+  /** The app theme, and choosing another. */
+  | 'themes'
 
 /**
  * An immutable reference to what a view is about, resolved once by the host

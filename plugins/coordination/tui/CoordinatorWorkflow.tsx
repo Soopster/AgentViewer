@@ -1,13 +1,13 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AgentProvider } from '../../lib/types'
-import type { PlaybookSummary } from '../../lib/agentProtocol'
-import type { InteractiveWorkflowPreview } from '../../lib/agentCoordination'
-import { workflowArguments, workflowPreviewLines } from '../../lib/coordinatorWorkflow'
-import { listTuiRunPlaybooks, previewTuiInteractiveWorkflow } from '../../lib/tui/service'
-import { runInteractiveCoordinatorAction } from './interactiveCoordinatorStore'
-import type { TuiThemePalette } from '../theme'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+import type { AgentProvider } from '../../../lib/types'
+import type { PlaybookSummary } from '../../../lib/agentProtocol'
+import type { InteractiveWorkflowPreview } from '../../../lib/agentCoordination'
+import { workflowArguments, workflowPreviewLines } from '../../../lib/coordinatorWorkflow'
+import { listTuiRunPlaybooks, previewTuiInteractiveWorkflow } from '../../../lib/tui/service'
+import { runInteractiveCoordinatorAction } from '../../../tui/opentui/shell/sdkCoordination'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
 
 type Key = { name: string; sequence: string; ctrl: boolean; shift: boolean }
 export function CoordinatorWorkflow({ cwd, provider, theme, width, height, onClose, onKeyHandlerReady }: {

@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useState } from 'react'
-import { resourceLimits, resourceSummary, type CoordinatorResources as Resources } from '../../lib/coordinatorResources'
-import { runInteractiveCoordinatorAction } from './interactiveCoordinatorStore'
-import type { TuiThemePalette } from '../theme'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+import { resourceLimits, resourceSummary, type CoordinatorResources as Resources } from '../../../lib/coordinatorResources'
+import { runInteractiveCoordinatorAction } from '../../../tui/opentui/shell/sdkCoordination'
+import type { TuiThemePalette } from '../../../tui/theme'
+import { MODAL_CONTENT_Z_INDEX } from '../../../tui/opentui/shell/sdk'
 
 type Key = { name: string; sequence: string; ctrl: boolean; shift: boolean }
 const FIELDS = ['capacity', 'tokens', 'cost', 'minutes'] as const

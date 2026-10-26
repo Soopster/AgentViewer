@@ -7,7 +7,7 @@ import { SessionCacheBudget } from './sessionCacheBudget'
 import { TranscriptDetailCache } from './transcriptDetailCache'
 import { windowSessionKey } from './windowTargets'
 import { transcriptSessionKey } from './splitPaneState'
-import { deskSessionKey } from './deskModel'
+import { deskSessionKey } from '../../plugins/desk/tui/deskModel'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 
 const defaultSession: Session = { provider: 'codex', sessionId: 'same:id|with:delimiters' }

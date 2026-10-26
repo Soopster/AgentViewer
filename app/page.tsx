@@ -36,7 +36,6 @@ const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover')
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
 const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
-const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 const CrossSessionMessaging = dynamic(() => import('@/app/agents/page'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
@@ -1450,6 +1449,32 @@ export default function Home() {
     'pull-request': 'Available when a project is open.',
   }), [])
 
+  // The control center (Coordination plugin) in the side panel and the run dashboard.
+  const panelCoordinationServices = useMemo<WebPluginServices>(() => ({
+    coordination: {
+      provider,
+      selectedSession,
+      openSession: selectCommandPaletteSession,
+      sessionsChanged: () => { void loadSessionsForProvider(provider).catch(() => {}) },
+    },
+  }), [provider, selectedSession, selectCommandPaletteSession, loadSessionsForProvider])
+  const dashboardCoordinationServices = useMemo<WebPluginServices>(() => ({
+    coordination: {
+      ...panelCoordinationServices.coordination!,
+      sessionsChanged: () => {
+        void loadSessionsForProvider(provider).catch((err) => {
+          setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
+        })
+      },
+    },
+  }), [panelCoordinationServices, loadSessionsForProvider, provider])
+  // The control center's command opens the run dashboard on it.
+  useEffect(() => subscribePluginCommands((commandId) => {
+    const command = getPluginCommand(commandId)
+    if (!command || command.opens !== 'coordination' || !isPluginEnabled(command.pluginId)) return false
+    openCoordinator()
+    return true
+  }), [openCoordinator])
   const rightPanelSurfaceTitle = useCallback((surface: RightPanelSurface) => {
     if (surface.kind !== 'browser') return surfaceKindLabel(surface.kind)
     if (!surface.url) return 'Browser'
@@ -1499,14 +1524,7 @@ export default function Home() {
       case 'agents':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto' }}>
-            <AgentTeamCoordinator
-              provider={provider}
-              selectedSession={selectedSession}
-              onOpenSession={selectCommandPaletteSession}
-              onSessionsChanged={() => {
-                void loadSessionsForProvider(provider).catch(() => {})
-              }}
-            />
+            <PluginSurfaceHost surfaceId="coordination" placement="panel" sessionKey={null} services={panelCoordinationServices} onClose={() => closeRightPanelSurface(surface.id)} />
           </div>
         )
     }
@@ -1520,6 +1538,7 @@ export default function Home() {
     selectedProject,
     selectedSession,
     setRightPanelBrowserUrl,
+    panelCoordinationServices,
   ])
 
   return (
@@ -1656,16 +1675,7 @@ export default function Home() {
                       />
                     </TabsContent>
                     <TabsContent value="agents" className="av-dashboard-tab-content">
-                      <AgentTeamCoordinator
-                        provider={provider}
-                        selectedSession={selectedSession}
-                        onOpenSession={selectCommandPaletteSession}
-                        onSessionsChanged={() => {
-                          void loadSessionsForProvider(provider).catch((err) => {
-                            setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
-                          })
-                        }}
-                      />
+                      <PluginSurfaceHost surfaceId="coordination" placement="window" sessionKey={null} services={dashboardCoordinationServices} onClose={openRunDashboard} />
                     </TabsContent>
                     <TabsContent value="messaging" className="av-dashboard-tab-content">
                       <CrossSessionMessaging />
@@ -1745,7 +1755,6 @@ export default function Home() {
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
                   onOpenPullRequests={openPullRequestView}
-                  onOpenCoordinator={openCoordinator}
                   onOpenCrossSessionMessaging={openCrossSessionMessaging}
                   onOpenTasks={openTaskPanel}
                   onOpenPromptLibrary={openPromptLibrary}

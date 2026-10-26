@@ -4,11 +4,13 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   analytics: async () => (await import('../../../plugins/analytics/tui')).module,
   git: async () => (await import('../../../plugins/git/tui')).module,
   files: async () => (await import('../../../plugins/files/tui')).module,
   editor: async () => (await import('../../../plugins/editor/tui')).module,
+  coordination: async () => (await import('../../../plugins/coordination/tui')).module,
+  desk: async () => (await import('../../../plugins/desk/tui')).module,
 }, TUI_PLUGIN_SERVICES)

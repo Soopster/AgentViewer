@@ -15,7 +15,11 @@ off or on; the choice is `.agent-viewer-data/plugins.json`, shared by the TUI
 and the web daemon (`/api/plugins`). `npm run plugins:smoke` checks the
 contract, enablement, the TUI host, Git and the manager in the real App, and the
 import boundaries. Next: terminal/browser, coordination and the
-remaining optional features (step 5), then step 6. Plugin view state has a
+remaining optional features (step 5), then step 6. **Coordination** (`plugins/coordination/`:
+the control center and teammates, TUI and Web) and the TUI **desk** (`plugins/desk/`) are plugins;
+the runs, the interactive coordinator store, the sweep and the coordinator rail stay host code, so
+closing or turning a view off stops nothing, and the TUI's `agents` side-panel kind (the transcript's
+subagent list, which the reader's task column also draws) stays host code. Plugin view state has a
 versioned snapshot codec but is not yet written to disk.
 
 ## Objective

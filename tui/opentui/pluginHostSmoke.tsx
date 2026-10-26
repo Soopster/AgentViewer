@@ -47,8 +47,16 @@ mock.module('./threadingWorkerClient', () => ({ ...threadingClient, getTranscrip
 const metadataClient = await import('./metadataWorkerClient')
 mock.module('./metadataWorkerClient', () => ({ ...metadataClient, readTuiSessionMetadataAsync: async () => ({ currentModel: null, contextUsage: null }) }))
 const service = await import('../../lib/tui/service')
+// Anything that would stop a run or change a team: closing or turning off a
+// coordination view must call none of it.
+const coordinationMutations: string[] = []
 mock.module('../../lib/tui/service', () => ({
   ...service,
+  readTuiSessionCoordinator: async () => null,
+  sendTuiSessionCoordination: async (...args: unknown[]) => { coordinationMutations.push(`send ${JSON.stringify(args[2])}`); throw new Error('not in this smoke') },
+  stopTuiProtocolRun: async (runId: string) => { coordinationMutations.push(`stop ${runId}`); return null },
+  deleteTuiProtocolRun: async (runId: string) => { coordinationMutations.push(`delete ${runId}`); return null },
+  interruptTuiSessionTurn: async () => { coordinationMutations.push('interrupt'); return [] },
   readTuiSessions: async () => SESSIONS.map((session) => ({ ...session })),
   readTuiSessionDetail: async (session: Session) => detailFor(session),
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
@@ -247,6 +255,63 @@ await settle(300)
 check(!screen().includes('UNSAVEDEDIT') && screen().includes('Open project editor is off'), 'a disabled editor still opened, or said nothing')
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('The editor opens as a lazy plugin and keeps an unsaved edit across full screen → window → full screen.')
+
+// Coordination: the control center and the teammates panel are one lazy
+// plugin; the desk another. Closing or turning a view off leaves the team (the
+// interactive coordinator store, its session and feed) as it was, and calls
+// nothing that stops a run or a teammate.
+const portable = async (letter: string) => { await key('k', { ctrl: true }); await key(letter) }
+check(!tuiPluginViews.isLoaded('coordination'), 'the Coordination plugin loaded before a coordination view was opened')
+check(!tuiPluginViews.isLoaded('desk'), 'the Desk plugin loaded before the desk was opened')
+await portable('a')
+await waitFor('the control center', () => screen().includes('AGENT CONTROL CENTER'))
+check(tuiPluginViews.isLoaded('coordination'), 'the control center opened without its plugin module')
+await key('escape')
+await waitFor('the control center closed', () => !screen().includes('AGENT CONTROL CENTER'))
+await key('a', { ctrl: true, shift: true })
+await waitFor('the control center from ⌃⇧A', () => screen().includes('AGENT CONTROL CENTER'))
+await key('escape')
+await waitFor('the control center closed again', () => !screen().includes('AGENT CONTROL CENTER'))
+const coordinatorStore = await import('./interactiveCoordinatorStore')
+await portable('t')
+await waitFor('the teammates panel', () => coordinatorStore.isInteractiveCoordinatorOpen() && screen().includes(' Teammates '))
+const teamSession = coordinatorStore.getInteractiveCoordinatorState().session
+check(teamSession?.sessionId === SESSIONS[0]!.sessionId, `the teammates panel opened for ${teamSession?.sessionId ?? 'nothing'}`)
+// The attention badge observes the conversation's team without the panel.
+const releaseObservation = coordinatorStore.observeInteractiveCoordinator(teamSession!)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'coordination', false))
+await waitFor('the teammates panel closed by turning Coordination off, saying why', () => !coordinatorStore.isInteractiveCoordinatorOpen() && screen().includes('Teammates are off'))
+const kept = coordinatorStore.getInteractiveCoordinatorState()
+check(kept.session?.sessionId === teamSession!.sessionId, 'turning the view off dropped the conversation\'s team from the store')
+check(coordinationMutations.length === 0, `closing or turning off a coordination view changed the team: ${coordinationMutations.join(', ')}`)
+await portable('a')
+await settle(300)
+check(!screen().includes('AGENT CONTROL CENTER') && screen().includes('Open Agent Operations is off'), 'a disabled control center still opened, or said nothing')
+await portable('t')
+await settle(300)
+check(!coordinatorStore.isInteractiveCoordinatorOpen() && !screen().includes('TEAMMATES') && screen().includes('Teammates for this conversation is off'), 'a disabled teammates panel still opened, or said nothing')
+// The attention badge opens the store directly; the host refuses it too.
+coordinatorStore.openInteractiveCoordinatorAttention()
+coordinatorStore.openInteractiveCoordinator(teamSession!)
+await settle(300)
+check(!coordinatorStore.isInteractiveCoordinatorOpen(), 'the teammates panel opened from the store with Coordination off')
+check(coordinatorStore.getInteractiveCoordinatorState().session?.sessionId === teamSession!.sessionId, 'refusing the panel dropped the team')
+releaseObservation()
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Coordination opens as a lazy plugin (⌃K a, ⌃⇧A, ⌃K t); turning it off closes its views, refuses openers with a notice, and leaves the team untouched.')
+
+await portable('b')
+await waitFor('the desk', () => screen().includes('AGENT VIEWER ▸ DESK'))
+check(tuiPluginViews.isLoaded('desk'), 'the desk opened without its plugin module')
+await key('escape')
+await waitFor('the desk closed', () => !screen().includes('AGENT VIEWER ▸ DESK'))
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'desk', false))
+await settle(100)
+await portable('b')
+await settle(300)
+check(!screen().includes('AGENT VIEWER ▸ DESK') && screen().includes('Bloomberg-style desk is off'), 'a disabled desk still opened, or said nothing')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('The desk opens as a lazy plugin from ⌃K b and refuses with a notice when turned off.')
 
 // A module that fails to load is evicted and loads on the next attempt.
 const { PluginSurfaceHost, pluginInstanceId } = await import('./shell/PluginSurfaceHost')

@@ -3,7 +3,10 @@ import type { SyntaxStyle } from '@opentui/core'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
 import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
 import type { SelectionAskInput } from '../../../lib/selectionAsk'
-import type { TuiThemePalette } from '../../theme'
+import type { TuiThemeMode, TuiThemePalette } from '../../theme'
+import type { TuiTranscriptCard } from '../../format'
+import type { AgentProvider, ContextUsage, Session } from '../../../lib/types'
+import type { ProtocolAgent, ProtocolRunSnapshot } from '../../../lib/agentProtocol'
 
 export type TuiPluginKeyEvent = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string; eventType?: 'press' | 'repeat' | 'release'; repeated?: boolean }
 
@@ -33,7 +36,7 @@ export type TuiPluginServices = {
     readonly read?: () => Promise<string>
   }
   notices?: {
-    readonly show: (kind: 'info' | 'error', text: string) => void
+    readonly show: (kind: 'info' | 'error', text: string, durationMs?: number) => void
   }
   'file-history'?: {
     readonly open: (path: string) => void
@@ -49,6 +52,55 @@ export type TuiPluginServices = {
     readonly velocity: boolean
     readonly toggleVelocity: () => void
   }
+  /** What a coordination view asks the host to do; the runs themselves are the host's. */
+  coordination?: {
+    /** The run the control center opens on (a run just started); null for the latest. */
+    readonly initialRunId: string | null
+    /** An agent's transcript in the reader, or a notice saying why it has none. */
+    readonly openAgentSession: (agent: ProtocolAgent) => void
+    /** These agents' transcripts in panes beside the reader, in priority order. */
+    readonly watchAgentSessions: (agents: ProtocolAgent[]) => void
+    /** The run's lead in the reader with its teammates beside it. */
+    readonly watchRun: (snapshot: ProtocolRunSnapshot) => void
+    /** Open the host's new-run setup. */
+    readonly newRun: () => void
+    readonly copyJoinCommand: (runId: string) => void
+  }
+  'session-fleet'?: {
+    readonly sessions: Session[]
+    readonly activity: ReadonlyMap<string, 'needs-input' | 'running' | 'waiting'>
+    readonly alerts: readonly TuiFleetAlert[]
+    /** The selected session, and its loaded detail once that detail is the selected session's. */
+    readonly selected: Session | null
+    readonly selectedCards: TuiTranscriptCard[] | null
+    readonly selectedContext: ContextUsage | null
+    readonly selectedModel: string | null
+    readonly selectedMessageCount: number | null
+    /** Select a session without leaving the view. */
+    readonly select: (session: Session) => void
+    /** Select a session and give the reader the keyboard. */
+    readonly open: (session: Session) => void
+    /** Open what an alert is about; false when the alert is gone. */
+    readonly openAlert: (alertKey: string) => boolean
+  }
+  themes?: {
+    readonly mode: TuiThemeMode
+    /** Whether `mode` is on the light side, as the theme menu groups it. */
+    readonly light: boolean
+    readonly choose: (mode: TuiThemeMode) => void
+  }
+}
+
+/** Something blocked on a person, as the attention inbox lists it. */
+export type TuiFleetAlert = {
+  readonly key: string
+  readonly sessionKey: string
+  readonly provider: AgentProvider
+  readonly sessionTitle: string
+  readonly title: string
+  readonly detail?: string
+  readonly needsInput: boolean
+  readonly createdAt: number
 }
 
 /** Services a host hands over as values; the transcript and repository it resolves itself. */

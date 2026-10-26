@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useMemo } from 'react'
-import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../lib/agentProtocol'
-import type { WorktreeTask } from '../../lib/tui/service'
-import { getProviderAccent, type TuiThemePalette } from '../theme'
+import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../../lib/agentProtocol'
+import type { WorktreeTask } from '../../../lib/tui/service'
+import { getProviderAccent, type TuiThemePalette } from '../../../tui/theme'
 
 export type ControlCenterSection = 'overview' | 'team' | 'tasks' | 'events'
 

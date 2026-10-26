@@ -1,8 +1,8 @@
 'use client'
 import { useState } from 'react'
 import type { CoordinatorCapabilities } from '@/lib/coordinatorCapabilities'
-import { Button } from './ui/button'
-import { NativeSelect } from './ui/native-select'
+import { Button } from '@/components/ui/button'
+import { NativeSelect } from '@/components/ui/native-select'
 
 type SelectionProps = {
   model: string; effort: string; onModel: (model: string) => void; onEffort: (effort: string) => void; disabled: boolean
