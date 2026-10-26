@@ -148,6 +148,11 @@ const scrollScenarios = ({ prefix, view }: { prefix: string; view: TuiTranscript
   ]
 }
 
+function longDraftPaste(lines: number): string {
+  const line = 'The quick brown fox jumps over the lazy dog while the composer keeps typing smoothly. '
+  return `\x1b[200~${Array.from({ length: lines }, (_, i) => `${i + 1}. ${line}`).join('\n')}\x1b[201~`
+}
+
 const SCENARIOS: Scenario[] = [
   { name: 'sidebar-scroll', press: [{ key: 'j' }] },
   { name: 'sidebar-scroll-alt', press: [{ key: 'j' }, { key: 'k' }] },
@@ -172,6 +177,11 @@ const SCENARIOS: Scenario[] = [
     press: keys('expanded-composer-performance'),
     expect: 'send',
   },
+  // A long draft: typing must cost the same at 400 lines as at none. The paste
+  // is the setup, so the measured window is only the keystrokes after it.
+  { name: 'composer-type-long', setup: [TAB, { key: 'c' }, { raw: longDraftPaste(400) }], press: keys('rendering-performance'), expect: 'send' },
+  // The paste itself: a single large input event must not stall the frame loop.
+  { name: 'composer-paste', setup: [TAB, { key: 'c' }], press: [{ raw: longDraftPaste(200) }], intervalMs: 400, expect: 'send' },
   { name: 'composer-slash-filter', setup: [TAB, { key: 'c' }], press: keys('/model'), expect: 'send' },
   { name: 'composer-mention-filter', setup: [TAB, { key: 'c' }], press: keys('@src'), expect: 'send' },
   { name: 'command-palette-nav', setup: [{ key: '?' }], press: [{ key: 'j' }, { key: 'k' }], expect: 'type to filter' },
@@ -629,7 +639,7 @@ rendererInternals.loop = async () => {
   treeWorst = Math.max(treeWorst, treeMsThisFrame)
   nativeWorst = Math.max(nativeWorst, durationMs - treeMsThisFrame)
   if (process.env.INPUT_DEBUG_PROFILE === '1' && durationMs > TUI_FRAME_BUDGET_MS) {
-    console.error(`OVER frame=${durationMs.toFixed(2)}ms tree=${treeMsThisFrame.toFixed(2)}ms rest=${(durationMs - treeMsThisFrame).toFixed(2)}ms`)
+    console.error(`OVER #${frameTimes.length} frame=${durationMs.toFixed(2)}ms tree=${treeMsThisFrame.toFixed(2)}ms rest=${(durationMs - treeMsThisFrame).toFixed(2)}ms`)
   }
 }
 

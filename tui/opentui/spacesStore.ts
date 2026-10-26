@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -103,6 +104,11 @@ export class SpacesController {
   readonly migrated: boolean
   private healthy = true
   private lastWritten: string | null = null
+  // The timed save writes off the render thread; a synchronous flush (exit, leaving a
+  // workspace) bumps the generation so an older write in flight never lands over it.
+  private generation = 0
+  private writing = false
+  private writeAgain = false
   private recoveredFromBackup = false
   persistenceError: string | null = null
   constructor(readonly launchCwd = process.cwd()) {
@@ -204,12 +210,49 @@ export class SpacesController {
     this.publish()
   }
   workspacesFor(id: string): Workspace[] { const space = this.state.spaces.find(space => space.id === id); return space?.workspaces ?? this.state.spaces.flatMap(space => space.workspaces.filter(workspace => workspace.id === id)) }
+  private serialize(): string {
+    const state = { ...this.state, spaces: this.state.spaces.map(space => ({ ...space, workspaces: space.workspaces.map(workspace => ({ ...workspace, values: this.runtimes.get(workspace.id)?.snapshot() ?? workspace.values })) })) }
+    return `${JSON.stringify(state, encode, 2)}\n`
+  }
+  /**
+   * The timed save. A save is four file operations (a backup of the previous
+   * generation, then the state), and done synchronously they ran on the render
+   * thread every 350ms while a draft was being typed: one rename stalling for tens
+   * of milliseconds dropped a frame. Serialising stays here, where the state is
+   * consistent; only the file operations leave the thread.
+   */
+  private async flushAsync(): Promise<void> {
+    if (!this.healthy) return
+    if (this.writing) { this.writeAgain = true; return }
+    const data = this.serialize()
+    if (data === this.lastWritten) return
+    const generation = ++this.generation
+    const previous = this.lastWritten
+    this.writing = true
+    try {
+      await mkdir(path.dirname(this.file), { recursive: true })
+      if (previous !== null) {
+        await writeFile(`${this.file}.bak.async.tmp`, previous)
+        if (generation !== this.generation) return
+        await rename(`${this.file}.bak.async.tmp`, `${this.file}.bak`)
+      }
+      await writeFile(`${this.file}.async.tmp`, data)
+      // A synchronous flush since this began wrote something newer: landing now would replace it.
+      if (generation !== this.generation) return
+      await rename(`${this.file}.async.tmp`, this.file)
+      this.lastWritten = data
+      if (this.persistenceError) { this.persistenceError = null; this.setAttention('__storage', '') }
+    } finally {
+      this.writing = false
+      if (this.writeAgain) { this.writeAgain = false; this.scheduleSave() }
+    }
+  }
   flush(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     if (!this.healthy) return
-    const state = { ...this.state, spaces: this.state.spaces.map(space => ({ ...space, workspaces: space.workspaces.map(workspace => ({ ...workspace, values: this.runtimes.get(workspace.id)?.snapshot() ?? workspace.values })) })) }
+    this.generation += 1
     mkdirSync(path.dirname(this.file), { recursive: true })
-    const data = `${JSON.stringify(state, encode, 2)}\n`
+    const data = this.serialize()
     // Saves run on the render thread every 350ms while anything persistent
     // changes, so an unchanged state writes nothing.
     if (data === this.lastWritten) return
@@ -227,7 +270,7 @@ export class SpacesController {
   }
   private scheduleSave(): void {
     if (this.timer) return
-    this.timer = setTimeout(() => { this.timer = null; try { this.flush() } catch (error) { this.persistenceError = `Spaces could not be saved: ${error instanceof Error ? error.message : String(error)}`; this.setAttention('__storage', this.persistenceError) } }, 350)
+    this.timer = setTimeout(() => { this.timer = null; this.flushAsync().catch(error => { this.persistenceError = `Spaces could not be saved: ${error instanceof Error ? error.message : String(error)}`; this.setAttention('__storage', this.persistenceError) }) }, 350)
   }
 }
 function cleanName(name: string): string { const result = name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim(); if (!result || result.length > 60) throw new Error('Use a name between 1 and 60 characters'); return result }
