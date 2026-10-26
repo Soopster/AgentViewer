@@ -99,7 +99,7 @@ import {
 } from '../../lib/tuiComposerState'
 import { frecencyKey, frecencyPrefix, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
-import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, noteTuiComposerLatency, noteTuiNavLatency, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
+import { startTuiMetricsLogger, noteRenderFrame, noteTuiComposerLatency, noteTuiNavLatency, registerTuiMetricsGauge, logCardRecompute } from './metricsLogger'
 import { CardSelectionVariants } from './cardSelectionVariants'
 import {
   buildPierreDiffView,
@@ -286,7 +286,6 @@ import { SelectableMarkdown } from './SelectableMarkdown'
 import { applySelectionColorsToTree, type SelectionColors } from './selectionTree'
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
-import { TUI_FRAME_BUDGET_MS } from './performanceBudget'
 import {
   attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
@@ -350,7 +349,7 @@ import {
   sessionMessageSequenceFingerprint,
   summarizeDurableSessionMessages,
 } from './messageFingerprint'
-import { appendFile, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir, release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -398,6 +397,8 @@ import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSna
 import { NATIVE_OSC_ENABLED, RECENT_SESSION_ACTIVITY_MS, MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
 import { READER_CARD_SEARCH_DEPTH, SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
+import { PERF_LOG, PERF_LOG_PATH, CARD_PROFILE, noteRootRender, FRAME_TIMING_NEEDED, recordFramePerf, sameJson } from './app/perf'
+export { readRootRenderCount } from './app/perf'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 // A tab for a session with a turn in flight spins, so work you are not looking
@@ -490,45 +491,8 @@ const PlaybookManagerPopover = lazyComponent(() => import('./PlaybookManagerPopo
 registerExtraTreeSitterParsers()
 startTuiMetricsLogger()
 
-// ── Optional render-frame timing (set AGENT_VIEWER_PERF=1) ───────────────────
-// A fullscreen TUI can't log to stdout/stderr without corrupting the render, so
-// frame timings are appended to a file. Each render stamps the start time in the
-// component body; a post-commit effect measures the render→commit duration and,
-// once per second, appends a summary line: commits observed, how many blew the
-// 120fps (8.33ms) budget, and the slowest. Zero runtime cost unless enabled.
-const PERF_LOG = process.env.AGENT_VIEWER_PERF === '1'
-const PERF_LOG_PATH = process.env.AGENT_VIEWER_PERF_LOG
-  ?? join(process.cwd(), '.agent-viewer-data', 'tui-perf.log')
-// Either sink wants a render-start stamp; check both so enabling just
-// AGENT_VIEWER_TUI_METRICS (without AGENT_VIEWER_PERF) still times frames.
-const FRAME_TIMING_NEEDED = PERF_LOG || tuiMetricsEnabled()
-// Targeted live-streaming render profiling — see metricsLogger.ts. Read once
-// at module scope (matches PERF_LOG) so the hot-path memos below pay nothing
-// but a boolean check when disabled.
-const CARD_PROFILE = cardProfileEnabled()
-
 if (PERF_LOG) {
   try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
-}
-
-const perfWindow = { frames: 0, slow: 0, maxDur: 0, startedAt: 0 }
-function recordFramePerf(durationMs: number): void {
-  const now = performance.now()
-  if (perfWindow.startedAt === 0) perfWindow.startedAt = now
-  perfWindow.frames++
-  if (durationMs > TUI_FRAME_BUDGET_MS) perfWindow.slow++
-  if (durationMs > perfWindow.maxDur) perfWindow.maxDur = durationMs
-  if (now - perfWindow.startedAt >= 1000) {
-    const line = `${new Date().toISOString()} commits=${perfWindow.frames} over-budget=${perfWindow.slow} max=${perfWindow.maxDur.toFixed(2)}ms\n`
-    // Keep the canary out of the frame it measures. A synchronous append here
-    // created its own once-per-second outlier, especially on slower disks and
-    // Windows antivirus-scanned worktrees.
-    appendFile(PERF_LOG_PATH, line, () => { /* logging is best-effort */ })
-    perfWindow.frames = 0
-    perfWindow.slow = 0
-    perfWindow.maxDur = 0
-    perfWindow.startedAt = now
-  }
 }
 
 class TuiErrorBoundary extends React.Component<
@@ -8462,21 +8426,6 @@ function SplitTranscriptPaneInner({
 
 const SplitTranscriptPane = React.memo(SplitTranscriptPaneInner)
 
-// Root render counter. The root is one very large component, so "did this
-// state change re-render the whole app?" is the question every surface moved
-// out of it has to answer — and a Profiler cannot answer it, because a commit
-// caused by a memoized child still fires the Profiler wrapping the root. An
-// increment here is the only thing that distinguishes the two. It costs one
-// integer add per render.
-let rootRenderCount = 0
-
-function sameJson(a: unknown, b: unknown): boolean {
-  return a === b || JSON.stringify(a) === JSON.stringify(b)
-}
-export function readRootRenderCount(): number {
-  return rootRenderCount
-}
-
 // The mounted slice of the transcript: the window derivation and the whole
 // per-card pipeline (stableCardData → allLandmarks → cardDisplayData → card
 // elements). It lives outside the root so that moving the window — a slide, a
@@ -9458,7 +9407,7 @@ function OpenTuiWorkspace() {
     workspaceContext.runtime.set(`draftparts:${key}`, parts)
   }
 
-  rootRenderCount += 1
+  noteRootRender()
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
 
