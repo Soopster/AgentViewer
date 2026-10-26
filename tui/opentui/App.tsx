@@ -22,10 +22,11 @@ import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
 import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
+import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
 import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
 import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginPanelSurfaceId, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
 import type { PluginKeyChord, PluginServiceId } from '../../lib/plugins/types'
-import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
+import { NewSessionModal, enabledNewSessionProviders } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { readBridgeConfigFromEnv, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import {
@@ -5249,8 +5250,10 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 // A provider with further instances lists each under its own row. The bare
 // provider row then means all of them; a value of `provider|instance` one.
 function providerSelectOptions(instances: readonly TuiProviderInstanceChoice[]): SelectOption[] {
-  if (instances.length === 0) return PROVIDER_SELECT_OPTIONS
-  return PROVIDER_SELECT_OPTIONS.flatMap((option) => [
+  // A provider turned off in the plugin manager has no row; 'all' always has one.
+  const options = PROVIDER_SELECT_OPTIONS.filter((option) => option.value === 'all' || isProviderEnabled(option.value as string))
+  if (instances.length === 0) return options
+  return options.flatMap((option) => [
     option,
     ...instances.filter((instance) => instance.provider === option.value).map((instance) => ({
       name: `  ${instance.label.toUpperCase()}`,
@@ -5265,7 +5268,12 @@ function providerOptionIndex(options: readonly SelectOption[], provider: Provide
   return Math.max(exact >= 0 ? exact : options.findIndex((option) => option.value === provider), 0)
 }
 
-const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
+const COORD_RUN_PROVIDER_CHOICES: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
+/** The run modal's providers, minus any turned off in the plugin manager. */
+function coordRunProviders(): AgentProvider[] {
+  const on = COORD_RUN_PROVIDER_CHOICES.filter(isProviderEnabled)
+  return on.length > 0 ? on : COORD_RUN_PROVIDER_CHOICES
+}
 const COORD_MODAL_FOCUS_ORDER = [
   'prompt', 'acceptance', 'nonGoals', 'manualQa', 'escalation',
   'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'tokenBudget',
@@ -5279,8 +5287,9 @@ function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): Coord
 }
 
 function cycleCoordProvider(current: AgentProvider, direction: 1 | -1): AgentProvider {
-  const index = COORD_RUN_PROVIDERS.indexOf(current)
-  return COORD_RUN_PROVIDERS[(Math.max(index, 0) + direction + COORD_RUN_PROVIDERS.length) % COORD_RUN_PROVIDERS.length]
+  const choices = coordRunProviders()
+  const index = choices.indexOf(current)
+  return choices[(Math.max(index, 0) + direction + choices.length) % choices.length]
 }
 
 const COORD_AUTONOMY_LEVELS: ProtocolAutonomy[] = ['low', 'medium', 'high']
@@ -15883,11 +15892,17 @@ function OpenTuiWorkspace() {
     void loadCoordPlaybooks(baseCwd)
   })
 
+  // Turning the selected provider off in the plugin manager moves the list to all providers still on.
+  useEffect(() => {
+    if (provider !== 'all' && !isProviderEnabled(provider)) void chooseProvider('all')
+  }, [provider, disabledPlugins, chooseProvider])
+
   const openNewSessionModal = useStableEvent(() => {
     const defaultProvider: AgentProvider = provider === 'all'
       ? (selectedSession?.provider ?? 'claude')
       : provider
-    setNewSessionProvider(NEW_SESSION_PROVIDERS.includes(defaultProvider) ? defaultProvider : 'claude')
+    const choices = enabledNewSessionProviders()
+    setNewSessionProvider(choices.includes(defaultProvider) ? defaultProvider : (choices[0] ?? 'claude'))
     setNewSessionCwd(selectedSession?.cwd ?? process.cwd())
     setNewSessionBusy(false)
     setFolderPickerForNewSession(false)
@@ -15896,9 +15911,9 @@ function OpenTuiWorkspace() {
 
   const cycleNewSessionProvider = useStableEvent((direction: 1 | -1) => {
     setNewSessionProvider((current) => {
-      const index = Math.max(0, NEW_SESSION_PROVIDERS.indexOf(current))
-      const next = (index + direction + NEW_SESSION_PROVIDERS.length) % NEW_SESSION_PROVIDERS.length
-      return NEW_SESSION_PROVIDERS[next]!
+      const choices = enabledNewSessionProviders()
+      const index = Math.max(0, choices.indexOf(current))
+      return choices[(index + direction + choices.length) % choices.length] ?? current
     })
   })
 
@@ -23679,10 +23694,10 @@ function OpenTuiWorkspace() {
         })
       } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'pool') {
         const direction = key.name === 'left' || key.name === 'up' ? -1 : 1
-        handled(() => setCoordProviderPoolIndex((current) => (current + direction + COORD_RUN_PROVIDERS.length) % COORD_RUN_PROVIDERS.length))
+        handled(() => setCoordProviderPoolIndex((current) => (current + direction + coordRunProviders().length) % coordRunProviders().length))
       } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'pool') {
         handled(() => {
-          const selectedProvider = COORD_RUN_PROVIDERS[coordProviderPoolIndex]!
+          const selectedProvider = coordRunProviders()[coordProviderPoolIndex]!
           const suggested = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
           const leadProvider = coordProviderOverride ?? suggested
           setCoordTeammateProviderOverride((current) => {
@@ -25644,7 +25659,7 @@ function OpenTuiWorkspace() {
     [rightPaneWidth, selectedSession],
   )
 
-  const providerOptions = useMemo(() => providerSelectOptions(providerInstances), [providerInstances])
+  const providerOptions = useMemo(() => providerSelectOptions(providerInstances), [providerInstances, disabledPlugins])
   const providerAccent = getProviderAccent(provider)
   const composerPlaceholder = composerTargetSession
     ? (visibleComposerSending
@@ -29494,7 +29509,7 @@ function OpenTuiWorkspace() {
                   <text fg={coordModalFocus === 'pool' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'pool' ? '←/→ · Space' : 'round-robin'}</text>
                 </box>
                 <box height={1} flexDirection="row" overflow="hidden">
-                  {COORD_RUN_PROVIDERS.map((providerName, index) => {
+                  {coordRunProviders().map((providerName, index) => {
                     const selected = teammateProviders.includes(providerName)
                     const cursor = coordModalFocus === 'pool' && coordProviderPoolIndex === index
                     return (

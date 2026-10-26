@@ -6,6 +6,9 @@ import { getProviderManifest, PROVIDER_IDS } from './catalog'
 import { createLazyRegistry } from '../lazyRegistry'
 import { registerProviderPendingTurnPayloadReader } from '../../sessionActivity'
 import { registerProviderDiagnostics } from '../../providerDiagnostics'
+import { isProviderDisabled } from '../../providerInstances'
+import { isPluginEnabled, subscribePluginEnablement } from '../../plugins/enablement'
+import { providerPluginId } from '../../plugins/providerPlugins'
 
 // Static import specifiers let both Next and Bun discover bundled extensions.
 const loaders = {
@@ -62,11 +65,45 @@ const runtimes = createLazyRegistry<AgentProvider, ProviderRuntime>(
   },
 )
 
-export const getProviderExtension = extensions.get
-export const getProviderRuntime = runtimes.get
+// A provider turned off is not activated: its extension, adapter and runtime
+// never load, and a loaded one is released. The settings file is the shared
+// truth (the TUI and the web daemon both write it), so every lookup checks it.
+function assertEnabled(id: AgentProvider): void {
+  if (isProviderDisabled(id)) {
+    void deactivateProvider(id)
+    throw new Error(`Provider is disabled: ${id}`)
+  }
+}
+
+const deactivating = new Map<AgentProvider, Promise<void>>()
+
+/** Release a provider's loaded runtime and forget its loaded modules; the next enabled lookup reloads it. */
+export function deactivateProvider(id: AgentProvider): Promise<void> {
+  const running = deactivating.get(id)
+  if (running) return running
+  const runtime = runtimes.peek(id)
+  const done = (async () => {
+    try { await runtime?.deactivate?.() } catch (error) { console.error(`Provider ${id} deactivation failed:`, error) }
+    runtimes.evict(id)
+    adapters.evict(id)
+    extensions.evict(id)
+  })().finally(() => { deactivating.delete(id) })
+  deactivating.set(id, done)
+  return done
+}
+
+// The in-process store changes when the plugin manager toggles (TUI directly,
+// web through /api/plugins); a daemon whose file was edited elsewhere is caught
+// by the lookup check above.
+subscribePluginEnablement(() => {
+  for (const id of PROVIDER_IDS) if (!isPluginEnabled(providerPluginId(id)) && extensions.peek(id)) void deactivateProvider(id)
+})
+
+export const getProviderExtension = async (id: AgentProvider) => { assertEnabled(id); return extensions.get(id) }
+export const getProviderRuntime = async (id: AgentProvider) => { assertEnabled(id); return runtimes.get(id) }
 export const getLoadedProviderRuntime = runtimes.peek
-export const getSessionAdapter = adapters.get
+export const getSessionAdapter = async (id: AgentProvider) => { assertEnabled(id); return adapters.get(id) }
 
 export async function assertAllAdapterCapabilities(): Promise<void> {
-  await Promise.all(PROVIDER_IDS.map(id => getSessionAdapter(id)))
+  await Promise.all(PROVIDER_IDS.filter(id => !isProviderDisabled(id)).map(id => getSessionAdapter(id)))
 }

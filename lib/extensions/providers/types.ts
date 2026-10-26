@@ -75,6 +75,9 @@ export interface ProviderRuntime {
   listPendingPermissions?(sessionId: string, provider: AgentProvider): Record<string, unknown>[]
   listPendingPrompts?(sessionId: string): Record<string, unknown>[]
   getMemoryDiagnostics?(): Record<string, number>
+  /** The provider was turned off. Release pools, subprocesses and timers; idempotent.
+   * In-flight turns are not interrupted by the host. */
+  deactivate?(): Promise<void>
   afterFileRestore?(params: ProviderRuntimeTarget & { sessionId: string; cwd: string; paths?: string[] }): Promise<void>
 }
 

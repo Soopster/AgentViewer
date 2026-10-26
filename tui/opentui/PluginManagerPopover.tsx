@@ -9,6 +9,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { PLUGIN_MANIFESTS } from '../../lib/plugins/catalog'
 import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
+import { PROVIDER_PLUGINS, isProviderPluginId, wouldDisableEveryProvider, type ProviderPlugin } from '../../lib/plugins/providerPlugins'
 import type { PluginManifest } from '../../lib/plugins/types'
 import { writePluginSettingsFile } from '../../lib/plugins/settingsFile'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
@@ -27,14 +28,15 @@ export type PluginManagerPopoverProps = {
 
 const RENDERER_LABELS = { tui: 'TUI', web: 'Web' } as const
 
-function pluginSummary(manifest: PluginManifest): string {
+function pluginSummary(manifest: PluginManifest | ProviderPlugin): string {
+  if (!('renderers' in manifest)) return 'Provider'
   const renderers = manifest.renderers.map(renderer => RENDERER_LABELS[renderer]).join(' · ')
   const commands = manifest.commands.map(command => (command.tuiKeyLabel ? `${command.tuiKeyLabel} ${command.label}` : command.label)).join(', ')
   return `${renderers}${commands ? ` · ${commands}` : ''}`
 }
 
 export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandlerReady, onNotice }: PluginManagerPopoverProps) {
-  const manifests = PLUGIN_MANIFESTS as readonly PluginManifest[]
+  const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...PROVIDER_PLUGINS]
   const disabled = useDisabledPlugins()
   const [cursor, setCursor] = useState(0)
   const scroll = useRef<ScrollBoxRenderable>(null)
@@ -42,9 +44,13 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
     const timer = setTimeout(() => scroll.current?.scrollChildIntoView(`plugin-row:${manifests[cursor]?.id}`), 0)
     return () => clearTimeout(timer)
   }, [cursor, height, width])
-  const toggle = (manifest: PluginManifest) => {
+  const toggle = (manifest: PluginManifest | ProviderPlugin) => {
     const enabled = disabled.has(manifest.id)
     const next = withPluginEnabled(readPluginSettings(), manifest.id, enabled)
+    if (isProviderPluginId(manifest.id) && wouldDisableEveryProvider(new Set(next.disabled))) {
+      onNotice('error', 'At least one provider must stay on')
+      return
+    }
     try {
       writePluginSettingsFile(next)
     } catch (error) {

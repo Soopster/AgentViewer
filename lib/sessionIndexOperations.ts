@@ -1,5 +1,6 @@
 // Provider architecture extraction: SDK behavior preserved from the session backend.
 import { INDEXABLE_PROVIDER_IDS } from "./extensions/providers/catalog";
+import { isProviderDisabled } from "./providerInstances";
 import { mapConcurrent } from "./adapters/shared";
 import { withProviderInstance } from "./providerInstances";
 import type { AgentProvider, Session, SessionMessage } from "./types";
@@ -73,7 +74,7 @@ export async function listProviderSessionsForIndex(params: {
 export async function rebuildViewSessionIndex(params: RebuildSessionIndexParams = {}): Promise<SessionIndexRebuildResult> {
     const provider = params.provider ?? 'all';
     const includeWorktrees = params.includeWorktrees !== false;
-    const scannedProviders = provider === 'all' ? INDEX_REBUILD_PROVIDERS : [provider];
+    const scannedProviders = provider === 'all' ? INDEX_REBUILD_PROVIDERS.filter((id) => !isProviderDisabled(id)) : [provider];
     const startedAt = new Date().toISOString();
     const errors: SessionIndexRebuildError[] = [];
     let sessionCount = 0;

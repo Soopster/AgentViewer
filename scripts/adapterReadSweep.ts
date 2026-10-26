@@ -18,6 +18,7 @@ import {
 import { assertAllAdapterCapabilities } from '../lib/adapters/registry'
 import type { AgentProvider } from '../lib/types'
 
+import { isProviderDisabled } from '../lib/providerInstances'
 const PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'lmstudio']
 const ACP: AgentProvider[] = ['claude-acp', 'codex-acp', 'acp']
 
@@ -125,8 +126,14 @@ async function assertAcpListing(provider: AgentProvider) {
 // adapter resident at once.
 await step('capabilities match adapters (all providers)', assertAllAdapterCapabilities)
 
-for (const provider of PROVIDERS) await sweep(provider)
-for (const provider of ACP) await assertAcpListing(provider)
+for (const provider of PROVIDERS) {
+  if (isProviderDisabled(provider)) { console.log(`=== ${provider} ===\n    SKIP  turned off in the plugin manager`); continue }
+  await sweep(provider)
+}
+for (const provider of ACP) {
+  if (isProviderDisabled(provider)) { console.log(`=== ${provider} ===\n    SKIP  turned off in the plugin manager`); continue }
+  await assertAcpListing(provider)
+}
 
 console.log(failures === 0 ? '\nAdapter read sweep: PASS' : `\nAdapter read sweep: ${failures} FAILURE(S)`)
 process.exit(failures === 0 ? 0 : 1)

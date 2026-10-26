@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
 import { NEW_SESSION_PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import React, { useCallback, useEffect, useState } from 'react'
 import type { AgentProvider } from '../../lib/types'
@@ -14,6 +15,12 @@ export type NewSessionKeyEvent = {
 
 // Providers a fresh single-agent session can be started for (no 'all' aggregate).
 export const NEW_SESSION_PROVIDERS: readonly AgentProvider[] = NEW_SESSION_PROVIDER_IDS
+
+/** The same, minus providers turned off in the plugin manager. */
+export function enabledNewSessionProviders(): readonly AgentProvider[] {
+  const on = NEW_SESSION_PROVIDERS.filter(isProviderEnabled)
+  return on.length > 0 ? on : NEW_SESSION_PROVIDERS
+}
 
 type Row = 'folder' | 'provider'
 const ROWS: Row[] = ['folder', 'provider']

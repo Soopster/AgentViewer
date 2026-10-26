@@ -1,9 +1,12 @@
 import { PROVIDER_IDS, getProviderManifest } from './extensions/providers/catalog'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { statSync } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isAgentProvider } from './provider'
 import type { AgentProvider, ProviderInstanceSummary } from './types'
+import { providerPluginId } from './plugins/providerPlugins'
+import { pluginSettingsPath, readPluginSettingsFile } from './plugins/settingsFile'
 
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data')
 const INSTANCE_FILE = path.join(DATA_DIR, 'provider-instances.json')
@@ -181,12 +184,33 @@ async function readConfiguredInstances(): Promise<ProviderInstance[]> {
   }
 }
 
+// Providers turned off in the plugin manager. Read from the shared settings file
+// (the TUI and the web daemon write it) and re-read only when it changes, since
+// every instance lookup passes through here.
+let disabledProvidersCache: { file: string; mtimeMs: number; disabled: ReadonlySet<string> } | undefined
+
+function disabledPluginIds(): ReadonlySet<string> {
+  const file = pluginSettingsPath()
+  let mtimeMs = 0
+  try { mtimeMs = statSync(file).mtimeMs } catch { /* no file: every plugin on */ }
+  if (disabledProvidersCache?.file === file && disabledProvidersCache.mtimeMs === mtimeMs) return disabledProvidersCache.disabled
+  const disabled = new Set(mtimeMs ? readPluginSettingsFile(file).disabled : [])
+  disabledProvidersCache = { file, mtimeMs, disabled }
+  return disabled
+}
+
+/** Whether the plugin manager has turned this provider off (shared settings file, mtime-cached). */
+export function isProviderDisabled(provider: AgentProvider): boolean {
+  return disabledPluginIds().has(providerPluginId(provider))
+}
+
 export async function listProviderInstances(): Promise<ProviderInstance[]> {
   const configured = await readConfiguredInstances()
   const configuredById = new Map(configured.map((instance) => [instance.id, instance]))
   const defaults = DEFAULT_PROVIDER_ORDER.map((provider) => configuredById.get(provider) ?? defaultInstance(provider))
   const extras = configured.filter((instance) => instance.id !== instance.provider)
-  return [...defaults, ...extras].filter((instance) => instance.enabled)
+  const off = disabledPluginIds()
+  return [...defaults, ...extras].filter((instance) => instance.enabled && !off.has(providerPluginId(instance.provider)))
 }
 
 export async function listProviderInstanceSummaries(): Promise<ProviderInstanceSummary[]> {
@@ -211,7 +235,9 @@ export async function resolveProviderInstance(
   if (!instance) {
     throw new Error(requested
       ? `Unknown or disabled provider instance: ${requested}`
-      : 'A provider instance is required')
+      : provider
+        ? `Provider is disabled or unknown: ${provider}`
+        : 'A provider instance is required')
   }
   if (provider && instance.provider !== provider) {
     throw new Error(`Provider instance ${instance.id} uses ${instance.provider}, not ${provider}`)

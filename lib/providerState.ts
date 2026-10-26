@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ProviderSelection } from './types'
 import { isAgentProvider } from './provider'
-import { resolveProviderInstance } from './providerInstances'
+import { listProviderInstances, resolveProviderInstance } from './providerInstances'
 
 const PROVIDER_FILE = path.join(process.cwd(), '.agent-viewer-data', 'provider.json')
 
@@ -17,7 +17,7 @@ function getDefaultProvider(): ProviderSelection {
   return asProviderSelection(process.env.AGENT_VIEWER_PROVIDER) ?? 'claude'
 }
 
-export async function getConfiguredProvider(): Promise<ProviderSelection> {
+async function readStoredProvider(): Promise<ProviderSelection> {
   try {
     const contents = await readFile(PROVIDER_FILE, 'utf8')
     const parsed = JSON.parse(contents) as { provider?: unknown }
@@ -25,6 +25,17 @@ export async function getConfiguredProvider(): Promise<ProviderSelection> {
   } catch {
     return getDefaultProvider()
   }
+}
+
+// A provider turned off in the plugin manager cannot stay selected: the choice
+// moves to the first provider still on, without rewriting the saved file, so
+// turning the provider back on restores it.
+export async function getConfiguredProvider(): Promise<ProviderSelection> {
+  const stored = await readStoredProvider()
+  if (stored === 'all') return stored
+  const instances = await listProviderInstances()
+  if (instances.some(instance => instance.provider === stored)) return stored
+  return instances[0]?.provider ?? stored
 }
 
 export type ConfiguredProviderTarget = {

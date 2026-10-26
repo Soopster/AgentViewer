@@ -82,7 +82,7 @@
     "composer:concurrency:smoke": "bun run ./scripts/composerSessionIsolationSmoke.ts && bun run ./tui/opentui/equalPanesSmoke.tsx",
     "composer:web:smoke": "node ./scripts/webComposerConcurrencySmoke.mjs",
     "plugins:contributor:smoke": "node ./scripts/pluginPanelContributorSmoke.mjs",
-    "plugins:smoke": "bun run ./scripts/pluginDeactivationSmoke.ts && bun run ./scripts/sessionRuntimeIsolationSmoke.ts && bun run ./scripts/pluginHostSmoke.ts && bun run ./scripts/pluginBoundarySmoke.ts && bun run ./scripts/tuiWorkerEntrypointsSmoke.ts && bun run ./tui/opentui/pluginHostSmoke.tsx",
+    "plugins:smoke": "bun run ./scripts/providerPluginSmoke.ts && bun run ./scripts/pluginDeactivationSmoke.ts && bun run ./scripts/sessionRuntimeIsolationSmoke.ts && bun run ./scripts/pluginHostSmoke.ts && bun run ./scripts/pluginBoundarySmoke.ts && bun run ./scripts/tuiWorkerEntrypointsSmoke.ts && bun run ./tui/opentui/pluginHostSmoke.tsx",
     "providers:scaffold": "node ./scripts/scaffoldProviderExtension.mjs",
     "providers:extensions:smoke": "bun run ./scripts/providerExtensionSmoke.mjs && node ./scripts/providerExtensionContributorSmoke.mjs && bun run ./scripts/providerRuntimeBoundarySmoke.mjs",
     "adapters:smoke": "bun run ./scripts/adapterReadSweep.ts",

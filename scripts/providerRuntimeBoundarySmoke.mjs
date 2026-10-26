@@ -29,7 +29,7 @@ for (const [provider, allowed] of Object.entries(providers)) {
     console.log(JSON.stringify({ provider: ${JSON.stringify(provider)}, loadedSdkPackages: loaded() }))
     process.exit(0)
   `
-  const result = spawnSync('bun', ['-e', script], { cwd: root, encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024 })
+  const result = spawnSync('bun', ['-e', script], { cwd: root, env: { ...process.env, AGENT_VIEWER_PLUGIN_SETTINGS: path.join(root, 'node_modules', '.no-plugin-settings.json') }, encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024 })
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)
   if (result.error) throw result.error

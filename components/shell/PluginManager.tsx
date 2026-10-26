@@ -8,6 +8,7 @@ import { Puzzle, X } from 'lucide-react'
 import { PLUGIN_MANIFESTS } from '@/lib/plugins/catalog'
 import { applyPluginSettings, decodePluginSettings } from '@/lib/plugins/enablement'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
+import { PROVIDER_PLUGINS, type ProviderPlugin } from '@/lib/plugins/providerPlugins'
 import type { PluginManifest } from '@/lib/plugins/types'
 import { readJsonResponse } from '@/lib/httpResponse'
 
@@ -27,7 +28,7 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [open, onClose])
 
-  const toggle = useCallback(async (manifest: PluginManifest, enabled: boolean) => {
+  const toggle = useCallback(async (manifest: { id: string }, enabled: boolean) => {
     setSaving(manifest.id)
     setError(null)
     try {
@@ -63,7 +64,7 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
           <button type="button" aria-label="Close" onClick={onClose} style={{ color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}><X size={16} /></button>
         </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 8, overflowY: 'auto' }}>
-          {(PLUGIN_MANIFESTS as readonly PluginManifest[]).map((manifest) => {
+          {[...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...PROVIDER_PLUGINS].map((manifest: PluginManifest | ProviderPlugin) => {
             const enabled = !disabled.has(manifest.id)
             const switchId = `plugin-switch-${manifest.id}`
             return (
@@ -72,8 +73,9 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
                   <label htmlFor={switchId} style={{ fontWeight: 600, color: enabled ? 'var(--text)' : 'var(--text-2)', cursor: 'pointer' }}>{manifest.title}</label>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{manifest.description}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-3, var(--text-2))', marginTop: 4 }}>
-                    {manifest.renderers.map(renderer => RENDERER_LABELS[renderer]).join(' · ')}
-                    {manifest.commands.length ? ` · ${manifest.commands.map(command => command.label).join(', ')}` : ''}
+                    {'renderers' in manifest
+                      ? `${manifest.renderers.map(renderer => RENDERER_LABELS[renderer]).join(' · ')}${manifest.commands.length ? ` · ${manifest.commands.map(command => command.label).join(', ')}` : ''}`
+                      : 'Provider'}
                   </div>
                 </div>
                 <button

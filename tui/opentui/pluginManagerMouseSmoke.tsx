@@ -9,6 +9,7 @@ import { DARK_THEME } from '../theme'
 process.chdir(mkdtempSync(join(tmpdir(), 'plugins-mouse-')))
 const { PluginManagerPopover } = await import('./PluginManagerPopover')
 const { PLUGIN_MANIFESTS } = await import('../../lib/plugins/catalog')
+const { PROVIDER_PLUGINS } = await import('../../lib/plugins/providerPlugins')
 const { isPluginEnabled } = await import('../../lib/plugins/enablement')
 for (const width of [52, 90]) {
   let key!: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void
@@ -26,7 +27,7 @@ for (const width of [52, 90]) {
     assert.ok(list().scrollTop > start, 'wheel moves through plugins')
     await act(async () => { key({ name: 'end', sequence: '', ctrl: false, shift: false }) })
     await settle()
-    assert.ok(setup.captureCharFrame().includes(PLUGIN_MANIFESTS.at(-1)!.title), 'keyboard reveals final plugin')
+    assert.ok(setup.captureCharFrame().includes(PROVIDER_PLUGINS.at(-1)!.title), 'keyboard reveals final row')
     assert.ok(setup.captureCharFrame().includes('esc close'), 'footer stays visible')
     await act(async () => { key({ name: 'home', sequence: '', ctrl: false, shift: false }) })
     await settle()

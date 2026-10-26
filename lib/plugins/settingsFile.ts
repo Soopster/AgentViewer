@@ -8,6 +8,9 @@ import { decodePluginSettings, DEFAULT_PLUGIN_SETTINGS, type PluginSettings } fr
 
 /** Resolved per call: smokes and the TUI chdir into a workspace after loading modules. */
 export function pluginSettingsPath(): string {
+  // Smokes that exercise every provider point this at an empty file, so a
+  // user's own switches do not change what they test.
+  if (process.env.AGENT_VIEWER_PLUGIN_SETTINGS) return process.env.AGENT_VIEWER_PLUGIN_SETTINGS
   return path.join(process.cwd(), '.agent-viewer-data', 'plugins.json')
 }
 
