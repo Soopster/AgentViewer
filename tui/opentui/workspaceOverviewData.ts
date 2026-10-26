@@ -10,7 +10,7 @@ export type OverviewWindow = { key: string; title: string; detail: string; hidde
 export type OverviewNode = { id: string; title: string; detail: string; spaceId: string; workspaceId?: string; target?: string; children: OverviewNode[] }
 export type OverviewRow = OverviewNode & { depth: number; parent?: string; matched: boolean }
 
-const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'workspaceHasSession', 'windowZoom'] as const
+const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'windowSurfaceMeta', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'workspaceHasSession', 'windowZoom'] as const
 export function subscribeWorkspaceOverview(controller: SpacesController, listener: () => void): () => void {
   let active = true, queued = false
   const changed = () => {

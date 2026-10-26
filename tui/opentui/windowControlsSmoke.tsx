@@ -93,7 +93,7 @@ const frame = (id: string): Frame | null => {
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
 // Visible panes only: a zoom hides the others but keeps them mounted.
-const panes = () => [0, 1, 2, 3, 4].map((index) => {
+const panes = () => [0, 1, 2, 3, 4, 5].map((index) => {
   const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null
   return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }).filter((box): box is Frame => box !== null)
@@ -123,7 +123,7 @@ const { readAllScreenText } = await import('../../plugins/terminal/tui/shellScre
 const chordKey = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
   await settle(60)
-  await act(async () => { setup.mockInput.pressKey(/^[0-8]$/.test(key) ? String(Number(key) + 1) : key) })
+  await act(async () => { setup.mockInput.pressKey(key) })
   await settle(200)
 }
 const paneHas = (index: number, text: string) => {
@@ -157,15 +157,15 @@ await settle(2500)
 await openMenu()
 const six = frame('window-layout:grid-six')!
 await click(six.x + 3, six.y + 1)
-await waitFor('five panes', () => panes().length === 5)
-await waitFor('pane transcripts', () => [0, 1, 2, 3, 4].every(index => paneName(index) !== null))
+await waitFor('six panes', () => panes().length === 6)
+await waitFor('pane transcripts', () => [0, 1, 2, 3, 4, 5].every(index => paneName(index) !== null))
 const portable = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey('k', { ctrl: true }) })
   await settle(40)
   await act(async () => { setup.mockInput.pressKey(key) })
   await settle(160)
 }
-const key = async (value: string) => { await act(async () => { setup.mockInput.pressKey(/^[0-8]$/.test(value) && !promptActive ? String(Number(value) + 1) : value) }); await settle(120) }
+const key = async (value: string) => { await act(async () => { setup.mockInput.pressKey(value) }); await settle(120) }
 const escape = async () => { await act(async () => { setup.mockInput.pressEscape() }); await settle(120) }
 const menuPick = async (label: string) => { const point = locate(label, frame('context-menu')!); await click(point.x + 1, point.y) }
 const guide = () => setup.captureCharFrame().includes('MANAGE WINDOWS')
@@ -193,8 +193,8 @@ await portable('q')
 await waitFor('reader identification', () => !!frame('window-control:1'))
 check([2, 3, 4, 5, 6].every(number => !!frame(`window-control:${number}`)), 'visible panes lack identification')
 const identified = frame('window-control:4')!
-check(identified.width === frame('split-pane:2')!.width, 'identification changed pane geometry')
-await key('3')
+check(identified.width === frame('split-pane:3')!.width, 'identification changed pane geometry')
+await key('4')
 check(!frame('window-control:1'), 'identification did not dismiss on selection')
 await portable('w')
 check(guide(), 'portable management command did not enter the mode')
@@ -205,16 +205,16 @@ await key('u')
 check(geometry() === before, 'one undo did not restore the grouped resize')
 check(guide(), 'undo exited management mode')
 // Other layout changes break the resize undo group.
-await key(']'); await key('0'); await key('>'); await key('u')
+await key(']'); await key('1'); await key('>'); await key('u')
 check(geometry() !== before, 'undo crossed a focus change and erased the earlier resize')
 await key('u')
 check(geometry() === before, 'second undo did not restore the earlier resize')
-await key('3')
-const swapRects = [frame('split-pane:2'), frame('split-pane:3')]
+await key('4')
+const swapRects = [frame('split-pane:3'), frame('split-pane:4')]
 await act(async () => { setup.mockInput.pressArrow('right', { shift: true }) }); await settle(200)
-check(JSON.stringify(frame('split-pane:2')) === JSON.stringify(swapRects[1]) && JSON.stringify(frame('split-pane:3')) === JSON.stringify(swapRects[0]), 'management swap did not exchange the adjacent windows')
+check(JSON.stringify(frame('split-pane:3')) === JSON.stringify(swapRects[1]) && JSON.stringify(frame('split-pane:4')) === JSON.stringify(swapRects[0]), 'management swap did not exchange the adjacent windows')
 await key('u')
-await key('3'); await key(']'); await key('>'); await key('+'); await key('=')
+await key('4'); await key(']'); await key('>'); await key('+'); await key('=')
 check(geometry() === before, 'equalize did not reset all pane weights and dividers')
 await escape()
 check(!guide(), 'Escape failed to end management')
@@ -232,8 +232,8 @@ checkMenuAnchor(button)
 await menuPick('Zoom window')
 check(paneName(1) === secondName && frame('split-pane:1')!.width > secondWidth, 'menu zoom missed its target')
 await portable('q')
-await waitFor('zoomed identification', () => !!frame('window-control:3'))
-check(!frame('window-control:1') && !frame('window-control:2') && !frame('window-control:4'), 'identification includes zoom-hidden windows')
+await waitFor('zoomed identification', () => !!frame('window-control:2'))
+check(!frame('window-control:1') && !frame('window-control:3') && !frame('window-control:4'), 'identification includes zoom-hidden windows')
 await escape()
 await portable('w'); await key('m'); await escape()
 await portable('q')
@@ -273,7 +273,7 @@ await act(async () => { setup.resize(220, 46) }); await settle(200)
 await chordKey('1'); await chordKey('f')
 await waitFor('floating window', () => !!frame('floating-window'))
 await portable('q')
-const floatingNumber = panes().length + 2
+const floatingNumber = panes().length + 1
 await waitFor('floating identification', () => !!frame(`window-control:${floatingNumber}`))
 check(frame(`window-control:${floatingNumber}`)!.width === frame('floating-window')!.width, 'floating identification uses a docked frame')
 await act(async () => { setup.mockInput.pressKey(String(floatingNumber)) }); await settle(120)
@@ -286,7 +286,7 @@ for (let count = panes().length; count > 1; count--) { await chordKey(String(cou
 await openMenu()
 const two = frame('window-layout:two')!
 await click(two.x + 3, two.y + 1)
-await portable('q'); await key('0')
+await portable('q'); await key('1')
 await act(async () => { setup.mockInput.pressKey('O', { shift: true }) }); await settle(300)
 const terminalTab = locate(' Terminal', frame('surface-panel-frame')!)
 await click(terminalTab.x + 2, terminalTab.y)
@@ -328,7 +328,7 @@ await click(browserMenuButton.x, browserMenuButton.y)
 checkMenuAnchor(browserMenuButton)
 await escape()
 // An arriving permission must end management and retain keyboard priority.
-await portable('q'); await key('0'); await portable('w')
+await portable('q'); await key('1'); await portable('w')
 promptActive = true
 await waitFor('permission interrupts management', () => !!frame('permission-prompt') && !guide())
 await portable('w'); check(!guide(), 'window controls took priority over the permission')

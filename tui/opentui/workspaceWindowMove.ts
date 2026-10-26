@@ -45,7 +45,11 @@ export function moveWorkspaceWindow(controller: SpacesController, sourceId: stri
   const moved = new Set(members)
   const sourceSessions = read(source, 'openTabSessions', [] as Session[])
   const readerSession = read(source, 'readerSession', null as Session | null)
-  const sessions = [...sourceSessions, ...(readerSession ? [readerSession] : [])].filter(session => moved.has(sessionKey(session)))
+  // The selected transcript is also an ordinary open tab. Reader metadata is
+  // only a fallback for restored workspaces, not another tab to transfer.
+  const sessions = [...new Map([...(readerSession ? [readerSession] : []), ...sourceSessions]
+    .filter(session => moved.has(sessionKey(session)))
+    .map(session => [sessionKey(session), session])).values()]
   if (members.some(member => !isSurfaceWindowKey(member) && !sessions.some(session => sessionKey(session) === member))) throw new Error('Session information is not available yet')
   const destinationStacks = read(destination, 'windowStacks', [] as string[][])
   const destinationFloating = read(destination, 'floatingWindow', null as { key: string } | null)

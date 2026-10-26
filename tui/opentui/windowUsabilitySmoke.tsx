@@ -96,7 +96,7 @@ const frame = (id: string): Frame | null => {
   return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }
 // Visible panes only: a zoom hides the others but keeps them mounted.
-const panes = () => [0, 1, 2, 3, 4].map((index) => {
+const panes = () => [0, 1, 2, 3, 4, 5].map((index) => {
   const box = setup.renderer.root.findDescendantById(`split-pane:${index}`) as unknown as (Frame & { visible?: boolean }) | null
   return box && box.visible !== false ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
 }).filter((box): box is Frame => box !== null)
@@ -165,31 +165,36 @@ const portable = async (value: string) => {
 const pickLayout = async (name: string) => { await openMenu(); const rect = frame(`window-layout:${name}`)!; await click(rect.x + 2, rect.y + 1) }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 await pickLayout('grid-six')
-await waitFor('all session tabs', () => panes().length === 5 && [0, 1, 2, 3, 4].every(index => paneName(index) !== null))
-await pickLayout('fill')
-await waitFor('reader only', () => panes().length === 0)
+await waitFor('all session tabs', () => panes().length === 6 && [0, 1, 2, 3, 4, 5].every(index => paneName(index) !== null))
+// Fill now zooms a window without discarding its neighbours. Close the other
+// frames explicitly to exercise adding fresh splits from one ordinary window.
+for (let number = 6; number > 1; number--) {
+  await chordKey(String(number)); await chordKey('x')
+}
+await chordKey('1')
+await waitFor('one window', () => panes().length === 1)
 await chordKey('%')
-await waitFor('first split', () => panes().length === 1)
-const reader = frame('transcript-reader')!
-const right = frame('split-pane:0')!
+await waitFor('first split', () => panes().length === 2)
+const reader = frame('split-pane:0')!
+const right = frame('split-pane:1')!
 await chordKey('"')
-await waitFor('local stacked split', () => panes().length === 2)
-check(same(frame('transcript-reader'), reader), 'splitting the right pane rearranged the reader')
-const top = frame('split-pane:0')!, bottom = frame('split-pane:1')!
+await waitFor('local stacked split', () => panes().length === 3)
+check(same(frame('split-pane:0'), reader), 'splitting the right pane rearranged the reader')
+const top = frame('split-pane:1')!, bottom = frame('split-pane:2')!
 check(top.x === right.x && bottom.x === right.x && top.width === right.width && bottom.width === right.width && top.y + top.height === bottom.y && bottom.y + bottom.height === right.y + right.height, 'stacked children do not tile the focused pane')
 
 // Close and recover a pane independently of other layout edits.
 const workspace = controller!.activeWorkspace()!
 const runtime = controller!.runtime(workspace)
-const closedName = paneName(1)!
+const closedName = paneName(2)!
 const original = JSON.stringify([frame('transcript-reader'), ...panes()])
 await chordKey('x')
-await waitFor('pane closed', () => panes().length === 1)
+await waitFor('pane closed', () => panes().length === 2)
 await chordKey('X')
-await waitFor('pane reopened', () => panes().length === 2 && paneName(1) === closedName)
+await waitFor('pane reopened', () => panes().length === 3 && paneName(2) === closedName)
 check(JSON.stringify([frame('transcript-reader'), ...panes()]) === original, 'reopen lost the original nested position')
-await chordKey('u'); await waitFor('reopen undone', () => panes().length === 1)
-await chordKey('U'); await waitFor('reopen redone', () => panes().length === 2)
+await chordKey('u'); await waitFor('reopen undone', () => panes().length === 2)
+await chordKey('U'); await waitFor('reopen redone', () => panes().length === 3)
 // Previous-pane toggles between two panes, rather than always through the reader.
 await chordKey('1'); await chordKey('2'); await chordKey(';')
 check(runtime.values.get('splitFocusIndex') === 0, 'previous pane did not return to pane 1')
@@ -203,29 +208,29 @@ const drag = async (from: { x: number; y: number }, to: { x: number; y: number }
   await settle(100); checkPreview?.()
   await act(async () => { await setup.mockMouse.release(to.x, to.y) }); await settle(250)
 }
-const movingName = paneName(0)!, from = frame('split-pane:0')!, target = frame('split-pane:1')!
+const movingName = paneName(1)!, from = frame('split-pane:1')!, target = frame('split-pane:2')!
 let preview: Frame | null = null
 await drag({ x: from.x + 5, y: from.y }, { x: target.x + 2, y: target.y + Math.floor(target.height / 2) }, () => {
   preview = frame('window-drop-zone')
   check(preview, 'nested edge drag omitted its preview')
 })
-const movingIndex = [0, 1].find(index => paneName(index) === movingName)!
+const movingIndex = [0, 1, 2].find(index => paneName(index) === movingName)!
 check(same(frame(`split-pane:${movingIndex}`), preview), 'edge drop did not match its exact preview')
 // Centre drops group the windows as tabs.
-const a = frame('split-pane:0')!, b = frame('split-pane:1')!
+const a = frame('split-pane:1')!, b = frame('split-pane:2')!
 await drag({ x: a.x + 5, y: a.y }, { x: b.x + Math.floor(b.width / 2), y: b.y + Math.floor(b.height / 2) })
-await waitFor('centre drop creates tabs', () => panes().length === 1 && (runtime.values.get('windowStacks') as string[][]).length === 1)
+await waitFor('centre drop creates tabs', () => panes().length === 2 && (runtime.values.get('windowStacks') as string[][]).length === 1)
 // Move that entire tabbed window using the title menu.
 let destination: typeof workspace | null = null
 await act(async () => { destination = controller!.addWorkspace(controller!.activeSpace()!.id) }); await settle(300)
 await act(async () => { controller!.rename(destination!.id, 'Destination'); controller!.activate(controller!.activeSpace()!.id, workspace.id) }); await settle(400)
-await chordKey('1'); await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(60); await act(async () => { setup.mockInput.pressEnter() }); await settle(200)
+await chordKey('2'); await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(60); await act(async () => { setup.mockInput.pressEnter() }); await settle(200)
 await waitFor('pane menu', () => !!frame('context-menu'))
 const moveAction = locate('Move to workspace…'); await click(moveAction.x + 2, moveAction.y)
 await waitFor('destination picker', () => setup.captureCharFrame().includes('/ Destination'))
 const option = locate('/ Destination'); await click(option.x + 2, option.y)
 await waitFor('window moved', () => controller!.activeWorkspace()!.id === destination!.id && panes().length === 1)
-check((runtime.values.get('splitPinnedKeys') as string[]).length === 0, 'source kept the moved pane')
+check((runtime.values.get('splitPinnedKeys') as string[]).length === 1, 'source lost the independent window or kept the moved pane')
 const destinationRuntime = controller!.runtime(destination!)
 check((destinationRuntime.values.get('windowStacks') as string[][]).length === 1, 'move lost the window tabs')
 // Recent windows crosses workspace boundaries.
@@ -245,17 +250,18 @@ for (let i = 0; i < tabIndex; i++) await key('down')
 await act(async () => { setup.mockInput.pressKey('w', { ctrl: true }) }); await settle(200)
 check(setup.captureCharFrame().includes('Move to workspace…'), 'overview move shortcut did not open the picker')
 await act(async () => { setup.mockInput.pressEnter() }); await settle(350)
-await waitFor('single tab moved back', () => controller!.activeWorkspace()!.id === workspace.id && panes().length === 1)
+await waitFor('single tab moved back', () => controller!.activeWorkspace()!.id === workspace.id && panes().length === 2)
 check((destinationRuntime.values.get('windowStacks') as string[][]).length === 0, 'moving a tab retained a stale group')
-check((runtime.values.get('splitPinnedKeys') as string[]).length === 1, 'moving one tab moved the entire group')
+check((runtime.values.get('splitPinnedKeys') as string[]).length === 2, 'moving one tab moved the entire group')
+check((runtime.values.get('openTabSessions') as Session[]).filter(session => session.sessionId === `win-${movingName}`).length === 1, 'moving the selected transcript back duplicated its workspace tab')
 // A floating window also docks into a nested edge using the exact preview.
-await chordKey('1'); await chordKey('f')
-await waitFor('pane floated', () => !!frame('floating-window') && panes().length === 0)
-const floating = frame('floating-window')!, readerTarget = frame('transcript-reader')!
+await chordKey('2'); await chordKey('f')
+await waitFor('pane floated', () => !!frame('floating-window') && panes().length === 1)
+const floating = frame('floating-window')!, readerTarget = frame('split-pane:0')!
 let floatPreview: Frame | null = null
-await drag({ x: floating.x + 5, y: floating.y }, { x: readerTarget.x + Math.floor(readerTarget.width / 2), y: readerTarget.y + readerTarget.height - 2 }, () => { floatPreview = frame('float-dock-zone') })
-await waitFor('floating pane split-docked', () => !frame('floating-window') && panes().length === 1)
-check(same(frame('split-pane:0'), floatPreview), 'floating drop did not match its preview')
+await drag({ x: floating.x + 5, y: floating.y }, { x: readerTarget.x + Math.floor(readerTarget.width / 2), y: readerTarget.y + readerTarget.height - 1 }, () => { floatPreview = frame('float-dock-zone') })
+await waitFor('floating pane split-docked', () => !frame('floating-window') && panes().length === 2)
+check(same(frame(`split-pane:${[0, 1].find(index => paneName(index) === movingName)}`), floatPreview), 'floating drop did not match its preview')
 // Closing a terminal view keeps its process and reopens the same selection.
 const terminalKey = 'surface:terminal'
 await act(async () => { runtime.set('windowSurfaces', ['terminal']); runtime.set('windowOrder', [...(runtime.values.get('windowOrder') as string[]), terminalKey]) }); await settle(400)
