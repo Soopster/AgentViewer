@@ -5836,6 +5836,13 @@ function MessageViewInner({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing || isComposingRef.current) return
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b'
+      && session?.provider === 'claude' && (sendState === 'sending' || reattachedRunning)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!e.repeat) void backgroundClaudeTasks()
+      return
+    }
     if (mentionQuery && mentionResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -5968,7 +5975,7 @@ function MessageViewInner({
       })
       return
     }
-  }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand, inputTextRef, textareaRef, setInputText, setAttachments])
+  }, [backgroundClaudeTasks, session?.provider, sendState, reattachedRunning, sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand, inputTextRef, textareaRef, setInputText, setAttachments])
 
   const handleExport = useCallback(async () => {
     if (!session) return
@@ -6941,6 +6948,10 @@ function MessageViewInner({
     ? 'Retrying after a transient error…'
     : liveStatus === 'compacting'
     ? 'Compacting conversation to free up context…'
+    : session?.provider === 'claude' && liveToolActivities.some(activity => activity.status === 'running'
+      && /^(Bash|Agent|Task)$/.test(activity.toolUse?.name ?? activity.label)
+      && activity.toolUse?.input?.run_in_background !== true)
+    ? 'Command running · Ctrl+B in composer to run in background'
     : activeToolCount > 0
     ? `Turn running; using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}.`
     : liveStatus === 'requesting' && !liveAssistantText.trim()
@@ -10375,7 +10386,7 @@ function MessageViewInner({
                       disabled={backgroundingTasks}
                       variant="outline"
                       aria-label="Move Claude task to background"
-                      title="Move Claude task to background"
+                      title="Move Claude task to background (Ctrl+B)"
                       style={{
                         width: 34,
                         height: 34,

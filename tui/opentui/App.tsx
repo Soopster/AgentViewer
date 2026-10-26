@@ -13028,6 +13028,9 @@ function OpenTuiWorkspace() {
     () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
     [liveToolActivities],
   )
+  const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
+    && composerSendState === 'sending'
+    && liveToolActivities.some(activity => activity.status === 'running' && /^(Bash|Agent|Task)$/.test(activity.label))
   const composerActivityVisible = Boolean(
     composerActivitySessionKey
     && selectedSessionIdentity === composerActivitySessionKey,
@@ -13206,6 +13209,7 @@ function OpenTuiWorkspace() {
     // entire turn, not just the pre-output window).
     // Embedded composers own a compact status row in the reader, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
+    if (composerActivityVisible && canBackgroundClaudeCommand) rows += 1
     if (visibleComposerSending && !embeddedComposer) rows += 2
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
@@ -23477,6 +23481,12 @@ function OpenTuiWorkspace() {
       return
     }
 
+    // Handle Claude's native shortcut before the window chord and textarea.
+    if (composerActive && isCtrl('b') && composerTargetSession?.provider === 'claude'
+      && (composerSendState === 'sending' || reattachedRunning)) {
+      handled(() => { if (!isKeyRepeat) void backgroundComposerTasks() })
+      return
+    }
     if (composerActive && composerSendState !== 'sending' && isCtrl('b')) { handled(() => setSplitChordPending(true)); return }
     if (isCtrlShift('v') && composerActive && !isKeyRepeat) {
       handled(() => toggleVoice())
@@ -24405,15 +24415,6 @@ function OpenTuiWorkspace() {
             }, 5000)
           }
         })
-        return
-      }
-      if (isCtrl('b') && composerSendState === 'sending' && composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0) {
-        if (isKeyRepeat) {
-          key.preventDefault()
-          key.stopPropagation()
-          return
-        }
-        handled(() => { void backgroundComposerTasks() })
         return
       }
       if (isCtrl('o')) {
@@ -28356,6 +28357,12 @@ function OpenTuiWorkspace() {
           <text fg={theme.muted} wrapMode="none">
             {fitText('● Open in another Codex client — transcript will lag until that turn finishes', Math.max(width - 6, 16))}
           </text>
+        </box>
+      ) : null}
+
+      {composerActivityVisible && canBackgroundClaudeCommand ? (
+        <box height={1} flexShrink={0} paddingX={1} backgroundColor={theme.surface2}>
+          <text fg={theme.muted} wrapMode="none">Ctrl+B in composer to run in background</text>
         </box>
       ) : null}
 
