@@ -1738,17 +1738,23 @@ type InlineTextSegment = {
 
 /** The action of the segment under a column of a row drawn by renderInlineTextSegments. */
 export function inlineSegmentActionAt(segments: readonly InlineTextSegment[], width: number, column: number): ComposerStatusAction | undefined {
+  const index = inlineSegmentIndexAt(segments, width, column)
+  return index === null ? undefined : segments[index]?.action
+}
+
+/** The index of the segment drawn under a column, or null past the drawn text. */
+export function inlineSegmentIndexAt(segments: readonly InlineTextSegment[], width: number, column: number): number | null {
   let start = 0
   let remaining = width
-  for (const segment of segments) {
+  for (let index = 0; index < segments.length; index += 1) {
     if (remaining <= 0) break
-    const length = clipText(segment.text, remaining).length
+    const length = clipText(segments[index]!.text, remaining).length
     if (length === 0) continue
-    if (column >= start && column < start + length) return segment.action
+    if (column >= start && column < start + length) return index
     start += length
     remaining -= length
   }
-  return undefined
+  return null
 }
 
 function composerSendingHintSegments(value: string, theme: TuiThemePalette): InlineTextSegment[] {
@@ -1822,7 +1828,7 @@ function wrapLivePreviewTail(value: string, width: number, maxLines: number): st
   return wrapped.slice(-maxLines)
 }
 
-function renderInlineTextSegments(segments: InlineTextSegment[], width: number, padFg: string): React.ReactNode[] {
+function renderInlineTextSegments(segments: InlineTextSegment[], width: number, padFg: string, hover?: { index: number; bg: string } | null): React.ReactNode[] {
   if (width <= 0) return []
   const out: React.ReactNode[] = []
   let remaining = width
@@ -1832,7 +1838,18 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
     if (!segment?.text) continue
     const clipped = clipText(segment.text, remaining)
     if (!clipped) continue
-    out.push(<span key={i} fg={segment.fg} bg={segment.bg} attributes={segment.attributes}>{clipped}</span>)
+    if (segment.action) {
+      // A click target is underlined, but not the padding around its label.
+      const label = clipped.trim()
+      const start = clipped.indexOf(label)
+      // Under the pointer the label takes a raised background, so it reads as a button.
+      const labelBg = hover?.index === i ? hover.bg : segment.bg
+      if (start > 0) out.push(<span key={`${i}a`} fg={segment.fg} bg={segment.bg}>{clipped.slice(0, start)}</span>)
+      out.push(<span key={i} fg={segment.fg} bg={labelBg} attributes={(segment.attributes ?? 0) | TextAttributes.UNDERLINE}>{label}</span>)
+      if (start + label.length < clipped.length) out.push(<span key={`${i}b`} fg={segment.fg} bg={segment.bg}>{clipped.slice(start + label.length)}</span>)
+    } else {
+      out.push(<span key={i} fg={segment.fg} bg={segment.bg} attributes={segment.attributes}>{clipped}</span>)
+    }
     remaining -= clipped.length
   }
   if (remaining > 0) {
@@ -15919,6 +15936,12 @@ function OpenTuiWorkspace() {
   // A click on the composer's status row acts on the segment under the pointer:
   // model and effort open the model picker, the folder shows its full path, and
   // the branch and change counts open the Git view for the composer's session.
+  const [composerStatusHover, setComposerStatusHover] = useState<{ site: 'chat' | 'dock'; index: number } | null>(null)
+  const hoverComposerStatus = useStableEvent((site: 'chat' | 'dock', event: { x: number; currentTarget: { x: number } | null }, segments: InlineTextSegment[], width: number) => {
+    const index = inlineSegmentIndexAt(segments, width, event.x - (event.currentTarget?.x ?? 0))
+    const next = index !== null && segments[index]?.action ? { site, index } : null
+    setComposerStatusHover(current => current?.site === next?.site && current?.index === next?.index ? current : next)
+  })
   const clickComposerStatus = useStableEvent((event: { button: number; x: number; currentTarget: { x: number } | null; stopPropagation: () => void }, segments: InlineTextSegment[], width: number) => {
     if (event.button !== 0) return
     const action = inlineSegmentActionAt(segments, width, event.x - (event.currentTarget?.x ?? 0))
@@ -26280,11 +26303,11 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsSegments, chatComposerStatsWidth) }}>
+            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsSegments, chatComposerStatsWidth) }} onMouseMove={event => { if (!composerSlashHint) hoverComposerStatus('chat', event, composerDockStatsSegments, chatComposerStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
               <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {composerSlashHint
                   ? fitText(composerSlashHint, chatComposerStatsWidth)
-                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim)}
+                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim, composerStatusHover?.site === 'chat' ? { index: composerStatusHover.index, bg: theme.surface3 } : null)}
               </text>
             </box>
             <box flexGrow={1} />
@@ -28564,7 +28587,7 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsSegments, composerDockFooterStatsWidth) }}>
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsSegments, composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsSegments, composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
@@ -28572,6 +28595,7 @@ function OpenTuiWorkspace() {
                     dockFooterStatsSegments,
                     composerDockFooterStatsWidth,
                     theme.dim,
+                    composerStatusHover?.site === 'dock' ? { index: composerStatusHover.index, bg: theme.surface3 } : null,
                   )}
               </text>
             </box>
