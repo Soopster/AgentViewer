@@ -21,6 +21,7 @@ export type TuiPluginCapture = boolean | 'input' | 'terminal'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
+  'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {
     readonly detail: TuiSessionDetail | null
     readonly status: 'loading' | 'ready' | 'error' | 'gone'

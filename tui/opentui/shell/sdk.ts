@@ -14,3 +14,5 @@ export { getProviderAccent } from '../../theme'
 export { fitText } from '../textLayout'
 export { isCtrlKey, isShiftedKey } from '../shortcutKeys'
 export { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalBrowserEnabled } from '../terminalBrowser'
+
+export { createPluginResourceScope } from '../../../lib/plugins/lifecycle'

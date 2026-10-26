@@ -25,6 +25,7 @@ const SESSIONS: Session[] = NAMES.map((name, index) => ({
   sessionId: `win-${name}`, provider: 'claude', cwd: CWD, summary: `Win ${name}`, firstPrompt: `Win ${name}`, lastModified: 1_700_000_000_000 - index * 1000,
 }))
 const broadcastSends: Array<{ session: Session; body: Record<string, unknown> }> = []
+const heldTurns = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
 let promptActive = false
 let permissionResponses = 0
 const running = () => promptActive ? [{
@@ -45,7 +46,17 @@ const detailFor = (session: Session) => ({
   transcriptCardsDensity: 'balanced' as const, transcriptCardsShowToolCalls: true, contextUsage: null,
 })
 const detailClient = await import('./sessionDetailWorkerClient')
-mock.module('./sessionDetailWorkerClient', () => ({ ...detailClient, readTuiSessionsAsync: async () => SESSIONS.map((session) => ({ ...session })), readTuiSessionDetailAsync: async (session: Session) => detailFor(session) }))
+const subagentReads: Array<{ parent: string; agent: string }> = []
+mock.module('./sessionDetailWorkerClient', () => ({ ...detailClient,
+  readTuiSessionsAsync: async () => SESSIONS.map((session) => ({ ...session })),
+  readTuiSessionDetailAsync: async (session: Session) => detailFor(session),
+  readTuiSubagentSummariesAsync: async (session: Session) => session.sessionId === 'win-alpha' ? [{ agentId: 'captured-child', provider: session.provider, taskDescription: 'Captured child transcript', messageCount: 2, usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0 } }] : [],
+  readTuiSubagentTranscriptAsync: async (session: Session, agent: string) => {
+    subagentReads.push({ parent: session.sessionId, agent })
+    const lines = [{ text: 'CAPTURED SUBAGENT BODY', tone: 'default' as const }]
+    return [{ ...card(session), key: 'captured-child-card', label: 'Captured child', lines, expandedLines: lines }]
+  },
+}))
 const threadingClient = await import('./threadingWorkerClient')
 mock.module('./threadingWorkerClient', () => ({ ...threadingClient, getTranscriptCardsSync: (session: Session) => cardsFor(session), formatTranscriptCardsAsync: async (session: Session) => cardsFor(session) }))
 const metadataClient = await import('./metadataWorkerClient')
@@ -63,8 +74,16 @@ mock.module('../../lib/tui/service', () => ({
     if (body.action === 'respondPermission') { permissionResponses++; promptActive = false }
     return {}
   },
-  streamTuiSessionTurn: async (session: Session, body: Record<string, unknown>) => {
+  streamTuiSessionTurn: async (session: Session, body: Record<string, unknown>, signal: AbortSignal) => {
     broadcastSends.push({ session: { ...session }, body })
+    const message = String(body.message)
+    if (message.startsWith('concurrent:')) {
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        heldTurns.set(message, controller)
+        controller.enqueue(new TextEncoder().encode('event: turn-accepted\ndata: {}\n\n'))
+        signal.addEventListener('abort', () => { heldTurns.delete(message); controller.error(new DOMException('Stopped', 'AbortError')) }, { once: true })
+      } }))
+    }
     return new Response('event: turn-accepted\ndata: {}\n\n')
   },
 }))
@@ -73,7 +92,7 @@ const store = await import('./spacesStore')
 let controller: InstanceType<typeof store.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...store, SpacesController: class extends store.SpacesController { constructor() { super(); controller = this } } }))
 const { default: OpenTuiApp } = await import('./App')
-const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
+const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, exitOnCtrlC: false, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
 }
@@ -192,6 +211,59 @@ check(runtime.values.get('composerPaneTargetKey') === `claude:win-${secondName}`
 await act(async () => { runtime.set('windowSurfaces', ['browser']); runtime.set('windowOrder', [...(runtime.values.get('windowOrder') as string[]), 'surface:browser']) }); await settle(300)
 await chordKey('3')
 check(runtime.values.get('composerPaneTargetKey') === `claude:win-${secondName}`, 'browser focus retargeted the composer')
+// Submit through the real textarea after changing the active window.
+for (const [number, name] of [['1', firstName], ['2', secondName]] as const) {
+  await chordKey(number)
+  await act(async () => { runtime.set('composerActive', true) })
+  await settle(120)
+  const text = `Message for activated ${name}`
+  await act(async () => { await setup.mockInput.typeText(text) })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('message sent to activated window', () => broadcastSends.some(send => send.body.message === text))
+  const sent = broadcastSends.find(send => send.body.message === text)!
+  check(sent.session.sessionId === `win-${name}`, `composer sent ${text} to ${sent.session.sessionId}`)
+  await escape()
+}
+// Hold two provider streams open: sends and follow-up queues are session-owned.
+const sendConcurrent = async (number: string, text: string) => {
+  const target = frame(`split-pane:${Number(number) - 1}`)!
+  await click(target.x + 3, target.y)
+  await act(async () => { runtime.set('composerActive', true) })
+  await settle(100)
+  await act(async () => { await setup.mockInput.typeText(text) })
+  await act(async () => { setup.mockInput.pressEnter() })
+  await settle(120)
+}
+await sendConcurrent('1', 'concurrent:A')
+await waitFor('A stream started', () => heldTurns.has('concurrent:A'))
+await sendConcurrent('2', 'concurrent:B')
+await waitFor('B starts before A finishes', () => heldTurns.has('concurrent:B'))
+check(heldTurns.has('concurrent:A'), 'starting B cancelled A')
+await sendConcurrent('1', 'concurrent:A-followup')
+check(!heldTurns.has('concurrent:A-followup'), 'same-session followup overlapped its first turn')
+await click(frame('split-pane:1')!.x + 3, frame('split-pane:1')!.y)
+await act(async () => { runtime.set('composerActive', true) })
+await settle(100)
+await act(async () => { await setup.mockInput.typeText('B unsent draft') })
+await act(async () => { heldTurns.get('concurrent:A')!.close(); heldTurns.delete('concurrent:A') })
+await waitFor('A followup starts while B is active', () => heldTurns.has('concurrent:A-followup'))
+const composerInput = () => setup.renderer.root.findDescendantById('composer-textarea') as unknown as { plainText: string }
+check(composerInput().plainText === 'B unsent draft', 'background completion cleared B draft')
+check(heldTurns.has('concurrent:B'), 'A followup cancelled B')
+await click(frame('split-pane:0')!.x + 3, frame('split-pane:0')!.y)
+await act(async () => { runtime.set('composerActive', true) })
+await settle(100)
+await act(async () => { setup.mockInput.pressKey('c', { ctrl: true }) })
+await settle(100)
+await act(async () => { setup.mockInput.pressKey('c', { ctrl: true }) })
+await waitFor('only A was cancelled', () => !heldTurns.has('concurrent:A-followup'))
+check(heldTurns.has('concurrent:B'), 'cancelling A cancelled B')
+await click(frame('split-pane:1')!.x + 3, frame('split-pane:1')!.y)
+await act(async () => { heldTurns.get('concurrent:B')!.close(); heldTurns.delete('concurrent:B') })
+await settle(200)
+check(composerInput().plainText === 'B unsent draft', 'returning to B lost its unsent draft')
+await escape()
+console.log('Concurrent composer streams, per-session followups, background completion and targeted cancellation passed')
 // The layout picker uses focused placement and numbered panes, with no R role.
 await chordKey('2')
 await openMenu()
@@ -254,6 +326,38 @@ check((controller!.runtime(controller!.activeWorkspace()!).values.get('windowSpl
 await chordKey('1'); await chordKey('x')
 await waitFor('last ordinary pane closed', () => panes().length === 0 && setup.captureCharFrame().includes('No panes open'))
 await chordKey('X'); await waitFor('ordinary pane recovered', () => panes().length === 1 && paneName(0) === 'delta')
+// Provider-captured child rows fold independently and open a read-only transcript.
+const alphaRow = railRow('alpha'); await click(alphaRow.x + 1, alphaRow.y)
+const disclosureId = 'sidebar-subagents-toggle:claude:win-alpha'
+await waitFor('subagent disclosure', () => !!frame(disclosureId))
+const childId = 'sidebar:subagent:session:claude:win-alpha:captured-child'
+await waitFor('captured child row', () => !!frame(childId))
+await click(frame(disclosureId)!.x, frame(disclosureId)!.y)
+await waitFor('subagent list collapsed', () => !frame(childId))
+check((controller!.runtime(controller!.activeWorkspace()!).values.get('collapsedSubagentParents') as string[]).includes('claude:win-alpha'), 'collapse preference was not workspace-owned')
+await click(frame(disclosureId)!.x, frame(disclosureId)!.y)
+await waitFor('subagent list expanded', () => !!frame(childId))
+await click(frame(childId)!.x + 1, frame(childId)!.y)
+await waitFor('captured subagent transcript opened', () => setup.captureCharFrame().includes('CAPTURED SUBAGENT BODY'))
+check(subagentReads.at(-1)?.parent === 'win-alpha' && subagentReads.at(-1)?.agent === 'captured-child', 'captured child was read as a top-level session')
+check(setup.captureCharFrame().includes('Read only'), 'nested transcript was not marked read only')
+await escape()
+await waitFor('captured transcript closed', () => !frame('subagent-transcript'))
+const activeRailRuntime = controller!.runtime(controller!.activeWorkspace()!)
+await click(railRow('alpha').x + 1, railRow('alpha').y)
+await act(async () => { activeRailRuntime.set('focusedPane', 'sessions') })
+await settle(100)
+await act(async () => { setup.mockInput.pressArrow('down') })
+await waitFor('keyboard focus on captured child', () => setup.captureCharFrame().split('\n').some(line => line.includes('Captured child') && line.includes('▎')))
+await act(async () => { setup.mockInput.pressEnter() })
+await waitFor('keyboard opens captured transcript', () => setup.captureCharFrame().includes('CAPTURED SUBAGENT BODY'))
+await escape()
+await act(async () => { setup.mockInput.pressArrow('left') })
+await waitFor('keyboard collapses child list', () => !frame(childId))
+await act(async () => { setup.mockInput.pressArrow('right') })
+await waitFor('keyboard expands child list', () => !!frame(childId))
+
+console.log('Subagent rail expansion, collapse persistence and captured transcript viewing passed')
 console.log('Equal panes rendered smoke passed (close last, empty workspace, reopen, original session float/dock, split without reader, stable composer target, focused layout placement, saved generic layout, menus, tabs)')
 act(() => setup.renderer.destroy())
 await resetShellsForTest()

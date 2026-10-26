@@ -457,13 +457,15 @@ export async function getViewSubagentMessages(
   sessionId: string,
   agentId: string,
   providerOverride?: AgentProvider,
+  providerInstanceId?: string,
 ): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   // A provider without subagents genuinely has none — empty is the answer, not
   // a failure to look.
   if (!adapter.readSubagentMessages) return []
-  return withSessionInstance(provider, sessionId, () => adapter.readSubagentMessages!(sessionId, agentId))
+  const read = () => adapter.readSubagentMessages!(sessionId, agentId)
+  return providerInstanceId ? withProviderInstance(providerInstanceId, provider, read) : withSessionInstance(provider, sessionId, read)
 }
 
 /**
@@ -471,11 +473,12 @@ export async function getViewSubagentMessages(
  * not full content) for sidebar nesting. Claude subagents aren't real
  * top-level sessions, so this is how the sidebar learns they exist at all.
  */
-export async function getClaudeSubagentSummaries(sessionId: string, providerOverride?: AgentProvider): Promise<SubagentSummary[]> {
+export async function getClaudeSubagentSummaries(sessionId: string, providerOverride?: AgentProvider, providerInstanceId?: string): Promise<SubagentSummary[]> {
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSubagentSummaries) return []
-  return withSessionInstance(provider, sessionId, () => adapter.readSubagentSummaries!(sessionId))
+  const read = () => adapter.readSubagentSummaries!(sessionId)
+  return providerInstanceId ? withProviderInstance(providerInstanceId, provider, read) : withSessionInstance(provider, sessionId, read)
 }
 
 // Model discovery is read-only but can be one of the slowest control-plane

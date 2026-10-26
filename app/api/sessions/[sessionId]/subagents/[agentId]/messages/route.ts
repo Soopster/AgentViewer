@@ -13,7 +13,7 @@ export async function GET(
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
-    const messages = await getViewSubagentMessages(sessionId, agentId, provider)
+    const messages = await getViewSubagentMessages(sessionId, agentId, provider, new URL(request.url).searchParams.get('providerInstanceId') ?? undefined)
     return NextResponse.json({ messages })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

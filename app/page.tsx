@@ -4,7 +4,7 @@ import { panelSurfaceAvailability } from '@/lib/rightPanel'
 
 import { beginProviderLoading } from '@/lib/providerLoading'
 
-import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
@@ -438,7 +438,7 @@ export default function Home() {
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
   const dashboardSelected = selectedTabKey === RUN_DASHBOARD_KEY && !selectedProject
-  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
+  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : 'reader'
   // Bundle the projectView prop so it only gets a new identity when one of
   // its fields actually changes — otherwise <MessageView /> sees a new object
   // on every parent render.
@@ -1276,12 +1276,14 @@ export default function Home() {
 
   // Navigate to a newly forked session, or materialize a provider-created
   // pending tab after its first streamed session event.
-  const handleFork = useCallback((newSessionId: string) => {
-    if (!selectedSession?.provider) return
-    if (selectedSession.isPending) {
-      const oldKey = projectSessionKey(selectedSession)
+  const selectedComposerSessionRef = useRef<string | null>(null)
+  useLayoutEffect(() => { selectedComposerSessionRef.current = selectedSession ? projectSessionKey(selectedSession) : null }, [selectedSession])
+  const handleFork = useCallback((newSessionId: string, sourceSession: Session | null = selectedSession) => {
+    if (!sourceSession?.provider) return
+    if (sourceSession.isPending) {
+      const oldKey = projectSessionKey(sourceSession)
       const materialized: Session = {
-        ...selectedSession,
+        ...sourceSession,
         sessionId: newSessionId,
         isPending: false,
         lastModified: Date.now(),
@@ -1312,17 +1314,18 @@ export default function Home() {
           }
         : prev
       )
-      setSelectedTabKey(newKey)
-      void selectSession(materialized)
+      if (selectedComposerSessionRef.current === oldKey) { setSelectedTabKey(newKey); void selectSession(materialized) }
       return
     }
-    void selectSession({
+    const forked = {
       sessionId: newSessionId,
-      provider: selectedSession.provider,
-      providerInstanceId: selectedSession.providerInstanceId,
-      providerDisplayName: selectedSession.providerDisplayName,
-      providerAccentColor: selectedSession.providerAccentColor,
-    } as Session)
+      provider: sourceSession.provider,
+      providerInstanceId: sourceSession.providerInstanceId,
+      providerDisplayName: sourceSession.providerDisplayName,
+      providerAccentColor: sourceSession.providerAccentColor,
+    } as Session
+    if (selectedComposerSessionRef.current === projectSessionKey(sourceSession)) void selectSession(forked)
+    else setOpenTabSessions(previous => dedupeSessionsByKey([...previous, forked]))
   }, [selectSession, selectedSession])
 
   const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {

@@ -6,6 +6,7 @@
 // An instance is disposed when nothing has held it for a tick, so a move that
 // unmounts and remounts in one commit keeps it, while a closed view releases it
 // and its cleanups (timers, subscriptions a view registered) run then.
+import { isPluginEnabled, readDisabledPlugins, subscribePluginEnablement } from './enablement'
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 
 type Instance = {
@@ -23,6 +24,16 @@ export type PluginStateSnapshot = {
 }
 
 export type PluginStateStore = ReturnType<typeof createPluginStateStore>
+
+// Weak ownership: the lifecycle listener must not retain closed workspaces.
+const liveStores = new Set<WeakRef<{ disposePlugin(id: string): void }>>()
+subscribePluginEnablement(() => {
+  for (const reference of liveStores) {
+    const store = reference.deref()
+    if (!store) { liveStores.delete(reference); continue }
+    for (const id of readDisabledPlugins()) store.disposePlugin(id)
+  }
+})
 
 export function createPluginStateStore(options: { disposeDelayMs?: number } = {}) {
   const delay = options.disposeDelayMs ?? 0
@@ -55,7 +66,7 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
     instance.cleanups.clear()
   }
 
-  return {
+  const store = {
     get<T>(pluginId: string, instanceId: string, name: string, initial: T): T {
       const instance = instances.get(keyOf(pluginId, instanceId))
       if (instance?.values.has(name)) return instance.values.get(name) as T
@@ -63,24 +74,31 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
       return pending?.has(name) ? pending.get(name) as T : initial
     },
     set(pluginId: string, instanceId: string, name: string, value: unknown): void {
+      if (!isPluginEnabled(pluginId)) return
       const instance = ensure(pluginId, instanceId)
       if (Object.is(instance.values.get(name), value)) return
       instance.values.set(name, value)
       for (const listener of instance.listeners) listener()
     },
     subscribe(pluginId: string, instanceId: string, listener: () => void): () => void {
+      if (!isPluginEnabled(pluginId)) return () => {}
       const instance = ensure(pluginId, instanceId)
       instance.listeners.add(listener)
       return () => { instance.listeners.delete(listener) }
     },
     /** Register work to undo when the instance is disposed. */
     onDispose(pluginId: string, instanceId: string, cleanup: () => void): () => void {
+      if (!isPluginEnabled(pluginId)) {
+        try { cleanup() } catch (error) { console.error('Plugin cleanup failed:', error) }
+        return () => {}
+      }
       const instance = ensure(pluginId, instanceId)
       instance.cleanups.add(cleanup)
       return () => { instance.cleanups.delete(cleanup) }
     },
     /** A mounted view holds its instance; the returned release lets it go. */
     hold(pluginId: string, instanceId: string): () => void {
+      if (!isPluginEnabled(pluginId)) return () => {}
       const key = keyOf(pluginId, instanceId)
       const instance = ensure(pluginId, instanceId)
       instance.holds += 1
@@ -101,6 +119,12 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
     },
     has(pluginId: string, instanceId: string): boolean {
       return instances.has(keyOf(pluginId, instanceId))
+    },
+    /** Release active and parked view caches, leaving retained unknown snapshot data intact. */
+    disposePlugin(pluginId: string): void {
+      const prefix = `${pluginId}\u0000`
+      for (const key of instances.keys()) if (key.startsWith(prefix)) dispose(key)
+      for (const key of restored.keys()) if (key.startsWith(prefix)) restored.delete(key)
     },
     disposeNow(pluginId: string, instanceId: string): void {
       dispose(keyOf(pluginId, instanceId))
@@ -145,6 +169,8 @@ export function createPluginStateStore(options: { disposeDelayMs?: number } = {}
       }
     },
   }
+  liveStores.add(new WeakRef(store))
+  return store
 }
 
 /** Anything malformed reads as empty rather than throwing at boot. */

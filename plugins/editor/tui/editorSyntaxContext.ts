@@ -78,7 +78,9 @@ export function editorSyntaxForPath(path: string): LanguageSyntax {
 // UTF-16 code unit in JavaScript. Only the finite language configurations are
 // cached: this never retains document text or query results.
 type DelimiterSearch = { table: Uint8Array; expression: RegExp }
-const DELIMITER_STARTS = new WeakMap<LanguageSyntax, DelimiterSearch>()
+let DELIMITER_STARTS = new WeakMap<LanguageSyntax, DelimiterSearch>()
+
+export function clearEditorSyntaxCache(): void { DELIMITER_STARTS = new WeakMap() }
 
 function delimiterStarts(syntax: LanguageSyntax): DelimiterSearch {
   const cached = DELIMITER_STARTS.get(syntax)

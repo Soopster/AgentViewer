@@ -2,6 +2,10 @@
 // TUI entry for the editor plugin: loaded on first open, never at boot.
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
+import { disposeEditorProjectSearchWorker } from './editorProjectSearchWorkerClient'
+import { clearEditorSyntaxCache } from './editorSyntaxContext'
+import { clearEditorCellMeasureCache } from './editorCells'
+import { clearEditorLspConfigCache } from './editorLspServers'
 import { EditorPopover } from './EditorPopover'
 
 function EditorSurface({ services, target, theme, syntaxStyle, width, height, placement, focused, registerKeys, close, detach }: TuiPluginViewProps) {
@@ -42,4 +46,5 @@ export const module: PluginViewModule<TuiPluginView> = {
   apiVersion: PLUGIN_API_VERSION,
   pluginId: 'editor',
   views: { editor: EditorSurface },
+  deactivate() { disposeEditorProjectSearchWorker(); clearEditorLspConfigCache(); clearEditorCellMeasureCache(); clearEditorSyntaxCache() },
 }

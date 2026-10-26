@@ -18,6 +18,7 @@
 
 import {
   getClaudeSubagentSummaries,
+  getViewSubagentMessages,
   listViewSessionMessageWindow,
   listViewSessions,
   readViewSessionComposerOptions,
@@ -160,12 +161,12 @@ export async function readTuiRuntimeActivityState(): Promise<TuiRuntimeActivity>
 }
 
 /** Subagents a provider records inside a session rather than as sessions of their own. */
-export async function readTuiSubagentSummaries(sessionId: string, provider?: AgentProvider): Promise<SubagentSummary[]> {
+export async function readTuiSubagentSummaries(sessionId: string, provider?: AgentProvider, providerInstanceId?: string): Promise<SubagentSummary[]> {
   if (isRemoteAttached()) {
-    const { subagents } = await remoteJson<{ subagents?: SubagentSummary[] }>(encodeSessionPath(sessionId, `/subagents${providerQuery(provider)}`))
+    const { subagents } = await remoteJson<{ subagents?: SubagentSummary[] }>(encodeSessionPath(sessionId, `/subagents${providerQuery(provider)}${providerInstanceId ? `${provider ? '&' : '?'}providerInstanceId=${encodeURIComponent(providerInstanceId)}` : ''}`))
     return subagents ?? []
   }
-  return getClaudeSubagentSummaries(sessionId, provider)
+  return getClaudeSubagentSummaries(sessionId, provider, providerInstanceId)
 }
 
 export async function readTuiSlashCommands(
@@ -189,4 +190,16 @@ export async function readTuiComposerOptions(
     return remoteJson(encodeSessionPath(sessionId, `/composer${providerQuery(provider)}`))
   }
   return readViewSessionComposerOptions(sessionId, provider)
+}
+
+/** Nested captured transcripts use the provider adapter; never interpret agent IDs as session IDs. */
+export async function readTuiSubagentMessages(session: Session, agentId: string): Promise<SessionMessage[]> {
+  if (isRemoteAttached()) {
+    const query = new URLSearchParams()
+    if (session.provider) query.set('provider', session.provider)
+    if (session.providerInstanceId) query.set('providerInstanceId', session.providerInstanceId)
+    const response = await remoteJson<{ messages: SessionMessage[] }>(encodeSessionPath(session.sessionId, `/subagents/${encodeURIComponent(agentId)}/messages?${query}`))
+    return response.messages
+  }
+  return getViewSubagentMessages(session.sessionId, agentId, session.provider, session.providerInstanceId)
 }

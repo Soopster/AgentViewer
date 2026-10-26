@@ -324,3 +324,58 @@ adds the manifest and renderer loaders; renderer-specific services remain explic
 The source-only `npm run plugins:contributor:smoke` fixture adds a new panel
 manifest and loaders and type-checks both apps without editing their roots.
 Run `npm run plugins:smoke`, `npm run tui:check` and `npx tsc --noEmit` after changes.
+
+## Plugin deactivation and memory ownership
+
+Disabling a feature unmounts its views, disposes active and parked scoped state,
+and evicts its view module from the host registry. Pending imports are invalidated;
+a completion from an older activation cannot repopulate a newer activation's cache.
+The JavaScript engine still caches imported code, so disabling is not full code
+unloading and does not promise an immediate reduction in process RSS.
+
+A lazy entry may export an optional, synchronous, idempotent `module.deactivate()`
+to clear module-owned caches. It runs only for a loaded plugin, never by importing
+an unused plugin just to clean it up. Analytics terminates its worker and rejects
+outstanding computations; Editor terminates project search and releases its LSP
+configuration and cell measurement caches. Re-enabling lazily creates new resources.
+
+Contributors should create a `createPluginResourceScope(pluginId)` when starting
+background work (available from the TUI SDK or `lib/plugins/lifecycle` on Web).
+Pass `scope.signal` to fetch/search operations and register worker termination,
+timer clearing and unsubscribe functions with `scope.defer(cleanup)`. Return
+`scope.dispose` from the owning effect for early cleanup on unmount. Disabling
+aborts and disposes the scope even if its view has already been parked. A scope
+created while disabled is already aborted and immediately disposes registered work.
+Do not allocate workers or start requests as import-time side effects.
+
+User-owned host services, including TUI shells and managed processes, keep their
+own lifetime: disabling their presentation plugin does not kill commands. User
+editor drafts and saved layout data are not treated as disposable worker caches.
+Run `npm run plugins:smoke` for the deactivation, load-race and worker restart checks.
+
+## Concurrent composers and transcript handoff
+
+Web and OpenTUI share `lib/composerSessions.ts`: stream state, controllers,
+request IDs, retries and live buffers belong to a provider-instance/session key.
+Callbacks retain that owner when focus changes. Pending-to-native ID changes
+rekey the existing cells rather than creating a second owner. A follow-up queues
+or steers within its session; another session can start immediately. Background
+queue continuation uses its captured target and request payload. Cancelling one
+session never uses another session's controller or account configuration.
+
+Web keeps the reader mounted when session tabs change, instead of remounting it
+through the transition key. The state store preserves inactive sends without
+mounting a hidden transcript per session. TUI background completion cannot clear
+the active textarea; failed background sends restore their own saved draft.
+
+`lib/composerTranscript.ts` reconciles optimistic user echoes with provider and
+persisted rows. IDs are scoped to the owning provider instance. Text matching is
+limited to optimistic echoes and newly persisted users, so two real identical
+prompts stay separate. Persisted indexes are rebuilt on transcript/turn changes,
+not per token, and background transcript panes use the same filtering.
+
+Regression commands: `npm run composer:concurrency:smoke` (real terminal input,
+overlapping held streams, per-session followups, draft isolation and targeted
+cancellation) and `npm run composer:web:smoke` against the local Web app (Chrome,
+scripted streams, tab changes, persisted handoff, background queue and cancellation).
+The Web fixture accepts `WEB_COMPOSER_ORIGIN` and `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.

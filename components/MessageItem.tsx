@@ -2088,6 +2088,7 @@ const AGENT_STATUS_LABELS: Record<string, string> = {
 }
 
 function AgentCard({ thread }: { thread: ToolThread }) {
+  const transcriptOwner = use(ArtifactSessionContext)
   const sessionId = use(SessionContext)
   const hydrated = use(HydrationContext)
   // Read live text straight from context (changes every streamed token); keep
@@ -2142,7 +2143,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     if (transcriptMessages || !agentId || !sessionId) return
     setTranscriptLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/subagents/${agentId}/messages`)
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(agentId)}/messages?${new URLSearchParams({ provider: transcriptOwner?.provider ?? 'claude', ...(transcriptOwner?.providerInstanceId ? { providerInstanceId: transcriptOwner.providerInstanceId } : {}) })}`)
       const data = await readJsonResponse<{ messages?: SubagentMessage[] }>(res)
       setTranscriptMessages(data.messages ?? [])
     } catch {
@@ -2452,6 +2453,7 @@ const OPENCODE_TASK_STATE_COLOR: Record<NonNullable<OpenCodeTaskParsed['state']>
 }
 
 function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
+  const transcriptOwner = use(ArtifactSessionContext)
   const sessionId = use(SessionContext)
   const hydrated = use(HydrationContext)
   const onOpenSession = use(NavigateSessionContext)
@@ -2494,7 +2496,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
     if (transcriptMessages || !taskId || !sessionId) return
     setTranscriptLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/subagents/${taskId}/messages?provider=opencode`)
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(taskId)}/messages?${new URLSearchParams({ provider: 'opencode', ...(transcriptOwner?.providerInstanceId ? { providerInstanceId: transcriptOwner.providerInstanceId } : {}) })}`)
       const data = await readJsonResponse<{ messages?: SubagentMessage[] }>(res)
       setTranscriptMessages(data.messages ?? [])
     } catch {

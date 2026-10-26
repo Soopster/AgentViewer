@@ -104,6 +104,7 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  | 'subagent-transcript'
   /** The session the view was opened for: its identity, not its transcript. */
   | 'session'
   /** The selected session's in-flight turn, before it reaches the transcript. */
@@ -148,4 +149,6 @@ export type PluginViewModule<View> = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
   readonly pluginId: string
   readonly views: Readonly<Record<string, View>>
+  /** Release module-owned caches and resources. Must be idempotent; runs on disable. */
+  readonly deactivate?: () => void
 }

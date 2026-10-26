@@ -32,6 +32,7 @@ import {
   readTuiSessions,
   readTuiSlashCommands,
   readTuiSubagentSummaries,
+  readTuiSubagentMessages,
 } from '../../lib/tui/reads'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
@@ -112,7 +113,8 @@ type SubagentsRequest = {
   session: Session
 }
 type RetainRequest = { kind: 'retain'; id: number; session: Session; retain: boolean }
-type WorkerRequest = RetainRequest | DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest | SubagentsRequest
+type SubagentTranscriptRequest = { kind: 'subagent-transcript'; id: number; session: Session; agentId: string; density: TuiDensity }
+type WorkerRequest = SubagentTranscriptRequest | RetainRequest | DetailRequest | FormatRequest | SessionsRequest | WarmRequest | MetadataRequest | AffordancesRequest | SubagentsRequest
 
 type WorkerResponse = (
   | {
@@ -162,6 +164,7 @@ type WorkerResponse = (
   | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: true; warmed: true }
   | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
+  | { id: number; ok: true; subagentCards: TuiTranscriptCard[] }
   | { id: number; ok: true; subagents: Awaited<ReturnType<typeof readTuiSubagentSummaries>> }
   | { id: number; ok: true; affordances: {
       commands: Awaited<ReturnType<typeof readTuiSlashCommands>>
@@ -563,8 +566,15 @@ self.onmessage = async (event) => {
       })
       return
     }
+    if (data.kind === 'subagent-transcript') {
+      const raw = await readTuiSubagentMessages(data.session, data.agentId)
+      const threaded = buildThreadedMessages(raw)
+      const subagentCards = threaded.map(message => formatTranscriptCard(message, data.density))
+      self.postMessage({ id: data.id, ok: true, subagentCards })
+      return
+    }
     if (data.kind === 'subagents') {
-      const subagents = await readTuiSubagentSummaries(data.session.sessionId, data.session.provider)
+      const subagents = await readTuiSubagentSummaries(data.session.sessionId, data.session.provider, data.session.providerInstanceId)
       self.postMessage({ id: data.id, ok: true, subagents })
       return
     }

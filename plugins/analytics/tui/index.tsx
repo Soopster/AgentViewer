@@ -2,6 +2,7 @@
 // TUI entry for the Analytics plugin: loaded on first open, never at boot.
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
+import { disposeAnalyticsWorker } from './analyticsWorkerClient'
 import { AnalyticsPopover, type PaneId } from './AnalyticsView'
 
 function AnalyticsSurface({ services, theme, width, height, placement, useState, registerKeys, close, detach }: TuiPluginViewProps) {
@@ -30,4 +31,5 @@ export const module: PluginViewModule<TuiPluginView> = {
   apiVersion: PLUGIN_API_VERSION,
   pluginId: 'analytics',
   views: { analytics: AnalyticsSurface },
+  deactivate: disposeAnalyticsWorker,
 }

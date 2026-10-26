@@ -3,6 +3,7 @@
 // each renderer's loader list (components/shell/pluginViews.ts,
 // tui/opentui/shell/pluginViews.ts); no root, palette or window-kind union
 // changes.
+import { manifest as subagents } from '../../plugins/subagents/manifest'
 import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
@@ -15,7 +16,7 @@ import { manifest as terminal } from '../../plugins/terminal/manifest'
 import { manifest as browser } from '../../plugins/browser/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
