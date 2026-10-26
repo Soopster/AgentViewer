@@ -66,7 +66,8 @@ import type { WindowLayoutAction } from './WindowLayoutPicker'
 import type { ContextMenuItem } from './ContextMenu'
 import { startSpacesBackground } from './spacesBackground'
 import { SpacesController, canonicalSpacePath } from './spacesStore'
-import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
+import type { QuietWorkspaceState } from './workspaceContext'
+import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useQuietWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
 import { SpacesRail, WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
 import { LIGHT_THEME } from '../theme'
 import { WindowHistory } from './windowHistory'
@@ -1725,6 +1726,53 @@ function fitHintText(value: string, width: number): string {
   return fitText(value, width)
 }
 
+/**
+ * What the root draws from the draft, besides the draft's own text. Typing changes the text on
+ * every key but this almost never, and the root re-renders only when it does: each field is
+ * something the root lays out or decides with, so a change in any must reach it.
+ */
+type ComposerDraftShape = {
+  /** Lines the dock must hold: logical lines, or the editor's wrapped lines when more. */
+  lines: number
+  /** Wrapped line counts at the dock's and the expanded composer's widths. */
+  dock: number
+  window: number
+  /** The first line when it is a slash command (the menu filters on it), else empty. */
+  slashLine: string
+  shell: boolean
+  /** Width of the character count, which sizes the stats row. */
+  digits: number
+  /** The attachment count label, which a pasted part or mention contributes while its marker is in the text. */
+  attachments: string
+}
+
+/** Lines the dock holds for a draft: its logical lines, or the editor's wrapped lines when more. */
+function composerDraftLineCount(text: string, virtualLines: number | null): number {
+  const logical = composerEntryLineCount(text)
+  return text.length > 0 && virtualLines !== null ? Math.max(logical, virtualLines) : logical
+}
+
+function computeComposerDraftShape(text: string, dockWidth: number, windowWidth: number, virtualLines: number | null): ComposerDraftShape {
+  const lines = composerDraftLineCount(text, virtualLines)
+  let dock = 1
+  let window = 1
+  if (text.length > 0) {
+    dock = 0
+    window = 0
+    for (const line of text.split('\n')) {
+      dock += Math.max(1, Math.ceil(line.length / dockWidth))
+      window += Math.max(1, Math.ceil(line.length / windowWidth))
+    }
+  }
+  const newline = text.indexOf('\n')
+  const firstLine = newline < 0 ? text : text.slice(0, newline)
+  return { lines, dock, window, slashLine: firstLine.startsWith('/') ? firstLine : '', shell: text.startsWith('!'), digits: text.length === 0 ? 0 : String(text.length).length, attachments: '' }
+}
+
+function sameComposerDraftShape(a: ComposerDraftShape | null, b: ComposerDraftShape): boolean {
+  return a !== null && a.lines === b.lines && a.dock === b.dock && a.window === b.window && a.slashLine === b.slashLine && a.shell === b.shell && a.digits === b.digits && a.attachments === b.attachments
+}
+
 /** What clicking a composer status segment does. */
 type ComposerStatusAction = 'model' | 'path' | 'git'
 
@@ -1856,6 +1904,21 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
     out.push(<span key="pad" fg={padFg}>{' '.repeat(remaining)}</span>)
   }
   return out
+}
+
+/**
+ * A status row that shows the draft's length. It subscribes to the draft itself, so typing
+ * repaints these spans without re-rendering the root.
+ */
+function DraftLengthSpans({ draft, build, width, padFg, hover }: {
+  draft: QuietWorkspaceState
+  build: (draftLength: number) => InlineTextSegment[]
+  width: number
+  padFg: string
+  hover?: { index: number; bg: string } | null
+}) {
+  const length = useSyncExternalStore(draft.subscribe, () => draft.read().length, () => draft.read().length)
+  return <>{renderInlineTextSegments(build(length), width, padFg, hover)}</>
 }
 
 // `code` and **bold** are the only spans the native CLIs surface in prose, and
@@ -10329,7 +10392,16 @@ function OpenTuiWorkspace() {
   const [composerActive, setComposerActive] = useWorkspaceState('composerActive', false)
   const [composerWindowOpen, setComposerWindowOpen] = useWorkspaceState('composerWindowOpen', false)
   const [composerHidden, setComposerHidden] = useWorkspaceState('composerHidden', false)
-  const [composerDraft, setComposerDraft] = useWorkspaceState('composerDraft', '')
+  // The draft is read, not subscribed to: a keystroke must not re-render this root (see
+  // useQuietWorkspaceState). `composerDraft` is its value as of this render; whatever changes
+  // per key is drawn by a child that subscribes itself, or arrives through composerDraftShape.
+  const composerDraftState = useQuietWorkspaceState('composerDraft', '')
+  const composerDraft = composerDraftState.read()
+  const setComposerDraft = useStableEvent((action: React.SetStateAction<string>) => {
+    const next = typeof action === 'function' ? action(composerDraftState.read()) : action
+    composerDraftRef.current = next
+    composerDraftState.write(next, true)
+  })
   const composerDraftStorageKeyRef = useRef<string | null>(null)
   const [composerLiveTodos, setComposerLiveTodos] = useComposerSessionState<import('../../lib/taskRegistry').OpenCodeTodo[]>(composerSessions, composerOwnerKey, 'composerLiveTodos', [])
   const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
@@ -10681,7 +10753,7 @@ function OpenTuiWorkspace() {
   useEffect(() => { densityRef.current = density }, [density])
   useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
   useEffect(() => { composerActiveRef.current = composerActive }, [composerActive])
-  useEffect(() => { composerDraftRef.current = composerDraft }, [composerDraft])
+  useEffect(() => { composerDraftRef.current = composerDraft })
   useEffect(() => { tuiPermissionModeByKeyRef.current = tuiPermissionModeByKey }, [tuiPermissionModeByKey])
   useEffect(() => { liveTranscriptMessagesRef.current = liveTranscriptMessages }, [liveTranscriptMessages])
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
@@ -12175,10 +12247,8 @@ function OpenTuiWorkspace() {
     }
     if (selected) openCoordinationAgentSession(selected.agent)
   })
-  const composerLogicalLineCount = composerEntryLineCount(composerDraft)
-  const composerDraftLines = composerDraft.length > 0 && composerTextareaRef.current?.plainText === composerDraft
-    ? Math.max(composerLogicalLineCount, composerTextareaRef.current.editorView.getTotalVirtualLineCount())
-    : composerLogicalLineCount
+  const composerDraftShapeRef = useRef<ComposerDraftShape | null>(null)
+  const composerDraftLines = composerDraftLineCount(composerDraft, composerTextareaRef.current?.plainText === composerDraft ? composerTextareaRef.current.editorView.getTotalVirtualLineCount() : null)
   const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
   const composerHeight = embeddedComposer
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
@@ -12391,13 +12461,13 @@ function OpenTuiWorkspace() {
     }
     return parts
   }, [composerGitBranch, composerGitSummary, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
-  const buildComposerStatsSegments = (lineCount: number): InlineTextSegment[] => {
+  const buildComposerStatsSegments = (lineCount: number, draftLength: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = []
-    if (composerDraft.length === 0) {
+    if (draftLength === 0) {
       segments.push({ text: ` ${composerConfig.label} `, fg: theme.surface, bg: composerAccentColor })
     } else {
       segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
-      segments.push({ text: ` · ${composerDraft.length} chars`, fg: theme.text })
+      segments.push({ text: ` · ${draftLength} chars`, fg: theme.text })
     }
     if (composerAttachmentLabel) {
       segments.push({ text: ' · ', fg: theme.dim })
@@ -12454,9 +12524,11 @@ function OpenTuiWorkspace() {
     setModelPickerIndex((current) => Math.min(current, Math.max(filteredModelPickerOptions.length - 1, 0)))
   }, [filteredModelPickerOptions.length, modelPickerOpen])
   const composerWaitingStatusSeed = composerWaitingSeed
-    || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
-  const firstNewline = composerDraft.indexOf('\n')
-  const composerFirstLine = firstNewline < 0 ? composerDraft : composerDraft.slice(0, firstNewline)
+    || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}`
+  // Only a slash command's first line matters here, and `composerDraftShape` makes the root
+  // re-render per key only while one is being typed.
+  const composerDraftFirstLine = composerDraft.slice(0, composerDraft.indexOf('\n') < 0 ? undefined : composerDraft.indexOf('\n'))
+  const composerFirstLine = composerDraftFirstLine.startsWith('/') ? composerDraftFirstLine : ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
     if (!composerSlashOpen) return []
@@ -13018,7 +13090,15 @@ function OpenTuiWorkspace() {
     const renderable = composerTextareaRef.current
     const text = renderable?.plainText ?? ''
     const cursor = renderable?.cursorOffset ?? text.length
-    setComposerDraft(text)
+    // Typing writes the draft quietly. The root re-renders only when something it draws from the
+    // draft changed (see ComposerDraftShape).
+    const virtualLines = renderable ? renderable.editorView.getTotalVirtualLineCount() : null
+    const attachments = composerPromptParts.length > 0 || composerMentionAttachments.length > 0
+      ? attachmentCountLabel(prepareComposerSubmission(text, composerMentionAttachments, composerPromptParts).attachments) ?? ''
+      : ''
+    const nextShape = { ...computeComposerDraftShape(text, textareaInnerWidth, composerWindowTextareaWidth, null), lines: composerDraftLineCount(text, virtualLines), attachments }
+    composerDraftRef.current = text
+    composerDraftState.write(text, !sameComposerDraftShape(composerDraftShapeRef.current, nextShape))
     if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
     if (historyIndex !== -1 && text !== (sentHistory[historyIndex]?.text ?? '')) setHistoryIndex(-1)
     if (composerError) setComposerError(null)
@@ -13777,19 +13857,13 @@ function OpenTuiWorkspace() {
   const composerWindowTop = Math.max(1, Math.floor((height - composerWindowHeight) / 2))
   const composerWindowContentWidth = Math.max(composerWindowWidth - 4, 16)
   const composerWindowTextareaWidth = Math.max(composerWindowContentWidth - 2, 12)
-  const composerLineCounts = useMemo(() => {
-    if (composerDraft.length === 0) return { dock: 1, window: 1 }
-    // The dock and expanded composer use different widths, but both counts
-    // come from the same draft. Split once per draft update instead of once per
-    // width on every root render (typing and resize are the hot paths here).
-    let dock = 0
-    let window = 0
-    for (const line of composerDraft.split('\n')) {
-      dock += Math.max(1, Math.ceil(line.length / textareaInnerWidth))
-      window += Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth))
-    }
-    return { dock, window }
-  }, [composerDraft, textareaInnerWidth, composerWindowTextareaWidth])
+  // What this render drew from the draft. The content-change handler compares each keystroke's
+  // shape with it and re-renders the root only when they differ.
+  const composerLineCounts = useMemo(
+    () => computeComposerDraftShape(composerDraft, textareaInnerWidth, composerWindowTextareaWidth, null),
+    [composerDraft, textareaInnerWidth, composerWindowTextareaWidth],
+  )
+  composerDraftShapeRef.current = { ...composerLineCounts, lines: composerDraftLines, attachments: '' }
   const composerVisualLineCount = composerLineCounts.dock
   const composerWindowVisualLineCount = composerLineCounts.window
   const composerWindowSuggestionHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
@@ -25747,10 +25821,13 @@ function OpenTuiWorkspace() {
     [composerDraft, composerMentionAttachments, composerPromptParts, prepareComposerSubmission],
   )
   const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
-  const composerDockStatsSegments = useMemo<InlineTextSegment[]>(
-    () => buildComposerStatsSegments(composerVisualLineCount),
-    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerWorkingDirectory, composerVisualLineCount, theme.cyan, theme.dim, theme.text],
-  )
+  if (composerDraftShapeRef.current) composerDraftShapeRef.current.attachments = composerAttachmentLabel ?? ''
+  // The stats row shows the character count, which changes on every key; the rows that draw it
+  // take a builder and subscribe to the length themselves (DraftLengthSpans), so a keystroke
+  // repaints them without rendering the root. The array below is the draft as of this render, for
+  // the widths and hit-tests that only need it when something else has already rendered.
+  const composerDockStatsFor = (draftLength: number): InlineTextSegment[] => buildComposerStatsSegments(composerVisualLineCount, draftLength)
+  const composerDockStatsSegments = composerDockStatsFor(composerDraft.length)
   const composerWindowMetaSegments = useMemo<InlineTextSegment[]>(() => {
     const segments: InlineTextSegment[] = []
     composerKnobSegments.forEach((segment, index) => {
@@ -25763,17 +25840,17 @@ function OpenTuiWorkspace() {
     }
     return segments
   }, [composerKnobSegments, composerLocationSegments, theme.dim])
-  const composerWindowDraftSegments = useMemo<InlineTextSegment[]>(() => {
+  const composerWindowDraftFor = (draftLength: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = [
       { text: `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'}`, fg: theme.dim },
-      { text: ` · ${composerDraft.length} chars`, fg: theme.dim },
+      { text: ` · ${draftLength} chars`, fg: theme.dim },
     ]
     if (composerAttachmentLabel) {
       segments.push({ text: ' · ', fg: theme.dim })
       segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
     }
     return segments
-  }, [composerAttachmentLabel, composerDraft.length, composerWindowVisualLineCount, theme.cyan, theme.dim])
+  }
   const composerBaseTextareaStyle = {
     backgroundColor: theme.surface,
     textColor: theme.text,
@@ -25865,9 +25942,9 @@ function OpenTuiWorkspace() {
     && (commandChordPending || splitChordPending || (!composerActive && !composerKeysTargetTurn && !routeComposerToBridge && !routeComposerToIde))
   // The attention badge rides the stats while the composer holds the hint slot:
   // it must stay visible in every mode.
-  const dockFooterStatsSegments = statusBarInDock && !dockShowsStatusBar && attentionNeedsInputCount > 0
-    ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsSegments]
-    : composerDockStatsSegments
+  const dockFooterStatsFor = (draftLength: number): InlineTextSegment[] => statusBarInDock && !dockShowsStatusBar && attentionNeedsInputCount > 0
+    ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsFor(draftLength)]
+    : composerDockStatsFor(draftLength)
   const dockStatusBarLength = dockShowsStatusBar ? footerSegments.reduce((n, segment) => n + segment.text.length, 0) : 0
   const composerDockFooterHintWidth = Math.max(
     18,
@@ -26303,11 +26380,11 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsSegments, chatComposerStatsWidth) }} onMouseMove={event => { if (!composerSlashHint) hoverComposerStatus('chat', event, composerDockStatsSegments, chatComposerStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
+            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsFor(composerDraftState.read().length), chatComposerStatsWidth) }} onMouseMove={event => { if (!composerSlashHint) hoverComposerStatus('chat', event, composerDockStatsFor(composerDraftState.read().length), chatComposerStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
               <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {composerSlashHint
                   ? fitText(composerSlashHint, chatComposerStatsWidth)
-                  : renderInlineTextSegments(composerDockStatsSegments, chatComposerStatsWidth, theme.dim, composerStatusHover?.site === 'chat' ? { index: composerStatusHover.index, bg: theme.surface3 } : null)}
+                  : <DraftLengthSpans draft={composerDraftState} build={composerDockStatsFor} width={chatComposerStatsWidth} padFg={theme.dim} hover={composerStatusHover?.site === 'chat' ? { index: composerStatusHover.index, bg: theme.surface3 } : null} />}
               </text>
             </box>
             <box flexGrow={1} />
@@ -28587,16 +28664,11 @@ function OpenTuiWorkspace() {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsSegments, composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsSegments, composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
-                  : renderInlineTextSegments(
-                    dockFooterStatsSegments,
-                    composerDockFooterStatsWidth,
-                    theme.dim,
-                    composerStatusHover?.site === 'dock' ? { index: composerStatusHover.index, bg: theme.surface3 } : null,
-                  )}
+                  : <DraftLengthSpans draft={composerDraftState} build={dockFooterStatsFor} width={composerDockFooterStatsWidth} padFg={theme.dim} hover={composerStatusHover?.site === 'dock' ? { index: composerStatusHover.index, bg: theme.surface3 } : null} />}
               </text>
             </box>
             {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
@@ -28921,7 +28993,7 @@ function OpenTuiWorkspace() {
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
                   ? fitText(composerSlashHint, composerWindowFooterStatsWidth)
-                  : renderInlineTextSegments(composerWindowDraftSegments, composerWindowFooterStatsWidth, theme.dim)}
+                  : <DraftLengthSpans draft={composerDraftState} build={composerWindowDraftFor} width={composerWindowFooterStatsWidth} padFg={theme.dim} />}
               </text>
             </box>
             <box flexGrow={1} />

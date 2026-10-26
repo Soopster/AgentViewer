@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState, useLayoutEffect } from 'react'
+import { createContext, useCallback, useContext, useReducer, useRef, useState, useLayoutEffect } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { Space, SpacesController, WorkspaceRuntime } from './spacesStore'
 export const WorkspaceViewContext = createContext('root')
@@ -42,3 +42,36 @@ export function useWorkspaceRef<T>(key: string, initial: T, persist = false): Mu
   return context.runtime.get(`ref:${key}`, () => ({ current: initial }), persist)
 }
 export function workspaceStorageKey(workspaceId: string | undefined, sessionKey: string): string { return workspaceId ? `workspace:${workspaceId}:${sessionKey}` : sessionKey }
+
+export type QuietWorkspaceState = {
+  /** The current value, read from the workspace on every call. */
+  read: () => string
+  /** Store a value. The caller re-renders only when `render` is true. */
+  write: (value: string, render: boolean) => void
+  /** Notified (in a microtask) when the stored value changes; for external-store subscribers. */
+  subscribe: (listener: () => void) => () => void
+}
+const NO_UNSUBSCRIBE = () => {}
+/**
+ * A workspace string that is read rather than subscribed to. useWorkspaceState re-renders its
+ * owner on every change, which for the composer draft meant the whole root once per keystroke.
+ * Here the owner decides: a keystroke that changes nothing it draws writes quietly, and the few
+ * things that do change per key (the character count) subscribe on their own.
+ * It is still read on every render, so a workspace switch or any other render shows the current value.
+ */
+export function useQuietWorkspaceState(key: string, initial: string): QuietWorkspaceState {
+  const context = useWorkspaceContext()
+  const namespace = useContext(WorkspaceViewContext)
+  const runtime = context?.runtime
+  const fullKey = namespace === 'root' ? key : `${namespace}:${key}`
+  const local = useRef(initial)
+  const [, rerender] = useReducer((count: number) => count + 1, 0)
+  const read = useCallback(() => (runtime ? runtime.get(fullKey, initial, true) as string : local.current), [runtime, fullKey, initial])
+  const write = useCallback((value: string, render: boolean) => {
+    if (runtime) runtime.set(fullKey, value)
+    else local.current = value
+    if (render) rerender()
+  }, [runtime, fullKey])
+  const subscribe = useCallback((listener: () => void) => (runtime ? runtime.subscribe(fullKey, listener) : NO_UNSUBSCRIBE), [runtime, fullKey])
+  return { read, write, subscribe }
+}
