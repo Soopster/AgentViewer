@@ -35,7 +35,7 @@ import {
   sendDurableChannelMessage,
 } from '../../lib/channelBridgeOutbox'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
-import { ToastOverlay, toastStackTop, useToasts } from './ToastOverlay'
+import { ToastOverlay, toastExtraRows, toastStackTop, useToasts } from './ToastOverlay'
 import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
@@ -27958,7 +27958,7 @@ function OpenTuiWorkspace() {
           // that says how to close it — so end above the stack while it shows.
           const panelBottom = Math.min(
             height - composerDockHeight - composerStatusBlockHeight,
-            toasts.length > 0 ? toastStackTop(toasts.length, height) : height,
+            toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) : height,
           )
           const maxRows = Math.max(panelBottom - overlayTop - overlayChromeRows, 6)
           const visible = rows.slice(0, maxRows)

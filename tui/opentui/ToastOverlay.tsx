@@ -29,14 +29,28 @@ const ICON: Record<ToastKind, string> = {
   warning: '▲',
 }
 
-function fit(text: string, max: number): string {
-  if (max <= 1) return ''
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
+// A toast is as wide as its message up to the screen, so a long path fits on
+// one row where the terminal allows, and wraps onto further rows where it does not.
+const DEFAULT_TOAST_WIDTH = 46
+export function toastWidthFor(messages: readonly string[], width: number): number {
+  const widest = messages.reduce((max, message) => Math.max(max, message.length + 6), 0)
+  return Math.min(Math.max(width - 4, 24), Math.max(DEFAULT_TOAST_WIDTH, widest))
+}
+
+/** Content rows a message takes at an inner width (the glyph and a space lead the first). */
+export function toastContentRows(message: string, innerWidth: number): number {
+  return Math.max(1, Math.ceil((message.length + 2) / Math.max(1, innerWidth)))
+}
+
+/** Rows beyond one per toast that wrapping adds, for the stack's height. */
+export function toastExtraRows(messages: readonly string[], width: number): number {
+  const inner = toastWidthFor(messages, width) - 4
+  return messages.reduce((sum, message) => sum + toastContentRows(message, inner) - 1, 0)
 }
 
 /** The row the toast stack starts on; overlays that must stay readable end above it. */
-export function toastStackTop(count: number, height: number): number {
-  const stackHeight = count * 3 + Math.max(count - 1, 0)
+export function toastStackTop(count: number, height: number, extraRows = 0): number {
+  const stackHeight = count * 3 + extraRows + Math.max(count - 1, 0)
   return Math.max(1, height - stackHeight - 3)
 }
 
@@ -69,12 +83,13 @@ export function ToastOverlay({
     ...providers.map((provider, index) => ({ id: -index - 1, kind: 'info' as const, message: providerLoadingLabel(provider) })),
   ]
   if (items.length === 0) return null
-  const toastWidth = Math.min(Math.max(width - 4, 24), 46)
+  const messages = items.map(item => item.message)
+  const toastWidth = toastWidthFor(messages, width)
   const left = Math.max(1, width - toastWidth - 2)
   const gap = 1
   // Each toast is three rows (border + one content row); anchored just above
   // the bottom edge, leaving room for the composer/footer.
-  const top = toastStackTop(items.length, height)
+  const top = toastStackTop(items.length, height, toastExtraRows(messages, width))
   const innerWidth = toastWidth - 4
   return (
     <box position="absolute" top={top} left={left} width={toastWidth} flexDirection="column" gap={gap} zIndex={zIndex}>
@@ -90,8 +105,8 @@ export function ToastOverlay({
             backgroundColor={theme.surface2}
             paddingX={1}
           >
-            <text fg={accent} wrapMode="none">
-              {fit(`${toastItem.id < 0 ? ['◐', '◓', '◑', '◒'][frame] : ICON[toastItem.kind]} ${toastItem.message}`, innerWidth)}
+            <text fg={accent} wrapMode="char">
+              {`${toastItem.id < 0 ? ['◐', '◓', '◑', '◒'][frame] : ICON[toastItem.kind]} ${toastItem.message}`}
             </text>
           </box>
         )
