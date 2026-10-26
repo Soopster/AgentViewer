@@ -2045,8 +2045,7 @@ function timeAgo(value?: string | number): string {
   return `${days}d`
 }
 
-// Borders plus two rows of draft: an empty prompt is not worth four rows of
-// the transcript, and the dock grows with the draft anyway.
+// Two draft rows plus borders; multiline drafts grow the dock as needed.
 const COMPOSER_MIN_HEIGHT = 4
 // The cursor says what Enter will do: a block sends a prompt, an underline runs
 // a `!` shell command. Module-level so the textarea is not handed a new object
@@ -12289,12 +12288,6 @@ function OpenTuiWorkspace() {
     }
     return parts
   }, [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
-  const composerKnobsChip = useMemo(
-    () => composerKnobSegments.length > 0
-      ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
-      : '',
-    [composerKnobSegments],
-  )
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
   const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
@@ -12380,7 +12373,7 @@ function OpenTuiWorkspace() {
   }
   const composerWaitingSuffix = useMemo(() => {
     const parts: string[] = []
-    if (composerKnobsChip) parts.push(composerKnobsChip.replace(/^·\s*/, ''))
+    // Model, context, and effort already live in the dock footer.
     if (composerSendState === 'sending' && liveOutputTokens > 0) {
       parts.push(`↓ ${formatLiveOutputTokens(liveOutputTokens)} tokens`)
     }
@@ -12391,7 +12384,7 @@ function OpenTuiWorkspace() {
       parts.push(interruptPressActive ? '⌃C again to interrupt' : '⌃C cancel')
     }
     return parts.length > 0 ? parts.join(' · ') : null
-  }, [composerKnobsChip, composerSendState, interruptPressActive, liveOutputTokens])
+  }, [composerSendState, interruptPressActive, liveOutputTokens])
 
   useEffect(() => {
     if (!modelPickerOpen) return
@@ -13210,7 +13203,7 @@ function OpenTuiWorkspace() {
     // Embedded composers own a compact status row in the reader, so it comes
     // out of transcriptViewportRows rather than this sibling-status budget.
     if (composerActivityVisible && canBackgroundClaudeCommand) rows += 1
-    if (visibleComposerSending && !embeddedComposer) rows += 2
+    if (visibleComposerSending && !embeddedComposer) rows += 1
     if (composerActivityVisible && hasSubagentTail) rows += 2
     if (visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -19486,12 +19479,12 @@ function OpenTuiWorkspace() {
   // An explicit pane target outranks the auto-targeting note: the user aimed
   // this composer at a split pane and must be able to see that before sending.
   const composerTargetMessage = composerPaneTargetKey && composerTargetSession
-    ? `Sending to: ${formatSessionTitle(composerTargetSession)}`
+    ? `To: ${formatSessionTitle(composerTargetSession)}`
     : composerPaneTargetKey
     ? 'Session target is unavailable — select a session to retarget'
     : composerAutoTargetingRunning && composerTargetSession
-      ? `Sending to: ${formatSessionTitle(composerTargetSession)}`
-      : composerTargetSession ? `Sending to: ${formatSessionTitle(composerTargetSession)}` : null
+      ? `To: ${formatSessionTitle(composerTargetSession)}`
+      : composerTargetSession ? `To: ${formatSessionTitle(composerTargetSession)}` : null
   const composerIdleFooterHint = useMemo(
     () => formatTuiComposerIdleHint(composerConfig.footerHintIdle, sentHistory.length),
     [composerConfig.footerHintIdle, sentHistory.length],
@@ -25608,7 +25601,7 @@ function OpenTuiWorkspace() {
   const providerAccent = getProviderAccent(provider)
   const composerPlaceholder = composerTargetSession
     ? (visibleComposerSending
-        ? composerConfig.placeholderStreaming
+        ? 'Follow-up…'
         : composerExample)
     : composerConfig.placeholderNoSession
   const composerActiveAttachments = useMemo(
@@ -28325,7 +28318,8 @@ function OpenTuiWorkspace() {
         <box
           backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
           paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
-          paddingTop={isChatLikeView ? 0 : 1}
+          height={1}
+          flexShrink={0}
           flexDirection="row"
         >
           <text fg={theme.cyan} wrapMode="none">{isChatLikeView ? '● ' : '▌ '}</text>
