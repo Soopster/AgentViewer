@@ -109,7 +109,7 @@ import {
   type TuiSplitRowSide,
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
-import { LayoutEvents, RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes, type NativeResourceOwner } from '@opentui/core'
+import { LayoutEvents, RGBA, SyntaxStyle, TextAttributes, type NativeResourceOwner } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, CliRenderer, Renderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { pruneUnmountedCardData } from './readerCardCache'
 import { RowHeightIndex } from './rowHeightIndex'
@@ -353,7 +353,7 @@ import {
 import { appendFile, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir, release, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   adjustSplitReaderShare,
@@ -395,6 +395,9 @@ import {
   PORTABLE_COMMAND_CHORDS,
   portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
 import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type PaletteCommand, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
+import { NATIVE_OSC_ENABLED, RECENT_SESSION_ACTIVITY_MS, MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
+import { READER_CARD_SEARCH_DEPTH, SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
+import { clamp } from './app/util'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 // A tab for a session with a turn in flight spins, so work you are not looking
@@ -847,110 +850,6 @@ function filterThemeModes(modes: TuiThemeMode[], query: string): TuiThemeMode[] 
   if (!q) return modes
   return modes.filter((mode) => THEME_LABELS[mode].toLowerCase().includes(q) || mode.toLowerCase().includes(q))
 }
-const SEARCH_MAX_CHARS = 80
-const SESSION_REFRESH_MS = 5000
-const DETAIL_REFRESH_MS = 2000
-const RECENT_SESSION_ACTIVITY_MS = 60 * 60_000
-// How recent a transcript write must be for its row to read as active when no
-// turn this host knows about is running in it. Long enough to span the quiet
-// stretch of a model thinking between writes, short enough to let go soon
-// after the other process stops.
-const RECENT_WRITE_ACTIVE_MS = 2 * 60_000
-// Cadence for reconciling against the in-process running-turn registry (a
-// cheap synchronous read — the TUI and its backend share one process).
-const REATTACH_POLL_MS = 1500
-const COORDINATOR_FALLBACK_POLL_MS = 2000
-const COORDINATOR_RECONCILE_MS = 30_000
-const COORDINATOR_PUSH_DEBOUNCE_MS = 25
-// Remote attach (agent-viewer --attach <url>): backend calls route through a
-// running web daemon; shown in the footer so the mode is always visible.
-const ATTACHED_DAEMON_HOST = (() => {
-  const raw = process.env.AGENT_VIEWER_ATTACH?.trim()
-  if (!raw) return null
-  try {
-    return new URL(raw).host
-  } catch {
-    return raw
-  }
-})()
-// Most recent background turn completions kept in the attention inbox.
-const ATTENTION_DONE_LIMIT = 20
-// Debounce before opening a selected session's transcript. Scrubbing quickly
-// through the sidebar (mouse or keyboard) lands on many sessions in passing;
-// without this every fly-by would load + reformat a full transcript only to be
-// discarded a few ms later.
-//
-// Two delays, because the two cases cost wildly different amounts. A session
-// whose detail is already cached and mtime-fresh opens with no read and no
-// reformat at all — waiting on it buys nothing and is pure added latency, so
-// it opens on the next tick. Everything else pays a worker round-trip, which
-// is what the debounce protects; the neighbour warm and the single-flight
-// coalescing in refreshSelectedSessionDetail keep that cheap enough that it
-// needs far less than the 200ms this used to sit at.
-const DETAIL_OPEN_DELAY_MS = 70
-const DETAIL_OPEN_CACHED_DELAY_MS = 0
-// Reader-mode virtualization. The messages pane used to mount the FULL
-// transcript, so opening a huge session paid an O(cards) Yoga layout once and
-// every commit while reading stayed that size. Instead mount a sliding window
-// of READER_CARD_WINDOW cards: keyboard navigation recenters the window when
-// the cursor nears an edge, and a scroll poll slides it when the user
-// wheels/drags near the top or bottom of the mounted content. Sessions at or
-// under the window size behave exactly as before (full mount, no sliding).
-// Keep the default at 120: scene layout still visits every mounted card,
-// even when viewport culling skips painting it. Sliding preserves access to
-// the full transcript without paying for 240 cards on every scroll frame.
-// Env override is a test hook (lets a harness exercise sliding against a
-// modest session) and an escape hatch for very tall terminals.
-const READER_CARD_WINDOW = Math.max(
-  40,
-  Number.parseInt(process.env.AGENT_VIEWER_READER_WINDOW ?? '', 10) || 120,
-)
-// Cards the window shifts per slide. A slide's cost is the cards it mounts and
-// destroys, not the root render: profiled on a sustained wheel scroll, a
-// 120-card slide was ~31ms of React work of which the root was ~4ms, the new
-// cards' renderables ~60% and freeing the old ones' text buffers ~17%. So a
-// slide is kept small enough to fit one frame, and they are frequent instead —
-// which is only acceptable because a slide is invisible (see the layout-pass
-// fixup below) and starts long before the mounted content runs out.
-const READER_WINDOW_SLIDE = clamp(
-  Number.parseInt(process.env.AGENT_VIEWER_READER_SLIDE ?? '', 10) || 8,
-  1,
-  Math.floor(READER_CARD_WINDOW / 2),
-)
-// A slide starts when fewer than this many viewport-heights of mounted rows
-// remain ahead of the scroll direction. At the old 8 rows a fast wheel reached
-// the end of the mounted content and stopped dead until the slide landed.
-const READER_SLIDE_AHEAD_VIEWPORTS = 3
-// Cards a different session's first commit mounts before growing; enough to
-// fill a tall terminal's viewport with collapsed cards. See TranscriptWindowBody.
-const READER_OPEN_WINDOW = Math.min(48, READER_CARD_WINDOW)
-// Cards at the tail expanded in the first commit after leaving the collapsed
-// preview: more than a tall viewport shows. See TranscriptWindowBody.
-const READER_EXPAND_FIRST = 16
-const READER_EXPAND_STEP = 40
-// A window still growing toward its target mounts one step per this interval,
-// so the steps interleave with painted frames instead of stacking up.
-const READER_GROW_INTERVAL_MS = 8
-// Keyboard recenter margin: when the cursor gets within this many cards of a
-// window edge (and more cards exist beyond it), recenter the window.
-const READER_WINDOW_MARGIN = Math.max(8, Math.floor(READER_CARD_WINDOW / 10))
-// OpenTUI's scrollbox emits no scroll events. The window slide reads scrollTop
-// from a renderer frame callback (a scroll always paints a frame, and an idle
-// app paints none); the SCROLLBACK settle and the sticky header still poll.
-// Within READER_EDGE_ROWS of the mounted content's edge a slide starts whatever
-// the scroll direction: there is no further scroll to read a direction from.
-const READER_EDGE_ROWS = 8
-const READER_SCROLL_POLL_MS = 120
-// A requested slide that never commits (its window turned out unchanged) must
-// not block slide detection for good.
-const READER_SLIDE_REQUEST_TTL_MS = 500
-// A restored window waits for the next Yoga layout pass on a short timer.
-const READER_FIXUP_RETRY_MS = 16
-// A card box sits at most this deep under the scrollbox content: the content
-// holds one wrapper box per card (landmarks + the `card:` box itself), and a
-// user bubble adds one more level of alignment box.
-const READER_CARD_SEARCH_DEPTH = 3
-
 // OpenTUI's `findDescendantById` is a recursive walk of the WHOLE subtree, and
 // it sorts each level's children on the way down. Under a mounted transcript
 // that is every renderable inside every card — and the fixup executors below
@@ -1005,75 +904,6 @@ function readerRowCard(row: Renderable): Renderable | undefined {
   if (row.id?.startsWith('card:')) return row
   return row.getChildren().find((child) => child.id?.startsWith('card:')) as Renderable | undefined
 }
-// Above this many threaded messages, never format cards synchronously on the
-// render thread (the fallback in baseTranscriptCards) — formatTranscriptCard ×
-// N is a multi-second freeze on big sessions. The worker formats instead and
-// the transcript pops in when it lands (usually within one frame budget).
-const SYNC_FORMAT_CARD_LIMIT = 400
-// Stable empty set for browse-mode preview rendering (all cards collapsed).
-const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set<string>()
-const NOOP_SELECT_AGENT_TOOL = (_groupKey: string, _toolKey: string) => {}
-// Composer affordances (slash commands / agent options) cache. Refreshing
-// these for a Claude session spawns a CLI subprocess, so cache generously —
-// command lists change rarely (new files in .claude/commands etc.).
-const COMPOSER_AFFORDANCES_TTL_MS = 5 * 60_000
-const COMPOSER_AFFORDANCES_CACHE_MAX = 64
-const COMPOSER_GIT_SUMMARY_POLL_MS = 5_000
-const COMPOSER_GIT_SUMMARY_IDLE_POLL_MS = 30_000
-// Safety net: max time to wait for a completed turn's persisted rows before
-// force-revealing the polled transcript, so the "Syncing…" state can't hang
-// forever on a lost/delayed write. Generous vs the 2s detail poll.
-const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 12000
-const DEFAULT_SIDEBAR_WIDTH = 32
-const SIDEBAR_RESIZE_STEP = 2
-const MIN_SIDEBAR_WIDTH = 28
-const MIN_WINDOW_COLUMNS = 46
-const MIN_WINDOW_ROWS = 9
-// Compatibility names for the original frame's renderer and old presets.
-const MIN_READER_WIDTH = MIN_WINDOW_COLUMNS
-const TASK_PANEL_MIN_WIDTH = 24
-const TASK_PANEL_DEFAULT_WIDTH = 32
-const TASK_PANEL_MAX_WIDTH = 60
-const TASK_PANEL_RESIZE_STEP = 4
-const SURFACE_PANEL_MIN_WIDTH = 34
-const SURFACE_PANEL_DEFAULT_WIDTH = 58
-const SURFACE_PANEL_MAX_WIDTH = 120
-const SURFACE_PANEL_RESIZE_STEP = 4
-// Docked under the reader, the panel is sized in rows and leaves the reader this many.
-const SURFACE_PANEL_MIN_ROWS = 8
-const SURFACE_PANEL_DEFAULT_ROWS = 14
-const SURFACE_PANEL_READER_MIN_ROWS = 10
-const SURFACE_PANEL_ROW_STEP = 2
-// Cached TuiSessionDetail bundles include the full transcript, blocks, and
-// derived landmarks, so this cap bounds the resident footprint on long-running
-// TUI sessions. 8 covers the settled session and the recents around it —
-// paired with the foreground mtime guard it makes revisiting a recent session
-// free (no worker re-read, no reformat) and lets the open skip its debounce
-// entirely. Matches the spirit of
-// THREADING_CACHE_LIMIT (10) in threadingWorkerClient.ts, which already holds
-// threaded messages + cards for the same neighbourhood.
-const SESSION_CACHE_LIMIT = 8
-// Sessions whose provider-recorded subagents have been read for the sidebar.
-const SUBAGENT_SUMMARY_CACHE_LIMIT = 64
-const WORKTREE_TASK_CWD_SEGMENT = `${sep}.agent-viewer-worktrees${sep}`
-// After a settle, warm the threading worker's caches for the sessions adjacent
-// to the current one in sidebar order, so the *first* visit to a neighbour is
-// served from those caches instead of paying a cold read + thread + format.
-// The delay keeps the worker free for the settled session's own load first;
-// prefetches run one at a time and yield to any real open. Raising the radius
-// means raising the worker's THREADING_CACHE_LIMIT with it — see
-// threadingWorker.ts.
-const NEIGHBOR_PREFETCH_DELAY_MS = 450
-const NEIGHBOR_PREFETCH_RADIUS = 2
-const EXIT_CLEANUP_TIMEOUT_MS = 1500
-const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
-// Velocity scroll tuning — see velocityScrollStep(). A gap longer than the
-// reset window between same-direction j/k/↑/↓ events means the key was
-// released, so the streak (and thus the speed) starts over from base.
-const VELOCITY_SCROLL_RESET_MS = 160
-const VELOCITY_SCROLL_RAMP_MS = 700
-const VELOCITY_SCROLL_MAX_STEP = 8
-const TERMINAL_SELECTION_COPY_WINDOW_MS = 15_000
 
 export type TerminalSelectionCopyDestination = 'none' | 'osc52' | 'host'
 
@@ -1100,10 +930,6 @@ const PIERRE_DIFF_CACHE = new WeakMap<TuiTranscriptCard, {
   isExpanded: boolean
   value: TuiPierreDiffView | null
 }>()
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(value, max))
-}
 
 function isSendAttachmentList(value: unknown): value is SendAttachment[] {
   return Array.isArray(value) && value.every((attachment) =>
@@ -2078,28 +1904,6 @@ function timeAgo(value?: string | number): string {
   const days = Math.round(hours / 24)
   return `${days}d`
 }
-
-// Two draft rows plus borders; multiline drafts grow the dock as needed.
-const COMPOSER_MIN_HEIGHT = 4
-// The cursor says what Enter will do: a block sends a prompt, an underline runs
-// a `!` shell command. Module-level so the textarea is not handed a new object
-// (and the terminal a new cursor escape) on every render.
-const COMPOSER_PROMPT_CURSOR = { style: 'block', blinking: true } as const
-const COMPOSER_SHELL_CURSOR = { style: 'underline', blinking: true } as const
-const COMPOSER_MAX_HEIGHT = 12
-// The embedded composer keeps one breathing row below the draft. Its height
-// budget includes that row plus the top border. The composer has no bottom
-// border of its own: the status/hint row is painted onto the reader frame's
-// bottom border, so the two never stack.
-const CHAT_COMPOSER_CHROME_HEIGHT = 2
-// Top border, one line of draft, and the breathing row.
-const CHAT_COMPOSER_MIN_HEIGHT = 3
-// Top border + bottom border. The status/hint row costs no height of its own:
-// outside fullscreen it is painted into the bottom border, the way a title is
-// painted into the top one.
-const COMPOSER_DOCK_CHROME_HEIGHT = 2
-const COMPOSER_WINDOW_MAX_WIDTH = 88
-const COMPOSER_WINDOW_MAX_HEIGHT = 24
 const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
 const CLAUDE_LIVE_ASSISTANT_UUID_PREFIX = 'live-claude-assistant:'
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
@@ -2211,45 +2015,6 @@ const composerKeyBindings: ComposerKeyBinding[] = [
   { name: 'j', ctrl: true, action: 'newline' },
   { name: 'linefeed', action: 'newline' },
 ]
-// Metadata refresh is intentionally slow because Claude control queries are
-// expensive and can still cause main-thread pressure when they complete.
-const CLAUDE_METADATA_REFRESH_MS = 5 * 60_000
-const DEFAULT_METADATA_REFRESH_MS = 60_000
-const CLAUDE_BACKGROUND_METADATA_REFRESH_MS = 30 * 60_000
-const DEFAULT_BACKGROUND_METADATA_REFRESH_MS = 5 * 60_000
-const METADATA_REQUEST_TIMEOUT_MS = 4_000
-// Fire an OSC 9 / OSC 99 desktop notification when a composer send takes at
-// least this long. Tuned high enough that quick replies don't bell the user.
-const NOTIFY_AFTER_MS = 8_000
-const NOTIFY_PREVIEW_CHARS = 140
-
-// OpenTUI's OSC escape writers — desktop notifications (OSC 9/99) and clipboard
-// (OSC 52) — call straight into the native renderer (opentui.dll) over FFI. On
-// Windows that native path is implicated in hard segfaults; critically, a fault
-// in native code CANNOT be caught by a surrounding JS try/catch, so the existing
-// "silently ignore" guard offers false reassurance — a faulting OSC write would
-// take the whole process down. We disable the native OSC calls on Windows, and
-// elsewhere gate them on the terminal actually advertising the capability.
-const IS_WINDOWS = typeof process !== 'undefined' && process.platform === 'win32'
-const NATIVE_OSC_ENABLED = !IS_WINDOWS
-
-// toBmpSafe (astral-plane / variation-selector stripping for native OSC writers)
-// now lives in ./bmp and is imported above — shared with the toast store.
-// If the Claude send stream goes fully silent for this long — no data AND no
-// heartbeat (the server pulses one every 15s) — the socket is presumed dead.
-// We stop reading and let the persisted-detail poll surface the rest of the
-// still-running turn instead of blocking on read() for minutes.
-const CLAUDE_STREAM_STALL_MS = 45_000
-const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
-// Coalesce live streaming-text flushes to roughly one display frame. Uses a timer, NOT
-// requestAnimationFrame: OpenTUI's RAF only fires on the renderer's frame loop,
-// which goes idle during a pure-text streaming turn (deltas touch a ref and
-// schedule a flush with no React commit to drive a frame), freezing the preview
-// after the first token. A timer is render-loop-independent and each flush's
-// setState drives a repaint.
-const LIVE_TEXT_FLUSH_MS = 16
-const MAX_CODE_BLOCK_RENDER_LINES = 240
-const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -7662,39 +7427,10 @@ export function createLazyTranscriptIndexLookup(
     },
   }
 }
-
-// ── Split transcript panes ───────────────────────────────────────────────────
-// Each pane owns its session data, viewport and saved state. All panes render
-// their cards through TranscriptWindowBody, including the selected transcript.
-const SPLIT_PANE_MIN_WIDTH = MIN_WINDOW_COLUMNS
-// Lightweight windows: cards a window mounts from the tail, and loads per page walking back.
-const SPLIT_PANE_CARD_WINDOW = 80
-// Row minimums for the stacked orientation. A pane needs its two border rows,
-// a meta row, the reserved action row and a few body rows to say anything at
-// all; below that the layout drops the pane rather than render a sliver.
-const SPLIT_PANE_MIN_ROWS = MIN_WINDOW_ROWS
-const SPLIT_TREE_LIMITS = { paneWidth: SPLIT_PANE_MIN_WIDTH, paneRows: SPLIT_PANE_MIN_ROWS, readerWidth: SPLIT_PANE_MIN_WIDTH, readerRows: SPLIT_PANE_MIN_ROWS }
-const ZOOM_TREE_LIMITS = { paneWidth: 0, paneRows: 0, readerWidth: 0, readerRows: 0 }
-const MIN_READER_ROWS = MIN_WINDOW_ROWS
-const SPLIT_PANE_MAX = 2
 // A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
 // A surface window's id is its kind, or `kind#n` for a further one of a kind
 // that can have several (shells, browsers, file views).
 type WindowSurfaceId = string
-// Kinds that hold their own state per window, so a second one is useful.
-// The pane index a floating window registers its handle and focus under: past
-// any laid-out window, so no window index can collide with it.
-const FLOATING_PANE_INDEX = 64
-// The window full screen draws (⇧Z). No window is laid out then, and every key
-// goes to the focused window's handle, so full screen focuses this one.
-const FULLSCREEN_PANE_INDEX = 65
-const MULTI_INSTANCE_SURFACES: ReadonlySet<WindowSurfaceKind> = new Set(['terminal', 'browser', 'files'])
-// Surface kinds that are also full-screen popovers (Git, Files, pull requests).
-const SURFACE_POPOVER_KINDS: ReadonlySet<WindowSurfaceKind> = new Set(['diff', 'files', 'pull-request'])
-// A popover window kind whose windows pin a session or path: one per pin.
-const isPinnedPopoverKind = (kind: WindowSurfaceKind): kind is PopoverWindowKind => isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].pin !== null
-// Two presses this close in time and place are a double-click; OpenTUI reports presses only.
-const DOUBLE_CLICK_MS = 400
 function isDoubleClick(last: { current: { x: number; y: number; at: number } | null }, event: { x: number; y: number }): boolean {
   const now = Date.now()
   const previous = last.current
@@ -7702,8 +7438,6 @@ function isDoubleClick(last: { current: { x: number; y: number; at: number } | n
   last.current = double ? null : { x: event.x, y: event.y, at: now }
   return double
 }
-// Main + stack and the grid hold more: up to five panes beside the reader.
-const SPLIT_PANE_ARRANGED_MAX = 5
 // Transcript refreshes are owned by TranscriptSessionLoader. Views acquire
 // one observer while visible; the broker orders foreground reads and shares
 // updates across transcript and pinned-tool views of the same variant.
