@@ -4,12 +4,10 @@ import assert from 'node:assert/strict'
 import { CardSelectionVariants } from './cardSelectionVariants'
 import {
   selectTranscriptCardVariants,
-  shouldCenterTranscriptCard,
   terminalSelectionCopyDestination,
-  transcriptCursorScrollTargetKey,
   type TranscriptCardSelectionVariants,
-  usesAgentCardPresentation,
 } from './App'
+import { shouldCenterTranscriptCard, transcriptCursorScrollTargetKey, usesAgentCardPresentation } from './app/transcriptRows'
 import type { TuiTranscriptCard } from '../format'
 
 let elementsCreated = 0
