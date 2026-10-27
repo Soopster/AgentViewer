@@ -311,7 +311,7 @@ import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, ru
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
-import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
+import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
@@ -4160,37 +4160,10 @@ function OpenTuiWorkspace() {
   }, [])
   const windowNeedsInputKeys = useMemo(() => new Set(attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey)), [attentionItems])
   const windowPinSignature = splitPinnedKeys.join('\u0000')
-  useEffect(() => {
-    setWindowAttention((previous) => {
-      let next = previous
-      const keys = new Set([...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys])
-      const replace = (key: string, value: WindowAttention) => {
-        if (next === previous) next = new Map(previous)
-        next.set(key, value)
-      }
-      for (const key of keys) {
-        const session = sessionsByKeyRef.current.get(key)
-        const revision = session ? sessionTranscriptUpdatedAt(session) : undefined
-        const before = next.get(key)
-        if (revision !== undefined) {
-          const value = observeWindowAttention(before, 'metadata', String(revision), null, key === focusedWindowKey)
-          if (value !== before) replace(key, value)
-        } else if (key === focusedWindowKey && before) {
-          const value = readWindowAttention(before)
-          if (value !== before) replace(key, value)
-        }
-      }
-      // Open tabs keep theirs, unobserved and so unchanged: switching between
-      // tabs otherwise dropped and re-added an entry, a root render per switch.
-      const retained = new Set([...keys, ...openTabSessions.map((session) => sessionKey(session))])
-      for (const key of previous.keys()) {
-        if (retained.has(key)) continue
-        if (next === previous) next = new Map(previous)
-        next.delete(key)
-      }
-      return next
-    })
-  }, [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey, openTabSessions])
+  useEffect(() => runWindowAttentionEffect({
+    setWindowAttention, selectedSessionKey, splitPinnedKeys, sessionsByKeyRef, focusedWindowKey,
+    openTabSessions,
+  }), [sessions, windowPinSignature, selectedSessionKey, focusedWindowKey, openTabSessions])
   const badgeForWindow = (key: string, compact = false) => [coordinatorBadges.get(key) ? (compact ? '?' : coordinatorBadges.get(key)) : null, windowAttentionBadge({ ...windowAttention.get(key), needsInput: windowNeedsInputKeys.has(key) }, compact)].filter(Boolean).join(' · ') || null
   // The window holding the transcript being read, whichever renderer draws it:
   // the reader's own chrome (composer bar, status widths) is sized to it.

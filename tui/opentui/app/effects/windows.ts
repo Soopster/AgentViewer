@@ -6,6 +6,8 @@ import React from 'react'
 import { type WindowItem, type NoticeTone } from '../types'
 import { type Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
+import { observeWindowAttention, readWindowAttention, type WindowAttention } from '../../windowAttention'
+import { sessionTranscriptUpdatedAt } from '../../sessionRefreshPolicy'
 
 export type WindowSurfaceFocusEffectContext = {
   pendingSurfaceFocusRef: React.RefObject<string | null>
@@ -93,5 +95,50 @@ export function runSplitPinnedFillEffect(ctx: SplitPinnedFillEffectContext) {
     const unchanged = trimmed.length === current.length
       && trimmed.every((pinnedKey, i) => pinnedKey === current[i])
     return unchanged ? current : trimmed
+  })
+}
+
+export type WindowAttentionEffectContext = {
+  setWindowAttention: React.Dispatch<React.SetStateAction<Map<string, WindowAttention>>>
+  selectedSessionKey: string | null
+  splitPinnedKeys: string[]
+  sessionsByKeyRef: React.RefObject<Map<string, Session>>
+  focusedWindowKey: string | null
+  openTabSessions: Session[]
+}
+
+export function runWindowAttentionEffect(ctx: WindowAttentionEffectContext) {
+  const {
+    setWindowAttention, selectedSessionKey, splitPinnedKeys, sessionsByKeyRef, focusedWindowKey,
+    openTabSessions,
+  } = ctx
+  setWindowAttention((previous) => {
+    let next = previous
+    const keys = new Set([...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys])
+    const replace = (key: string, value: WindowAttention) => {
+      if (next === previous) next = new Map(previous)
+      next.set(key, value)
+    }
+    for (const key of keys) {
+      const session = sessionsByKeyRef.current.get(key)
+      const revision = session ? sessionTranscriptUpdatedAt(session) : undefined
+      const before = next.get(key)
+      if (revision !== undefined) {
+        const value = observeWindowAttention(before, 'metadata', String(revision), null, key === focusedWindowKey)
+        if (value !== before) replace(key, value)
+      } else if (key === focusedWindowKey && before) {
+        const value = readWindowAttention(before)
+        if (value !== before) replace(key, value)
+      }
+    }
+    // Open tabs keep theirs, unobserved and so unchanged: switching between
+    // tabs otherwise dropped and re-added an entry, a root render per switch.
+    const retained = new Set([...keys, ...openTabSessions.map((session) => sessionKey(session))])
+    for (const key of previous.keys()) {
+      if (retained.has(key)) continue
+      if (next === previous) next = new Map(previous)
+      next.delete(key)
+    }
+    return next
   })
 }
