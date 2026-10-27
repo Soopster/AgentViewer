@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
@@ -5820,30 +5820,9 @@ function OpenTuiWorkspace() {
     setVoiceStatus('')
   }, [composerTargetSession?.provider, composerTargetSession?.sessionId])
 
-  const toggleVoice = useStableEvent(() => {
-    if (voiceJob.current) {
-      if (voiceJob.current.stop) voiceJob.current.stop()
-      else { voiceJob.current.controller.abort(); voiceJob.current = null; setVoiceStatus('Voice input cancelled') }
-      return
-    }
-    const job: { controller: AbortController; stop?: () => void } = { controller: new AbortController() }
-    voiceJob.current = job
-    setComposerActive(true)
-    setVoiceStatus('Opening microphone…')
-    void recordVoice(job.controller.signal, (stop) => {
-      job.stop = () => { stop(); job.stop = undefined; setVoiceStatus('Transcribing locally…') }
-      setVoiceStatus('Listening… Ctrl+Shift+V to stop')
-    }).then(text => {
-      if (!job.controller.signal.aborted) insertComposerTextAtCursor(`${text} `)
-    }).catch(error => {
-      if (!job.controller.signal.aborted) setVoiceStatus(error instanceof Error ? error.message : 'Voice input failed')
-    }).finally(() => {
-      if (voiceJob.current === job) {
-        voiceJob.current = null
-        setVoiceStatus(current => /^(Opening|Listening|Transcribing)/.test(current) ? '' : current)
-      }
-    })
-  })
+  const toggleVoice = useStableEvent(() => runToggleVoice({
+    voiceJob, setVoiceStatus, setComposerActive, insertComposerTextAtCursor,
+  }))
 
   const pasteTextToComposer = useStableEvent(async (textToInsert: string) => {
     const normalizedText = textToInsert.replace(/\r\n/g, '\n').replace(/\r/g, '\n')

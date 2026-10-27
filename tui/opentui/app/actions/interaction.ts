@@ -53,6 +53,7 @@ import { FLOATING_PANE_INDEX } from '../layoutConstants'
 import { type SendAttachment } from '../../../../lib/types'
 import { join } from 'node:path'
 import { type ComposerPromptPart, type ComposerDraftSnapshot } from '../types'
+import { recordVoice } from '../../voiceRecorder'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -866,4 +867,39 @@ export function runMoveAgentToolCursor(ctx: MoveAgentToolCursorContext, delta: -
   if (!next) return false
   setAgentToolCursorByGroupKey((current) => current[groupCard.key] === next.key ? current : { ...current, [groupCard.key]: next.key })
   return true
+}
+
+export type ToggleVoiceContext = {
+  voiceJob: React.RefObject<{ controller: AbortController; stop?: () => void; } | null>
+  setVoiceStatus: React.Dispatch<React.SetStateAction<string>>
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+  insertComposerTextAtCursor: (textToInsert: string) => void
+}
+
+export function runToggleVoice(ctx: ToggleVoiceContext) {
+  const {
+    voiceJob, setVoiceStatus, setComposerActive, insertComposerTextAtCursor,
+  } = ctx
+  if (voiceJob.current) {
+    if (voiceJob.current.stop) voiceJob.current.stop()
+    else { voiceJob.current.controller.abort(); voiceJob.current = null; setVoiceStatus('Voice input cancelled') }
+    return
+  }
+  const job: { controller: AbortController; stop?: () => void } = { controller: new AbortController() }
+  voiceJob.current = job
+  setComposerActive(true)
+  setVoiceStatus('Opening microphone…')
+  void recordVoice(job.controller.signal, (stop) => {
+    job.stop = () => { stop(); job.stop = undefined; setVoiceStatus('Transcribing locally…') }
+    setVoiceStatus('Listening… Ctrl+Shift+V to stop')
+  }).then(text => {
+    if (!job.controller.signal.aborted) insertComposerTextAtCursor(`${text} `)
+  }).catch(error => {
+    if (!job.controller.signal.aborted) setVoiceStatus(error instanceof Error ? error.message : 'Voice input failed')
+  }).finally(() => {
+    if (voiceJob.current === job) {
+      voiceJob.current = null
+      setVoiceStatus(current => /^(Opening|Listening|Transcribing)/.test(current) ? '' : current)
+    }
+  })
 }
