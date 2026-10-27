@@ -53,6 +53,9 @@ import { formatSessionTitle } from '../../../format'
 import { replacePrimaryWindow, reconcileWindowSplitTree } from '../../windowSplitTree'
 import { addToStack, replaceWindowKey, stackOf } from '../../windowTabs'
 import { orderWindows } from '../../windowOrder'
+import { moveWindowBeside } from '../../windowOrder'
+import { type WindowDropZone } from '../../windowLayout'
+import { planWindowSessionDrop } from '../../windowOperations'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1019,4 +1022,66 @@ export function runReopenClosedWindow(ctx: ReopenClosedWindowContext) {
   if (isSurfaceWindowKey(key) && saved.layout.surfaceMeta[surfaceIdOfKey(key)]) setWindowSurfaceMeta(current => ({ ...current, [surfaceIdOfKey(key)]: saved.layout.surfaceMeta[surfaceIdOfKey(key)]! }))
   setOverviewPendingTarget(key)
   showNotice('info', 'Closed pane reopened')
+}
+
+export type DropSessionOnSurfaceWindowContext = {
+  windowItems: WindowItem[]
+  swapWindows: (a: number, b: number) => void
+  checkpointWindowLayout: () => void
+  applyWindowOrder: (next: string[]) => void
+  shownFirstWindowKeys: () => string[]
+  splitPinnedKeys: string[]
+  splitPaneCount: number
+  splitArrangement: WindowArrangement
+  splitOrientation: SplitPaneOrientation
+  splitReaderLast: boolean
+  stackedSplit: boolean
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setWindowArrangement: (arrangement: WindowArrangement, readerLast: boolean) => void
+  applySplitOrientation: (next: SplitPaneOrientation, quiet?: boolean) => void
+  setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
+  setWindowOrder: React.Dispatch<React.SetStateAction<string[]>>
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+}
+
+export function runDropSessionOnSurfaceWindow(ctx: DropSessionOnSurfaceWindowContext, session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) {
+  const {
+    windowItems, swapWindows, checkpointWindowLayout, applyWindowOrder, shownFirstWindowKeys,
+    splitPinnedKeys, splitPaneCount, splitArrangement, splitOrientation, splitReaderLast,
+    stackedSplit, showNotice, setOpenTabSessions, setWindowArrangement, applySplitOrientation,
+    setSplitPaneCount, setWindowOrder, setSplitPinnedKeys,
+  } = ctx
+  const key = sessionKey(session)
+  const surface = windowItems[index]
+  if (!surface || surface.kind !== 'surface') return
+  if (fromPane !== null && windowItems[fromPane]?.kind === 'session') {
+    if (!edge) { swapWindows(fromPane, index); return }
+    checkpointWindowLayout()
+    applyWindowOrder(moveWindowBeside(shownFirstWindowKeys(), key, surfaceWindowKey(surface.surface), edge === 'left' || edge === 'top'))
+    return
+  }
+  if (splitPinnedKeys.slice(0, splitPaneCount).includes(key)) {
+    checkpointWindowLayout()
+    applyWindowOrder(moveWindowBeside(shownFirstWindowKeys(), key, surfaceWindowKey(surface.surface), edge === 'left' || edge === 'top'))
+    return
+  }
+  const plan = planWindowSessionDrop({
+    arrangement: splitArrangement, orientation: splitOrientation,
+    readerLast: splitReaderLast, count: splitPaneCount, pins: splitPinnedKeys,
+  }, key, { kind: 'edge', zone: splitReaderLast ? 'left' : stackedSplit ? 'bottom' : 'right' })
+  if (!plan) { showNotice('info', 'The layout is full · drop on a session pane to replace it'); return }
+  checkpointWindowLayout()
+  setOpenTabSessions((prev) => prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session])
+  setWindowArrangement(plan.arrangement, plan.readerLast)
+  applySplitOrientation(plan.orientation, true)
+  setSplitPaneCount(plan.count)
+  void writeTuiSplitPanes(plan.count).catch(() => {})
+  const anchor = surfaceWindowKey(surface.surface)
+  const withSession = [...shownFirstWindowKeys().filter((entry) => entry !== key), key]
+  const nextOrder = moveWindowBeside(withSession, key, anchor, edge === 'left' || edge === 'top')
+  setWindowOrder(nextOrder)
+  const sessionsInOrder = nextOrder.filter((entry) => !isSurfaceWindowKey(entry))
+  setSplitPinnedKeys([...sessionsInOrder, ...plan.pins.filter((pin) => !sessionsInOrder.includes(pin))])
+  showNotice('info', `${fitText(formatSessionTitle(session), 40).trimEnd()} · beside ${surfaceTitle(surface.surface)}`)
 }

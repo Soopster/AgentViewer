@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9675,40 +9675,12 @@ function OpenTuiWorkspace() {
   })
   // A session dropped on a surface window: a session already in a pane trades
   // places with it; one from the rail or a tab becomes a pane beside it.
-  const dropSessionOnSurfaceWindow = useStableEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => {
-    const key = sessionKey(session)
-    const surface = windowItems[index]
-    if (!surface || surface.kind !== 'surface') return
-    if (fromPane !== null && windowItems[fromPane]?.kind === 'session') {
-      if (!edge) { swapWindows(fromPane, index); return }
-      checkpointWindowLayout()
-      applyWindowOrder(moveWindowBeside(shownFirstWindowKeys(), key, surfaceWindowKey(surface.surface), edge === 'left' || edge === 'top'))
-      return
-    }
-    if (splitPinnedKeys.slice(0, splitPaneCount).includes(key)) {
-      checkpointWindowLayout()
-      applyWindowOrder(moveWindowBeside(shownFirstWindowKeys(), key, surfaceWindowKey(surface.surface), edge === 'left' || edge === 'top'))
-      return
-    }
-    const plan = planWindowSessionDrop({
-      arrangement: splitArrangement, orientation: splitOrientation,
-      readerLast: splitReaderLast, count: splitPaneCount, pins: splitPinnedKeys,
-    }, key, { kind: 'edge', zone: splitReaderLast ? 'left' : stackedSplit ? 'bottom' : 'right' })
-    if (!plan) { showNotice('info', 'The layout is full · drop on a session pane to replace it'); return }
-    checkpointWindowLayout()
-    setOpenTabSessions((prev) => prev.some((tab) => sessionKey(tab) === key) ? prev : [...prev, session])
-    setWindowArrangement(plan.arrangement, plan.readerLast)
-    applySplitOrientation(plan.orientation, true)
-    setSplitPaneCount(plan.count)
-    void writeTuiSplitPanes(plan.count).catch(() => {})
-    const anchor = surfaceWindowKey(surface.surface)
-    const withSession = [...shownFirstWindowKeys().filter((entry) => entry !== key), key]
-    const nextOrder = moveWindowBeside(withSession, key, anchor, edge === 'left' || edge === 'top')
-    setWindowOrder(nextOrder)
-    const sessionsInOrder = nextOrder.filter((entry) => !isSurfaceWindowKey(entry))
-    setSplitPinnedKeys([...sessionsInOrder, ...plan.pins.filter((pin) => !sessionsInOrder.includes(pin))])
-    showNotice('info', `${fitText(formatSessionTitle(session), 40).trimEnd()} · beside ${surfaceTitle(surface.surface)}`)
-  })
+  const dropSessionOnSurfaceWindow = useStableEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => runDropSessionOnSurfaceWindow({
+    windowItems, swapWindows, checkpointWindowLayout, applyWindowOrder, shownFirstWindowKeys,
+    splitPinnedKeys, splitPaneCount, splitArrangement, splitOrientation, splitReaderLast,
+    stackedSplit, showNotice, setOpenTabSessions, setWindowArrangement, applySplitOrientation,
+    setSplitPaneCount, setWindowOrder, setSplitPinnedKeys,
+  }, session, index, edge, fromPane))
 
   const rectOf = (id: string) => {
     // A popover tab holds the reader's place, so the reader's frame is the tab's
