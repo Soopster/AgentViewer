@@ -372,6 +372,7 @@ import { useActiveStripIndexGroup } from './app/slices/activeStripIndex'
 import { useTranscriptViewportRowsGroup } from './app/slices/transcriptViewportRows'
 import { useLiveAssistantPreviewLinesGroup } from './app/slices/liveAssistantPreviewLines'
 import { useSplitPaneRunningKeysGroup } from './app/slices/splitPaneRunningKeys'
+import { useFloatingItemGroup } from './app/slices/floatingItem'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2877,23 +2878,12 @@ function OpenTuiWorkspace() {
     ...liveWindowStacks.flat().filter((key) => !laidOutWindowKeys.has(key)),
     ...(floatingKey ? [floatingKey] : []),
   ])
-  const floatingItem: WindowItem | null = floatingKey ? windowItemFor(floatingKey) : null
-  const windowStackFor = (key: string) => stackOf(liveWindowStacks, key)
-  const windowItemKey = (item: WindowItem) => (item.kind === 'session' ? sessionKey(item.session) : surfaceWindowKey(item.surface))
-  // The pin index of the session in window `index`, or -1 for a surface window.
-  const pinIndexOfWindow = (index: number) => {
-    const item = windowItems[index]
-    return item?.kind === 'session' ? splitPinnedKeys.indexOf(sessionKey(item.session)) : -1
-  }
-  // The session panes on screen, in display order (live slices, running marks, handles).
-  const splitPaneSessions = windowItems.flatMap((item) => (item.kind === 'session' ? [item.session] : []))
-  const visibleWindowSurfaces = windowItems.flatMap((item) => (item.kind === 'surface' ? [item.surface] : []))
-  // The window showing the selected session is drawn by the reader's own
-  // pipeline (card window, view modes, every reader key); the rest are drawn
-  // as panes. Selection follows focus, so that is the window in use.
-  const lastFocusedSplitPaneRef = useRef(0)
-  const selectedWindowIndex = floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === selectedSessionKey ? FLOATING_PANE_INDEX
-    : windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === selectedSessionKey)
+  const {
+    floatingItem, windowStackFor, windowItemKey, pinIndexOfWindow, splitPaneSessions,
+    visibleWindowSurfaces, lastFocusedSplitPaneRef, selectedWindowIndex,
+  } = useFloatingItemGroup({
+    floatingKey, windowItemFor, liveWindowStacks, windowItems, splitPinnedKeys, selectedSessionKey,
+  })
   // The window showing the selected session, if any.
   selectedWindowHandleRef.current = () => (selectedWindowIndex !== -1 ? splitPaneHandlesRef.current.get(selectedWindowIndex) : undefined)
   const focusedWindowItem = splitFocusIndex === null ? null
