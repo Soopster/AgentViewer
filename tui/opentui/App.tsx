@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6430,34 +6430,12 @@ function OpenTuiWorkspace() {
   // Drafts follow the effective send target, not merely the primary reader.
   // A pane-targeted composer must never inherit or clear another session's
   // draft just because that session remains selected behind the overlay.
-  useEffect(() => {
-    if (!composerTargetSessionIdentity) return
-    const key = composerTargetSessionIdentity
-    const previousKey = composerDraftStorageKeyRef.current
-    if (previousKey && previousKey !== key) {
-      const outgoingDraft = composerTextareaRef.current?.plainText ?? composerDraftRef.current
-      writeWorkspaceDraft(previousKey, outgoingDraft)
-      writeWorkspaceDraftParts(previousKey, composerPromptPartsRef.current)
-      // Attachments are not persisted, so clear them rather than leaking them
-      // into a different session's composer.
-      setComposerMentionAttachments(keepEmpty)
-      composerTextareaRef.current?.extmarks.clear()
-    }
-    composerDraftStorageKeyRef.current = key
-    const saved = readWorkspaceDraft(key)
-    // The content behind the draft's placeholders, restored with it: text
-    // alone brought back "[Pasted ~200 lines]" with nothing behind it.
-    const savedParts = (readWorkspaceDraftParts(key) as ComposerPromptPart[])
-      .filter((part) => part && typeof part.marker === 'string' && saved.includes(part.marker))
-    composerPromptPartsRef.current = savedParts
-    setComposerPromptParts((current) => current.length === 0 && savedParts.length === 0 ? current : savedParts)
-    if (saved !== composerDraftRef.current) {
-      composerDraftRef.current = saved
-      setComposerDraft(saved)
-      composerTextareaRef.current?.setText(saved)
-    }
-    if (savedParts.length > 0) restoreComposerPromptPartExtmarks(savedParts, saved)
-  }, [composerTargetSessionIdentity])
+  useEffect(() => runDraftRestoreEffect({
+    composerTargetSessionIdentity, composerDraftStorageKeyRef, composerTextareaRef,
+    composerDraftRef, writeWorkspaceDraft, writeWorkspaceDraftParts, composerPromptPartsRef,
+    setComposerMentionAttachments, readWorkspaceDraft, readWorkspaceDraftParts,
+    setComposerPromptParts, setComposerDraft, restoreComposerPromptPartExtmarks,
+  }), [composerTargetSessionIdentity])
 
   useEffect(() => {
     if (!pendingTranscriptDiffPrompt || composerTargetSessionIdentity !== pendingTranscriptDiffPrompt.target) return
