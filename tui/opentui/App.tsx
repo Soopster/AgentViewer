@@ -370,6 +370,7 @@ import { useFooterSegmentsGroup } from './app/slices/footerSegments'
 import { useRefreshSelectedSessionDetailGroup } from './app/slices/refreshSelectedSessionDetail'
 import { useActiveStripIndexGroup } from './app/slices/activeStripIndex'
 import { useTranscriptViewportRowsGroup } from './app/slices/transcriptViewportRows'
+import { useLiveAssistantPreviewLinesGroup } from './app/slices/liveAssistantPreviewLines'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -3118,24 +3119,14 @@ function OpenTuiWorkspace() {
     composerWindowHeight - composerWindowHeaderHeight - composerWindowFooterHeight - composerWindowSuggestionHeight - 2,
   )
   const livePreviewContentWidth = Math.max(width - 8, 14)
-  const liveAssistantPreviewLines = useMemo(
-    () => wrapLivePreviewTail(composerLiveText, livePreviewContentWidth, LIVE_PREVIEW_BODY_LINES),
-    [composerLiveText, livePreviewContentWidth],
-  )
-  const liveReasoningPreviewLines = useMemo(
-    () => wrapLivePreviewTail(composerLiveReasoning, livePreviewContentWidth, LIVE_PREVIEW_BODY_LINES),
-    [composerLiveReasoning, livePreviewContentWidth],
-  )
-
-  const isPreviewMode = !!selectedSessionKey && laidOutWindowKeys.has(selectedSessionKey) && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
-  const visibleTabSessions = useMemo(() => (
-    isPreviewMode && selectedSession
-      ? [...openTabSessions, selectedSession]
-      : openTabSessions
-  ), [isPreviewMode, openTabSessions, selectedSession])
-  const showTabs = !fullscreenMode && tabsEnabled && (visibleTabSessions.length > 0 || popoverTabs.length > 0)
-
-  const showHorizontalTabs = showTabs && verticalTabsWidth === 0
+  const {
+    liveAssistantPreviewLines, liveReasoningPreviewLines, isPreviewMode, visibleTabSessions,
+    showTabs, showHorizontalTabs,
+  } = useLiveAssistantPreviewLinesGroup({
+    composerLiveText, livePreviewContentWidth, composerLiveReasoning, selectedSessionKey,
+    laidOutWindowKeys, openTabSessions, selectedSession, fullscreenMode, tabsEnabled, popoverTabs,
+    verticalTabsWidth,
+  })
   const showPreviewBar = false
   const TAB_BAR_HEIGHT = HORIZONTAL_TAB_BAR_HEIGHT
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
