@@ -316,7 +316,7 @@ import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEf
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
-import { runTranscriptCardsSyncEffect } from './app/effects/liveTranscript'
+import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect } from './app/effects/liveTranscript'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2353,21 +2353,11 @@ function OpenTuiWorkspace() {
   // Escape hatch mirroring the web composer: if the persisted rows for a
   // completed turn never arrive, force-reveal the polled transcript after a
   // bounded wait so the live overlay / "Syncing…" state can't stick forever.
-  useEffect(() => {
-    if (!awaitingPersistedTurn) return
-    const timer = setTimeout(() => {
-      const key = composerActivitySessionKey
-      if (key) {
-        liveTranscriptBaselineRef.current.delete(key)
-        setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== key))
-      }
-      liveToolIndexesRef.current.clear()
-      liveToolInputJsonRef.current.clear()
-      setComposerLiveText('')
-      setAwaitingPersistedTurn(false)
-    }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
-    return () => clearTimeout(timer)
-  }, [awaitingPersistedTurn, composerActivitySessionKey])
+  useEffect(() => runLiveOverlayTimeoutEffect({
+    awaitingPersistedTurn, composerActivitySessionKey, liveTranscriptBaselineRef,
+    setLiveTranscriptMessages, liveToolIndexesRef, liveToolInputJsonRef, setComposerLiveText,
+    setAwaitingPersistedTurn,
+  }), [awaitingPersistedTurn, composerActivitySessionKey])
 
   // (Auto-open of the composer on a pending session was removed: with
   // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
