@@ -174,7 +174,7 @@ await waitFor('grid fills from available sessions', () => panes().length === 3)
 const logicalBeforeFill = JSON.stringify(runtime().values.get('windowSplitTree'))
 await chord('1'); await openLayout()
 await act(async () => { setup.mockInput.pressKey('5') }); await settle(150)
-check(panes().length === 0 && typeof runtime().values.get('windowZoom') === 'number', 'Fill did not zoom the focused frame')
+check(panes().length === 0 && (runtime().values.get('windowPresentation') as { mode?: string } | null)?.mode === 'zoom', 'Fill did not zoom the focused frame')
 check(JSON.stringify(runtime().values.get('windowSplitTree')) === logicalBeforeFill, 'Fill discarded the other views')
 await chord('m')
 for (let count = 3; count > 0; count--) { await chord('2'); await chord('x') }
@@ -249,12 +249,12 @@ await chord('m'); await settle(450)
 check(windowCount() === count - 1 && !!windowWith('alpha'), 'title zoom replaced another session')
 const pane = paneFrame(0)!, zoomedPaneIndex = paneIndex(0)
 await click(pane.x + 6, pane.y); await click(pane.x + 6, pane.y)
-check(runtime().values.get('windowZoom') === zoomedPaneIndex, 'double-click did not zoom its own frame')
+check((runtime().values.get('windowPresentation') as { target?: string } | null)?.target === (runtime().values.get('windowOrder') as string[])[zoomedPaneIndex], 'double-click did not zoom its own frame')
 await chord('m'); await settle(450)
 reader = frame('transcript-reader')!
 await click(reader.x + 4, reader.y); await click(reader.x + 4, reader.y)
 // The selected session's window zooms like any other: by its index.
-check(typeof runtime().values.get('windowZoom') === 'number', 'double-click on the original frame behaves differently')
+check((runtime().values.get('windowPresentation') as { mode?: string } | null)?.mode === 'zoom', 'double-click on the original frame behaves differently')
 await chord('m')
 const bravoTab = locate('Win bravo', frame('session-tabs')!)
 const bravoBefore = windowWith('bravo')!

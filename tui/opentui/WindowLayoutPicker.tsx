@@ -31,7 +31,7 @@ export const WINDOW_LAYOUT_SECTIONS: ReadonlyArray<{ title: string; choices: Cho
   {
     title: 'Fill & Arrange',
     choices: [
-      { action: 'fill', label: 'Fill focused pane', icon: ['rrrrr', 'rrrrr'] },
+      { action: 'fill', label: 'Zoom focused pane', icon: ['rrrrr', 'rrrrr'] },
       { action: 'two', label: 'Two panes', icon: ['rr pp', 'rr pp'] },
       { action: 'main-stack', label: 'Focused pane and a stack', icon: ['rrr p', 'rrr p'] },
       { action: 'grid', label: 'Grid of four', icon: ['rr pp', 'pp pp'] },
@@ -210,7 +210,7 @@ export function WindowLayoutPicker({
     ? `${WINDOW_LAYOUT_SECTIONS[target.section]!.choices[target.column]!.label} · ⏎ applies · esc`
     : target?.kind === 'saved' ? '⏎ restore · r rename · u update · x delete · esc'
     : target?.kind === 'save' ? 's save · n named layout · esc'
-    : 'Toggle full screen · ⏎ · esc'
+    : 'Fullscreen focused window · ⏎ · esc'
 
   return (
     <box
@@ -274,7 +274,7 @@ export function WindowLayoutPicker({
       <box height={1} marginTop={1} border={['top']} borderStyle="single" borderColor={theme.border} />
       {listRow('window-layout:fullscreen', ICONS.length, (
         <>
-          <text fg={theme.text} wrapMode="none">{fullscreen ? 'Leave Full Screen' : 'Full Screen'}</text>
+          <text fg={theme.text} wrapMode="none">{'Fullscreen window'}</text>
           <box flexGrow={1} />
           <text fg={theme.dim} wrapMode="none">{'f ›'}</text>
         </>
