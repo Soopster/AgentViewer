@@ -345,6 +345,7 @@ import { useWindowOverlayState } from './app/state/windowOverlayState'
 import { useWindowPanesState } from './app/state/windowPanesState'
 import { useProviderThemeState } from './app/state/providerThemeState'
 import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
+import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9219,39 +9220,20 @@ function OpenTuiWorkspace() {
       ) : null}
 
 
-      {(() => {
-        // The second divider: the grid's row split (the reader's bottom border).
-        // Drawn at the root over that border, where it is inside its parent's
-        // bounds. Borders between panes are the group handles below.
-        if (!arrangedVisible || fullscreenMode || windowZoom !== null) return null
-        const anchor = splitArrangement === 'grid' && arrangedLayout.secondary ? rectOf('transcript-reader') : null
-        if (!anchor) return null
-        const area = windowAreaRect()
-        const left = area ? area.x : anchor.x
-        const span = area ? area.width : anchor.width
-        return (
-          <box
-            id="split-secondary-divider"
-            position="absolute"
-            top={anchor.y + anchor.height - 1}
-            left={left + 1}
-            width={Math.max(1, span - 2)}
-            height={1}
-            zIndex={40}
-            onMouseOver={() => setSecondaryDividerHovered(true)}
-            onMouseOut={() => setSecondaryDividerHovered(false)}
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.stopPropagation()
-              setSplitDividerDragging('secondary')
-            }}
-          >
-            <text fg={secondaryDividerHovered || splitDividerDragging === 'secondary' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
-              {'─'.repeat(Math.max(1, span - 2))}
-            </text>
-          </box>
-        )
-      })()}
+      <GridSecondDivider
+        arrangedVisible={arrangedVisible}
+        fullscreenMode={fullscreenMode}
+        windowZoom={windowZoom}
+        splitArrangement={splitArrangement}
+        arrangedLayout={arrangedLayout!}
+        rectOf={rectOf}
+        windowAreaRect={windowAreaRect}
+        setSecondaryDividerHovered={setSecondaryDividerHovered}
+        setSplitDividerDragging={setSplitDividerDragging}
+        secondaryDividerHovered={secondaryDividerHovered}
+        splitDividerDragging={splitDividerDragging}
+        theme={theme}
+      />
 
       {/* Every border between neighbouring panes: the frame before it, its
           right or bottom border, redrawn so it is hittable, and dragged. */}
