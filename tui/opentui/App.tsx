@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
@@ -2647,26 +2647,9 @@ function OpenTuiWorkspace() {
   })
   const [providerSubagentSummaries, setProviderSubagentSummaries] = useState<Map<string, SubagentSummary[]>>(new Map())
   const subagentSummariesReadRef = useRef(new Set<string>())
-  useEffect(() => {
-    const target = selectedSessionTarget
-    if (!target) return
-    const cacheKey = sessionKey(target)
-    const read = subagentSummariesReadRef.current
-    if (read.has(cacheKey)) return
-    let cancelled = false
-    void readTuiSubagentSummariesAsync(target).then((subagents) => {
-      if (cancelled) return
-      read.add(cacheKey)
-      if (read.size > SUBAGENT_SUMMARY_CACHE_LIMIT) read.delete(read.values().next().value!)
-      if (subagents.length === 0) return
-      setProviderSubagentSummaries((previous) => {
-        const next = new Map(previous).set(cacheKey, subagents)
-        for (const key of next.keys()) if (next.size > SUBAGENT_SUMMARY_CACHE_LIMIT && key !== cacheKey) next.delete(key)
-        return next
-      })
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [selectedSessionTarget])
+  useEffect(() => runProviderSubagentSummariesEffect({
+    selectedSessionTarget, subagentSummariesReadRef, setProviderSubagentSummaries,
+  }), [selectedSessionTarget])
 
   const childrenByParentId = useMemo(() => {
     const map = new Map<string, SidebarSubagentEntry[]>()

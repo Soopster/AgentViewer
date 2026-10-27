@@ -36,6 +36,9 @@ import { join } from 'node:path'
 import { type RunningRegistryEntry } from '../types'
 import { REATTACH_POLL_MS } from '../timing'
 import { sameJson } from '../perf'
+import { readTuiSubagentSummariesAsync } from '../../sessionDetailWorkerClient'
+import { type SubagentSummary } from '../../../../lib/types'
+import { SUBAGENT_SUMMARY_CACHE_LIMIT } from '../layoutConstants'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -584,4 +587,34 @@ export function runRunningRegistryEffect(ctx: RunningRegistryEffectContext) {
   void poll()
   const timer = setInterval(() => { void poll() }, REATTACH_POLL_MS)
   return () => clearInterval(timer)
+}
+
+export type ProviderSubagentSummariesEffectContext = {
+  selectedSessionTarget: Session | null
+  subagentSummariesReadRef: React.RefObject<Set<string>>
+  setProviderSubagentSummaries: React.Dispatch<React.SetStateAction<Map<string, SubagentSummary[]>>>
+}
+
+export function runProviderSubagentSummariesEffect(ctx: ProviderSubagentSummariesEffectContext) {
+  const {
+    selectedSessionTarget, subagentSummariesReadRef, setProviderSubagentSummaries,
+  } = ctx
+  const target = selectedSessionTarget
+  if (!target) return
+  const cacheKey = sessionKey(target)
+  const read = subagentSummariesReadRef.current
+  if (read.has(cacheKey)) return
+  let cancelled = false
+  void readTuiSubagentSummariesAsync(target).then((subagents) => {
+    if (cancelled) return
+    read.add(cacheKey)
+    if (read.size > SUBAGENT_SUMMARY_CACHE_LIMIT) read.delete(read.values().next().value!)
+    if (subagents.length === 0) return
+    setProviderSubagentSummaries((previous) => {
+      const next = new Map(previous).set(cacheKey, subagents)
+      for (const key of next.keys()) if (next.size > SUBAGENT_SUMMARY_CACHE_LIMIT && key !== cacheKey) next.delete(key)
+      return next
+    })
+  }).catch(() => {})
+  return () => { cancelled = true }
 }
