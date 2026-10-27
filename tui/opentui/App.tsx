@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -7876,33 +7876,10 @@ function OpenTuiWorkspace() {
   // pane is already showing. Only that pane moves — the others keep their
   // pinned sessions, so cycling reads as "flip through the rest" instead of
   // scrambling every pane.
-  const cycleSplitPaneSession = useStableEvent(() => {
-    checkpointWindowLayout()
-    if (splitPaneCount === 0) {
-      showNotice('error', 'Split transcript view is off (⌃B % to split)')
-      return
-    }
-    const candidateKeys = splitCandidateSessions.map((tab) => sessionKey(tab))
-    if (candidateKeys.length <= splitPaneCount) {
-      showNotice('info', 'No other open tab to swap into the split pane')
-      return
-    }
-    const target = splitFocusIndex === null ? 0 : pinIndexOfWindow(splitFocusIndex)
-    setSplitPinnedKeys((current) => {
-      if (target < 0 || target >= current.length) return current
-      const heldByOtherPanes = new Set(current.filter((_, i) => i !== target))
-      const from = candidateKeys.indexOf(current[target]!)
-      for (let step = 1; step <= candidateKeys.length; step += 1) {
-        const nextKey = candidateKeys[(from + step) % candidateKeys.length]!
-        if (nextKey !== current[target] && !heldByOtherPanes.has(nextKey)) {
-          const next = [...current]
-          next[target] = nextKey
-          return next
-        }
-      }
-      return current
-    })
-  })
+  const cycleSplitPaneSession = useStableEvent(() => runCycleSplitPaneSession({
+    checkpointWindowLayout, splitPaneCount, showNotice, splitCandidateSessions, splitFocusIndex,
+    pinIndexOfWindow, setSplitPinnedKeys,
+  }))
 
   const jumpToNextWindowAttention = useStableEvent(() => {
     const order = [...(selectedSessionKey ? [selectedSessionKey] : []), ...splitPinnedKeys]

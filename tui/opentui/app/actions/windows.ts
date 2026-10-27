@@ -1364,3 +1364,45 @@ export function runMoveFloatGesture(ctx: MoveFloatGestureContext, event: { x: nu
     : { ...gesture.rect, width: gesture.rect.width + dx, height: gesture.rect.height + dy }
   setFloatingWindow({ ...floatingWindow, rect: clampFloatingRect(rect, area) })
 }
+
+export type CycleSplitPaneSessionContext = {
+  checkpointWindowLayout: () => void
+  splitPaneCount: number
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  splitCandidateSessions: Session[]
+  splitFocusIndex: number | null
+  pinIndexOfWindow: (index: number) => number
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+}
+
+export function runCycleSplitPaneSession(ctx: CycleSplitPaneSessionContext) {
+  const {
+    checkpointWindowLayout, splitPaneCount, showNotice, splitCandidateSessions, splitFocusIndex,
+    pinIndexOfWindow, setSplitPinnedKeys,
+  } = ctx
+  checkpointWindowLayout()
+  if (splitPaneCount === 0) {
+    showNotice('error', 'Split transcript view is off (⌃B % to split)')
+    return
+  }
+  const candidateKeys = splitCandidateSessions.map((tab) => sessionKey(tab))
+  if (candidateKeys.length <= splitPaneCount) {
+    showNotice('info', 'No other open tab to swap into the split pane')
+    return
+  }
+  const target = splitFocusIndex === null ? 0 : pinIndexOfWindow(splitFocusIndex)
+  setSplitPinnedKeys((current) => {
+    if (target < 0 || target >= current.length) return current
+    const heldByOtherPanes = new Set(current.filter((_, i) => i !== target))
+    const from = candidateKeys.indexOf(current[target]!)
+    for (let step = 1; step <= candidateKeys.length; step += 1) {
+      const nextKey = candidateKeys[(from + step) % candidateKeys.length]!
+      if (nextKey !== current[target] && !heldByOtherPanes.has(nextKey)) {
+        const next = [...current]
+        next[target] = nextKey
+        return next
+      }
+    }
+    return current
+  })
+}
