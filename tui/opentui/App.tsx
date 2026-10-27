@@ -277,6 +277,7 @@ import { CoordRunModal } from './app/overlays/CoordRunModal'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 import { ComposerStatusMessage } from './app/overlays/ComposerStatusMessage'
+import { FloatingWindowLayer } from './app/overlays/FloatingWindowLayer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -17715,36 +17716,7 @@ function OpenTuiWorkspace() {
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
       {workspacesEnabled ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
-      {floatingItem && floatingWindow && !fullscreenMode && !windowSurfacePeek ? (() => {
-            const rect = clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight })
-            const size = { width: rect.width, height: rect.height, boxHeight: rect.height }
-            return (
-              <box id="floating-window" position="absolute" left={(windowAreaRef.current?.x ?? sidebarWidth + verticalTabsWidth) + rect.x} top={(windowAreaRef.current?.y ?? (tabsEnabled ? 2 : 1)) + rect.y} width={rect.width} height={rect.height}
-                // Over a floating surface (drawn by the surface layer at 41) it is
-                // only its controls; over a session it is the window and opaque —
-                // an unpainted cell would show the windows underneath through it.
-                zIndex={50}
-                backgroundColor={floatingItem.kind === 'surface' ? undefined : theme.bg}
-                onMouseDown={(event) => {
-                  const frame = rectOf('floating-window')
-                  if (floatingItem.kind === 'surface' && event.button === 0 && frame && event.y === frame.y) startFloatGesture('move', event)
-                }}
-                onMouseDrag={(event: { x: number; y: number }) => moveFloatGesture(event)}
-                onMouseUp={(event: { x: number; y: number }) => endFloatGesture(event)}
-              >
-                {floatingItem.kind === 'session' ? <text position="absolute" left={0} top={0} width={rect.width} height={rect.height} fg={theme.bg} bg={theme.bg} selectable={false} wrapMode="none">{Array(rect.height).fill(' '.repeat(rect.width)).join('\n')}</text> : null}
-                {floatingItem.kind === 'session' ? renderSplitPane(floatingItem.session, FLOATING_PANE_INDEX, size) : null}
-                <box position="absolute" top={0} right={20} height={1} flexDirection="row" zIndex={46}>
-                  <WindowButton id="floating-dock" label=" ⊞ dock " theme={theme} onPress={() => dockFloatingWindow()} />
-                </box>
-                <box id="floating-resize" position="absolute" bottom={0} right={0} width={1} height={1} zIndex={46}
-                  onMouseDown={(event) => { if (event.button === 0) startFloatGesture('resize', event) }}
-                >
-                  <text fg={theme.cyan} selectable={false}>◢</text>
-                </box>
-              </box>
-            )
-          })() : null}
+      <FloatingWindowLayer floatingItem={floatingItem} floatingWindow={floatingWindow} fullscreenMode={fullscreenMode} windowSurfacePeek={windowSurfacePeek} readerAreaWidth={readerAreaWidth} windowAreaHeight={windowAreaHeight} windowAreaRef={windowAreaRef} sidebarWidth={sidebarWidth} verticalTabsWidth={verticalTabsWidth} tabsEnabled={tabsEnabled} theme={theme} rectOf={rectOf} startFloatGesture={startFloatGesture} moveFloatGesture={moveFloatGesture} endFloatGesture={endFloatGesture} renderSplitPane={renderSplitPane} dockFloatingWindow={dockFloatingWindow} />
       <box
         flexGrow={surfacePanelAtBottom ? 0 : 1}
         flexShrink={surfacePanelAtBottom ? 0 : undefined}
