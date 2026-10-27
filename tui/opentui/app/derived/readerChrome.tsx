@@ -18,6 +18,12 @@ import { DraftLengthSpans } from '../inlineText'
 import { type TuiTranscriptCard } from '../../../format'
 import { type WindowChrome } from '../../windowChrome'
 import { Spinner, ComposerWaitingStatus, IdleTicker } from '../chrome'
+import { type SurfacePanelState, activeSurface, closeSurface as closeSurfaceIn, cycleSurface as cycleSurfaceIn, openSurface as openSurfaceIn, type TuiSurface } from '../../surfacePanelState'
+import { panelSurfaceAvailability } from '../../../../lib/rightPanel'
+import { isPluginSurfaceId } from '../../../../lib/plugins/catalog'
+import { SurfacePanel } from '../../SurfacePanel'
+import { type WindowSurfaceKind } from '../../windowSurfaceNames'
+import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 export type ReaderHeaderChromeContext = {
   presentationFocusMode: boolean
@@ -376,4 +382,92 @@ return {
     </>
   ),
 }
+}
+
+export type SurfacePanelElementContext = {
+  surfacePanelVisible: boolean
+  surfacePanel: SurfacePanelState
+  theme: TuiThemePalette
+  surfacePanelAtBottom: boolean
+  readerAreaWidth: number
+  effectiveSurfacePanelWidth: number
+  surfacePanelExpanded: boolean
+  surfacePanelPlacement: 'right' | 'bottom'
+  effectiveSurfacePanelRows: number
+  surfacePanelHeight: number
+  surfacePanelFocused: boolean
+  gitRepoCwd: string
+  liveSubagentText: Record<string, string>
+  setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
+  setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
+  toggleSurfacePanelPlacement: () => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  setSurfacePanelExpanded: React.Dispatch<React.SetStateAction<boolean>>
+  setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
+  surfacePanelResizeFromRef: React.RefObject<number | null>
+  setSurfacePanelResizing: React.Dispatch<React.SetStateAction<boolean>>
+  surfacePanelKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
+  surfacePluginKeyRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>
+  renderSurfaceBody: (kind: WindowSurfaceKind, box: { width: number; height: number; }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => React.ReactNode
+}
+
+export function runSurfacePanelElement(ctx: SurfacePanelElementContext) {
+  const {
+    surfacePanelVisible, surfacePanel, theme, surfacePanelAtBottom, readerAreaWidth,
+    effectiveSurfacePanelWidth, surfacePanelExpanded, surfacePanelPlacement,
+    effectiveSurfacePanelRows, surfacePanelHeight, surfacePanelFocused, gitRepoCwd,
+    liveSubagentText, setSurfacePanel, setSurfacePanelFocused, toggleSurfacePanelPlacement,
+    openSurfaceWindow, setSurfacePanelExpanded, setSurfacePanelOpen, surfacePanelResizeFromRef,
+    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody,
+  } = ctx
+return surfacePanelVisible ? (
+  <SurfacePanel
+    state={surfacePanel}
+    theme={theme}
+    width={surfacePanelAtBottom ? readerAreaWidth : effectiveSurfacePanelWidth}
+    expanded={surfacePanelExpanded}
+    placement={surfacePanelPlacement}
+    height={surfacePanelAtBottom ? effectiveSurfacePanelRows : surfacePanelHeight}
+    focused={surfacePanelFocused}
+    availability={panelSurfaceAvailability('tui', {
+      browser: true,
+      terminal: true,
+      files: !!gitRepoCwd,
+      diff: !!gitRepoCwd,
+      'pull-request': !!gitRepoCwd,
+      agents: true,
+    })}
+    unavailableHints={{
+      files: 'Available when a project is open.',
+      diff: 'Available for Git repositories.',
+      'pull-request': 'Available when a project is open.',
+    }}
+    liveAgentCount={Object.values(liveSubagentText).filter((text) => text.trim().length > 0).length}
+    onOpenSurface={(kind) => setSurfacePanel((current) => openSurfaceIn(current, kind))}
+    onCloseSurface={(id) => setSurfacePanel((current) => closeSurfaceIn(current, id))}
+    onCycleSurface={(delta) => setSurfacePanel((current) => cycleSurfaceIn(current, delta))}
+    onBlur={() => setSurfacePanelFocused(false)}
+    onFocus={() => setSurfacePanelFocused(true)}
+    onActivateSurface={(id) => setSurfacePanel((current) => ({ ...current, activeId: id }))}
+    onTogglePlacement={() => toggleSurfacePanelPlacement()}
+    onMoveToWindow={(kind) => openSurfaceWindow(kind, { fromPanelId: activeSurface(surfacePanel)?.id })}
+    onToggleExpand={() => setSurfacePanelExpanded((current) => !current)}
+    onClosePanel={() => {
+      setSurfacePanelOpen(false)
+      setSurfacePanelFocused(false)
+    }}
+    onResizeStart={(position) => {
+      surfacePanelResizeFromRef.current = position
+      setSurfacePanelResizing(true)
+    }}
+    onKeyHandlerReady={(handler) => { surfacePanelKeyHandlerRef.current = handler }}
+    surfaceKeyHandler={(key) => {
+      const surface = activeSurface(surfacePanel)
+      if (!surface) return
+      if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
+      // agents is read-only.
+    }}
+    renderSurface={(surface: TuiSurface, box) => renderSurfaceBody(surface.kind, box, () => setSurfacePanel((current) => closeSurfaceIn(current, surface.id)), surfacePanelFocused, undefined, surface.id, surface.cwd)}
+  />
+) : null
 }

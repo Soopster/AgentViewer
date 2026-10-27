@@ -350,7 +350,7 @@ import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
-import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome } from './app/derived/readerChrome'
+import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8145,56 +8145,14 @@ function OpenTuiWorkspace() {
   // One element for both placements, so the panel keeps its state when it moves.
   const panelViewSignature = surfacePanel.surfaces.map(entry => `${entry.id}:${entry.kind}`).join('|')
   useLayoutEffect(() => { migratePanelViewState(workspaceContext.runtime, surfacePanel.surfaces, surfacePanel.activeId) }, [workspaceContext.runtime, panelViewSignature])
-  const surfacePanelElement = surfacePanelVisible ? (
-    <SurfacePanel
-      state={surfacePanel}
-      theme={theme}
-      width={surfacePanelAtBottom ? readerAreaWidth : effectiveSurfacePanelWidth}
-      expanded={surfacePanelExpanded}
-      placement={surfacePanelPlacement}
-      height={surfacePanelAtBottom ? effectiveSurfacePanelRows : surfacePanelHeight}
-      focused={surfacePanelFocused}
-      availability={panelSurfaceAvailability('tui', {
-        browser: true,
-        terminal: true,
-        files: !!gitRepoCwd,
-        diff: !!gitRepoCwd,
-        'pull-request': !!gitRepoCwd,
-        agents: true,
-      })}
-      unavailableHints={{
-        files: 'Available when a project is open.',
-        diff: 'Available for Git repositories.',
-        'pull-request': 'Available when a project is open.',
-      }}
-      liveAgentCount={Object.values(liveSubagentText).filter((text) => text.trim().length > 0).length}
-      onOpenSurface={(kind) => setSurfacePanel((current) => openSurfaceIn(current, kind))}
-      onCloseSurface={(id) => setSurfacePanel((current) => closeSurfaceIn(current, id))}
-      onCycleSurface={(delta) => setSurfacePanel((current) => cycleSurfaceIn(current, delta))}
-      onBlur={() => setSurfacePanelFocused(false)}
-      onFocus={() => setSurfacePanelFocused(true)}
-      onActivateSurface={(id) => setSurfacePanel((current) => ({ ...current, activeId: id }))}
-      onTogglePlacement={() => toggleSurfacePanelPlacement()}
-      onMoveToWindow={(kind) => openSurfaceWindow(kind, { fromPanelId: activeSurface(surfacePanel)?.id })}
-      onToggleExpand={() => setSurfacePanelExpanded((current) => !current)}
-      onClosePanel={() => {
-        setSurfacePanelOpen(false)
-        setSurfacePanelFocused(false)
-      }}
-      onResizeStart={(position) => {
-        surfacePanelResizeFromRef.current = position
-        setSurfacePanelResizing(true)
-      }}
-      onKeyHandlerReady={(handler) => { surfacePanelKeyHandlerRef.current = handler }}
-      surfaceKeyHandler={(key) => {
-        const surface = activeSurface(surfacePanel)
-        if (!surface) return
-        if (isPluginSurfaceId(surface.kind)) surfacePluginKeyRef.current?.(key)
-        // agents is read-only.
-      }}
-      renderSurface={(surface: TuiSurface, box) => renderSurfaceBody(surface.kind, box, () => setSurfacePanel((current) => closeSurfaceIn(current, surface.id)), surfacePanelFocused, undefined, surface.id, surface.cwd)}
-    />
-  ) : null
+  const surfacePanelElement = runSurfacePanelElement({
+    surfacePanelVisible, surfacePanel, theme, surfacePanelAtBottom, readerAreaWidth,
+    effectiveSurfacePanelWidth, surfacePanelExpanded, surfacePanelPlacement,
+    effectiveSurfacePanelRows, surfacePanelHeight, surfacePanelFocused, gitRepoCwd,
+    liveSubagentText, setSurfacePanel, setSurfacePanelFocused, toggleSurfacePanelPlacement,
+    openSurfaceWindow, setSurfacePanelExpanded, setSurfacePanelOpen, surfacePanelResizeFromRef,
+    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody,
+  })
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
   const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
