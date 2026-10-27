@@ -328,6 +328,7 @@ import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transc
 import { runTabOptions } from './app/derived/tabs'
 import { runSidebarSessionActivity } from './app/derived/sidebar'
 import { useNavigationRefs } from './app/state/navigationRefs'
+import { useSessionCaches } from './app/state/sessionCaches'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1199,11 +1200,10 @@ function OpenTuiWorkspace() {
     lastKey: null,
   })
   const loader = useTranscriptSessionLoader()
-  const [ownedDetailCache] = useState(() => new TranscriptDetailCache())
-  const sessionDetailCacheRef = useRef(ownedDetailCache)
-  const sessionContextUsageCacheRef = useRef(new Map<string, ContextUsage | null>())
-  const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
-  const sessionMetadataInFlightRef = useRef(new Set<string>())
+  const {
+    sessionDetailCacheRef, sessionContextUsageCacheRef, sessionMetadataFetchedAtRef,
+    sessionMetadataInFlightRef,
+  } = useSessionCaches()
   const composerAbortRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'composerAbortRef', null)
   const activeComposerSendCleanupRef = composerSessions.ref<Promise<void> | null>(composerOwnerKey, 'activeComposerSendCleanupRef', null)
   // Transient auto-retry bookkeeping (mirrors the web composer): only retry a
