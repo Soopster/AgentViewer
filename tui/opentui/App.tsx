@@ -334,6 +334,7 @@ import { useModelState } from './app/state/modelState'
 import { useLiveTurnState } from './app/state/liveTurnState'
 import { useQuestionPickerState } from './app/state/questionPickerState'
 import { useComposerListState } from './app/state/composerListState'
+import { useComposerInputState } from './app/state/composerInputState'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -983,18 +984,16 @@ function OpenTuiWorkspace() {
     composerDraftRef.current = next
     composerDraftState.write(next, true)
   })
-  const composerDraftStorageKeyRef = useRef<string | null>(null)
-  const [composerLiveTodos, setComposerLiveTodos] = useComposerSessionState<import('../../lib/taskRegistry').OpenCodeTodo[]>(composerSessions, composerOwnerKey, 'composerLiveTodos', [])
-  const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
-  const [composerMentionResults, setComposerMentionResults] = useState<TuiMentionResult[]>([])
-  const [composerAgentOptions, setComposerAgentOptions] = useState<SessionComposerAgentOption[]>([])
-  const [composerMentionAgents, setComposerMentionAgents] = useState<SessionComposerAgentOption[]>([])
-  const [composerMentionIndex, setComposerMentionIndex] = useState(0)
-  const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
-  const [composerMentionAttachments, setComposerMentionAttachments] = useWorkspaceState<SendAttachment[]>('composerMentionAttachments', [])
-  const [composerPromptParts, setComposerPromptParts] = useWorkspaceState<ComposerPromptPart[]>('composerPromptParts', [])
-  const composerMentionAttachmentsRef = useRef<SendAttachment[]>([])
-  const composerPromptPartsRef = useRef<ComposerPromptPart[]>([])
+  const {
+    composerDraftStorageKeyRef, composerLiveTodos, setComposerLiveTodos, composerMention,
+    setComposerMention, composerMentionResults, setComposerMentionResults, composerAgentOptions,
+    setComposerAgentOptions, composerMentionAgents, setComposerMentionAgents, composerMentionIndex,
+    setComposerMentionIndex, composerMentionDismissedStart, setComposerMentionDismissedStart,
+    composerMentionAttachments, setComposerMentionAttachments, composerPromptParts,
+    setComposerPromptParts, composerMentionAttachmentsRef, composerPromptPartsRef,
+  } = useComposerInputState({
+    composerSessions, composerOwnerKey,
+  })
   useEffect(() => { composerMentionAttachmentsRef.current = composerMentionAttachments }, [composerMentionAttachments])
   useEffect(() => { composerPromptPartsRef.current = composerPromptParts }, [composerPromptParts])
   const {
