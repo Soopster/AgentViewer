@@ -310,7 +310,7 @@ import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoo
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
-import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel } from './app/actions/composerPanels'
+import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel } from './app/actions/composerPanels'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10156,42 +10156,9 @@ function OpenTuiWorkspace() {
   }, panelWidth, rowWidth)
   // Always-visible queued-send list (no modal): shows what will fire after the
   // current turn, in order, with the ⌃Y edit / ⇧⌃Y clear hint.
-  const renderComposerQueuePanel = (panelWidth: number, rowWidth: number) => {
-    if (!composerActive || activeQueuedComposerSends.length === 0) return null
-    const visible = Math.min(activeQueuedComposerSends.length, 4)
-    const hiddenCount = activeQueuedComposerSends.length - visible
-    return (
-      <box
-        width={panelWidth}
-        height={visible + (hiddenCount > 0 ? 2 : 1) + 2}
-        paddingX={1}
-        backgroundColor={theme.surface2}
-        border
-        borderStyle="single"
-        borderColor={composerQueueDurable ? (theme.amber ?? theme.border2) : theme.red}
-        flexDirection="column"
-      >
-        <text fg={composerQueueDurable ? (theme.amber ?? composerAccentColor) : theme.red} wrapMode="none">
-          {fitText(`${composerQueueDurable ? '' : 'memory only · '}queued (${activeQueuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
-        </text>
-        {activeQueuedComposerSends.slice(0, visible).map((entry, index) => {
-          const compact = compactComposerEntryText(entry.text)
-          const attachmentLabel = attachmentCountLabel(entry.attachments)
-          const suffix = attachmentLabel ? `  ${attachmentLabel}` : ''
-          return (
-            <box key={entry.id} flexDirection="row" height={1} width={rowWidth}>
-              <text fg={theme.dim} wrapMode="none">{`${index + 1}. `}</text>
-              <text fg={theme.text} wrapMode="none">{fitText(compact, Math.max(rowWidth - 6 - suffix.length, 8))}</text>
-              <text fg={theme.dim} wrapMode="none">{suffix}</text>
-            </box>
-          )
-        })}
-        {hiddenCount > 0 ? (
-          <text fg={theme.dim} wrapMode="none">{fitText(`  +${hiddenCount} more queued`, rowWidth)}</text>
-        ) : null}
-      </box>
-    )
-  }
+  const renderComposerQueuePanel = (panelWidth: number, rowWidth: number) => runRenderComposerQueuePanel({
+    composerActive, activeQueuedComposerSends, theme, composerQueueDurable, composerAccentColor,
+  }, panelWidth, rowWidth)
 
 
   // The active transcript uses the same controls in a tiled or floating window,
