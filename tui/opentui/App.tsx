@@ -385,6 +385,7 @@ import { useTaskPanelMessagesGroup } from './app/slices/taskPanelMessages'
 import { useComposerProviderGroup } from './app/slices/composerProvider'
 import { useRecentlyWrittenKeysGroup } from './app/slices/recentlyWrittenKeys'
 import { useTranscriptDiffHoverScrollTopRefGroup } from './app/slices/transcriptDiffHoverScrollTopRef'
+import { useThemeGroup } from './app/slices/theme'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1127,25 +1128,13 @@ function OpenTuiWorkspace() {
       pinnedKeys,
     )
   }, [openTabSessions, selectedSessionKey])
-
-  // The epoch is what changes the terminal theme's colours.
-  const theme = useMemo(() => getThemePalette(themeMode), [themeMode, terminalPaletteEpoch])
-  const composerSyntaxStyle = useMemo(() => buildComposerSyntaxStyle(theme, renderer.nativeScene), [theme, renderer])
-  const densityState = useMemo(() => densityConfig(density), [density])
-  const presentationFocusMode = focusMode || fullscreenMode
-  const showRail = railVisible && !fullscreenMode
-  const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
-  const selectedIndex = useMemo(
-    () => resolveSelectedSessionIndex(selectedSessionKey, sessions, sessionKey),
-    [selectedSessionKey, sessions],
-  )
-  // Latest sessions list keyed for ref-time lookups. refreshSelectedSessionDetail
-  // receives identity-stable SKELETON sessions ({sessionId, provider} — see
-  // selectedSessionTarget), so it must resolve list-level metadata like
-  // transcript update time here; reading it off the passed session disabled the
-  // mtime guards (typeof undefined !== 'number') and made every 2s poll and
-  // every scrub settle re-read the full session file.
-  const sessionsByKeyRef = useRef(new Map<string, Session>())
+  const {
+    theme, composerSyntaxStyle, densityState, presentationFocusMode, showRail, effectiveFocus,
+    selectedIndex, sessionsByKeyRef,
+  } = useThemeGroup({
+    themeMode, terminalPaletteEpoch, renderer, density, focusMode, fullscreenMode, railVisible,
+    focusedPane, selectedSessionKey, sessions,
+  })
   useEffect(() => {
     sessionsRef.current = sessions
     const byKey = new Map<string, Session>()
