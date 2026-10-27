@@ -376,6 +376,7 @@ import { useFloatingItemGroup } from './app/slices/floatingItem'
 import { useStackedPanesVisibleGroup } from './app/slices/stackedPanesVisible'
 import { usePopoverTakesWindowGroup } from './app/slices/popoverTakesWindow'
 import { useComposerKeysTargetTurnGroup } from './app/slices/composerKeysTargetTurn'
+import { useComposerMentionVisibleCountGroup } from './app/slices/composerMentionVisibleCount'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2548,41 +2549,16 @@ function OpenTuiWorkspace() {
       if (composerSlashDismissed) setComposerSlashDismissed(false)
     }
   })
-
-  const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
-  const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
-  const composerHistoryVisibleCount = Math.min(sentHistory.length, 6)
-  const composerStashVisibleCount = Math.min(composerStash.length, 6)
-  const composerRewindVisibleCount = Math.min(composerRewindItems?.length ?? 0, 6)
-  const composerPopoverHeight = presentationHidesComposer ? 0 : (!composerWindowOpen && composerActive && composerMention && composerMentionVisibleCount > 0)
-    ? composerMentionVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen && !composerStashOpen)
-    ? composerSlashVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerHistoryOpen && composerHistoryVisibleCount > 0 && !composerMention)
-    ? composerHistoryVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerStashOpen && composerStashVisibleCount > 0 && !composerMention)
-    ? composerStashVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerRewindVisibleCount > 0)
-    ? composerRewindVisibleCount + 3
-    : 0
-  // Status indicators (requesting spinner, subagent tail, live-prompt
-  // suggestion, composer status, auto-targeting note) render as siblings
-  // *between* the scrollbox and the composer. They each take fixed rows when
-  // visible — we must subtract them from mainContentHeight so the transcript
-  // shrinks instead of pushing the composer off-screen.
-  const hasSubagentTail = useMemo(
-    () => Object.values(liveSubagentText).some((t) => t.trim().length > 0),
-    [liveSubagentText],
-  )
-  const activeRunningToolCount = useMemo(
-    () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
-    [liveToolActivities],
-  )
-  const composerActivityVisible = Boolean(
-    composerActivitySessionKey
-    && selectedSessionIdentity === composerActivitySessionKey,
-  )
-  const visibleComposerSending = composerActivityVisible && composerSendState === 'sending'
+  const {
+    composerMentionVisibleCount, composerSlashVisibleCount, composerHistoryVisibleCount,
+    composerStashVisibleCount, composerRewindVisibleCount, composerPopoverHeight, hasSubagentTail,
+    activeRunningToolCount, composerActivityVisible, visibleComposerSending,
+  } = useComposerMentionVisibleCountGroup({
+    composerMentionResults, composerSlashCommands, sentHistory, composerStash, composerRewindItems,
+    presentationHidesComposer, composerWindowOpen, composerActive, composerMention,
+    composerSlashOpen, composerHistoryOpen, composerStashOpen, liveSubagentText,
+    liveToolActivities, composerActivitySessionKey, selectedSessionIdentity, composerSendState,
+  })
   const composerTurnStatusInBorder = visibleComposerSending && !embeddedComposer && !fullscreenMode && !composerWindowOpen && !composerHidden && !presentationHidesComposer
   const visibleAwaitingPersistedTurn = composerActivityVisible && awaitingPersistedTurn
   const visibleComposerLiveText = composerActivityVisible ? composerLiveText : ''
