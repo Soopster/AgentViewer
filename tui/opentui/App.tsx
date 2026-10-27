@@ -309,7 +309,7 @@ import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlActi
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
-import { runRenderSurfaceBodyInner, runRenderSplitPane } from './app/actions/windowRender'
+import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow } from './app/actions/windowRender'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10627,67 +10627,13 @@ function OpenTuiWorkspace() {
   // A surface in the layout: the side panel's view of it, in a window frame.
   // `place` puts the frame in the surface layer (absolute, over its slot's
   // placeholder, which keeps the `split-pane:i` id) rather than in the flow.
-  const renderSurfaceWindow = (surface: WindowSurfaceId, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false, place?: { x: number; y: number; zIndex: number }) => {
-    const focused = splitFocusIndex === index
-    const height = size.boxHeight ?? size.height
-    return (
-      <box
-        key={`surface-window:${surface}`}
-        id={place ? `surface-frame:${surface}` : `split-pane:${index}`}
-        visible={!hidden}
-        width={size.width}
-        height={size.boxHeight}
-        {...(place ? { position: 'absolute' as const, left: place.x, top: place.y, zIndex: place.zIndex } : {})}
-        {...(index === FLOATING_PANE_INDEX ? {
-          onMouseDrag: (event: { x: number; y: number }) => moveFloatGesture(event),
-          onMouseUp: (event: { x: number; y: number }) => endFloatGesture(event),
-        } : {
-          onMouseDrag: (event: { x: number; y: number }) => sessionDragHandlers.move(event),
-          onMouseUp: (event: { x: number; y: number }) => sessionDragHandlers.release(event),
-        })}
-        flexShrink={0}
-        flexDirection="column"
-        // Not clipped here: the tab strip and the title buttons sit on the border,
-        // and a clipping frame does not paint them. The body clips instead.
-        border
-        borderStyle="single"
-        borderColor={focused ? theme.cyan : theme.border}
-        backgroundColor={theme.surface}
-        title={` ${windowSurfaceTitle(surface)} `}
-        titleColor={focused ? theme.cyan : theme.dim}
-        onMouseDown={(event) => {
-          if (event.button === 2) {
-            openSurfaceWindowMenu(surface, index, event)
-            return
-          }
-          if (event.button !== 0) return
-          if (surfacePanelFocused) setSurfacePanelFocused(false)
-          focusSplitPane(index)
-          // The title row is the handle: dragging it moves the window.
-          const frame = renderer.root.findDescendantById(index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`) as unknown as { y: number } | null
-          if (index === FLOATING_PANE_INDEX) { if (frame && event.y === frame.y) startFloatGesture('move', event); return }
-          if (index >= 0 && frame && event.y === frame.y) {
-            let clicks = surfaceTitleClicksRef.current.get(surface)
-            if (!clicks) { clicks = { current: null }; surfaceTitleClicksRef.current.set(surface, clicks) }
-            if (isDoubleClick(clicks, event)) toggleWindowZoom(index)
-            else sessionDragImplRef.current.pressSurface(surface, index, event)
-          }
-        }}
-      >
-        {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
-        <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
-          <WindowButton id={`surface-window-menu:${surface}`} label=" ≡ " theme={theme} onPress={point => openWindowControlMenu(surfaceWindowKey(surface), point)} />
-          <WindowButton id={`surface-window-to-panel:${surface}`} label={isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
-          <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
-        </box>
-        <box flexGrow={1} overflow="hidden">
-          <RetainedWindow visible={!hidden}>
-          {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
-          </RetainedWindow>
-        </box>
-      </box>
-    )
-  }
+  const renderSurfaceWindow = (surface: WindowSurfaceId, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false, place?: { x: number; y: number; zIndex: number }) => runRenderSurfaceWindow({
+    splitFocusIndex, moveFloatGesture, endFloatGesture, sessionDragHandlers, theme,
+    windowSurfaceTitle, openSurfaceWindowMenu, surfacePanelFocused, setSurfacePanelFocused,
+    focusSplitPane, renderer, startFloatGesture, surfaceTitleClicksRef, toggleWindowZoom,
+    sessionDragImplRef, renderWindowTabs, openWindowControlMenu, moveSurfaceToPanel,
+    closeSurfaceWindow, renderSurfaceBody, composerActive,
+  }, surface, index, size, hidden, place)
 
   // A surface window in the flow is only its slot: the frame itself is drawn by
   // the surface layer, so moving it between rows, tabbing it or floating it

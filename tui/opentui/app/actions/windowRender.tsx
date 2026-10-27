@@ -37,6 +37,11 @@ import { type MenuPoint, type PaneFocus } from '../types'
 import { FLOATING_PANE_INDEX } from '../layoutConstants'
 import { isLiveAssistantTextMessage } from '../liveStream'
 import { SPLIT_PANE_EMPTY_LIVE, type SplitPaneHandle, type TranscriptDiffControls, SplitTranscriptPane } from '../SplitTranscriptPane'
+import { WindowButton } from '../../WindowButton'
+import { surfaceKindOf } from '../../windowSurfaceNames'
+import { isPopoverWindowKind } from '../../popoverWindows'
+import { surfaceWindowKey } from '../../windowOrder'
+import { isDoubleClick } from '../SplitTranscriptPane'
 
 export type RenderSurfaceBodyInnerContext = {
   windowSurfaceMeta: Record<string, SurfaceMeta>
@@ -379,4 +384,98 @@ return (
     {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
   </box>
 )
+}
+
+export type RenderSurfaceWindowContext = {
+  splitFocusIndex: number | null
+  moveFloatGesture: (event: { x: number; y: number; }) => void
+  endFloatGesture: (event?: { x: number; y: number; }) => void
+  sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }
+  theme: TuiThemePalette
+  windowSurfaceTitle: (surface: WindowSurfaceId) => string
+  openSurfaceWindowMenu: (surface: WindowSurfaceId, _index: number, point: { x: number; y: number; }) => void
+  surfacePanelFocused: boolean
+  setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
+  focusSplitPane: (paneIndex: number) => void
+  renderer: CliRenderer
+  startFloatGesture: (mode: 'move' | 'resize', event: { x: number; y: number; }) => void
+  surfaceTitleClicksRef: React.RefObject<Map<string, { current: { x: number; y: number; at: number; } | null; }>>
+  toggleWindowZoom: (target?: number | null) => void
+  sessionDragImplRef: React.RefObject<{ press: (_session: Session, _fromPane: number | null, _event: { x: number; y: number; }, _onClick?: () => void) => void; pressSurface: (_surface: WindowSurfaceId, _fromPane: number, _event: { x: number; y: number; }) => void; pressTab: (_key: string, _fromPane: number, _event: { x: number; y: number; }, _onClick?: () => void) => void; pressReader: (_session: Session, _event: { x: number; y: number; }) => void; move: (_event: { x: number; y: number; }) => void; release: (_event: { x: number; y: number; }) => void; }>
+  renderWindowTabs: (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => React.ReactNode
+  openWindowControlMenu: (key: string, point?: { x: number; y: number; }, section?: 'resize' | 'swap' | 'session') => void
+  moveSurfaceToPanel: (surface: WindowSurfaceId) => void
+  closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
+  renderSurfaceBody: (kind: WindowSurfaceKind, box: { width: number; height: number; }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => React.ReactNode
+  composerActive: boolean
+}
+
+export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface: WindowSurfaceId, index: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden?: boolean, place?: { x: number; y: number; zIndex: number }) {
+  const {
+    splitFocusIndex, moveFloatGesture, endFloatGesture, sessionDragHandlers, theme,
+    windowSurfaceTitle, openSurfaceWindowMenu, surfacePanelFocused, setSurfacePanelFocused,
+    focusSplitPane, renderer, startFloatGesture, surfaceTitleClicksRef, toggleWindowZoom,
+    sessionDragImplRef, renderWindowTabs, openWindowControlMenu, moveSurfaceToPanel,
+    closeSurfaceWindow, renderSurfaceBody, composerActive,
+  } = ctx
+  if (hidden === undefined) hidden = false
+  const focused = splitFocusIndex === index
+  const height = size.boxHeight ?? size.height
+  return (
+    <box
+      key={`surface-window:${surface}`}
+      id={place ? `surface-frame:${surface}` : `split-pane:${index}`}
+      visible={!hidden}
+      width={size.width}
+      height={size.boxHeight}
+      {...(place ? { position: 'absolute' as const, left: place.x, top: place.y, zIndex: place.zIndex } : {})}
+      {...(index === FLOATING_PANE_INDEX ? {
+        onMouseDrag: (event: { x: number; y: number }) => moveFloatGesture(event),
+        onMouseUp: (event: { x: number; y: number }) => endFloatGesture(event),
+      } : {
+        onMouseDrag: (event: { x: number; y: number }) => sessionDragHandlers.move(event),
+        onMouseUp: (event: { x: number; y: number }) => sessionDragHandlers.release(event),
+      })}
+      flexShrink={0}
+      flexDirection="column"
+      // Not clipped here: the tab strip and the title buttons sit on the border,
+      // and a clipping frame does not paint them. The body clips instead.
+      border
+      borderStyle="single"
+      borderColor={focused ? theme.cyan : theme.border}
+      backgroundColor={theme.surface}
+      title={` ${windowSurfaceTitle(surface)} `}
+      titleColor={focused ? theme.cyan : theme.dim}
+      onMouseDown={(event) => {
+        if (event.button === 2) {
+          openSurfaceWindowMenu(surface, index, event)
+          return
+        }
+        if (event.button !== 0) return
+        if (surfacePanelFocused) setSurfacePanelFocused(false)
+        focusSplitPane(index)
+        // The title row is the handle: dragging it moves the window.
+        const frame = renderer.root.findDescendantById(index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`) as unknown as { y: number } | null
+        if (index === FLOATING_PANE_INDEX) { if (frame && event.y === frame.y) startFloatGesture('move', event); return }
+        if (index >= 0 && frame && event.y === frame.y) {
+          let clicks = surfaceTitleClicksRef.current.get(surface)
+          if (!clicks) { clicks = { current: null }; surfaceTitleClicksRef.current.set(surface, clicks) }
+          if (isDoubleClick(clicks, event)) toggleWindowZoom(index)
+          else sessionDragImplRef.current.pressSurface(surface, index, event)
+        }
+      }}
+    >
+      {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
+      <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
+        <WindowButton id={`surface-window-menu:${surface}`} label=" ≡ " theme={theme} onPress={point => openWindowControlMenu(surfaceWindowKey(surface), point)} />
+        <WindowButton id={`surface-window-to-panel:${surface}`} label={isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
+        <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
+      </box>
+      <box flexGrow={1} overflow="hidden">
+        <RetainedWindow visible={!hidden}>
+        {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
+        </RetainedWindow>
+      </box>
+    </box>
+  )
 }
