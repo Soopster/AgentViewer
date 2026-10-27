@@ -361,6 +361,7 @@ import { useControlWindowIndexGroup } from './app/slices/controlWindowIndex'
 import { useOpenMoveWorkspaceMenuGroup } from './app/slices/openMoveWorkspaceMenu'
 import { useDragSplitDividerGroup } from './app/slices/dragSplitDivider'
 import { useDropTargetAtGroup } from './app/slices/dropTargetAt'
+import { useRegisterTeammatesKeysGroup } from './app/slices/registerTeammatesKeys'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6291,65 +6292,18 @@ function OpenTuiWorkspace() {
     showNotice('info', 'Teammates are off · turn Coordination on in Plugins (⌃K palette)')
     closeInteractiveCoordinator()
   }, [teammatesModalOpen, disabledPlugins])
-  const registerTeammatesKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
-    teammatesKeyHandlerRef.current = handler
+  const {
+    registerTeammatesKeys, offerTeammatesPlacement, registerPluginOverlayKeys,
+    pluginSelectedDetail, offerPopoverPlacement, returnPopoverWindow, moveSurfaceToPanel,
+    currentWindowLayoutAction,
+  } = useRegisterTeammatesKeysGroup({
+    teammatesKeyHandlerRef, pluginOverlayKeyHandlerRef, selectedSessionKey, sessionDetail,
+    openPopoverWindow, setPopoverOpen, openSurfaceWindow, setContextMenu, width, openPopoverTab,
+    openPopoverInNewTab, readerPin, pinnedSessionOf, windowSurfaceMeta, workspaceContext,
+    returningPopoverRef, closeSurfaceWindow, openTabByKey, setOpenTabSessions, selectTabSession,
+    surfacePanel, gitRepoCwd, setSurfacePanelOpen, setSurfacePanelFocused, setSurfacePanel,
+    reconciledSplitTree, visibleSplitPaneCount, splitArrangement, stackedSplit, splitReaderLast,
   })
-  const offerTeammatesPlacement = useStableEvent(() => offerPopoverPlacement('teammates'))
-  const registerPluginOverlayKeys = useStableEvent((handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) => {
-    pluginOverlayKeyHandlerRef.current = handler
-  })
-  const pluginSelectedDetail = useMemo(() => ({ key: selectedSessionKey, detail: sessionDetail }), [selectedSessionKey, sessionDetail])
-  const offerPopoverPlacement = useStableEvent((kind: WindowSurfaceKind) => {
-    const beside = () => {
-      if (isPopoverWindowKind(kind)) { openPopoverWindow(kind); return }
-      setPopoverOpen(kind, false)
-      openSurfaceWindow(kind)
-    }
-    setContextMenu({ x: Math.max(0, width - 34), y: 1, title: WINDOW_SURFACE_TITLES[kind], items: [
-      { label: 'Beside the focused pane', hint: '⌃⇧W', run: beside },
-      { label: 'As a tab in this workspace', run: () => (isPopoverWindowKind(kind) ? openPopoverWindow(kind, undefined, 'fill') : openPopoverTab(kind, {})) },
-      { label: 'In a new workspace', run: () => { setPopoverOpen(kind, false); openPopoverInNewTab(kind, isPopoverWindowKind(kind) ? pinFor(kind, readerPin()) : {}) } },
-    ] })
-  })
-  // A popover window back to full screen: on its pinned session, in the reader.
-  const returnPopoverWindow = useStableEvent((surface: WindowSurfaceId) => {
-    const kind = surfaceKindOf(surface)
-    if (!isPopoverWindowKind(kind)) return
-    const pinned = pinnedSessionOf(surface)
-    const meta = windowSurfaceMeta[surface]
-    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, surface), 'root', getPluginSurface(kind).pluginId)
-    returningPopoverRef.current = true
-    closeSurfaceWindow(surface, true)
-    returningPopoverRef.current = false
-    // Into the reader as a tab — never through the rail's path, which with this
-    // (just closed, still focused this render) window would reopen the session
-    // as a window and re-commit the window list it was closed from.
-    if (pinned && sessionKey(pinned) !== selectedSessionKey) {
-      if (!openTabByKey.has(sessionKey(pinned))) setOpenTabSessions((current) => [...current, pinned])
-      selectTabSession(pinned)
-    }
-    setPopoverOpen(kind, true, meta)
-  })
-  const moveSurfaceToPanel = useStableEvent((surface: WindowSurfaceId) => {
-    const kind = surfaceKindOf(surface)
-    if (isPopoverWindowKind(kind)) { returnPopoverWindow(surface); return }
-    const opened = openSurfaceIn(surfacePanel, kind)
-    const nextPanel = { ...opened, surfaces: opened.surfaces.map(entry => entry.id === opened.activeId ? { ...entry, cwd: windowSurfaceMeta[surface]?.cwd ?? gitRepoCwd } : entry) }
-    const panel = activeSurface(nextPanel)!
-    copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, surface), surfaceViewNamespace(kind, undefined, panel.id))
-    closeSurfaceWindow(surface, true)
-    setSurfacePanelOpen(true)
-    setSurfacePanelFocused(true)
-    setSurfacePanel(nextPanel)
-  })
-
-  // The choice the window menu shows as current.
-  const currentWindowLayoutAction: WindowLayoutAction | null = reconciledSplitTree ? null : visibleSplitPaneCount === 0
-    ? 'fill'
-    : splitArrangement === 'main-stack' ? 'main-stack'
-    : splitArrangement === 'grid' ? (visibleSplitPaneCount > 3 ? 'grid-six' : 'grid')
-    : stackedSplit ? (splitReaderLast ? 'reader-bottom' : 'reader-top')
-    : splitReaderLast ? 'reader-right' : visibleSplitPaneCount === 1 ? 'two' : 'reader-left'
 
   const planPaneArrangement = (action: WindowLayoutAction) => {
     const focused = splitFocusIndex ?? 0
