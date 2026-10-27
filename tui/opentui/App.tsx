@@ -332,6 +332,7 @@ import { useSessionCaches } from './app/state/sessionCaches'
 import { useSelectionRefs } from './app/state/selectionRefs'
 import { useModelState } from './app/state/modelState'
 import { useLiveTurnState } from './app/state/liveTurnState'
+import { useQuestionPickerState } from './app/state/questionPickerState'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1062,34 +1063,19 @@ function OpenTuiWorkspace() {
   // Session key of the turn the local send stream currently owns; the registry
   // poll never treats that session as reattached.
   const ownedTurnKeyRef = composerSessions.ref<string | null>(composerOwnerKey, 'ownedTurnKeyRef', null)
-  // AskUserQuestion picker state (keyed off the active pending permission's id).
-  const [questionFocusIndex, setQuestionFocusIndex] = useState(0)
-  const [questionOptionIndex, setQuestionOptionIndex] = useState(0)
-  const [questionSelections, setQuestionSelections] = useState<Record<number, string[]>>({})
-  const [questionFreeformAnswers, setQuestionFreeformAnswers] = useState<Record<number, string>>({})
-  const [questionFreeformEditing, setQuestionFreeformEditing] = useState(false)
-  const questionPermissionIdRef = useRef<string | null>(null)
-  const [composerWaitingSeed, setComposerWaitingSeed] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerWaitingSeed', '')
-  const [composerError, setComposerError] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'composerError', null)
-  const [composerLiveText, setComposerLiveText] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerLiveText', '')
-  // Reasoning streams on its own dim channel (see liveReasoning render below).
-  const [composerLiveReasoning, setComposerLiveReasoning] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerLiveReasoning', '')
-  // Live thinking-token estimate (SDK `thinking_tokens` messages); shown on the
-  // THINKING preview header, reset each turn.
-  const [composerThinkingTokens, setComposerThinkingTokens] = useComposerSessionState(composerSessions, composerOwnerKey, 'composerThinkingTokens', 0)
-  const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
-  // Output of a Claude local slash command (/context, /usage, …). The CLI
-  // persists it as a system row the SDK returns without content, so the
-  // transcript re-read can never show it; it is held here — apart from the live
-  // overlay the reconcile clears — until that session's next send.
-  const [localCommandOutputs, setLocalCommandOutputs] = useState<ThreadedMessage[]>([])
-  // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
-  // a single slot here used to silently overwrite the first queued message).
-  const [queuedComposerSends, setQueuedComposerSends] = useWorkspaceState<QueuedComposerSend[]>('queuedComposerSends', () =>
-    workspaceContext.runtime.values.get('legacyInitialWorkspace') === true ? readComposerQueue(isQueuedComposerSend) : [])
-  const queuedComposerSendsRef = useRef<QueuedComposerSend[]>(queuedComposerSends)
-  const [composerQueueDurable, setComposerQueueDurable] = useState(true)
-  const [runningRegistryReady, setRunningRegistryReady] = useState(false)
+  const {
+    questionFocusIndex, setQuestionFocusIndex, questionOptionIndex, setQuestionOptionIndex,
+    questionSelections, setQuestionSelections, questionFreeformAnswers, setQuestionFreeformAnswers,
+    questionFreeformEditing, setQuestionFreeformEditing, questionPermissionIdRef,
+    composerWaitingSeed, setComposerWaitingSeed, composerError, setComposerError, composerLiveText,
+    setComposerLiveText, composerLiveReasoning, setComposerLiveReasoning, composerThinkingTokens,
+    setComposerThinkingTokens, liveTranscriptMessages, setLiveTranscriptMessages,
+    localCommandOutputs, setLocalCommandOutputs, queuedComposerSends, setQueuedComposerSends,
+    queuedComposerSendsRef, composerQueueDurable, setComposerQueueDurable, runningRegistryReady,
+    setRunningRegistryReady,
+  } = useQuestionPickerState({
+    composerSessions, composerOwnerKey, workspaceContext,
+  })
   // Follow-up queue mutations must be crash-safe before the next render. Keep
   // the transient ref and atomic queue file in lockstep in the originating
   // interaction; relying only on effects leaves immediate-exit windows where
