@@ -14,7 +14,26 @@ import { type QueuedComposerSend, type ComposerDraftSnapshot, type TuiMentionRes
 import { keepEmpty } from '../collections'
 
 /** Returns true when one of these branches handled the key. */
-export function handleComposerKeys({ composerActive, isCtrl, handled, pasteSystemClipboardToComposer, key, composerMention, composerMentionResults, setComposerMentionDismissedStart, setComposerMention, setComposerMentionResults, composerSlashOpen, composerSlashCommands, setComposerSlashDismissed, setComposerSlashIndex, composerHistoryOpen, cancelComposerHistory, composerStashOpen, setComposerStashOpen, setComposerStashIndex, composerRewindItems, setComposerRewindItems, composerSendState, reattachedRunning, rememberComposerCursor, setComposerWindowOpen, setComposerActive, composerWindowOpen, isKeyRepeat, interruptPressActive, cancelComposerSend, setInterruptPressActive, interruptPressTimeoutRef, toggleComposerWindow, activeQueuedComposerSends, clearQueuedComposerSends, popNewestQueuedComposerSend, canUseChannelBridge, routeComposerToBridge, toggleComposerBridgeRoute, searchComposerHistory, editComposerInExternalEditor, pluginOverlay, closePluginOverlay, runPluginCommandId, composerTargetSession, setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory, moveComposerHistory, selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen, setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt, setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry, composerStashIndex, composerStash, composerMentionIndex, insertMentionAtCursor, setComposerMentionIndex, composerSlashIndex, insertSlashAtCursor, livePromptSuggestion, composerTextareaRef, setComposerDraft, setLivePromptSuggestion, composerDraft, historyIndex }: {
+export function handleComposerKeys({
+  composerActive, isCtrl, handled, pasteSystemClipboardToComposer, key, composerMention,
+  composerMentionResults, setComposerMentionDismissedStart, setComposerMention,
+  setComposerMentionResults, composerSlashOpen, composerSlashCommands, setComposerSlashDismissed,
+  setComposerSlashIndex, composerHistoryOpen, cancelComposerHistory, composerStashOpen,
+  setComposerStashOpen, setComposerStashIndex, composerRewindItems, setComposerRewindItems,
+  composerSendState, reattachedRunning, rememberComposerCursor, setComposerWindowOpen,
+  setComposerActive, composerWindowOpen, isKeyRepeat, interruptPressActive, cancelComposerSend,
+  setInterruptPressActive, interruptPressTimeoutRef, toggleComposerWindow,
+  activeQueuedComposerSends, clearQueuedComposerSends, popNewestQueuedComposerSend,
+  canUseChannelBridge, routeComposerToBridge, toggleComposerBridgeRoute, searchComposerHistory,
+  editComposerInExternalEditor, pluginOverlay, closePluginOverlay, runPluginCommandId,
+  composerTargetSession, setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory,
+  moveComposerHistory, selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen,
+  setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt,
+  setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry, composerStashIndex,
+  composerStash, composerMentionIndex, insertMentionAtCursor, setComposerMentionIndex,
+  composerSlashIndex, insertSlashAtCursor, livePromptSuggestion, composerTextareaRef,
+  setComposerDraft, setLivePromptSuggestion, composerDraft, historyIndex,
+}: {
   composerActive: boolean
   isCtrl: (char: string) => boolean
   handled: (action: () => void) => void

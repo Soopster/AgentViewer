@@ -8,7 +8,12 @@ import { cycleCoordinatorFilter } from '../../coordinatorStore'
 import { type SidebarEntry, type PaneFocus, type NoticeTone } from '../types'
 
 /** Returns true when one of these branches handled the key. */
-export function handleSidebarKeys({ effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView, showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry, toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort }: {
+export function handleSidebarKeys({
+  effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
+  showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted,
+  openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,
+  toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort,
+}: {
   effectiveFocus: PaneFocus
   sidebarSubagentCursor: string | null
   key: KeyEvent

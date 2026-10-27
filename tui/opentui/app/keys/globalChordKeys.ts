@@ -19,7 +19,26 @@ import { type SplitPaneHandle } from '../SplitTranscriptPane'
 import { TUI_KEYED_PLUGIN_COMMANDS } from '../pluginCommands'
 
 /** Returns true when one of these branches handled the key. */
-export function handleGlobalChordKeys({ commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl, showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted, toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit, windowSurfaceKeysRef, focusedWindowItem, composeToSplitPaneSession, openComposerWindow, selectedSessionKey, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, splitFocusIndex, effectiveFocus, splitPaneHandlesRef, searchMatches, fleetStripVisible, fleetPageCount, transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch, jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex, tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage, replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane, closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard, splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen, openPromptLibrary, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft }: {
+export function handleGlobalChordKeys({
+  commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl,
+  showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted,
+  toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit,
+  windowSurfaceKeysRef, focusedWindowItem, composeToSplitPaneSession, openComposerWindow,
+  selectedSessionKey, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay,
+  splitFocusIndex, effectiveFocus, splitPaneHandlesRef, searchMatches, fleetStripVisible,
+  fleetPageCount, transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch,
+  jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex,
+  tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage,
+  replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane,
+  closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard, splitPaneRunningKeys,
+  requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane,
+  tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand,
+  setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry,
+  setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen, openPromptLibrary,
+  taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel,
+  setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession,
+  setRenameSessionKey, setRenameDraft,
+}: {
   commandChordPending: boolean
   windowControlsBlocked: boolean
   handled: (action: () => void) => void

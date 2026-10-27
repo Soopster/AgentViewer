@@ -11,7 +11,13 @@ import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 /** Returns true when one of these branches handled the key. */
-export function handleWindowAndTabKeys({ effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key, workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab }: {
+export function handleWindowAndTabKeys({
+  effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key,
+  workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents,
+  sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay,
+  promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex,
+  tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab,
+}: {
   effectiveFocus: PaneFocus
   sequence: string
   handled: (action: () => void) => void

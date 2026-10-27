@@ -11,7 +11,17 @@ import { permissionOptionsFor, type PendingPermission, type PermissionOption, ty
 import { type TuiPermissionMode } from '../types'
 
 /** Returns true when one of these branches handled the key. */
-export function handleAskAndShortcutKeys({ pendingPermissions, permissionActionLoading, questionFocusIndex, key, questionFreeformEditing, handled, questionOptionIndex, setQuestionFreeformEditing, setQuestionFreeformAnswers, setQuestionSelections, setQuestionOptionIndex, setQuestionFocusIndex, sequence, toggleTuiQuestionOption, questionFreeformAnswers, submitTuiQuestion, respondToTuiPermission, permissionOptionIndex, setPermissionOptionIndex, respondToTuiPlan, movePermissionOptionIndex, resolvePermissionOptionIndex, composerTargetSession, selectedSession, cycleClaudeComposerPermissionMode, executeCommandPalette, composerActive, isShifted, surfacePanelOpen, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelFocused, fullscreenMode, composerTextareaRef, composerDraft, toggleFullscreenMode }: {
+export function handleAskAndShortcutKeys({
+  pendingPermissions, permissionActionLoading, questionFocusIndex, key, questionFreeformEditing,
+  handled, questionOptionIndex, setQuestionFreeformEditing, setQuestionFreeformAnswers,
+  setQuestionSelections, setQuestionOptionIndex, setQuestionFocusIndex, sequence,
+  toggleTuiQuestionOption, questionFreeformAnswers, submitTuiQuestion, respondToTuiPermission,
+  permissionOptionIndex, setPermissionOptionIndex, respondToTuiPlan, movePermissionOptionIndex,
+  resolvePermissionOptionIndex, composerTargetSession, selectedSession,
+  cycleClaudeComposerPermissionMode, executeCommandPalette, composerActive, isShifted,
+  surfacePanelOpen, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelFocused,
+  fullscreenMode, composerTextareaRef, composerDraft, toggleFullscreenMode,
+}: {
   pendingPermissions: PendingPermission[]
   permissionActionLoading: string | null
   questionFocusIndex: number

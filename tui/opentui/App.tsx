@@ -7432,7 +7432,29 @@ function OpenTuiWorkspace() {
       key.stopPropagation()
       action()
     }
-    if (handleWindowControlKeys({ windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls, sequence, readControlWindows, pickControlWindow, endWindowResizeGroup, runWindowControlAction, focusedControlKey, focusWindowInDirection, commandChordPending, setCommandChordPending, executeCommandPalette, setChordHelp, showNotice, setSplitChordPending, cancelPointerGesture, isCtrlShift, openPopoverKind, openPopoverWindow, pluginOverlay, gitRepoCwd, setPluginOverlay, openSurfaceWindow, focusedWindowSurfaceKind, focusedWindowSurface, popoverTabs, popoverTabToFullScreen, returnPopoverWindow, spacesMenuOpen, spacesKeyRef, workspacesEnabled, workspaceLaunched, setWorkspaceLaunched, setWindowPickerOpen, setWorkspaceHasSession, setFocusedPane, setNewSessionCwd, workspaceCwd, setNewSessionModalOpen, splitChordPending, composerActive, composerTargetSession, composerSendState, reattachedRunning, isKeyRepeat, backgroundComposerTasks, enterWindowControls, openWindowControlMenu, toggleWorkspaces, openSpaces, addSplitPane, rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader, shownPopoverTab, splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane, undoWindowLayout, redoWindowLayout, reopenClosedWindow, openRecentWindows, jumpToNextWindowAttention, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen, toggleSplitPanes, cycleSplitFocus, swapWindowInDirection, toggleWindowZoom, tabFocusedWindow, stepWindowTab, focusedWindowItem, breakOutWindowTab, windowItemKey, toggleFloatingFocused, resizeSecondaryDivider, focusPreviousWindow, primaryLeaf, focusReaderFromSplit, windowNumberOffset, windowItems, focusSplitPane, focusControlWindow, cycleSplitPaneSession, toggleVoice })) return
+    if (handleWindowControlKeys({
+      windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls,
+      sequence, readControlWindows, pickControlWindow, endWindowResizeGroup,
+      runWindowControlAction, focusedControlKey, focusWindowInDirection, commandChordPending,
+      setCommandChordPending, executeCommandPalette, setChordHelp, showNotice,
+      setSplitChordPending, cancelPointerGesture, isCtrlShift, openPopoverKind, openPopoverWindow,
+      pluginOverlay, gitRepoCwd, setPluginOverlay, openSurfaceWindow, focusedWindowSurfaceKind,
+      focusedWindowSurface, popoverTabs, popoverTabToFullScreen, returnPopoverWindow,
+      spacesMenuOpen, spacesKeyRef, workspacesEnabled, workspaceLaunched, setWorkspaceLaunched,
+      setWindowPickerOpen, setWorkspaceHasSession, setFocusedPane, setNewSessionCwd, workspaceCwd,
+      setNewSessionModalOpen, splitChordPending, composerActive, composerTargetSession,
+      composerSendState, reattachedRunning, isKeyRepeat, backgroundComposerTasks,
+      enterWindowControls, openWindowControlMenu, toggleWorkspaces, openSpaces, addSplitPane,
+      rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader, shownPopoverTab,
+      splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane, undoWindowLayout,
+      redoWindowLayout, reopenClosedWindow, openRecentWindows, jumpToNextWindowAttention,
+      setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen, toggleSplitPanes,
+      cycleSplitFocus, swapWindowInDirection, toggleWindowZoom, tabFocusedWindow, stepWindowTab,
+      focusedWindowItem, breakOutWindowTab, windowItemKey, toggleFloatingFocused,
+      resizeSecondaryDivider, focusPreviousWindow, primaryLeaf, focusReaderFromSplit,
+      windowNumberOffset, windowItems, focusSplitPane, focusControlWindow, cycleSplitPaneSession,
+      toggleVoice,
+    })) return
     const cursorIndex = readCursorIndex()
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     // cardDisplayData is window-relative (preview cap while browsing, sliding
@@ -7466,16 +7488,147 @@ function OpenTuiWorkspace() {
           thinkingMode,
         )
       : selectedTranscriptCardDisplay
-    if (handleModalDialogKeys({ exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm, mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen, setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask, playbookManagerOpen, playbookManagerKeyHandlerRef, coordModalOpen, setCoordModalOpen, setCoordDraft, setCoordAcceptanceDraft, setCoordNonGoalsDraft, setCoordManualQaDraft, setCoordEscalationDraft, setCoordPlaybookName, setCoordPlaybookArgsDraft, setCoordGateDraft, setCoordMaxTokens, setCoordMaxDurationMinutes, setCoordProviderOverride, setCoordTeammateProviderOverride, setCoordProviderPoolIndex, setCoordModalFocus, setCoordError, isCtrl, setCoordMaxAgents, setCoordRequirePlanApproval, showToggleOutcome, coordModalFocus, coordPlaybooks, coordPlaybookName, selectCoordPlaybook, setPlaybookManagerOpen, provider, selectedSession, coordProviderPoolIndex, coordProviderOverride, setCoordUseWorktrees, setCoordAutonomy, setCoordRequireReview, submitCoordinatedRun, remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef, teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode, setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef, dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu, contextMenuKeyHandlerRef, windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen, windowBroadcastKeyRef, windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay, pluginOverlayKeyHandlerRef, folderPickerForNewSession, folderPickerKeyHandlerRef })) return
-    if (handleOverlayAndMenuKeys({ focusedWindowSurface, windowSurfaceCaptureRef, windowSurfaceKeysRef, pendingPermissions, focusedWindowSurfaceKind, splitChordPending, key, handled, focusReaderFromSplit, surfacePanel, surfacePanelVisible, surfacePanelFocused, surfacePluginKeyCaptureRef, surfacePluginKeyRef, sequence, setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef, handoffBriefOpen, handoffBriefKeyHandlerRef, promptLibraryOpen, promptLibraryKeyHandlerRef, chordHelp, setChordHelp, bookmarksOverlayOpen, isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex, bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex, filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu, toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu, toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex, filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery, transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker })) return
-    if (handleAskAndShortcutKeys({ pendingPermissions, permissionActionLoading, questionFocusIndex, key, questionFreeformEditing, handled, questionOptionIndex, setQuestionFreeformEditing, setQuestionFreeformAnswers, setQuestionSelections, setQuestionOptionIndex, setQuestionFocusIndex, sequence, toggleTuiQuestionOption, questionFreeformAnswers, submitTuiQuestion, respondToTuiPermission, permissionOptionIndex, setPermissionOptionIndex, respondToTuiPlan, movePermissionOptionIndex, resolvePermissionOptionIndex, composerTargetSession, selectedSession, cycleClaudeComposerPermissionMode, executeCommandPalette, composerActive, isShifted, surfacePanelOpen, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelFocused, fullscreenMode, composerTextareaRef, composerDraft, toggleFullscreenMode })) return
-    if (handleComposerKeys({ composerActive, isCtrl, handled, pasteSystemClipboardToComposer, key, composerMention, composerMentionResults, setComposerMentionDismissedStart, setComposerMention, setComposerMentionResults, composerSlashOpen, composerSlashCommands, setComposerSlashDismissed, setComposerSlashIndex, composerHistoryOpen, cancelComposerHistory, composerStashOpen, setComposerStashOpen, setComposerStashIndex, composerRewindItems, setComposerRewindItems, composerSendState, reattachedRunning, rememberComposerCursor, setComposerWindowOpen, setComposerActive, composerWindowOpen, isKeyRepeat, interruptPressActive, cancelComposerSend, setInterruptPressActive, interruptPressTimeoutRef, toggleComposerWindow, activeQueuedComposerSends, clearQueuedComposerSends, popNewestQueuedComposerSend, canUseChannelBridge, routeComposerToBridge, toggleComposerBridgeRoute, searchComposerHistory, editComposerInExternalEditor, pluginOverlay, closePluginOverlay, runPluginCommandId, composerTargetSession, setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory, moveComposerHistory, selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen, setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt, setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry, composerStashIndex, composerStash, composerMentionIndex, insertMentionAtCursor, setComposerMentionIndex, composerSlashIndex, insertSlashAtCursor, livePromptSuggestion, composerTextareaRef, setComposerDraft, setLivePromptSuggestion, composerDraft, historyIndex })) return
+    if (handleModalDialogKeys({
+      exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm,
+      mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen,
+      setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask, playbookManagerOpen,
+      playbookManagerKeyHandlerRef, coordModalOpen, setCoordModalOpen, setCoordDraft,
+      setCoordAcceptanceDraft, setCoordNonGoalsDraft, setCoordManualQaDraft,
+      setCoordEscalationDraft, setCoordPlaybookName, setCoordPlaybookArgsDraft, setCoordGateDraft,
+      setCoordMaxTokens, setCoordMaxDurationMinutes, setCoordProviderOverride,
+      setCoordTeammateProviderOverride, setCoordProviderPoolIndex, setCoordModalFocus,
+      setCoordError, isCtrl, setCoordMaxAgents, setCoordRequirePlanApproval, showToggleOutcome,
+      coordModalFocus, coordPlaybooks, coordPlaybookName, selectCoordPlaybook,
+      setPlaybookManagerOpen, provider, selectedSession, coordProviderPoolIndex,
+      coordProviderOverride, setCoordUseWorktrees, setCoordAutonomy, setCoordRequireReview,
+      submitCoordinatedRun, remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef,
+      teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode,
+      setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef,
+      dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu, contextMenuKeyHandlerRef,
+      windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen, windowBroadcastKeyRef,
+      windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay, pluginOverlayKeyHandlerRef,
+      folderPickerForNewSession, folderPickerKeyHandlerRef,
+    })) return
+    if (handleOverlayAndMenuKeys({
+      focusedWindowSurface, windowSurfaceCaptureRef, windowSurfaceKeysRef, pendingPermissions,
+      focusedWindowSurfaceKind, splitChordPending, key, handled, focusReaderFromSplit,
+      surfacePanel, surfacePanelVisible, surfacePanelFocused, surfacePluginKeyCaptureRef,
+      surfacePluginKeyRef, sequence, setSurfacePanelExpanded, surfacePanelAtBottom,
+      setSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth,
+      toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused,
+      surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef,
+      newSessionModalOpen, newSessionKeyHandlerRef, handoffBriefOpen, handoffBriefKeyHandlerRef,
+      promptLibraryOpen, promptLibraryKeyHandlerRef, chordHelp, setChordHelp, bookmarksOverlayOpen,
+      isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex,
+      bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef,
+      renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen,
+      closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen,
+      modelPickerFocus, setModelPickerFocus, setModelPickerIndex, filteredModelPickerOptions,
+      modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey,
+      themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef,
+      setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
+      toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu,
+      toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
+      filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
+      transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
+    })) return
+    if (handleAskAndShortcutKeys({
+      pendingPermissions, permissionActionLoading, questionFocusIndex, key,
+      questionFreeformEditing, handled, questionOptionIndex, setQuestionFreeformEditing,
+      setQuestionFreeformAnswers, setQuestionSelections, setQuestionOptionIndex,
+      setQuestionFocusIndex, sequence, toggleTuiQuestionOption, questionFreeformAnswers,
+      submitTuiQuestion, respondToTuiPermission, permissionOptionIndex, setPermissionOptionIndex,
+      respondToTuiPlan, movePermissionOptionIndex, resolvePermissionOptionIndex,
+      composerTargetSession, selectedSession, cycleClaudeComposerPermissionMode,
+      executeCommandPalette, composerActive, isShifted, surfacePanelOpen, setSurfacePanelOpen,
+      setSurfacePanelFocused, surfacePanelFocused, fullscreenMode, composerTextareaRef,
+      composerDraft, toggleFullscreenMode,
+    })) return
+    if (handleComposerKeys({
+      composerActive, isCtrl, handled, pasteSystemClipboardToComposer, key, composerMention,
+      composerMentionResults, setComposerMentionDismissedStart, setComposerMention,
+      setComposerMentionResults, composerSlashOpen, composerSlashCommands,
+      setComposerSlashDismissed, setComposerSlashIndex, composerHistoryOpen, cancelComposerHistory,
+      composerStashOpen, setComposerStashOpen, setComposerStashIndex, composerRewindItems,
+      setComposerRewindItems, composerSendState, reattachedRunning, rememberComposerCursor,
+      setComposerWindowOpen, setComposerActive, composerWindowOpen, isKeyRepeat,
+      interruptPressActive, cancelComposerSend, setInterruptPressActive, interruptPressTimeoutRef,
+      toggleComposerWindow, activeQueuedComposerSends, clearQueuedComposerSends,
+      popNewestQueuedComposerSend, canUseChannelBridge, routeComposerToBridge,
+      toggleComposerBridgeRoute, searchComposerHistory, editComposerInExternalEditor,
+      pluginOverlay, closePluginOverlay, runPluginCommandId, composerTargetSession,
+      setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory, moveComposerHistory,
+      selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen,
+      setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt,
+      setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry,
+      composerStashIndex, composerStash, composerMentionIndex, insertMentionAtCursor,
+      setComposerMentionIndex, composerSlashIndex, insertSlashAtCursor, livePromptSuggestion,
+      composerTextareaRef, setComposerDraft, setLivePromptSuggestion, composerDraft, historyIndex,
+    })) return
     if (!windowControlsBlocked && windowPresentation && key.name === 'escape') { handled(restoreWindowPresentation); return }
-    if (handleGlobalChordKeys({ commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl, showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted, toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit, windowSurfaceKeysRef, focusedWindowItem, composeToSplitPaneSession, openComposerWindow, selectedSessionKey, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, splitFocusIndex, effectiveFocus, splitPaneHandlesRef, searchMatches, fleetStripVisible, fleetPageCount, transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch, jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex, tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage, replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane, closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard, splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen, openPromptLibrary, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft })) return
-    if (handleSidebarKeys({ effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView, showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry, toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort })) return
-    if (handleWindowAndTabKeys({ effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key, workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab })) return
-    if (handleReaderKeys({ effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep, jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl, moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView, jumpToUnreadBoundary, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor, replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys, transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey, setTranscriptDiffRowCursorForCard, committedSessionKey, transcriptDiffSelectionAnchorByCardKey, transcriptDiffNotes, toggleTranscriptDiffCardSet, setTranscriptDiffPlainCardKeys, clearTranscriptDiffSelectionForCard, setTranscriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys, showNotice, openTranscriptDiffNote, deleteTranscriptDiffNote, sendTranscriptDiffNoteToComposer, selectedAgentToolCard, selectedAgentToolExpanded, resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode, copySelectedMessage, setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch, jumpToMatchingCard })) return
-    if (handleLetterShortcutKeys({ sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode, setFocusMode, density, setDensity, isShifted, transcriptWidth, setTranscriptWidth, openTranscriptViewMenu, refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail })) return
+    if (handleGlobalChordKeys({
+      commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl,
+      showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted,
+      toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit,
+      windowSurfaceKeysRef, focusedWindowItem, composeToSplitPaneSession, openComposerWindow,
+      selectedSessionKey, selectedInteractiveTranscriptCard,
+      selectedInteractiveTranscriptCardDisplay, splitFocusIndex, effectiveFocus,
+      splitPaneHandlesRef, searchMatches, fleetStripVisible, fleetPageCount,
+      transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch,
+      jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex,
+      tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage,
+      replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane,
+      tabFromSplitPane, closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard,
+      splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer,
+      showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal,
+      runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled,
+      setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft,
+      setWorktreeModalOpen, openPromptLibrary, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
+      taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden,
+      openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
+    })) return
+    if (handleSidebarKeys({
+      effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
+      showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection,
+      isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,
+      toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort,
+    })) return
+    if (handleWindowAndTabKeys({
+      effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key,
+      workspaceContext, sidebarView, selectedSession, childrenByParentId,
+      setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex,
+      setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane,
+      showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab,
+      closePopoverTab, closeWindowSessionTab,
+    })) return
+    if (handleReaderKeys({
+      effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep,
+      jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl,
+      moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView,
+      jumpToUnreadBoundary, selectedInteractiveTranscriptCard,
+      selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor,
+      replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys,
+      transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
+      setTranscriptDiffRowCursorForCard, committedSessionKey,
+      transcriptDiffSelectionAnchorByCardKey, transcriptDiffNotes, toggleTranscriptDiffCardSet,
+      setTranscriptDiffPlainCardKeys, clearTranscriptDiffSelectionForCard,
+      setTranscriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys,
+      showNotice, openTranscriptDiffNote, deleteTranscriptDiffNote,
+      sendTranscriptDiffNoteToComposer, selectedAgentToolCard, selectedAgentToolExpanded,
+      resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode, copySelectedMessage,
+      setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch,
+      jumpToMatchingCard,
+    })) return
+    if (handleLetterShortcutKeys({
+      sequence, composerActive, handled, setComposerHidden, setComposerActive,
+      normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode,
+      showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex,
+      setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu,
+      stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible,
+      focusedPane, setFocusedPane, focusMode, setFocusMode, density, setDensity, isShifted,
+      transcriptWidth, setTranscriptWidth, openTranscriptViewMenu, refreshSessions, provider,
+      selectedSessionTarget, refreshSelectedSessionDetail,
+    })) return
   })
 
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'

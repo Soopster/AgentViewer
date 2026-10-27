@@ -18,7 +18,28 @@ import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 /** Returns true when one of these branches handled the key. */
-export function handleWindowControlKeys({ windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls, sequence, readControlWindows, pickControlWindow, endWindowResizeGroup, runWindowControlAction, focusedControlKey, focusWindowInDirection, commandChordPending, setCommandChordPending, executeCommandPalette, setChordHelp, showNotice, setSplitChordPending, cancelPointerGesture, isCtrlShift, openPopoverKind, openPopoverWindow, pluginOverlay, gitRepoCwd, setPluginOverlay, openSurfaceWindow, focusedWindowSurfaceKind, focusedWindowSurface, popoverTabs, popoverTabToFullScreen, returnPopoverWindow, spacesMenuOpen, spacesKeyRef, workspacesEnabled, workspaceLaunched, setWorkspaceLaunched, setWindowPickerOpen, setWorkspaceHasSession, setFocusedPane, setNewSessionCwd, workspaceCwd, setNewSessionModalOpen, splitChordPending, composerActive, composerTargetSession, composerSendState, reattachedRunning, isKeyRepeat, backgroundComposerTasks, enterWindowControls, openWindowControlMenu, toggleWorkspaces, openSpaces, addSplitPane, rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader, shownPopoverTab, splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane, undoWindowLayout, redoWindowLayout, reopenClosedWindow, openRecentWindows, jumpToNextWindowAttention, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen, toggleSplitPanes, cycleSplitFocus, swapWindowInDirection, toggleWindowZoom, tabFocusedWindow, stepWindowTab, focusedWindowItem, breakOutWindowTab, windowItemKey, toggleFloatingFocused, resizeSecondaryDivider, focusPreviousWindow, primaryLeaf, focusReaderFromSplit, windowNumberOffset, windowItems, focusSplitPane, focusControlWindow, cycleSplitPaneSession, toggleVoice }: {
+export function handleWindowControlKeys({
+  windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls, sequence,
+  readControlWindows, pickControlWindow, endWindowResizeGroup, runWindowControlAction,
+  focusedControlKey, focusWindowInDirection, commandChordPending, setCommandChordPending,
+  executeCommandPalette, setChordHelp, showNotice, setSplitChordPending, cancelPointerGesture,
+  isCtrlShift, openPopoverKind, openPopoverWindow, pluginOverlay, gitRepoCwd, setPluginOverlay,
+  openSurfaceWindow, focusedWindowSurfaceKind, focusedWindowSurface, popoverTabs,
+  popoverTabToFullScreen, returnPopoverWindow, spacesMenuOpen, spacesKeyRef, workspacesEnabled,
+  workspaceLaunched, setWorkspaceLaunched, setWindowPickerOpen, setWorkspaceHasSession,
+  setFocusedPane, setNewSessionCwd, workspaceCwd, setNewSessionModalOpen, splitChordPending,
+  composerActive, composerTargetSession, composerSendState, reattachedRunning, isKeyRepeat,
+  backgroundComposerTasks, enterWindowControls, openWindowControlMenu, toggleWorkspaces,
+  openSpaces, addSplitPane, rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader,
+  shownPopoverTab, splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane,
+  undoWindowLayout, redoWindowLayout, reopenClosedWindow, openRecentWindows,
+  jumpToNextWindowAttention, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen,
+  toggleSplitPanes, cycleSplitFocus, swapWindowInDirection, toggleWindowZoom, tabFocusedWindow,
+  stepWindowTab, focusedWindowItem, breakOutWindowTab, windowItemKey, toggleFloatingFocused,
+  resizeSecondaryDivider, focusPreviousWindow, primaryLeaf, focusReaderFromSplit,
+  windowNumberOffset, windowItems, focusSplitPane, focusControlWindow, cycleSplitPaneSession,
+  toggleVoice,
+}: {
   windowControlsBlocked: boolean
   windowControlMode: 'identify' | 'manage' | null
   handled: (action: () => void) => void

@@ -11,7 +11,25 @@ import { type RemoteCoordinatorTarget } from '../../../../lib/tui/remoteCoordina
 import { moveCoordModalFocus, cycleCoordProvider, coordRunProviders, cycleCoordAutonomy } from '../pickers'
 
 /** Returns true when one of these branches handled the key. */
-export function handleModalDialogKeys({ exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm, mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen, setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask, playbookManagerOpen, playbookManagerKeyHandlerRef, coordModalOpen, setCoordModalOpen, setCoordDraft, setCoordAcceptanceDraft, setCoordNonGoalsDraft, setCoordManualQaDraft, setCoordEscalationDraft, setCoordPlaybookName, setCoordPlaybookArgsDraft, setCoordGateDraft, setCoordMaxTokens, setCoordMaxDurationMinutes, setCoordProviderOverride, setCoordTeammateProviderOverride, setCoordProviderPoolIndex, setCoordModalFocus, setCoordError, isCtrl, setCoordMaxAgents, setCoordRequirePlanApproval, showToggleOutcome, coordModalFocus, coordPlaybooks, coordPlaybookName, selectCoordPlaybook, setPlaybookManagerOpen, provider, selectedSession, coordProviderPoolIndex, coordProviderOverride, setCoordUseWorktrees, setCoordAutonomy, setCoordRequireReview, submitCoordinatedRun, remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef, teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode, setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef, dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu, contextMenuKeyHandlerRef, windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen, windowBroadcastKeyRef, windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay, pluginOverlayKeyHandlerRef, folderPickerForNewSession, folderPickerKeyHandlerRef }: {
+export function handleModalDialogKeys({
+  exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm,
+  mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen, setWorktreeModalOpen,
+  setWorktreeDraft, submitWorktreeTask, playbookManagerOpen, playbookManagerKeyHandlerRef,
+  coordModalOpen, setCoordModalOpen, setCoordDraft, setCoordAcceptanceDraft, setCoordNonGoalsDraft,
+  setCoordManualQaDraft, setCoordEscalationDraft, setCoordPlaybookName, setCoordPlaybookArgsDraft,
+  setCoordGateDraft, setCoordMaxTokens, setCoordMaxDurationMinutes, setCoordProviderOverride,
+  setCoordTeammateProviderOverride, setCoordProviderPoolIndex, setCoordModalFocus, setCoordError,
+  isCtrl, setCoordMaxAgents, setCoordRequirePlanApproval, showToggleOutcome, coordModalFocus,
+  coordPlaybooks, coordPlaybookName, selectCoordPlaybook, setPlaybookManagerOpen, provider,
+  selectedSession, coordProviderPoolIndex, coordProviderOverride, setCoordUseWorktrees,
+  setCoordAutonomy, setCoordRequireReview, submitCoordinatedRun, remoteCoordinatorTarget,
+  remoteCoordinatorKeyHandlerRef, teammatesModalOpen, teammatesKeyHandlerRef, searchMode,
+  setSearchMode, sessionSearchMode, setSessionSearchMode, setSessionSearchQuery, fileHistoryPath,
+  fileHistoryKeyHandlerRef, dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu,
+  contextMenuKeyHandlerRef, windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen,
+  windowBroadcastKeyRef, windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay,
+  pluginOverlayKeyHandlerRef, folderPickerForNewSession, folderPickerKeyHandlerRef,
+}: {
   exitConfirmOpen: boolean
   key: KeyEvent
   handled: (action: () => void) => void

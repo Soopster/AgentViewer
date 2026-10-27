@@ -14,7 +14,23 @@ import { cardDiffText } from '../transcriptRows'
 import { type TranscriptDiffNote, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, nextTranscriptDiffRowIndex } from '../transcriptDiffSelection'
 
 /** Returns true when one of these branches handled the key. */
-export function handleReaderKeys({ effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep, jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl, moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView, jumpToUnreadBoundary, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor, replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys, transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey, setTranscriptDiffRowCursorForCard, committedSessionKey, transcriptDiffSelectionAnchorByCardKey, transcriptDiffNotes, toggleTranscriptDiffCardSet, setTranscriptDiffPlainCardKeys, clearTranscriptDiffSelectionForCard, setTranscriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys, showNotice, openTranscriptDiffNote, deleteTranscriptDiffNote, sendTranscriptDiffNoteToComposer, selectedAgentToolCard, selectedAgentToolExpanded, resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode, copySelectedMessage, setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch, jumpToMatchingCard }: {
+export function handleReaderKeys({
+  effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep,
+  jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl,
+  moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView,
+  jumpToUnreadBoundary, selectedInteractiveTranscriptCard,
+  selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor,
+  replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys,
+  transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
+  setTranscriptDiffRowCursorForCard, committedSessionKey, transcriptDiffSelectionAnchorByCardKey,
+  transcriptDiffNotes, toggleTranscriptDiffCardSet, setTranscriptDiffPlainCardKeys,
+  clearTranscriptDiffSelectionForCard, setTranscriptDiffHiddenLineNumberCardKeys,
+  setTranscriptDiffHiddenHunkHeaderCardKeys, showNotice, openTranscriptDiffNote,
+  deleteTranscriptDiffNote, sendTranscriptDiffNoteToComposer, selectedAgentToolCard,
+  selectedAgentToolExpanded, resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode,
+  copySelectedMessage, setDiffLayout, showToggleOutcome, setError, searchMatches,
+  jumpToSearchMatch, jumpToMatchingCard,
+}: {
   effectiveFocus: PaneFocus
   key: KeyEvent
   handled: (action: () => void) => void

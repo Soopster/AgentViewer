@@ -11,7 +11,16 @@ import { type PaneFocus } from '../types'
 import { cycleDensityValue } from '../viewHelpers'
 
 /** Returns true when one of these branches handled the key. */
-export function handleLetterShortcutKeys({ sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode, setFocusMode, density, setDensity, isShifted, transcriptWidth, setTranscriptWidth, openTranscriptViewMenu, refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail }: {
+export function handleLetterShortcutKeys({
+  sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery,
+  openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls,
+  setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery,
+  setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders,
+  tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode,
+  setFocusMode, density, setDensity, isShifted, transcriptWidth, setTranscriptWidth,
+  openTranscriptViewMenu, refreshSessions, provider, selectedSessionTarget,
+  refreshSelectedSessionDetail,
+}: {
   sequence: string
   composerActive: boolean
   handled: (action: () => void) => void

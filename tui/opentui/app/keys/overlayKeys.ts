@@ -24,7 +24,28 @@ import { sessionKey } from '../sessionList'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote } from '../transcriptDiffSelection'
 
 /** Returns true when one of these branches handled the key. */
-export function handleOverlayAndMenuKeys({ focusedWindowSurface, windowSurfaceCaptureRef, windowSurfaceKeysRef, pendingPermissions, focusedWindowSurfaceKind, splitChordPending, key, handled, focusReaderFromSplit, surfacePanel, surfacePanelVisible, surfacePanelFocused, surfacePluginKeyCaptureRef, surfacePluginKeyRef, sequence, setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef, handoffBriefOpen, handoffBriefKeyHandlerRef, promptLibraryOpen, promptLibraryKeyHandlerRef, chordHelp, setChordHelp, bookmarksOverlayOpen, isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex, bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex, filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu, toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu, toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex, filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery, transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker }: {
+export function handleOverlayAndMenuKeys({
+  focusedWindowSurface, windowSurfaceCaptureRef, windowSurfaceKeysRef, pendingPermissions,
+  focusedWindowSurfaceKind, splitChordPending, key, handled, focusReaderFromSplit, surfacePanel,
+  surfacePanelVisible, surfacePanelFocused, surfacePluginKeyCaptureRef, surfacePluginKeyRef,
+  sequence, setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows,
+  surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement,
+  isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef,
+  pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef,
+  handoffBriefOpen, handoffBriefKeyHandlerRef, promptLibraryOpen, promptLibraryKeyHandlerRef,
+  chordHelp, setChordHelp, bookmarksOverlayOpen, isCtrl, setBookmarksOverlayOpen, bookmarksOverlay,
+  setBookmarksOverlayIndex, bookmarksOverlayIndex, openBookmarkRecord, attentionOpen,
+  attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename,
+  providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut,
+  setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex,
+  filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex,
+  setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
+  themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
+  toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu,
+  toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
+  filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
+  transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
+}: {
   focusedWindowSurface: string | null
   windowSurfaceCaptureRef: React.RefObject<Map<string, boolean | 'none' | 'input' | 'terminal'>>
   windowSurfaceKeysRef: React.RefObject<Map<string, (key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => unknown>>
