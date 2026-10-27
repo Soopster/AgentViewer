@@ -310,7 +310,7 @@ import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoo
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
-import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel } from './app/actions/composerPanels'
+import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel } from './app/actions/composerPanels'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10188,49 +10188,10 @@ function OpenTuiWorkspace() {
       </box>
     )
   }
-  const renderComposerStashPanel = (panelWidth: number, rowWidth: number) => {
-    if (!composerActive || !composerStashOpen || composerStashVisibleCount <= 0 || composerMention) return null
-    const total = composerStash.length
-    const start = Math.max(0, Math.min(composerStashIndex - Math.floor((composerStashVisibleCount - 1) / 2), total - composerStashVisibleCount))
-    const end = Math.min(total, start + composerStashVisibleCount)
-    const hasMoreBelow = end < total
-    const hasMoreAbove = start > 0
-    const metaWidth = Math.max(Math.min(22, Math.floor(rowWidth * 0.28)), 10)
-    const textWidth = Math.max(rowWidth - metaWidth - 4, 8)
-    return (
-      <box
-        width={panelWidth}
-        height={composerStashVisibleCount + 3}
-        paddingX={1}
-        backgroundColor={theme.surface2}
-        border
-        borderStyle="single"
-        borderColor={theme.border2}
-        flexDirection="column"
-      >
-        <text fg={composerAccentColor} wrapMode="none">
-          {fitText(`stash · ⌃P older · ⌃N newer · tab/enter restore · esc close  (${composerStashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
-        </text>
-        {composerStash.slice().reverse().slice(start, end).map((entry, offset) => {
-          const index = start + offset
-          const active = index === composerStashIndex
-          const text = composerSnapshotText(entry)
-          const compact = compactComposerEntryText(text)
-          const lineCount = composerEntryLineCount(text)
-          const attachmentLabel = attachmentCountLabel(entry.attachments)
-          const meta = `${lineCount} line${lineCount === 1 ? '' : 's'} · ${text.length} chars${attachmentLabel ? ` · ${attachmentLabel}` : ''}`
-          return (
-            <box key={`stash:${total - 1 - index}:${text.length}:${offset}`} flexDirection="row" height={1} width={rowWidth}>
-              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
-              <text fg={theme.dim} wrapMode="none">  </text>
-              <text fg={theme.dim} wrapMode="none">{fitText(meta, metaWidth)}</text>
-            </box>
-          )
-        })}
-      </box>
-    )
-  }
+  const renderComposerStashPanel = (panelWidth: number, rowWidth: number) => runRenderComposerStashPanel({
+    composerActive, composerStashOpen, composerStashVisibleCount, composerMention, composerStash,
+    composerStashIndex, theme, composerAccentColor,
+  }, panelWidth, rowWidth)
   // Always-visible queued-send list (no modal): shows what will fire after the
   // current turn, in order, with the ⌃Y edit / ⇧⌃Y clear hint.
   const renderComposerQueuePanel = (panelWidth: number, rowWidth: number) => {
