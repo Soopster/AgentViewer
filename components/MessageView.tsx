@@ -51,7 +51,7 @@ import { getProviderComposer } from '@/lib/providerComposer'
 import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '@/lib/pendingRequestGone'
 import { initialQuestionState, extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, permissionMcpServerLabel, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
-import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
+import { parseClaudeCommandLifecycle } from '@/lib/claudeCommandLifecycle'
 import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
 import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
@@ -79,7 +79,7 @@ import { DEFAULT_DIFF_OPTIONS, QuestionAnswerComposerContext, DiffCommentCompose
 import { TaskRail } from './TaskRail'
 import ProviderIcon from './ProviderIcon'
 import BranchSwitcher from './BranchSwitcher'
-import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
+import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
@@ -119,6 +119,7 @@ import {
   type TimelineRowLayout,
   type TimelineScrollAnchor,
 } from '@/lib/timelineVirtualizer'
+import type { TranscriptFilter, ComposerDraft, QueuedWebSend, SseFrame, PendingMessageBaseline, TimelineRow, TimelineEstimateBucket, TimelineEstimateCalibration, ActiveTranscriptFilter, OpenCodeTodo, Props, CopilotContextTier, FailedSend, RewindPreview, RollbackPreview, SteeredSendEntry, LiveToolActivity, MentionResult, TimelineEstimateSample } from './message-view/types'
 
 const PluginSurfaceHost = dynamic(() => import('./shell/PluginSurfaceHost'), { ssr: false })
 // Feature plugins that put a button on the session toolbar.
@@ -172,150 +173,6 @@ function claudeDiagnosticActionNotice(
     : Array.isArray(result.effectiveKeys) ? result.effectiveKeys.length : null
   if (sources == null && effective == null) return fallback
   return `Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`
-}
-
-type Props = {
-  hideCoordinator?: boolean
-  onInspectTeammate?: (agent: ProtocolAgent) => void
-  messages: SessionMessage[]
-  loading: boolean
-  session: Session | null
-  targetMessageId?: string | null
-  targetMessageRequestId?: number
-  projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
-  onFork?: (newSessionId: string, sourceSession?: Session) => void
-  onDelete?: (sessionId: string, provider?: Session['provider']) => void
-  openTabs?: Session[]
-  selectedTabId?: string | null
-  onSelectTab?: (session: Session) => void
-  onCloseTab?: (sessionKey: string) => void
-  /** Opens a session that isn't necessarily in the current sidebar/tab list — e.g. an OpenCode subagent's own real child session, deep-linked from an inline AgentCard's "Open session" action. */
-  onOpenSession?: (session: Session) => void
-  taskPanelOpenRequest?: number
-  promptLibraryOpenRequest?: number
-  channelBridgeOpenRequest?: number
-  channelBridgeRouteToggleRequest?: number
-  onChannelBridgeRoutingChange?: (routing: boolean) => void
-  ideBridgeOpenRequest?: number
-  ideBridgeRouteToggleRequest?: number
-  onIdeBridgeRoutingChange?: (routing: boolean) => void
-  composerInsertRequest?: { requestId: number; text: string } | null
-  onComposerInsertConsumed?: (requestId: number) => void
-  openCodeTodos?: OpenCodeTodo[]
-  codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
-  // Another Codex client currently owns this session's rollout writer lock —
-  // the transcript is a stale cached snapshot until that client's turn ends.
-  codexExternalWriter?: boolean
-  onOpenGit?: () => void
-  maximized?: boolean
-  onToggleMaximized?: () => void
-  onEnterFullscreen?: () => void
-  /** Right-hand surface panel (browser/terminal/files/diff/PR/agents). */
-  rightPanelOpen?: boolean
-  onToggleRightPanel?: () => void
-}
-
-type CopilotContextTier = 'default' | 'long_context'
-
-type OpenCodeTodo = {
-  id: string
-  content: string
-  status: string
-  priority: string
-}
-
-type SseFrame = {
-  event: string
-  data: string
-}
-
-type LiveToolActivity = {
-  key: string
-  label: string
-  detail?: string
-  status: 'running' | 'done'
-  toolUse?: ToolUseBlock
-}
-
-type RewindPreview = {
-  userMessageId: string
-  contentPreview: string
-  filesChanged: string[]
-}
-
-type RollbackPreview = {
-  numTurns: number
-  turnsRemoved: Array<{ turnId: string; preview: string }>
-}
-
-type FailedSend = {
-  text: string
-  attachments: SendAttachment[]
-}
-
-type QueuedWebSend = {
-  id: string
-  targetKey: string
-  text: string
-  attachments: SendAttachment[]
-}
-
-type PendingMessageBaseline = {
-  count: number
-  lastUuid: string | null
-  lastFingerprint: string | null
-  sessionId: string
-  keys: Set<string>
-  fingerprintsByKey: Map<string, string | null>
-}
-
-type ComposerDraft = {
-  text: string
-  attachments: SendAttachment[]
-}
-
-type MentionResult =
-  | { kind: 'file'; path: string; basename: string }
-  | { kind: 'agent'; name: string; description?: string; mode?: string }
-
-type TimelineRow = {
-  key: string
-  message: ThreadedMessage
-  groupedMessageIds?: string[]
-  showSession: boolean
-  dimmed?: boolean
-  previewBadge?: string
-  activityDetail?: string
-  activityTone?: 'running' | 'syncing'
-  liveToolActivities?: LiveToolActivity[]
-  showForkControls?: boolean
-  allowFork?: boolean
-  allowResume?: boolean
-  allowEdit?: boolean
-  streamTurnHint?: string
-  streamTurnFooterHint?: string
-}
-
-type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
-
-type SteeredSendEntry = {
-  text: string
-  messageUuid?: string
-  state?: Extract<ClaudeCommandLifecycleState, 'queued' | 'started' | 'completed'>
-}
-type ActiveTranscriptFilter = Exclude<TranscriptFilter, 'all'>
-type TimelineEstimateBucket = 'text' | 'tool' | 'media' | 'system' | 'stream'
-
-type TimelineEstimateCalibration = {
-  estimatedTotal: number
-  measuredTotal: number
-  sampleCount: number
-}
-
-type TimelineEstimateSample = {
-  bucket: TimelineEstimateBucket
-  estimatedHeight: number
-  measuredHeight: number
 }
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
