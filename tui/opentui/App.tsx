@@ -315,6 +315,7 @@ import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFill
 import { runSurfacePlacementEffect, runThemeFollowEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
+import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5865,43 +5866,9 @@ function OpenTuiWorkspace() {
 
   // Watch active runs started this session: notify on terminal status and on
   // newly blocked teammates, then drop finished runs from the watch list.
-  useEffect(() => {
-    if (coordWatchIds.length === 0) return
-    let cancelled = false
-    const tick = async () => {
-      for (const runId of coordWatchIds) {
-        const snapshot = await readTuiProtocolRun(runId).catch(() => null)
-        if (cancelled) return
-        const watch = coordWatchStateRef.current.get(runId)
-        if (!snapshot || !watch) {
-          coordWatchStateRef.current.delete(runId)
-          setCoordWatchIds((prev) => keepFiltered(prev, (id) => id !== runId))
-          continue
-        }
-        for (const agent of snapshot.agents) {
-          if (agent.status === 'blocked' && !watch.blockedAgents.has(agent.id)) {
-            watch.blockedAgents.add(agent.id)
-            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ⌃K a to intervene`, 6000)
-            notifyTeamEvent('teammate blocked', `${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''}`)
-          }
-        }
-        const status = snapshot.run.status
-        if (status !== watch.status) {
-          watch.status = status
-          if (status === 'completed' || status === 'failed' || status === 'stopped') {
-            const headline = snapshot.run.summary?.split('\n')[0] ?? ''
-            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ⌃K a for the board`, 8000)
-            notifyTeamEvent(`team run ${status}`, headline || snapshot.run.prompt.slice(0, 80))
-            coordWatchStateRef.current.delete(runId)
-            setCoordWatchIds((prev) => keepFiltered(prev, (id) => id !== runId))
-          }
-        }
-      }
-    }
-    void tick()
-    const timer = setInterval(() => { void tick() }, 5000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [coordWatchIds])
+  useEffect(() => runCoordWatchEffect({
+    coordWatchIds, coordWatchStateRef, setCoordWatchIds, showNotice, notifyTeamEvent,
+  }), [coordWatchIds])
 
   // Palette actions resolve the latest run on demand — the interactive board
   // (CoordinationPopover) has its own run-scoped stop/cleanup keys.
