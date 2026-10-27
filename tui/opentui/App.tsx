@@ -353,6 +353,7 @@ import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
 import { runProjectedWindowGeometry } from './app/derived/windowGeometry'
 import { WorkspaceBody } from './app/overlays/WorkspaceBody'
+import { useRenderSurfaceLayerGroup } from './app/slices/renderSurfaceLayer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8013,79 +8014,30 @@ function OpenTuiWorkspace() {
     renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
     return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
   }, [renderer, visibleSplitPaneCount])
-
-  const renderSurfaceLayer = () => runRenderSurfaceLayer({
+  const {
+    renderSurfaceLayer, renderSplitPane, renderWindowTabs, resizeSurfacePanelBy, tabCloseHit,
+    popoverTabAt, tabAt,
+  } = useRenderSurfaceLayerGroup({
     readerAreaWidth, windowAreaHeight, treeGeometry, visibleSplitPaneCount, fittedWindows,
     splitOrientation, splitReaderLast, fittedWindowKeys, zoomedIndex, rectOf, windowSurfaces,
     liveWindowStacks, floatingKey, windowSurfacePeek, renderSurfaceWindow, floatingWindow,
-    fullscreenMode, windowStackFor, zooming,
+    fullscreenMode, windowStackFor, zooming, selectedSessionKey, chromeWindowIndex,
+    windowNumberOffset, primaryLeaf, effectiveFocus, splitFocusIndex, composerActive,
+    reportSelectedWindowCursor, setFollowTail, deferredSearchQuery, searchMatches,
+    visibleTranscriptCards, searchMatchIndex, registerSplitPaneHandle, theme, densityState,
+    density, showToolCalls, syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls,
+    agentToolCursorByGroupKey, selectAgentTool, thinkingMode, diffLayout, imessageStyle,
+    transcriptWidth, transcriptView, splitPaneLiveMessages, liveTranscriptBaselineRef,
+    splitPaneRunningKeys, badgeForWindow, watchedCoordinator, reportWindowActivity,
+    composerSendState, composerLiveText, composerActivitySessionKey, focusSplitPane,
+    splitPaneActions, stickyHeaders, lightweightWindows, noteTranscriptLinkPress,
+    openTranscriptLinkAt, openCardAsyncQuestions, floatGestureHandlers, sessionDragHandlers,
+    splitPaneShouldYield, sessionDragImplRef, activateWindowTab, windowKeyTitle, closeWindowTab,
+    setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows, surfacePanelExpanded,
+    effectiveSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth,
+    effectiveSurfacePanelWidth, surfacePanelMaxWidth, tabSelectRef, tabWidth, visibleTabSessions,
+    popoverTabs,
   })
-
-  // One split pane's frame, at the size its arrangement gives it.
-  const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => runRenderSplitPane({
-    selectedSessionKey, chromeWindowIndex, visibleSplitPaneCount, windowNumberOffset, primaryLeaf,
-    floatingKey, effectiveFocus, splitFocusIndex, composerActive, reportSelectedWindowCursor,
-    setFollowTail, fullscreenMode, deferredSearchQuery, searchMatches, visibleTranscriptCards,
-    searchMatchIndex, registerSplitPaneHandle, theme, densityState, density, showToolCalls,
-    syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls, agentToolCursorByGroupKey,
-    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView,
-    splitPaneLiveMessages, liveTranscriptBaselineRef, splitPaneRunningKeys, badgeForWindow,
-    watchedCoordinator, reportWindowActivity, composerSendState, composerLiveText,
-    composerActivitySessionKey, focusSplitPane, splitPaneActions, stickyHeaders,
-    lightweightWindows, noteTranscriptLinkPress, openTranscriptLinkAt, openCardAsyncQuestions,
-    floatGestureHandlers, sessionDragHandlers, splitPaneShouldYield, renderWindowTabs,
-  }, splitSession, splitIndex, size, hidden)
-
-  // A frame's tab strip, over its title: one tab per member, the shown one lit.
-  // A tab is clicked to show it and dragged to move it; × closes it.
-  // `reserve` is the title bar's right end, where the frame's own buttons are.
-  const renderWindowTabs = (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => runRenderWindowTabs({
-    windowStackFor, theme, sessionDragImplRef, activateWindowTab, sessionDragHandlers,
-    windowKeyTitle, closeWindowTab,
-  }, key, index, frameWidth, top, left, reserve)
-
-  // Dragging the panel's inner border by `delta` cells toward the reader (positive) or away.
-  const resizeSurfacePanelBy = (delta: number) => {
-    // A drag sets a size, so it ends an expansion.
-    setSurfacePanelExpanded(false)
-    if (surfacePanelAtBottom) {
-      setSurfacePanelRows((current) => clamp(
-        (surfacePanelExpanded ? effectiveSurfacePanelRows : current) + delta,
-        SURFACE_PANEL_MIN_ROWS,
-        surfacePanelMaxRows,
-      ))
-    } else {
-      setSurfacePanelWidth((current) => clamp(
-        (surfacePanelExpanded ? effectiveSurfacePanelWidth : current) + delta,
-        SURFACE_PANEL_MIN_WIDTH,
-        Math.min(SURFACE_PANEL_MAX_WIDTH, surfacePanelMaxWidth),
-      ))
-    }
-  }
-
-  // Whether a column of the tab strip is a tab's ×: the label's last cell,
-  // tabWidth - 2 into the tab (one cell either side, a click is not that exact).
-  const tabCloseHit = (x: number): boolean => {
-    const instance = tabSelectRef.current
-    if (!instance) return false
-    const column = (x - instance.x) % tabWidth
-    return column >= tabWidth - 3 && column <= tabWidth - 1
-  }
-  // The popover tab under a column of the tab strip, if that column is one.
-  const popoverTabAt = (x: number): WindowSurfaceId | null => {
-    const instance = tabSelectRef.current
-    if (!instance) return null
-    const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
-    const index = scrollOffset + Math.floor((x - instance.x) / tabWidth) - visibleTabSessions.length
-    return index >= 0 ? popoverTabs[index] ?? null : null
-  }
-  // The open tab under a column of the tab strip.
-  const tabAt = (x: number): Session | null => {
-    const instance = tabSelectRef.current
-    if (!instance) return null
-    const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
-    return visibleTabSessions[scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
-  }
 
   useLayoutEffect(() => runComposerDraftPersistEffect({
     composerTextareaRef, composerDraftRef, composerDraftStorageKeyRef, writeWorkspaceDraft,
