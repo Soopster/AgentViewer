@@ -314,6 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
 import { runOptionsEffect } from './app/effects/session'
+import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6848,22 +6849,10 @@ function OpenTuiWorkspace() {
   })
 
 
-  useEffect(() => {
-    if (
-      composerPreferredTargetKey !== null
-      && (
-        selectedSessionKey !== composerPreferredTargetKey
-        || (
-          !composerActive
-          && composerPreparingTargetKey !== composerPreferredTargetKey
-          && !newSessionModalOpen
-          && !worktreeModalOpen
-        )
-      )
-    ) {
-      setComposerPreferredTargetKey(null)
-    }
-  }, [composerActive, composerPreferredTargetKey, composerPreparingTargetKey, newSessionModalOpen, selectedSessionKey, worktreeModalOpen])
+  useEffect(() => runComposerPreferredTargetEffect({
+    composerPreferredTargetKey, selectedSessionKey, composerActive, composerPreparingTargetKey,
+    newSessionModalOpen, worktreeModalOpen, setComposerPreferredTargetKey,
+  }), [composerActive, composerPreferredTargetKey, composerPreparingTargetKey, newSessionModalOpen, selectedSessionKey, worktreeModalOpen])
 
   // Reconcile window pins against the open tabs:
   //   · a pin whose tab was closed is dropped (the previewed session excepted)
