@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
@@ -4431,29 +4431,10 @@ function OpenTuiWorkspace() {
 
   // Answer a plain tool permission straight from the inbox. Questions and plan
   // approvals need their full pickers — those route through openAttentionSession.
-  const respondToAttentionItem = useStableEvent(async (item: AttentionItem, response: PermissionResponse) => {
-    const permission = item.permission
-    if (!permission || attentionRespondingId) return
-    setAttentionRespondingId(permission.id)
-    try {
-      await runTuiSessionAction(
-        { sessionId: item.sessionId, provider: item.provider } as Session,
-        { action: 'respondPermission', permissionId: permission.id, response, provider: item.provider },
-      )
-      setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
-      setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
-    } catch (err) {
-      if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
-        setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
-        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
-      } else {
-        showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
-      }
-    } finally {
-      setAttentionRespondingId(null)
-    }
-  })
+  const respondToAttentionItem = useStableEvent(async (item: AttentionItem, response: PermissionResponse) => runRespondToAttentionItem({
+    attentionRespondingId, setAttentionRespondingId, setPendingPermissions, setBackgroundPrompts,
+    showNotice,
+  }, item, response))
 
   const openAttentionSession = useStableEvent((item: AttentionItem) => {
     setAttentionOpen(false)

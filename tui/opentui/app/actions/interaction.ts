@@ -54,6 +54,7 @@ import { type SendAttachment } from '../../../../lib/types'
 import { join } from 'node:path'
 import { type ComposerPromptPart, type ComposerDraftSnapshot } from '../types'
 import { recordVoice } from '../../voiceRecorder'
+import { type AttentionItem } from '../../AttentionInboxPopover'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -902,4 +903,40 @@ export function runToggleVoice(ctx: ToggleVoiceContext) {
       setVoiceStatus(current => /^(Opening|Listening|Transcribing)/.test(current) ? '' : current)
     }
   })
+}
+
+export type RespondToAttentionItemContext = {
+  attentionRespondingId: string | null
+  setAttentionRespondingId: React.Dispatch<React.SetStateAction<string | null>>
+  setPendingPermissions: React.Dispatch<React.SetStateAction<PendingPermission[]>>
+  setBackgroundPrompts: React.Dispatch<React.SetStateAction<PendingPermission[]>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+}
+
+export async function runRespondToAttentionItem(ctx: RespondToAttentionItemContext, item: AttentionItem, response: PermissionResponse) {
+  const {
+    attentionRespondingId, setAttentionRespondingId, setPendingPermissions, setBackgroundPrompts,
+    showNotice,
+  } = ctx
+  const permission = item.permission
+  if (!permission || attentionRespondingId) return
+  setAttentionRespondingId(permission.id)
+  try {
+    await runTuiSessionAction(
+      { sessionId: item.sessionId, provider: item.provider } as Session,
+      { action: 'respondPermission', permissionId: permission.id, response, provider: item.provider },
+    )
+    setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+    setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+  } catch (err) {
+    if (isPendingRequestGone(err)) {
+      setPendingPermissions((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+      setBackgroundPrompts((prev) => keepFiltered(prev, (p) => p.id !== permission.id))
+      showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
+    } else {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+    }
+  } finally {
+    setAttentionRespondingId(null)
+  }
 }
