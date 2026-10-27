@@ -305,6 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
+import { runPickWindowTarget } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10686,69 +10687,14 @@ function OpenTuiWorkspace() {
     pickWindowTarget(target)
   })
 
-  const pickWindowTarget = useStableEvent((key: string) => {
-    const target = windowTargets.find((entry) => entry.key === key)
-    if (!target) { showNotice('info', 'That window is no longer open'); return }
-    if (key === floatingKey) { setWindowSwitcherOpen(false); setFocusedPane('messages'); setSplitFocusIndex(FLOATING_PANE_INDEX); return }
-    if (parkedWindowKeysRef.current.has(key)) {
-      setWindowSwitcherOpen(false)
-      activateWindowTab(key)
-      if (isSurfaceWindowKey(key)) pendingSurfaceFocusRef.current = surfaceIdOfKey(key)
-      return
-    }
-    setWindowSwitcherOpen(false)
-    if (isSurfaceWindowKey(key) && popoverTabs.includes(surfaceIdOfKey(key))) { showPopoverTab(surfaceIdOfKey(key)); return }
-    setWindowZoom(null)
-    setWindowSurfacePeek(null)
-    setSurfacePanelFocused(false)
-    setFocusedPane('messages')
-    if (target.session) {
-      const pane = windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === key)
-      if (pane >= 0) focusSplitPane(pane)
-      else {
-        // A watched run keeps its lead's window (the first): a hidden teammate
-        // trades places with the first teammate shown.
-        const lead = splitPinnedKeys[0]
-        const shownTeammate = watchedCoordinator ? splitPaneSessions.find((session) => sessionKey(session) !== lead) : undefined
-        if (key !== selectedSessionKey && shownTeammate) {
-          checkpointWindowLayout()
-          const first = sessionKey(shownTeammate)
-          const swap = (keys: string[]) => keys.map(entry => entry === key ? first : entry === first ? key : entry)
-          setSplitPinnedKeys(swap)
-          setWindowOrder(swap)
-          focusSplitPane(windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === first))
-          return
-        }
-        if (key !== selectedSessionKey) {
-          checkpointWindowLayout()
-          // The hidden window trades places with the selected session's, so it
-          // is shown and the order keeps every window; picking the other back
-          // trades them again. The selection may be an unpinned preview tab:
-          // keep it as a tab instead of letting reconciliation drop it.
-          const current = selectedSession
-          const currentKey = current ? sessionKey(current) : null
-          setOpenTabSessions((tabs) => current && !tabs.some((tab) => sessionKey(tab) === currentKey) ? [...tabs, current] : tabs)
-          if (currentKey) {
-            const swap = (keys: string[]) => keys.map((entry) => entry === key ? currentKey : entry === currentKey ? key : entry)
-            setSplitPinnedKeys(swap)
-            setWindowOrder(swap)
-          }
-          selectTabSession(target.session)
-        }
-        focusReaderFromSplit()
-      }
-    } else if (target.surface) {
-      const pane = windowItems.findIndex((item) => item.kind === 'surface' && item.surface === target.surface)
-      if (pane >= 0) focusSplitPane(pane)
-      else {
-        // A hidden surface can be inspected at full size without changing the
-        // logical layout or mounting it in the side panel at the same time.
-        setWindowSurfacePeek(target.surface)
-        setSplitFocusIndex(-1)
-        showNotice('info', 'Hidden window · Esc or ⌃B m restores the layout')
-      }
-    }
-  })
+  const pickWindowTarget = useStableEvent((key: string) => runPickWindowTarget({
+    windowTargets, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
+    setSplitFocusIndex, parkedWindowKeysRef, activateWindowTab, pendingSurfaceFocusRef,
+    popoverTabs, showPopoverTab, setWindowZoom, setWindowSurfacePeek, setSurfacePanelFocused,
+    windowItems, focusSplitPane, splitPinnedKeys, watchedCoordinator, splitPaneSessions,
+    selectedSessionKey, checkpointWindowLayout, setSplitPinnedKeys, setWindowOrder,
+    selectedSession, setOpenTabSessions, selectTabSession, focusReaderFromSplit,
+  }, key))
   const sendBroadcastPrompt = useStableEvent(async (session: Session, text: string, requestId: string): Promise<BroadcastDelivery> => {
     const key = sessionKey(session)
     const permissionMode = session.provider === 'claude' ? tuiPermissionModeByKey[key] ?? 'auto'
