@@ -324,6 +324,7 @@ import { runQuestionPickerPlan } from './app/derived/questionPicker'
 import { runFleetEntries } from './app/derived/fleet'
 import { runComposerKnobSegments } from './app/derived/composerStatus'
 import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
+import { runPluginServices } from './app/derived/pluginServices'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6869,61 +6870,16 @@ function OpenTuiWorkspace() {
   // Only a warm Claude session can stop its background tasks (query.stopTask()).
   const composerCanStopTasks = composerTargetSession?.provider === 'claude'
   // What the root offers plugin views. Each surface receives only the services it declares.
-  const pluginServices = useMemo((): TuiProvidedPluginServices => ({
-    ...(subagentTranscriptSelection ? { 'subagent-transcript': {
-      label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,
-      agentId: subagentTranscriptSelection.agent.agentId,
-      load: (signal: AbortSignal) => readTuiSubagentTranscriptAsync(subagentTranscriptSelection.parent, subagentTranscriptSelection.agent.agentId, density, signal),
-    } } : {}),
-    composer: {
-      appendDiffNote: (prompt: string, notice?: string) => {
-        appendDiffCommentPromptToComposer(prompt)
-        showNotice('info', notice ?? 'Diff comment added to composer')
-      },
-      askAboutSelection: (request: SelectionAskInput) => { void askAgentAboutSelection(request) },
-      insertText: (text: string, notice?: string) => {
-        insertComposerTextAtCursor(text)
-        setComposerActive(true)
-        showNotice('info', notice ?? 'Added to composer')
-      },
-      appendPrompt: (prompt: string, notice: string) => {
-        appendDiffCommentPromptToComposer(prompt)
-        setSurfacePanelFocused(false)
-        showNotice('info', notice)
-      },
-    },
-    clipboard: { write: (text: string) => writeClipboard(text, renderer), read: readClipboardText },
-    'open-file': { open: (path: string, line?: number | null) => openEditorAt(path, line ?? null) },
-    notices: { show: (kind: 'info' | 'error', text: string, durationMs?: number) => showNotice(kind, text, durationMs) },
-    'browser-location': {
-      recent: surfaceBrowserRecent,
-      opened: (url: string) => setSurfaceBrowserRecent((current) => [url, ...current.filter((entry) => entry !== url)].slice(0, 12)),
-    },
-    ...(gitRepoCwd ? { 'file-history': { open: (path: string, where?: 'overlay' | 'window') => openFileHistory(path, where) } } : {}),
-    'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
-    coordination: {
-      initialRunId: coordBoardRunId,
-      openAgentSession: openCoordinationAgentSession,
-      watchAgentSessions: watchCoordinationAgentSessions,
-      watchRun: watchCoordinatorRun,
-      newRun: newCoordinationRun,
-      copyJoinCommand: copyCoordinationJoinCommand,
-    },
-    themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
-    'task-control': {
-      jumpTo: jumpToTaskCard,
-      ...(composerCanStopTasks ? { stop: (taskId: string) => { void stopComposerTask(taskId) } } : {}),
-    },
-    'session-diagnostics': {
-      read: async (session: Session) => (await readTuiSessionDiagnostics(session)).sections ?? [],
-      run: (session: Session, action: string, extra: Record<string, unknown>) => runTuiSessionAction(session, { action, ...extra }),
-      hasControls: (session: Session) => session.provider === 'claude',
-    },
-    // The bridges are offered only while a Claude session can use one (pluginServiceGaps says so otherwise).
-    ...(canUseChannelBridge ? { 'channel-bridge': { routed: routeComposerToBridge, toggleRoute: toggleComposerBridgeRoute, accentColor: composerAccentColor } } : {}),
-    ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
-  // The callbacks are the root's stable events and setters.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const pluginServices = useMemo(() => runPluginServices({
+    subagentTranscriptSelection, density, appendDiffCommentPromptToComposer, showNotice,
+    askAgentAboutSelection, insertComposerTextAtCursor, setComposerActive, setSurfacePanelFocused,
+    renderer, openEditorAt, surfaceBrowserRecent, setSurfaceBrowserRecent, gitRepoCwd,
+    openFileHistory, velocityScrollEnabled, toggleVelocityScroll, coordBoardRunId,
+    openCoordinationAgentSession, watchCoordinationAgentSessions, watchCoordinatorRun,
+    newCoordinationRun, copyCoordinationJoinCommand, themeMode, choosePluginTheme, jumpToTaskCard,
+    composerCanStopTasks, stopComposerTask, canUseChannelBridge, routeComposerToBridge,
+    toggleComposerBridgeRoute, composerAccentColor, canUseIdeBridge, routeComposerToIde,
+    toggleComposerIdeRoute, insertComposerPromptText,
   }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode])
   // The session fleet changes on every poll, so only a view that asks for it is
   // handed a bag holding it; the rest keep the stable one above.
