@@ -238,7 +238,7 @@ import {
   type ChordMap,
 } from './chordHelp'
 import { isAltKey, isCtrlKey, isCtrlShiftKey, isShiftedKey, PORTABLE_COMMAND_CHORDS, portableCommandChord } from './shortcutKeys'
-import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
+import { type MenuPoint, type WindowItem, type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
 import { NATIVE_OSC_ENABLED, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
 import { FLOATING_PANE_INDEX, READER_CARD_WINDOW, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
@@ -274,6 +274,7 @@ import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
 import { CoordRunModal } from './app/overlays/CoordRunModal'
+import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -618,7 +619,6 @@ function OpenTuiWorkspace() {
   })
   // A pane's title buttons, stable across renders: the panes are memoized, and
   // a fresh function per render would re-render every pane with the root.
-  type MenuPoint = { x: number; y: number }
   const splitPaneActionsRef = useRef({
     close: (_paneIndex: number) => {},
     promote: (_session: Session) => {},
@@ -4119,7 +4119,6 @@ function OpenTuiWorkspace() {
   // Every window in display order — sessions in their slots, surfaces in
   // theirs — then those that fit; short of room, sessions go before surfaces.
   const fittedWindowKeys = treeGeometry ? orderedWindowKeys.slice(0, visibleSplitPaneCount) : visibleSplitPaneCount > 0 ? fitWindows(orderedWindowKeys, visibleSplitPaneCount, pinnedWindowSessions.map((session) => sessionKey(session))) : []
-  type WindowItem = { kind: 'session'; session: Session } | { kind: 'surface'; surface: WindowSurfaceId }
   // A parked session (a background tab, the floating window) is an open tab, not a pin.
   const openTabByKey = new Map(openTabSessions.map((session) => [sessionKey(session), session]))
   const windowItemFor = (key: string): WindowItem => (isSurfaceWindowKey(key)
@@ -19455,66 +19454,7 @@ function OpenTuiWorkspace() {
           </box>
         </>
       ) : null}
-      {sessionDrag ? (() => {
-        // Where a dragged session would land, and the session itself under the
-        // pointer. Drawn only: the press that started the drag holds it, so
-        // these boxes take no events of their own.
-        const reader = rectOf('transcript-reader')
-        const paneRect = sessionDrag.pane !== null ? rectOf(`split-pane:${sessionDrag.pane}`) : null
-        const area = windowAreaRect()
-        const previewRect = nestedDragPreview?.geometry.rects.get(nestedDragPreview.tree.keys.indexOf(nestedDragPreview.key))
-        const splitting = !sessionDrag.title && Boolean(sessionDrag.insert || (sessionDrag.pane === null && sessionDrag.zone && sessionDrag.zone !== 'center'))
-        const rect = splitting ? (previewRect && area ? { ...previewRect, x: previewRect.x + area.x, y: previewRect.y + area.y } : null) : !sessionDrag.session && !sessionDrag.tab && !paneRect && reader && sessionDrag.zone ? reader
-          : paneRect
-          ? (sessionDrag.title ? { ...paneRect, height: Math.min(paneRect.height, 3) } : sessionDrag.insert ? windowDropZoneRect(paneRect, sessionDrag.insert) : paneRect)
-          : (reader && sessionDrag.zone ? windowDropZoneRect(reader, sessionDrag.zone) : null)
-        const label = sessionDrag.pane !== null && sessionDrag.insert ? `Beside pane ${sessionDrag.pane + windowNumberOffset}`
-          : sessionDrag.pane !== null ? `Replace pane ${sessionDrag.pane + windowNumberOffset}`
-          : !sessionDrag.zone ? 'Drop on the reader or a pane'
-          : sessionDrag.zone === 'center' ? 'Open session'
-          : `Put it ${sessionDrag.zone === 'left' ? 'left of' : sessionDrag.zone === 'right' ? 'right of' : sessionDrag.zone === 'top' ? 'above' : 'below'} the reader`
-        // fitText pads to its width; trimmed, so the label is as long as what it says.
-        const dragged = sessionDrag.tab ? windowKeyTitle(sessionDrag.tab) : sessionDrag.session ? formatSessionTitle(sessionDrag.session) : surfaceTitle(sessionDrag.surface ?? '')
-        const overSurface = sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface'
-        const shown = splitting ? (nestedDragPreview ? 'Split here' : 'Split does not fit') : hasPrimaryFrame && sessionDrag.pane === null && sessionDrag.zone === 'center' ? 'Add as a tab of window 1' : sessionDrag.reader && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
-          : sessionDrag.tab ? (sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}` : 'Its own window')
-          : sessionDrag.title && sessionDrag.pane !== null ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
-          : !sessionDrag.session && sessionDrag.pane === null ? (sessionDrag.zone ? 'Float it here' : 'Drop on a window')
-          : (overSurface || !sessionDrag.session) && sessionDrag.pane !== null && !sessionDrag.insert ? `Add as a tab of window ${sessionDrag.pane + windowNumberOffset}`
-          : label
-        const ghost = `⠿ ${fitText(dragged, 28).trimEnd()} · ${shown}`
-        return (
-          <>
-            {rect ? (
-              <box
-                id="window-drop-zone"
-                position="absolute"
-                top={rect.y}
-                left={rect.x}
-                width={rect.width}
-                height={rect.height}
-                zIndex={900}
-                border
-                borderStyle="double"
-                borderColor={theme.cyan}
-              />
-            ) : null}
-            <box
-              id="window-drag-ghost"
-              position="absolute"
-              top={Math.min(Math.max(0, sessionDrag.y + 1), height - 1)}
-              // Kept on screen whole: the label plus its padding must fit left of the right edge.
-              left={Math.min(Math.max(0, sessionDrag.x + 2), Math.max(0, width - ghost.length - 3))}
-              height={1}
-              zIndex={901}
-              backgroundColor={rect ? theme.cyan : theme.surface3}
-              paddingX={1}
-            >
-              <text fg={rect ? theme.bg : theme.text} wrapMode="none" selectable={false}>{ghost}</text>
-            </box>
-          </>
-        )
-      })() : null}
+      <SessionDragOverlay sessionDrag={sessionDrag} rectOf={rectOf} windowAreaRect={windowAreaRect} nestedDragPreview={nestedDragPreview} windowNumberOffset={windowNumberOffset} windowKeyTitle={windowKeyTitle} windowItems={windowItems} hasPrimaryFrame={hasPrimaryFrame} theme={theme} height={height} width={width} />
       {splitDividerDragging && splitDividerPoint ? (
         // The size the drag is setting, beside the pointer.
         <box
