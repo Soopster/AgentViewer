@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8943,68 +8943,18 @@ function OpenTuiWorkspace() {
     }
     applySavedWindowLayout(id, snapshot, request, project)
   })
-  const applySavedWindowLayout = useStableEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => {
-    if (request !== windowLayoutRestoreRequestRef.current || project !== windowLayoutProject || !windowPickerOpen) return
-    setWindowSurfacePeek(null)
-    checkpointWindowLayout()
-    setCoordinatorWorkspace(snapshot)
-    const saved = savedWindowLayouts.find((entry) => entry.id === id)
-    if (!saved) return
-    setCoordinatorWorkspaceRunId(saved.coordinatorRunId ?? null)
-    setWindowPickerOpen(false)
-    const known = new Map<string, Session>()
-    for (const session of [...sessions, ...openTabSessions]) known.set(sessionKey(session), session)
-    if (snapshot && snapshot.run.id === saved.coordinatorRunId) {
-      for (const target of planCoordinatorWorkspace(snapshot, known).targets) known.set(target.sessionKey, target.session)
-    }
-    const panes = saved.panes.flatMap((key) => (known.has(key) ? [known.get(key)!] : []))
-    const reader = saved.reader ? known.get(saved.reader) ?? null : null
-    const floatingSession = saved.floating && !isSurfaceWindowKey(saved.floating.key) ? known.get(saved.floating.key) : null
-    const missing = saved.panes.length - panes.length + (saved.reader && !reader ? 1 : 0) + (saved.floating && !isSurfaceWindowKey(saved.floating.key) && !floatingSession ? 1 : 0)
-    setWindowArrangement(saved.arrangement, saved.readerLast)
-    applySplitOrientation(saved.orientation, true)
-    setSplitReaderShare(saved.readerShare)
-    setSplitSecondaryShare(saved.secondaryShare)
-    setSplitBottomShare(saved.bottomShare ?? SPLIT_SHARE_EVEN)
-    setSplitWeights(saved.weights ?? {})
-    setOpenTabSessions((prev) => {
-      const next = [...prev]
-      for (const session of [...(reader ? [reader] : []), ...(floatingSession ? [floatingSession] : []), ...panes]) {
-        if (!next.some((tab) => sessionKey(tab) === sessionKey(session))) next.push(session)
-      }
-      return next
-    })
-    setSplitPinnedKeys(panes.map((pane) => sessionKey(pane)))
-    setSplitPaneCount(panes.length)
-    void writeTuiSplitPanes(panes.length).catch(() => {})
-    setWindowSurfaces(saved.surfaces.filter(surfaceRestorable))
-    setWindowOrder(saved.order ?? [])
-    // Background tabs' sessions must be open tabs, or their tab has nothing to show.
-    const tabSessions = (saved.stacks ?? []).flat().flatMap((key) => (known.has(key) && !panes.some((pane) => sessionKey(pane) === key) ? [known.get(key)!] : []))
-    if (tabSessions.length > 0) setOpenTabSessions((prev) => [...prev, ...tabSessions.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
-    const restoredPrimaryOpen = Boolean(reader) && (saved.primaryOpen ?? saved.splitTree?.primary !== false)
-    const restoredTree = validWindowSplitTree(saved.splitTree) ? saved.splitTree : null
-    const restoredTabs = (saved.popoverTabs ?? []).filter(surfaceRestorable)
-    setPopoverTabs(restoredTabs); setActivePopoverTab(saved.activePopoverTab && restoredTabs.includes(saved.activePopoverTab) ? saved.activePopoverTab : null)
-    const restoredPrimaryFrame = restoredPrimaryOpen || Boolean(saved.activePopoverTab && restoredTabs.includes(saved.activePopoverTab))
-    setWindowSplitTree(restoredTree ? restoredPrimaryFrame ? restoredTree : removePrimaryWindow(restoredTree) : null)
-    setWindowStacks(saved.stacks ?? [])
-    setWindowSurfaceMeta(readSurfaceMeta(saved.surfaceMeta))
-    const restoredFloating = saved.floating && (isSurfaceWindowKey(saved.floating.key) ? surfaceRestorable(surfaceIdOfKey(saved.floating.key)) : Boolean(floatingSession)) ? saved.floating : null
-    setFloatingWindow(restoredFloating)
-    setSplitFocusIndex(restoredPrimaryFrame ? null : panes.length + saved.surfaces.filter(surfaceRestorable).length > 0 ? 0 : restoredFloating ? FLOATING_PANE_INDEX : null)
-    setSurfacePanelFocused(false)
-    setFocusedPane('messages')
-    setWindowZoom(null)
-    // Generic layouts store all transcripts in panes (or the floating window).
-    // Restoring after an empty workspace must reactivate one of those sessions,
-    // rather than depending on the legacy saved reader field.
-    const restoredSession = reader ?? panes.find(pane => sessionKey(pane) === selectedSessionKey) ?? panes[0] ?? floatingSession
-    setWorkspaceHasSession(Boolean(restoredSession))
-    setWorkspaceReaderSession(restoredSession ?? null)
-    if (restoredSession && sessionKey(restoredSession) !== selectedSessionKey) setSelectedSessionKey(sessionKey(restoredSession))
-    showNotice('info', `${saved.name} restored${missing > 0 ? ` · ${missing} session${missing === 1 ? '' : 's'} no longer here` : ''}`)
-  })
+  const applySavedWindowLayout = useStableEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => runApplySavedWindowLayout({
+    windowLayoutRestoreRequestRef, windowLayoutProject, windowPickerOpen, setWindowSurfacePeek,
+    checkpointWindowLayout, setCoordinatorWorkspace, savedWindowLayouts,
+    setCoordinatorWorkspaceRunId, setWindowPickerOpen, sessions, openTabSessions,
+    setWindowArrangement, applySplitOrientation, setSplitReaderShare, setSplitSecondaryShare,
+    setSplitBottomShare, setSplitWeights, setOpenTabSessions, setSplitPinnedKeys,
+    setSplitPaneCount, setWindowSurfaces, surfaceRestorable, setWindowOrder, setPopoverTabs,
+    setActivePopoverTab, setWindowSplitTree, setWindowStacks, setWindowSurfaceMeta,
+    setFloatingWindow, setSplitFocusIndex, setSurfacePanelFocused, setFocusedPane, setWindowZoom,
+    selectedSessionKey, setWorkspaceHasSession, setWorkspaceReaderSession, setSelectedSessionKey,
+    showNotice,
+  }, id, snapshot, request, project))
 
   const deleteSavedWindowLayout = useStableEvent((id: string) => {
     try {
