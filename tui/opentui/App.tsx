@@ -371,6 +371,7 @@ import { useRefreshSelectedSessionDetailGroup } from './app/slices/refreshSelect
 import { useActiveStripIndexGroup } from './app/slices/activeStripIndex'
 import { useTranscriptViewportRowsGroup } from './app/slices/transcriptViewportRows'
 import { useLiveAssistantPreviewLinesGroup } from './app/slices/liveAssistantPreviewLines'
+import { useSplitPaneRunningKeysGroup } from './app/slices/splitPaneRunningKeys'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -3050,54 +3051,15 @@ function OpenTuiWorkspace() {
   useEffect(() => {
     splitPaneLiveCacheRef.current = splitPaneLiveMessages
   }, [splitPaneLiveMessages])
-
-  // Which pane sessions have a turn in flight — drives the ◐ running glyph and
-  // the working spinner, so a background agent's activity is visible without
-  // switching to its tab.
-  const splitPaneRunningKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const running of runningSessions) {
-      keys.add(sessionKey(running))
-    }
-    return keys
-  }, [runningSessions])
-
-  const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
-  // When either right-hand panel is open, dock the composer under the reader
-  // column so it sits beside the panel instead of running underneath it.
-  const rightSidePanelVisible = taskPanelVisible || surfacePanelOnRight
-  const composerAreaOffset = rightSidePanelVisible
-    ? (showRail ? sidebarWidth : 0)
-    : 0
-  const composerAreaWidth = Math.max(
-    30,
-    rightSidePanelVisible ? readerAreaWidth : width,
-  )
-  const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
-  const composerWindowWidth = Math.max(
-    20,
-    Math.min(
-      Math.max(width - 4, 20),
-      Math.max(64, Math.min(COMPOSER_WINDOW_MAX_WIDTH, Math.floor(width * 0.78))),
-    ),
-  )
-  const composerWindowHeight = Math.max(
-    10,
-    Math.min(
-      Math.max(height - 4, 10),
-      Math.max(14, Math.min(COMPOSER_WINDOW_MAX_HEIGHT, Math.floor(height * 0.62))),
-    ),
-  )
-  const composerWindowLeft = Math.max(1, Math.floor((width - composerWindowWidth) / 2))
-  const composerWindowTop = Math.max(1, Math.floor((height - composerWindowHeight) / 2))
-  const composerWindowContentWidth = Math.max(composerWindowWidth - 4, 16)
-  const composerWindowTextareaWidth = Math.max(composerWindowContentWidth - 2, 12)
-  // What this render drew from the draft. The content-change handler compares each keystroke's
-  // shape with it and re-renders the root only when they differ.
-  const composerLineCounts = useMemo(
-    () => computeComposerDraftShape(composerDraft, textareaInnerWidth, composerWindowTextareaWidth, null),
-    [composerDraft, textareaInnerWidth, composerWindowTextareaWidth],
-  )
+  const {
+    splitPaneRunningKeys, textareaInnerWidth, rightSidePanelVisible, composerAreaOffset,
+    composerAreaWidth, composerDockTextareaWidth, composerWindowWidth, composerWindowHeight,
+    composerWindowLeft, composerWindowTop, composerWindowContentWidth, composerWindowTextareaWidth,
+    composerLineCounts,
+  } = useSplitPaneRunningKeysGroup({
+    runningSessions, rightPaneWidth, taskPanelVisible, surfacePanelOnRight, showRail, sidebarWidth,
+    readerAreaWidth, width, fullscreenMode, height, composerDraft,
+  })
   composerDraftShapeRef.current = { ...composerLineCounts, lines: composerDraftLines, attachments: '' }
   const composerVisualLineCount = composerLineCounts.dock
   const composerWindowVisualLineCount = composerLineCounts.window
