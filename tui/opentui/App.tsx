@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6622,81 +6622,12 @@ function OpenTuiWorkspace() {
     })
   }, [transcriptCards])
 
-  useEffect(() => {
-    const currentLength = transcriptCards.length
-    const currentLastKey = transcriptCards.at(-1)?.key ?? null
-    const previous = previousTranscriptRef.current
-    const sameSession = previous.sessionKey === committedSessionKey
-
-    if (currentLength === 0) {
-      setTranscriptCursorKey(null)
-      setPendingNewCount(0)
-      setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: 0, lastKey: null }
-      return
-    }
-
-    if (!sameSession) {
-      if (restoredReaderState.sessionKey !== committedSessionKey || !restoredReaderState.loaded) return
-      const restoredState = restoredReaderState.state
-      if (restoredState?.followTail === false) {
-        const restoredIndex = restoredState.cursorKey ? (transcriptIndexByKey.get(restoredState.cursorKey) ?? -1) : -1
-        const targetIndex = restoredIndex >= 0 ? restoredIndex : 0
-        setTranscriptCursorKey(visibleTranscriptCards[targetIndex]?.key ?? visibleTranscriptCards[0].key)
-        setFollowTail(false)
-        setPendingNewCount(0)
-        setUnreadBoundaryKey(null)
-        setResumeMarkerKey(restoredState.cursorKey)
-      } else {
-        setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
-    setComposerLiveTodos(keepEmpty)
-    setFollowTail(true)
-    setPendingNewCount(0)
-    setUnreadBoundaryKey(null)
-        setResumeMarkerKey(null)
-      }
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
-      return
-    }
-
-    if (followTail) {
-      setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
-      setPendingNewCount(0)
-      setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
-      return
-    }
-
-    // Detached readers need append accounting, but do not allocate a second
-    // full key array. The scan is limited to this paused-reader path; the
-    // common tail-following live stream above remains O(1).
-    const previousLastIndex = previous.lastKey
-      ? transcriptCards.findIndex((card) => card.key === previous.lastKey)
-      : -1
-    const appendedCount = previousLastIndex >= 0
-      ? currentLength - previousLastIndex - 1
-      : 0
-
-    if (appendedCount > 0) {
-      setPendingNewCount(appendedCount)
-      setUnreadBoundaryKey((current) => {
-        if (current && transcriptCards.some((card) => card.key === current)) return current
-        return transcriptCards[previousLastIndex + 1]?.key ?? null
-      })
-    }
-
-    setTranscriptCursorKey((current) => {
-      if (current && transcriptCards.some((card) => card.key === current)) return current
-      return visibleTranscriptCards[Math.max(readCursorIndex(), 0)]?.key ?? visibleTranscriptCards[0].key
-    })
-    previousTranscriptRef.current = { sessionKey: committedSessionKey, length: currentLength, lastKey: currentLastKey }
-    // cursorIndex is intentionally omitted from deps: the effect reconciles
-    // cursor/pending state when transcriptCards changes, and the cursorIndex
-    // fallback only fires when the current cursor key is missing from the new
-    // card list. Re-running on every j/k keystroke would do O(n) indexOf +
-    // includes work over the full transcript for a no-op setter result.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
+  useEffect(() => runTranscriptScrollSyncEffect({
+    transcriptCards, previousTranscriptRef, committedSessionKey, setTranscriptCursorKey,
+    setPendingNewCount, setUnreadBoundaryKey, restoredReaderState, transcriptIndexByKey,
+    visibleTranscriptCards, setFollowTail, setResumeMarkerKey, setComposerLiveTodos, followTail,
+    readCursorIndex,
+  }), [
     followTail,
     restoredReaderState,
     committedSessionKey,
