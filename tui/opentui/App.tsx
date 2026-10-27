@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
@@ -4517,31 +4517,9 @@ function OpenTuiWorkspace() {
     openAttentionSession(target)
   })
 
-  const reuseLastPrompt = useStableEvent(() => {
-    const messages = sessionDetail?.threadedMessages
-    if (!messages || messages.length === 0) return
-    let lastUserText = ''
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const msg = messages[i]
-      if (msg.role !== 'user') continue
-      const text = msg.blocks
-        .map((block) => {
-          if (block.type === 'text') return block.text ?? ''
-          if (block.type === 'local_command_stdout' && 'stdout' in block && typeof block.stdout === 'string') return block.stdout
-          return ''
-        })
-        .join('\n')
-        .trim()
-      if (text.length > 0) {
-        lastUserText = text
-        break
-      }
-    }
-    if (!lastUserText) return
-    setComposerActive(true)
-    composerTextareaRef.current?.setText(lastUserText)
-    setComposerDraft(lastUserText)
-  })
+  const reuseLastPrompt = useStableEvent(() => runReuseLastPrompt({
+    sessionDetail, setComposerActive, composerTextareaRef, setComposerDraft,
+  }))
 
   // Digits 1-9 jump straight to a fleet cell on the visible page.
   const jumpToFleetEntry = useStableEvent((index: number) => {

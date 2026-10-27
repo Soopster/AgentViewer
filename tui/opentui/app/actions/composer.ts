@@ -27,6 +27,7 @@ import { type TuiMentionResult } from '../types'
 import { type ComposerPromptPartRange } from '../types'
 import { activeMentionAttachments } from '../composerInput'
 import { type ComposerDraftSnapshot } from '../types'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -466,4 +467,40 @@ export function runMoveComposerHistory(ctx: MoveComposerHistoryContext, delta: n
     return
   }
   selectComposerHistoryEntry(nextDisplayIndex)
+}
+
+export type ReuseLastPromptContext = {
+  sessionDetail: TuiSessionDetail | null
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+}
+
+export function runReuseLastPrompt(ctx: ReuseLastPromptContext) {
+  const {
+    sessionDetail, setComposerActive, composerTextareaRef, setComposerDraft,
+  } = ctx
+  const messages = sessionDetail?.threadedMessages
+  if (!messages || messages.length === 0) return
+  let lastUserText = ''
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i]
+    if (msg.role !== 'user') continue
+    const text = msg.blocks
+      .map((block) => {
+        if (block.type === 'text') return block.text ?? ''
+        if (block.type === 'local_command_stdout' && 'stdout' in block && typeof block.stdout === 'string') return block.stdout
+        return ''
+      })
+      .join('\n')
+      .trim()
+    if (text.length > 0) {
+      lastUserText = text
+      break
+    }
+  }
+  if (!lastUserText) return
+  setComposerActive(true)
+  composerTextareaRef.current?.setText(lastUserText)
+  setComposerDraft(lastUserText)
 }
