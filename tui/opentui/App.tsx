@@ -373,6 +373,7 @@ import { useTranscriptViewportRowsGroup } from './app/slices/transcriptViewportR
 import { useLiveAssistantPreviewLinesGroup } from './app/slices/liveAssistantPreviewLines'
 import { useSplitPaneRunningKeysGroup } from './app/slices/splitPaneRunningKeys'
 import { useFloatingItemGroup } from './app/slices/floatingItem'
+import { useStackedPanesVisibleGroup } from './app/slices/stackedPanesVisible'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2851,29 +2852,13 @@ function OpenTuiWorkspace() {
   // the reader out side by side with whatever is beside it.
   const stackedSplit = !treeGeometry && splitAxisStacked && !arrangedVisible
   const visibleSplitPaneCount = fittedWindows.visibleCount
-  const stackedPanesVisible = stackedSplit && visibleSplitPaneCount > 0
-  // Off-axis, a frame simply spans the reader area: stacked panes are full
-  // width, side-by-side panes are full height.
-  // Every window in display order — sessions in their slots, surfaces in
-  // theirs — then those that fit; short of room, sessions go before surfaces.
-  const fittedWindowKeys = treeGeometry ? orderedWindowKeys.slice(0, visibleSplitPaneCount) : visibleSplitPaneCount > 0 ? fitWindows(orderedWindowKeys, visibleSplitPaneCount, pinnedWindowSessions.map((session) => sessionKey(session))) : []
-  // A parked session (a background tab, the floating window) is an open tab, not a pin.
-  const openTabByKey = new Map(openTabSessions.map((session) => [sessionKey(session), session]))
-  const windowItemFor = (key: string): WindowItem => (isSurfaceWindowKey(key)
-    ? { kind: 'surface', surface: surfaceIdOfKey(key) }
-    : { kind: 'session', session: sessionsByKey.get(key) ?? openTabByKey.get(key)! })
-  const windowItems: WindowItem[] = fittedWindowKeys.map(windowItemFor)
-  const laidOutWindowKeys = new Set(orderedWindowKeys)
-  const floatingKey = floatingWindow
-    && (isSurfaceWindowKey(floatingWindow.key) ? !windowSurfaces.includes(surfaceIdOfKey(floatingWindow.key))
-      : openTabByKey.has(floatingWindow.key) && !laidOutWindowKeys.has(floatingWindow.key))
-    ? floatingWindow.key : null
-  // A tab still exists while its session is an open tab other than the reader,
-  // or — a surface — while it is not open somewhere else.
-  const windowKeyExists = (key: string) => key !== floatingKey && (isSurfaceWindowKey(key)
-    ? Object.hasOwn(WINDOW_SURFACE_TITLES, surfaceKindOf(surfaceIdOfKey(key))) && !popoverTabs.includes(surfaceIdOfKey(key))
-    : openTabByKey.has(key))
-  const liveWindowStacks = liveStacks(windowStacks, windowKeyExists, (key) => laidOutWindowKeys.has(key))
+  const {
+    stackedPanesVisible, fittedWindowKeys, openTabByKey, windowItemFor, windowItems,
+    laidOutWindowKeys, floatingKey, liveWindowStacks,
+  } = useStackedPanesVisibleGroup({
+    stackedSplit, visibleSplitPaneCount, treeGeometry, orderedWindowKeys, pinnedWindowSessions,
+    openTabSessions, sessionsByKey, floatingWindow, windowSurfaces, popoverTabs, windowStacks,
+  })
   parkedWindowKeysRef.current = new Set([
     ...liveWindowStacks.flat().filter((key) => !laidOutWindowKeys.has(key)),
     ...(floatingKey ? [floatingKey] : []),
