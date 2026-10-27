@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes, runSwapWindowInDirection } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -7458,29 +7458,10 @@ function OpenTuiWorkspace() {
   }, direction, focus))
 
   // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
-  const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => {
-    checkpointWindowLayout()
-    if (visibleSplitPaneCount === 0) {
-      showNotice('error', 'No split panes open (⌃B % to split)')
-      return
-    }
-    const windows: Array<{ id: number; rect: { x: number; y: number; width: number; height: number } }> = []
-    const reader = rectOf('transcript-reader')
-    if (reader) windows.push({ id: -1, rect: reader })
-    for (let index = 0; index < visibleSplitPaneCount; index += 1) {
-      const pane = rectOf(`split-pane:${index}`)
-      if (pane) windows.push({ id: index, rect: pane })
-    }
-    const from = target ?? -1
-    const to = windowInDirection(windows, from, direction)
-    if (to === null) {
-      showNotice('info', `No window ${direction === 'up' ? 'above' : direction === 'down' ? 'below' : `to the ${direction}`}`)
-      return
-    }
-    setWindowSplitTree(swapPaneSlots(currentPaneTree(), from, to))
-    if (from === -1) focusReaderFromSplit()
-    else focusSplitPane(from)
-  })
+  const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => runSwapWindowInDirection({
+    splitFocusIndex, checkpointWindowLayout, visibleSplitPaneCount, showNotice, rectOf,
+    setWindowSplitTree, currentPaneTree, focusReaderFromSplit, focusSplitPane,
+  }, direction, target))
 
   // ⌃B arrows: the window in that direction, by where the frames actually are.
   const focusWindowInDirection = useStableEvent((direction: WindowDirection) => {

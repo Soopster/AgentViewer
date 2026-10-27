@@ -66,6 +66,8 @@ import { findPopoverWindow, pinFor, POPOVER_WINDOWS, type PopoverWindowKind } fr
 import { focusAfterWindowClose } from '../../windowControls'
 import { removeSplitPaneKey } from '../../splitPaneState'
 import { removeFromStack } from '../../windowTabs'
+import { swapPaneSlots } from '../../windowSplitTree'
+import { windowInDirection } from '../../windowLayout'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1656,4 +1658,45 @@ export function runRequestWindowPanes(ctx: RequestWindowPanesContext, wanted: nu
     setError(err instanceof Error ? err.message : 'Failed to store split view setting')
   })
   showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
+}
+
+export type SwapWindowInDirectionContext = {
+  splitFocusIndex: number | null
+  checkpointWindowLayout: () => void
+  visibleSplitPaneCount: number
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  rectOf: (id: string) => { x: number; y: number; width: number; height: number; } | null
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  currentPaneTree: () => WindowSplitTree
+  focusReaderFromSplit: () => void
+  focusSplitPane: (paneIndex: number) => void
+}
+
+export function runSwapWindowInDirection(ctx: SwapWindowInDirectionContext, direction: WindowDirection, target?: number | null) {
+  const {
+    splitFocusIndex, checkpointWindowLayout, visibleSplitPaneCount, showNotice, rectOf,
+    setWindowSplitTree, currentPaneTree, focusReaderFromSplit, focusSplitPane,
+  } = ctx
+  if (target === undefined) target = splitFocusIndex
+  checkpointWindowLayout()
+  if (visibleSplitPaneCount === 0) {
+    showNotice('error', 'No split panes open (⌃B % to split)')
+    return
+  }
+  const windows: Array<{ id: number; rect: { x: number; y: number; width: number; height: number } }> = []
+  const reader = rectOf('transcript-reader')
+  if (reader) windows.push({ id: -1, rect: reader })
+  for (let index = 0; index < visibleSplitPaneCount; index += 1) {
+    const pane = rectOf(`split-pane:${index}`)
+    if (pane) windows.push({ id: index, rect: pane })
+  }
+  const from = target ?? -1
+  const to = windowInDirection(windows, from, direction)
+  if (to === null) {
+    showNotice('info', `No window ${direction === 'up' ? 'above' : direction === 'down' ? 'below' : `to the ${direction}`}`)
+    return
+  }
+  setWindowSplitTree(swapPaneSlots(currentPaneTree(), from, to))
+  if (from === -1) focusReaderFromSplit()
+  else focusSplitPane(from)
 }
