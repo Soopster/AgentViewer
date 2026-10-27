@@ -59,6 +59,8 @@ import { planWindowSessionDrop } from '../../windowOperations'
 import { readerShareAt } from '../../windowLayout'
 import { SPLIT_SHARE_MAX, SPLIT_SHARE_MIN } from '../../splitPaneState'
 import { adjustSplitReaderShare, evenSplitReaderShare, SPLIT_SHARE_STEP } from '../../splitPaneState'
+import { placePaneSlot, movePaneToEdge, placeWindowSplit } from '../../windowSplitTree'
+import { stackSuccessor } from '../../windowTabs'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1252,4 +1254,60 @@ export function runCancelPointerGesture(ctx: CancelPointerGestureContext) {
     return true
   }
   return false
+}
+
+export type NestedDropPlanContext = {
+  windowZoom: number | 'reader' | null
+  fullscreenMode: boolean
+  orderedWindowKeys: string[]
+  fittedWindowKeys: string[]
+  windowItems: WindowItem[]
+  windowItemKey: (item: WindowItem) => string
+  fittedWindows: WindowLayout
+  readerAreaWidth: number
+  windowAreaHeight: number
+  splitOrientation: SplitPaneOrientation
+  splitReaderLast: boolean
+  reconciledSplitTree: WindowSplitTree | null
+  windowStackFor: (key: string) => WindowStack | null
+  shownPopoverTab: string | null
+  splitTreeLimits: { paneWidth: number; paneRows: number; readerWidth: number; readerRows: number; }
+  rectOf: (id: string) => { x: number; y: number; width: number; height: number; } | null
+}
+
+export function runNestedDropPlan(ctx: NestedDropPlanContext, movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }) {
+  const {
+    windowZoom, fullscreenMode, orderedWindowKeys, fittedWindowKeys, windowItems, windowItemKey,
+    fittedWindows, readerAreaWidth, windowAreaHeight, splitOrientation, splitReaderLast,
+    reconciledSplitTree, windowStackFor, shownPopoverTab, splitTreeLimits, rectOf,
+  } = ctx
+  const edge = target.pane === null ? target.zone : target.insert
+  if (!edge || edge === 'center' || target.title || windowZoom !== null || fullscreenMode) return null
+  if (orderedWindowKeys.length !== fittedWindowKeys.length) return null
+  const anchor = target.pane === null ? null : windowItems[target.pane] ? windowItemKey(windowItems[target.pane]!) : undefined
+  if (anchor === undefined) return null
+  const rects = windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast })
+  let base = reconciledSplitTree ?? { keys: orderedWindowKeys, root: splitTreeFromRects(rects.map((rect, index) => ({ ...rect, slot: index - 1 }))) }
+  const stack = windowStackFor(movingKey)
+  if (stack?.includes(anchor ?? '')) return null
+  const successor = stack && orderedWindowKeys.includes(movingKey) ? stackSuccessor(stack, movingKey) : null
+  if (successor) base = { ...base, keys: base.keys.map(key => key === movingKey ? successor : key) }
+  const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
+  // Onto its own edge, a window moves to that side of the whole layout.
+  const ownSlot = movingKey === anchor ? base.keys.indexOf(movingKey) : -1
+  const next = primaryKey && movingKey === primaryKey ? placePaneSlot(base, -1, target.pane ?? -1, edge)
+    : ownSlot >= 0 ? movePaneToEdge(base, ownSlot, edge)
+    : movingKey === anchor ? null
+    : placeWindowSplit(base, movingKey, anchor, edge)
+  if (!next) return null
+  const geometry = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
+  if (geometry.layout.visibleCount !== next.keys.length) return null
+  // Refuse a new split that borrows minimum-size space from unrelated panes.
+  if (!orderedWindowKeys.includes(movingKey) && movingKey !== primaryKey) {
+    const frame = target.pane === null ? rectOf('transcript-reader') : rectOf(`split-pane:${target.pane}`)
+    const horizontal = edge === 'left' || edge === 'right'
+    const required = horizontal ? SPLIT_PANE_MIN_WIDTH + (target.pane === null ? MIN_READER_WIDTH : SPLIT_PANE_MIN_WIDTH) : SPLIT_PANE_MIN_ROWS + (target.pane === null ? MIN_READER_ROWS : SPLIT_PANE_MIN_ROWS)
+    if (!frame || (horizontal ? frame.width : frame.height) < required) return null
+  }
+  return { tree: next, geometry, key: movingKey }
 }

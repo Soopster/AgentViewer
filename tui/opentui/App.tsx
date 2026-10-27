@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9710,37 +9710,11 @@ function OpenTuiWorkspace() {
     setFloatingWindow((current) => current ? { ...current, rect: clampFloatingRect({ ...rect, x: point.x - area.x - 4, y: point.y - area.y }, area) } : current)
   })
 
-  const nestedDropPlan = (movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }) => {
-    const edge = target.pane === null ? target.zone : target.insert
-    if (!edge || edge === 'center' || target.title || windowZoom !== null || fullscreenMode) return null
-    if (orderedWindowKeys.length !== fittedWindowKeys.length) return null
-    const anchor = target.pane === null ? null : windowItems[target.pane] ? windowItemKey(windowItems[target.pane]!) : undefined
-    if (anchor === undefined) return null
-    const rects = windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast })
-    let base = reconciledSplitTree ?? { keys: orderedWindowKeys, root: splitTreeFromRects(rects.map((rect, index) => ({ ...rect, slot: index - 1 }))) }
-    const stack = windowStackFor(movingKey)
-    if (stack?.includes(anchor ?? '')) return null
-    const successor = stack && orderedWindowKeys.includes(movingKey) ? stackSuccessor(stack, movingKey) : null
-    if (successor) base = { ...base, keys: base.keys.map(key => key === movingKey ? successor : key) }
-    const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
-    // Onto its own edge, a window moves to that side of the whole layout.
-    const ownSlot = movingKey === anchor ? base.keys.indexOf(movingKey) : -1
-    const next = primaryKey && movingKey === primaryKey ? placePaneSlot(base, -1, target.pane ?? -1, edge)
-      : ownSlot >= 0 ? movePaneToEdge(base, ownSlot, edge)
-      : movingKey === anchor ? null
-      : placeWindowSplit(base, movingKey, anchor, edge)
-    if (!next) return null
-    const geometry = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
-    if (geometry.layout.visibleCount !== next.keys.length) return null
-    // Refuse a new split that borrows minimum-size space from unrelated panes.
-    if (!orderedWindowKeys.includes(movingKey) && movingKey !== primaryKey) {
-      const frame = target.pane === null ? rectOf('transcript-reader') : rectOf(`split-pane:${target.pane}`)
-      const horizontal = edge === 'left' || edge === 'right'
-      const required = horizontal ? SPLIT_PANE_MIN_WIDTH + (target.pane === null ? MIN_READER_WIDTH : SPLIT_PANE_MIN_WIDTH) : SPLIT_PANE_MIN_ROWS + (target.pane === null ? MIN_READER_ROWS : SPLIT_PANE_MIN_ROWS)
-      if (!frame || (horizontal ? frame.width : frame.height) < required) return null
-    }
-    return { tree: next, geometry, key: movingKey }
-  }
+  const nestedDropPlan = (movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }) => runNestedDropPlan({
+    windowZoom, fullscreenMode, orderedWindowKeys, fittedWindowKeys, windowItems, windowItemKey,
+    fittedWindows, readerAreaWidth, windowAreaHeight, splitOrientation, splitReaderLast,
+    reconciledSplitTree, windowStackFor, shownPopoverTab, splitTreeLimits, rectOf,
+  }, movingKey, target)
   const applyNestedDrop = useStableEvent((movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean }, session?: Session) => {
     const plan = nestedDropPlan(movingKey, target)
     if (!plan) { showNotice('info', 'That split does not fit · enlarge the target pane first'); return }
