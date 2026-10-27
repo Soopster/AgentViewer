@@ -278,6 +278,7 @@ import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 import { ComposerStatusMessage } from './app/overlays/ComposerStatusMessage'
 import { FloatingWindowLayer } from './app/overlays/FloatingWindowLayer'
+import { ThemeMenuOverlay } from './app/overlays/ThemeMenuOverlay'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -18275,114 +18276,7 @@ function OpenTuiWorkspace() {
           </>)
         })()}
 
-        {themeMenuOpen ? (() => {
-          const originTheme = themeMenuOriginRef.current
-          // Use the origin palette when it's dark; fall back to 'dark' when the
-          // origin is a light theme so the overlay is always readable.
-          const overlayTheme = originTheme && !isLightThemeMode(originTheme)
-            ? getThemePalette(originTheme)
-            : getThemePalette('dark')
-          const menuHeight = Math.max(15, Math.min(height - 4, 33))
-          const allGroupThemes = themeGroupModes(themeMenuGroup)
-          const groupThemes = filterThemeModes(allGroupThemes, themeMenuQuery)
-          const currentTheme = THEMES[themeMenuIndex]
-          const localIndex = Math.max(
-            currentTheme && groupThemes.includes(currentTheme) ? groupThemes.indexOf(currentTheme) : 0,
-            0,
-          )
-          const groupOptions = groupThemes.map((mode) => ({
-            name: THEME_LABELS[mode] + (mode === originTheme ? ' ✓' : ''),
-            description: THEME_DESCRIPTIONS[mode],
-            value: mode,
-          }))
-          return (
-            <box
-              position="absolute"
-              top={focusMode ? 1 : 3}
-              right={2}
-              width={36}
-              height={menuHeight}
-              border
-              borderStyle="single"
-              borderColor={overlayTheme.border2}
-              backgroundColor={overlayTheme.surface}
-              zIndex={20}
-              flexDirection="column"
-            >
-              <box paddingX={2} paddingBottom={1} flexDirection="row">
-                {THEME_GROUPS.map((group, i) => (
-                  <React.Fragment key={group.key}>
-                    {i > 0 ? <text fg={overlayTheme.dim} wrapMode="none">  |  </text> : null}
-                    <text fg={themeMenuGroup === group.key ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">{group.label}</text>
-                  </React.Fragment>
-                ))}
-                <text fg={overlayTheme.dim} wrapMode="none">   ← →</text>
-              </box>
-              <box height={1} paddingX={2} paddingBottom={1} flexDirection="row">
-                <text fg={overlayTheme.cyan} wrapMode="none">/ </text>
-                <input
-                  style={{ flexGrow: 1 }}
-                  focused
-                  value={themeMenuQuery}
-                  placeholder="Search themes..."
-                  maxLength={60}
-                  onInput={(value) => {
-                    setThemeMenuQuery(value)
-                    const nextGroupThemes = filterThemeModes(allGroupThemes, value)
-                    const target = nextGroupThemes[0]
-                    if (target) {
-                      setThemeMenuIndex(THEMES.indexOf(target))
-                      setThemeMode(target)
-                    }
-                  }}
-                  onSubmit={() => {
-                    const target = groupThemes[localIndex] ?? groupThemes[0]
-                    if (target) chooseTheme(target)
-                  }}
-                />
-              </box>
-              <box flexGrow={1} paddingX={1} paddingBottom={1}>
-                {groupThemes.length === 0 ? (
-                  <text fg={overlayTheme.dim} wrapMode="none">No matching themes</text>
-                ) : (
-                  <select
-                    style={{ height: menuHeight - 9 }}
-                    focused={false}
-                    options={groupOptions}
-                    selectedIndex={localIndex}
-                    selectedBackgroundColor={overlayTheme.surface3}
-                    selectedTextColor={overlayTheme.text}
-                    textColor={overlayTheme.muted}
-                    descriptionColor={overlayTheme.dim}
-                    selectedDescriptionColor={overlayTheme.cyan}
-                    backgroundColor={overlayTheme.surface}
-                    focusedBackgroundColor={overlayTheme.surface}
-                    showScrollIndicator={false}
-                    showDescription={false}
-                    itemSpacing={0}
-                    onChange={(index) => {
-                      const next = groupThemes[index]
-                      if (next) {
-                        setThemeMenuIndex(THEMES.indexOf(next))
-                        setThemeMode(next)
-                      }
-                    }}
-                    onSelect={(_, option) => {
-                      const next = option?.value as TuiThemeMode | undefined
-                      if (next) chooseTheme(next)
-                    }}
-                  />
-                )}
-              </box>
-              <box height={1} paddingX={2} flexDirection="row">
-                <text fg={overlayTheme.cyan} wrapMode="none">tab </text>
-                <text fg={themeFollowsTerminal ? overlayTheme.text : overlayTheme.muted} wrapMode="none">
-                  {themeFollowsTerminal ? '● matching terminal' : '○ match terminal'}
-                </text>
-              </box>
-            </box>
-          )
-        })() : null}
+        <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} />
 
         {transcriptViewMenuOpen ? (() => {
           const menuWidth = Math.min(Math.max(width - 8, 28), 46)
