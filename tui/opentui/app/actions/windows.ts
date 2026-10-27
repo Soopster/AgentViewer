@@ -56,6 +56,8 @@ import { orderWindows } from '../../windowOrder'
 import { moveWindowBeside } from '../../windowOrder'
 import { type WindowDropZone } from '../../windowLayout'
 import { planWindowSessionDrop } from '../../windowOperations'
+import { readerShareAt } from '../../windowLayout'
+import { SPLIT_SHARE_MAX, SPLIT_SHARE_MIN } from '../../splitPaneState'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1084,4 +1086,61 @@ export function runDropSessionOnSurfaceWindow(ctx: DropSessionOnSurfaceWindowCon
   const sessionsInOrder = nextOrder.filter((entry) => !isSurfaceWindowKey(entry))
   setSplitPinnedKeys([...sessionsInOrder, ...plan.pins.filter((pin) => !sessionsInOrder.includes(pin))])
   showNotice('info', `${fitText(formatSessionTitle(session), 40).trimEnd()} · beside ${surfaceTitle(surface.surface)}`)
+}
+
+export type DragSplitDividerContext = {
+  splitDividerPoint: { x: number; y: number; } | null
+  checkpointWindowLayout: () => void
+  windowAreaRect: () => { x: number; y: number; width: number; height: number; } | null
+  setSplitDividerPoint: React.Dispatch<React.SetStateAction<{ x: number; y: number; } | null>>
+  splitDividerDragging: 'primary' | 'secondary' | { group: WindowGroupKey; index: number; } | null
+  fittedWindows: WindowLayout
+  rectOf: (id: string) => { x: number; y: number; width: number; height: number; } | null
+  setSplitWeights: React.Dispatch<React.SetStateAction<Partial<Record<WindowGroupKey, number[]>>>>
+  splitSecondaryShare: number
+  setSplitSecondaryShare: React.Dispatch<React.SetStateAction<number>>
+  stackedSplit: boolean
+  splitReaderLast: boolean
+  splitReaderShare: number
+  setSplitReaderShare: React.Dispatch<React.SetStateAction<number>>
+}
+
+export function runDragSplitDivider(ctx: DragSplitDividerContext, event: { x: number; y: number }) {
+  const {
+    splitDividerPoint, checkpointWindowLayout, windowAreaRect, setSplitDividerPoint,
+    splitDividerDragging, fittedWindows, rectOf, setSplitWeights, splitSecondaryShare,
+    setSplitSecondaryShare, stackedSplit, splitReaderLast, splitReaderShare, setSplitReaderShare,
+  } = ctx
+  if (splitDividerPoint === null) checkpointWindowLayout()
+  const area = windowAreaRect()
+  if (!area) return
+  setSplitDividerPoint({ x: event.x, y: event.y })
+  if (splitDividerDragging && typeof splitDividerDragging === 'object') {
+    // A border inside a group: the cell under the pointer becomes the last
+    // cell of the frame before it; the frame after it takes up the rest of the pair.
+    const { group: groupKey, index } = splitDividerDragging
+    const group = fittedWindows.groups.find((entry) => entry.key === groupKey)
+    const rects = group?.members.map((member) => rectOf(`split-pane:${member}`)) ?? []
+    if (!group || rects.some((rect) => !rect)) return
+    const horizontal = group.axis === 'x'
+    const extents = rects.map((rect) => (horizontal ? rect!.width : rect!.height))
+    const before = rects[index]!
+    const combined = extents[index]! + extents[index + 1]!
+    const min = horizontal ? SPLIT_PANE_MIN_WIDTH : SPLIT_PANE_MIN_ROWS
+    const first = Math.max(min, Math.min(combined - min, (horizontal ? event.x - before.x : event.y - before.y) + 1))
+    if (first === extents[index]) return
+    extents[index] = first
+    extents[index + 1] = combined - first
+    setSplitWeights((current) => ({ ...current, [groupKey]: extents }))
+    return
+  }
+  if (splitDividerDragging === 'secondary') {
+    // The row the pointer is on becomes the first frame's bottom border.
+    const next = Math.min(0.8, Math.max(0.2, Math.round(((event.y - area.y + 1) / Math.max(1, area.height)) * 100) / 100))
+    if (next !== splitSecondaryShare) setSplitSecondaryShare(next)
+    return
+  }
+  const share = readerShareAt(area, stackedSplit ? event.y : event.x, stackedSplit ? 'y' : 'x', splitReaderLast)
+  const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
+  if (next !== splitReaderShare) setSplitReaderShare(next)
 }

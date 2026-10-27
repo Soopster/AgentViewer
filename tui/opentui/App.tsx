@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9968,40 +9968,11 @@ function OpenTuiWorkspace() {
   }
 
   // The divider between the reader and its panes, dragged to a new share.
-  const dragSplitDivider = useStableEvent((event: { x: number; y: number }) => {
-    if (splitDividerPoint === null) checkpointWindowLayout()
-    const area = windowAreaRect()
-    if (!area) return
-    setSplitDividerPoint({ x: event.x, y: event.y })
-    if (splitDividerDragging && typeof splitDividerDragging === 'object') {
-      // A border inside a group: the cell under the pointer becomes the last
-      // cell of the frame before it; the frame after it takes up the rest of the pair.
-      const { group: groupKey, index } = splitDividerDragging
-      const group = fittedWindows.groups.find((entry) => entry.key === groupKey)
-      const rects = group?.members.map((member) => rectOf(`split-pane:${member}`)) ?? []
-      if (!group || rects.some((rect) => !rect)) return
-      const horizontal = group.axis === 'x'
-      const extents = rects.map((rect) => (horizontal ? rect!.width : rect!.height))
-      const before = rects[index]!
-      const combined = extents[index]! + extents[index + 1]!
-      const min = horizontal ? SPLIT_PANE_MIN_WIDTH : SPLIT_PANE_MIN_ROWS
-      const first = Math.max(min, Math.min(combined - min, (horizontal ? event.x - before.x : event.y - before.y) + 1))
-      if (first === extents[index]) return
-      extents[index] = first
-      extents[index + 1] = combined - first
-      setSplitWeights((current) => ({ ...current, [groupKey]: extents }))
-      return
-    }
-    if (splitDividerDragging === 'secondary') {
-      // The row the pointer is on becomes the first frame's bottom border.
-      const next = Math.min(0.8, Math.max(0.2, Math.round(((event.y - area.y + 1) / Math.max(1, area.height)) * 100) / 100))
-      if (next !== splitSecondaryShare) setSplitSecondaryShare(next)
-      return
-    }
-    const share = readerShareAt(area, stackedSplit ? event.y : event.x, stackedSplit ? 'y' : 'x', splitReaderLast)
-    const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
-    if (next !== splitReaderShare) setSplitReaderShare(next)
-  })
+  const dragSplitDivider = useStableEvent((event: { x: number; y: number }) => runDragSplitDivider({
+    splitDividerPoint, checkpointWindowLayout, windowAreaRect, setSplitDividerPoint,
+    splitDividerDragging, fittedWindows, rectOf, setSplitWeights, splitSecondaryShare,
+    setSplitSecondaryShare, stackedSplit, splitReaderLast, splitReaderShare, setSplitReaderShare,
+  }, event))
   const endSplitDividerDrag = useStableEvent(() => {
     const kind = splitDividerDragging
     setSplitDividerDragging(null)
