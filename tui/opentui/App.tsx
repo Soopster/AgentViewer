@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -6543,32 +6543,13 @@ function OpenTuiWorkspace() {
   // `placement`: beside the reader (a window in the layout), filling this tab's
   // window area (that window zoomed; ⌃B m restores the layout), or a new
   // workspace tab of its own.
-  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
-    // Store-backed panels stay open while windowed: opened as a window straight
-    // from the palette, they must be opened first or their window closes at once.
-    if (kind === 'teammates' && !teammatesOpen) openTeammatesPanel()
-    setPopoverOpen(kind, false)
-    if (placement === 'tab') { openPopoverInNewTab(kind, pin); return }
-    if (placement === 'fill') { openPopoverTab(kind, pin); return }
-    const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
-    const existing = findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)
-    if (existing) {
-      if (parked.includes(existing)) activateWindowTab(surfaceWindowKey(existing))
-      pendingSurfaceFocusRef.current = existing
-      setFocusedPane('messages')
-      setWindowSurfaces((current) => [...current])
-      return
-    }
-    const surface = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked]))
-    checkpointWindowLayout()
-    if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
-    setWindowSurfaceMeta((current) => ({ ...current, [surface]: pin }))
-    setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
-    if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
-    pendingSurfaceFocusRef.current = surface
-    setFocusedPane('messages')
-    showNotice('info', `${POPOVER_WINDOWS[kind].title.slice(2)} in a window · ⌃⇧W or ⤢ for full screen`)
-  })
+  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => runOpenPopoverWindow({
+    readerPin, teammatesOpen, openTeammatesPanel, setPopoverOpen, openPopoverInNewTab,
+    openPopoverTab, parkedWindowKeysRef, windowSurfaces, windowSurfaceMeta, activateWindowTab,
+    pendingSurfaceFocusRef, setFocusedPane, setWindowSurfaces, checkpointWindowLayout,
+    workspaceContext, setWindowSurfaceMeta, windowSplitTree, splitArrangement, splitPaneCount,
+    setWindowArrangement, splitReaderLast, showNotice,
+  }, kind, pin, placement))
   // A popover in a new workspace tab: the tab's layout is that one window,
   // filling the area — split, tab or float it there like any other.
   const openPopoverInNewTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {

@@ -62,6 +62,7 @@ import { adjustSplitReaderShare, evenSplitReaderShare, SPLIT_SHARE_STEP } from '
 import { placePaneSlot, movePaneToEdge, placeWindowSplit } from '../../windowSplitTree'
 import { stackSuccessor } from '../../windowTabs'
 import { clampFloatingRect } from '../../windowTabs'
+import { findPopoverWindow, pinFor, POPOVER_WINDOWS, type PopoverWindowKind } from '../../popoverWindows'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1405,4 +1406,65 @@ export function runCycleSplitPaneSession(ctx: CycleSplitPaneSessionContext) {
     }
     return current
   })
+}
+
+export type OpenPopoverWindowContext = {
+  readerPin: () => { session: string | null; path: string | null; }
+  teammatesOpen: boolean
+  openTeammatesPanel: () => void
+  setPopoverOpen: (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => void
+  openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  parkedWindowKeysRef: React.RefObject<Set<string>>
+  windowSurfaces: string[]
+  windowSurfaceMeta: Record<string, SurfaceMeta>
+  activateWindowTab: (key: string) => void
+  pendingSurfaceFocusRef: React.RefObject<string | null>
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+  setWindowSurfaces: React.Dispatch<React.SetStateAction<string[]>>
+  checkpointWindowLayout: () => void
+  workspaceContext: WorkspaceContextValue
+  setWindowSurfaceMeta: React.Dispatch<React.SetStateAction<Record<string, SurfaceMeta>>>
+  windowSplitTree: WindowSplitTree | null
+  splitArrangement: WindowArrangement
+  splitPaneCount: number
+  setWindowArrangement: (arrangement: WindowArrangement, readerLast: boolean) => void
+  splitReaderLast: boolean
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+}
+
+export function runOpenPopoverWindow(ctx: OpenPopoverWindowContext, kind: PopoverWindowKind, pin?: SurfaceMeta, placement?: 'beside' | 'fill' | 'tab') {
+  const {
+    readerPin, teammatesOpen, openTeammatesPanel, setPopoverOpen, openPopoverInNewTab,
+    openPopoverTab, parkedWindowKeysRef, windowSurfaces, windowSurfaceMeta, activateWindowTab,
+    pendingSurfaceFocusRef, setFocusedPane, setWindowSurfaces, checkpointWindowLayout,
+    workspaceContext, setWindowSurfaceMeta, windowSplitTree, splitArrangement, splitPaneCount,
+    setWindowArrangement, splitReaderLast, showNotice,
+  } = ctx
+  if (pin === undefined) pin = pinFor(kind, readerPin())
+  if (placement === undefined) placement = 'beside'
+  // Store-backed panels stay open while windowed: opened as a window straight
+  // from the palette, they must be opened first or their window closes at once.
+  if (kind === 'teammates' && !teammatesOpen) openTeammatesPanel()
+  setPopoverOpen(kind, false)
+  if (placement === 'tab') { openPopoverInNewTab(kind, pin); return }
+  if (placement === 'fill') { openPopoverTab(kind, pin); return }
+  const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
+  const existing = findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)
+  if (existing) {
+    if (parked.includes(existing)) activateWindowTab(surfaceWindowKey(existing))
+    pendingSurfaceFocusRef.current = existing
+    setFocusedPane('messages')
+    setWindowSurfaces((current) => [...current])
+    return
+  }
+  const surface = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked]))
+  checkpointWindowLayout()
+  if (isPluginSurfaceId(kind) && !POPOVER_WINDOWS[kind].single) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
+  setWindowSurfaceMeta((current) => ({ ...current, [surface]: pin }))
+  setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
+  if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
+  pendingSurfaceFocusRef.current = surface
+  setFocusedPane('messages')
+  showNotice('info', `${POPOVER_WINDOWS[kind].title.slice(2)} in a window · ⌃⇧W or ⤢ for full screen`)
 }
