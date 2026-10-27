@@ -9,9 +9,9 @@ import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptSt
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
 import { hideScratchSessions } from './scratchSessions'
-import { readReaderLayout } from './readerLayout'
-import { composerProjectLabel, cycleTranscriptWidth, transcriptMeasure } from './engineeringLayout'
-import { TranscriptImages } from './TranscriptImages'
+
+import { composerProjectLabel, cycleTranscriptWidth } from './engineeringLayout'
+
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState, useSyncExternalStore } from 'react'
 import { recordVoice } from './voiceRecorder'
 import { lazyComponent } from './lazyComponent'
@@ -21,7 +21,7 @@ import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enableme
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
 import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
-import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginPanelSurfaceId, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
+import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
 import type { PluginKeyChord, PluginServiceId } from '../../lib/plugins/types'
 import { NewSessionModal, enabledNewSessionProviders } from './NewSessionModal'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
@@ -37,13 +37,13 @@ import { PiActivityPopover } from './PiActivityPopover'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
-import { getAssistantDisplayName, isAgentProvider } from '../../lib/provider'
+import { isAgentProvider } from '../../lib/provider'
 import { TaskSidePanel } from './TaskSidePanel'
 import { openExternalUrl } from './terminalBrowser'
-import { hasTuiLinkTarget, parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
+import { parseTuiLinkTarget } from '../../lib/tuiLinkTargets'
 import { SurfacePanel } from './SurfacePanel'
 import { WindowButton } from './WindowButton'
-import { transcriptViewportPosition, useTranscriptWindowPositions } from './transcriptWindowState'
+import { useTranscriptWindowPositions } from './transcriptWindowState'
 import { swapPaneSlots, placePaneSlot, adoptPrimaryWindow, arrangePaneTree, movePaneToEdge, replacePrimaryWindow, removePrimaryWindow, placeWindowSplit, validWindowSplitTree, reconcileWindowSplitTree, computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf, splitPath, updateSplitRatio, evenWindowSplitTree, rotateWindowSplitTree, type WindowSplitTree, type WindowSplitNode } from './windowSplitTree'
 import { WINDOW_SURFACE_TITLES, surfaceKindOf, surfaceTitle, type WindowSurfaceKind } from './windowSurfaceNames'
 import { copySurfaceViewState, migratePanelViewState, surfaceViewNamespace } from './windowViewState'
@@ -56,7 +56,7 @@ import { WindowControlOverlay } from './WindowControlOverlay'
 import { focusAfterWindowClose, WINDOW_CONTROL_ACTIONS, WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, windowManagementKey, type WindowControlAction, type WindowControlContext, type ControlWindow } from './windowControls'
 import { findPopoverWindow, isPopoverWindowKind, nextSurfaceId, pinFor, POPOVER_WINDOWS, readSurfaceMeta, type PopoverWindowKind, type SurfaceMeta } from './popoverWindows'
 import { addToStack, clampFloatingRect, defaultFloatingRect, liveStacks, removeFromStack, replaceWindowKey, stackNeighbour, stackOf, stackSuccessor, type FloatingRect, type WindowStack } from './windowTabs'
-import { popoverRootProps } from './dockedPopover'
+
 import { fitWindows, isSurfaceWindowKey, moveWindowBeside, orderWindows, surfaceIdOfKey, surfaceWindowKey, swapWindowSlots } from './windowOrder'
 import { computeResponsiveWindowLayout, type WindowGroupKey, type WindowWeights, windowLayoutRects, windowPreviewLines, readerShareAt, windowDropZone, windowDropZoneRect, windowInDirection, type WindowArrangement, type WindowDirection, type WindowDropZone } from './windowLayout'
 import type { WindowLayoutAction } from './WindowLayoutPicker'
@@ -70,7 +70,7 @@ import { WindowHistory } from './windowHistory'
 import { windowSessionTarget, type WindowTarget } from './windowTargets'
 import type { BroadcastDelivery } from './windowBroadcast'
 import { nextWindowNeedingAttention, observeWindowAttention, readWindowAttention, windowAttentionBadge, type WindowAttention } from './windowAttention'
-import { planWindowArrangement, planWindowSessionDrop, type WindowSessionDrop } from './windowOperations'
+import { planWindowSessionDrop, type WindowSessionDrop } from './windowOperations'
 import { coordinatorWindowBadges, planCoordinatorWorkspace } from './coordinatorWorkspace'
 import { useCoordinatorWorkspace } from './useCoordinatorWorkspace'
 import { deleteWindowLayout, describeSavedLayout, listSavedWindowLayouts, saveWindowLayout, updateWindowLayout, type SavedWindowLayout } from './windowLayoutStore'
@@ -96,20 +96,17 @@ import {
 import { frecencyKey, frecencyPrefix, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { startTuiMetricsLogger, noteRenderFrame, noteTuiComposerLatency, noteTuiNavLatency, registerTuiMetricsGauge, logCardRecompute } from './metricsLogger'
-import { CardSelectionVariants } from './cardSelectionVariants'
-import {
-  type TuiPierreDiffRow,
-  type TuiPierreSplitRow,
-} from './pierreDiffView'
+
+
 import type { SelectedLineRange } from '@pierre/diffs'
-import { LayoutEvents, RGBA, SyntaxStyle, TextAttributes } from '@opentui/core'
-import type { BaseRenderable, BoxRenderable, Renderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
-import { pruneUnmountedCardData } from './readerCardCache'
-import { RowHeightIndex } from './rowHeightIndex'
+import { LayoutEvents, RGBA, TextAttributes } from '@opentui/core'
+import type { BoxRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable } from '@opentui/core'
+
+
 import { TranscriptDetailCache } from './transcriptDetailCache'
 import { mainTranscriptBudget } from './sessionCacheBudget'
-import { createReaderWindowStore, deriveRowReaderWindow, stepReaderWindow } from './readerWindowStore'
-import type { ReaderWindow, ReaderWindowStore } from './readerWindowStore'
+
+
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -133,122 +130,13 @@ import {
   restoreComposerDraftPayload,
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
-import {
-  getProviderAccent,
-  getThemePalette,
-  setTerminalPaletteTheme,
-  terminalPaletteTheme,
-  type TerminalReportedColors,
-  setActiveTheme,
-  type TuiDensity,
-  type TuiThemeMode,
-  type TuiThemePalette,
-  type TuiTranscriptView,
-} from '../theme'
-import {
-  patchTuiSession,
-  readTuiDensity,
-  readTuiDiffLayout,
-  readTuiFocusMode,
-  readTuiStickyHeaders,
-  readTuiLightweightWindows,
-  readTuiProvider,
-  readTuiProviderInstances,
-  readTuiRailVisible,
-  readTuiSessionDetail,
-  readTuiSessionDiagnostics,
-  readTuiSessionReaderState,
-  readTuiSessionMetadata,
-  readTuiSidebarSort,
-  readTuiHideScratchSessions,
-  readTuiShowSettledSessions,
-  writeTuiShowSettledSessions,
-  updateTuiSessionInbox,
-  readTuiSidebarWidth,
-  readTuiShowToolCalls,
-  readTuiTabsEnabled,
-  readTuiTabOrientation,
-  readTuiSplitPanes,
-  readTuiSplitOrientation,
-  readTuiSplitReaderShare,
-  readTuiDaemonWarning,
-  readTuiTheme,
-  readTuiThemeFollow,
-  readTuiTranscriptView,
-  readTuiTranscriptWidth,
-  readTuiVelocityScroll,
-  readTuiSurfacePanelPlacement,
-  readTuiWindowArrangement,
-  readTuiSessionBookmarkIds,
-  readTuiAllBookmarks,
-  readTuiPrompts,
-  readTuiPrompt,
-  saveTuiPrompt,
-  deleteTuiPrompt,
-  toggleTuiSessionBookmark,
-  runTuiSessionAction,
-  streamTuiSessionTurn,
-  sendTuiCrossSessionMessage,
-  interruptTuiSessionTurn,
-  listTuiRunningSessions,
-  listTuiAddressableSessions,
-  readTuiRuntimeActivity,
-  dismissTuiViewerAttention,
-  createTuiSession,
-  forkTuiSession,
-  rewindTuiSession,
-  listTuiCheckpoints,
-  restoreTuiCheckpoint,
-  readTuiComposerOptions,
-  listTuiProtocolRuns,
-  listTuiRunPlaybooks,
-  readTuiProtocolRun,
-  subscribeTuiProtocolRunChanges,
-  startTuiProtocolRun,
-  stopTuiProtocolRun,
-  cleanupTuiProtocolRunWorktrees,
-  createTuiWorktreeTask,
-  findTuiWorktreeTask,
-  mergeTuiWorktreeTask,
-  removeTuiWorktreeTask,
-  type WorktreeTask,
-  prewarmTuiSession,
-  writeTuiDensity,
-  writeTuiDiffLayout,
-  writeTuiFocusMode,
-  writeTuiStickyHeaders,
-  writeTuiLightweightWindows,
-  writeTuiProvider,
-  writeTuiRailVisible,
-  writeTuiSessionReaderState,
-  writeTuiShowToolCalls,
-  writeTuiSidebarSort,
-  writeTuiHideScratchSessions,
-  writeTuiSidebarWidth,
-  writeTuiTabsEnabled,
-  writeTuiTabOrientation,
-  writeTuiSplitPanes,
-  writeTuiSplitOrientation,
-  writeTuiSplitReaderShare,
-  writeTuiTheme,
-  writeTuiThemeFollow,
-  writeTuiThemeSync,
-  writeTuiTranscriptView,
-  writeTuiTranscriptWidth,
-  writeTuiVelocityScroll,
-  writeTuiSurfacePanelPlacement,
-  writeTuiWindowArrangement,
-  type TuiSessionDetail,
-  type TuiProviderInstanceChoice,
-  type TuiDiffLayout,
-  type TuiSidebarSort,
-  type TuiTranscriptWidth,
-} from '../../lib/tui/service'
+import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
-import type { PlaybookSummary, ProtocolAgent, ProtocolAutonomy, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
+import type { PlaybookSummary, ProtocolAgent, ProtocolAutonomy, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolResults,
@@ -260,15 +148,15 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { shouldPrewarmTuiRuntime } from './sessionPrewarm'
 import { useTranscriptSessionLoader } from './useTranscriptSessionLoader'
-import { RetainedWindow, useWindowVisible } from './windowActivity'
-import { TranscriptViewportContext, TranscriptBlockRestoreContext, type TranscriptBlockRestore, VirtualTranscriptRows } from './VirtualTranscriptRows'
+import { RetainedWindow } from './windowActivity'
+
 import { useStableEvent } from './useStableEvent'
-import { useTranscriptWindowChrome, useTranscriptWindowChromeHost, type WindowChrome } from './windowChrome'
+import { useTranscriptWindowChromeHost, type WindowChrome } from './windowChrome'
 import { transcriptWindowCommand } from './transcriptWindowInput'
-import { usePinnedSessionDetail } from './usePinnedSessionDetail'
-import { useTranscriptCards } from './useTranscriptCards'
-import { SelectableMarkdown } from './SelectableMarkdown'
-import { applySelectionColorsToTree, type SelectionColors } from './selectionTree'
+
+
+
+
 import { sessionTranscriptUpdatedAt } from './sessionRefreshPolicy'
 import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import {
@@ -287,7 +175,7 @@ import { fitText, joinMeta } from './textLayout'
 import { Slot } from './slots'
 import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
 import './slotRegistrations'
-import { CoordinatorSidebar, coordinatorSidebarHeaderText } from './CoordinatorSidebar'
+import { coordinatorSidebarHeaderText } from './CoordinatorSidebar'
 import {
   getCoordinatorState,
   setCoordinatorSelectedKey,
@@ -337,26 +225,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import {
-  adjustSplitReaderShare,
-  calculateSplitPaneBodyRows,
-  calculateSplitPaneLayout,
-  evenSplitReaderShare,
-  groupItemsBySplitPaneKey,
-  isComposerTargetReady,
-  removeSplitPaneKey,
-  resolveComposerTargetSession,
-  resolveCoordinationTranscriptTarget,
-  resolveSelectedSession,
-  resolveSelectedSessionIndex,
-  runComposerSessionPreparation,
-  SPLIT_SHARE_EVEN,
-  SPLIT_SHARE_MAX,
-  SPLIT_SHARE_MIN,
-  SPLIT_SHARE_STEP,
-  type SplitPaneOrientation,
-  planTeammateWatch,
-} from './splitPaneState'
+import { adjustSplitReaderShare, calculateSplitPaneLayout, evenSplitReaderShare, groupItemsBySplitPaneKey, isComposerTargetReady, removeSplitPaneKey, resolveComposerTargetSession, resolveCoordinationTranscriptTarget, resolveSelectedSession, resolveSelectedSessionIndex, runComposerSessionPreparation, SPLIT_SHARE_EVEN, SPLIT_SHARE_MAX, SPLIT_SHARE_MIN, SPLIT_SHARE_STEP, type SplitPaneOrientation, planTeammateWatch } from './splitPaneState'
 import {
   CHORD_HELP_REVEAL_MS,
   CHORD_PENDING_TIMEOUT_MS,
@@ -368,43 +237,40 @@ import {
   SPLIT_CHORD_MAP,
   type ChordMap,
 } from './chordHelp'
-import {
-  isAltKey,
-  isCtrlKey,
-  isCtrlShiftKey,
-  isShiftedKey,
-  PORTABLE_COMMAND_CHORDS,
-  portableCommandChord, type ShortcutKeyEvent } from './shortcutKeys'
-import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type CardLandmark, type AgentToolGroupCard, type CardDisplayData, type ModelPickerOption, type TuiEffort, type DensityState, type StableCardData, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
-import { NATIVE_OSC_ENABLED, EMPTY_EXPANDED_KEYS, NOOP_SELECT_AGENT_TOOL, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
-import { SESSION_CACHE_LIMIT, DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL, READER_WINDOW_MARGIN, READER_CARD_WINDOW, READER_WINDOW_SLIDE, READER_SLIDE_REQUEST_TTL_MS, READER_SLIDE_AHEAD_VIEWPORTS, READER_EDGE_ROWS, READER_OPEN_WINDOW, READER_GROW_INTERVAL_MS, READER_EXPAND_FIRST, READER_EXPAND_STEP, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
+import { isAltKey, isCtrlKey, isCtrlShiftKey, isShiftedKey, PORTABLE_COMMAND_CHORDS, portableCommandChord } from './shortcutKeys'
+import { type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
+import { NATIVE_OSC_ENABLED, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
+import { FLOATING_PANE_INDEX, READER_CARD_WINDOW, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
 import { PERF_LOG, PERF_LOG_PATH, CARD_PROFILE, noteRootRender, FRAME_TIMING_NEEDED, recordFramePerf, sameJson } from './app/perf'
 import { type ThemeMenuGroup, THEMES, isLightThemeMode, OMZ_MODES, TERMINAL_PALETTE_MODE, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from './app/themes'
 import { pastedImageDisplayName, isComposerDraftSnapshot, isQueuedComposerSend, type ComposerDraftShape, composerDraftLineCount, activeMentionAttachments, composerSnapshotText, attachmentCountLabel, computeComposerDraftShape, sameComposerDraftShape, detectMentionAtCursor, imageAttachmentCount, pasteImageMimeType, inferPastedImageMimeType, composerKeyBindings, compactComposerEntryText, composerEntryLineCount } from './app/composerInput'
 import { cardClipboardText, writeClipboard, normalizePastedFilePath, pastedFileMimeTypeForPath, readClipboardImage, readClipboardText, isWslRuntime } from './app/clipboard'
-import { type InlineTextSegment, renderInlineTextSegments, renderInlineMarkdownSpans, hasInlineSpans, renderInlineMarkdownClipped, LIVE_PREVIEW_HEIGHT, wrapLivePreviewTail, LIVE_PREVIEW_BODY_LINES, inlineSegmentIndexAt, inlineSegmentActionAt, composerSendingHintSegments, DraftLengthSpans, LivePreviewCard } from './app/inlineText'
+import { type InlineTextSegment, renderInlineTextSegments, renderInlineMarkdownSpans, LIVE_PREVIEW_HEIGHT, wrapLivePreviewTail, LIVE_PREVIEW_BODY_LINES, inlineSegmentIndexAt, inlineSegmentActionAt, composerSendingHintSegments, DraftLengthSpans, LivePreviewCard } from './app/inlineText'
 import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOutputTokens, fmtTokens, footerDockStatsReserve, formatTuiComposerIdleHint, fitHintText, contextBarSegments } from './app/contextMeter'
-import { formatCopilotTimestamp, formatModelChipValue, timeAgo } from './app/format'
-import { Spinner, TuiErrorBoundary, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
+import { formatModelChipValue, timeAgo } from './app/format'
+import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
 import { sessionKey, sessionActivityMs, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
-import { EMPTY_LANDMARKS, streamStatusColor, transcriptColor, streamToolGroupMarker, transcriptAccent, diffRowColor, formatDiffLineNumber, diffRowIndicator, terminalSelectionColors, turnSummaryMouseProps, streamLandmarkText, streamLineMarker, mixHexColor, continuousUserBackground, streamUserBackground, streamContinuationMarker, transcriptBackground, diffRowBackground, diffGutterBar, SplitDiffSide, streamCompletedTurnHint, continuousTurnFooter, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
-import { readerRowCard, findReaderCard, readerLayoutOffset, readerRowKey } from './app/readerRows'
-import { extractDiffText } from './app/diffCache'
-import { cardDiffView, cardDiffText, filePathFromDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, agentToolCardsFor, streamToolSummaryName, agentToolCardIsExpanded, nestedAgentToolDisplay, streamActivitySummarySegments, isStreamActivityToolCard, transcriptToolLineSegments, streamToolSummarySegments, streamToolDetailLine, agentsToolSummaryLine, coordinatorResultSegments, countCodeBlockLines, codeBlockHeight, sliceCodeBlockLines, codeBlockLabel, isCompactSystemCard, codeBlockHiddenLineCount, stickyPromptText, groupStreamToolCards, isStreamGhostCard, visibleCardsForTranscriptView, resolveExpandedCardKeys, cardFoldsByDefault, scrollbackParkedCursorKey, usesAgentCardPresentation, renderedBodyLines, computeAllLandmarks } from './app/transcriptRows'
-import { streamDiffPreviewData, StreamDiffPreview } from './app/StreamDiffPreview'
-import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, nextTranscriptDiffRowIndex, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './app/transcriptDiffSelection'
+import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
+
+
+import { cardDiffText, filePathFromDiffText, agentToolCardsFor, agentToolCardIsExpanded, nestedAgentToolDisplay, visibleCardsForTranscriptView, resolveExpandedCardKeys } from './app/transcriptRows'
+
+import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, nextTranscriptDiffRowIndex } from './app/transcriptDiffSelection'
 import { type CoordModalFocus, sessionProviderLabel, filterModelPickerOptions, effortPickerOptions, PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL, QUESTION_PREVIEW_MAX_LINES, QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS, providerOptionIndex, providerSelectOptions, parseCoordContractLines, moveCoordModalFocus, cycleCoordProvider, coordRunProviders, cycleCoordAutonomy, TUI_PROVIDER_TAG } from './app/pickers'
 import { FLEET_PAGE_SIZE, TRANSCRIPT_VIEWS, COMMANDS, COMMAND_CATEGORY_ORDER, tuiCommandEquivalent, RUNNING_INSIDE_TMUX, TRANSCRIPT_VIEW_LABELS, TRANSCRIPT_VIEW_DESCRIPTIONS } from './app/commands'
 import { createLazyTranscriptIndexLookup } from './app/transcriptIndex'
-import { type TranscriptCardSelectionVariants, type TranscriptCardVariantCacheEntry, cachedTranscriptCardSelectionVariants, selectTranscriptCardVariants } from './app/TranscriptCard'
-import { type ReaderScrollFixup, type ReaderWindowGauge, type ReaderWindowOutput, type TranscriptWindowInputs, useReaderWindowSliding, TranscriptWindowBody } from './app/TranscriptWindowBody'
+import { type TranscriptCardSelectionVariants, selectTranscriptCardVariants } from './app/TranscriptCard'
+
 import { type WindowSurfaceId, isDoubleClick, SPLIT_PANE_EMPTY_LIVE, PinnedSessionDetail, type SplitPaneHandle, type TranscriptDiffControls, SplitTranscriptPane } from './app/SplitTranscriptPane'
+import { terminalSelectionCopyDestination } from './app/terminalSelection'
+import { keepEmpty, keepFiltered, sameKeys, touchMapEntry, pruneSessionCaches } from './app/collections'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
 export { buildSyntaxStyle } from './app/transcriptStyle'
+export { terminalSelectionCopyDestination, type TerminalSelectionCopyDestination } from './app/terminalSelection'
 export { isPlainMarkdownParagraph, selectTranscriptCardVariants, type TranscriptCardSelectionVariants } from './app/TranscriptCard'
 export { inlineSegmentActionAt, inlineSegmentIndexAt, renderInlineMarkdownSpans } from './app/inlineText'
 
@@ -438,20 +304,6 @@ if (PERF_LOG) {
   try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
 }
 
-export type TerminalSelectionCopyDestination = 'none' | 'osc52' | 'host'
-
-export function terminalSelectionCopyDestination(options: {
-  isDragging: boolean
-  nativeOscEnabled: boolean
-  osc52Supported: boolean
-  windowsClipboard: boolean
-}): TerminalSelectionCopyDestination {
-  if (options.isDragging) return 'none'
-  if (options.nativeOscEnabled && options.osc52Supported) return 'osc52'
-  if (options.windowsClipboard) return 'host'
-  return 'none'
-}
-
 // A TUI view, not a provider command: the web composer has no handoff, so it stays out of the shared catalog.
 const TUI_HANDOFF_COMMAND: SlashCommandSuggestion = {
   command: '/handoff',
@@ -479,56 +331,6 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
 
 function currentProjectName(session: Session | null): string {
   return session ? formatSessionProject(session) : 'no-project'
-}
-
-// A reset that keeps an already-empty value, so resetting what is empty
-// renders nothing. Session switches reset a dozen of these at once.
-function keepEmpty<Value extends { length: number } | { size: number }>(current: Value): Value {
-  return ('length' in current ? current.length : current.size) === 0 ? current : (Array.isArray(current) ? [] : new Set()) as unknown as Value
-}
-
-// A filter that returns the same array when it removes nothing, so a state
-// update that filters out what is not there renders nothing.
-function keepFiltered<Item>(list: Item[], keep: (item: Item, index: number) => boolean): Item[] {
-  const next = list.filter(keep)
-  return next.length === list.length ? list : next
-}
-
-// Whether a set already holds exactly these keys.
-function sameKeys(current: ReadonlySet<string>, keys: readonly string[] | undefined): boolean {
-  const list = keys ?? []
-  return current.size === list.length && list.every((key) => current.has(key))
-}
-
-function touchMapEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
-  if (map.has(key)) map.delete(key)
-  map.set(key, value)
-}
-
-function pruneSessionCaches(
-  detailCache: Map<string, TuiSessionDetail>,
-  usageCache: Map<string, ContextUsage | null>,
-  metadataFetchedAt: Map<string, number>,
-  pinnedKeys: Set<string>,
-  limit = SESSION_CACHE_LIMIT,
-): void {
-  const orderedKeys = [
-    ...detailCache.keys(),
-    ...usageCache.keys(),
-    ...metadataFetchedAt.keys(),
-  ].filter((key, index, keys) => keys.indexOf(key) === index)
-
-  let evictableCount = orderedKeys.filter((key) => !pinnedKeys.has(key)).length
-  if (evictableCount <= limit) return
-
-  for (const key of orderedKeys) {
-    if (pinnedKeys.has(key)) continue
-    detailCache.delete(key)
-    usageCache.delete(key)
-    metadataFetchedAt.delete(key)
-    evictableCount -= 1
-    if (evictableCount <= limit) break
-  }
 }
 
 export default function OpenTuiApp() {
