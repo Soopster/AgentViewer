@@ -17,6 +17,9 @@ import { sessionMessageFingerprint, sessionMessageSequenceFingerprint, summarize
 import { hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline } from '../liveStream'
 import { sessionKey, sessionDetailOwnerKeys } from '../sessionList'
 import { keepFiltered, touchMapEntry, pruneSessionCaches } from '../collections'
+import { readTuiSessionMetadataAsync } from '../../metadataWorkerClient'
+import { resolve } from 'node:path'
+import { CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS } from '../timing'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -305,4 +308,172 @@ export async function runRefreshSelectedSessionDetail(ctx: RefreshSelectedSessio
       }
     }
   }
+}
+
+export type RefreshSessionMetadataContext = {
+  selectedSessionKeyRef: React.RefObject<string | null>
+  runningSessionsRef: React.RefObject<RunningSessionRef[]>
+  tabsEnabledRef: React.RefObject<boolean>
+  openTabSessionsRef: React.RefObject<Session[]>
+  composerTargetSessionRef: React.RefObject<Session | null>
+  sessionContextUsageCacheRef: React.RefObject<Map<string, ContextUsage | null>>
+  sessionMetadataFetchedAtRef: React.RefObject<Map<string, number>>
+  sessionDetailCacheRef: React.RefObject<TranscriptDetailCache>
+  sessionMetadataInFlightRef: React.RefObject<Set<string>>
+  setContextUsageStatus: React.Dispatch<React.SetStateAction<'idle' | 'loading' | 'unavailable' | 'ready'>>
+  setTuiReportedModelByKey: React.Dispatch<React.SetStateAction<Record<string, string | null>>>
+  setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>
+  setSessionDetail: React.Dispatch<React.SetStateAction<TuiSessionDetail | null>>
+}
+
+export function runRefreshSessionMetadata(ctx: RefreshSessionMetadataContext, session: Session, foreground?: boolean | undefined, detailSnapshot?: TuiSessionDetail, cachedDetailSnapshot?: TuiSessionDetail | null, includeContextUsage?: boolean) {
+  const {
+    selectedSessionKeyRef, runningSessionsRef, tabsEnabledRef, openTabSessionsRef,
+    composerTargetSessionRef, sessionContextUsageCacheRef, sessionMetadataFetchedAtRef,
+    sessionDetailCacheRef, sessionMetadataInFlightRef, setContextUsageStatus,
+    setTuiReportedModelByKey, setContextUsage, setSessionDetail,
+  } = ctx
+  if (foreground === undefined) foreground = false
+  if (includeContextUsage === undefined) includeContextUsage = true
+  const cacheKey = sessionKey(session)
+  const isSelectedTab = cacheKey === selectedSessionKeyRef.current
+  const isRunningSession = runningSessionsRef.current.some((running) =>
+    running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
+  )
+
+  if (session.provider === 'claude') {
+    const isPreviewingSession = tabsEnabledRef.current
+      && !openTabSessionsRef.current.some((openSession) => sessionKey(openSession) === cacheKey)
+    const activeComposerTarget = composerTargetSessionRef.current
+    const isComposerTarget = Boolean(activeComposerTarget && sessionKey(activeComposerTarget) === cacheKey)
+    if (isPreviewingSession && !isComposerTarget) return
+
+    if (
+      includeContextUsage
+      && !isRunningSession
+      && sessionContextUsageCacheRef.current.get(cacheKey)
+    ) return
+  }
+
+  const metadataTtl = isSelectedTab
+    ? (session.provider === 'claude' ? CLAUDE_METADATA_REFRESH_MS : DEFAULT_METADATA_REFRESH_MS)
+    : (session.provider === 'claude' ? CLAUDE_BACKGROUND_METADATA_REFRESH_MS : DEFAULT_BACKGROUND_METADATA_REFRESH_MS)
+  const lastMetadataFetch = sessionMetadataFetchedAtRef.current.get(cacheKey) ?? 0
+  const hasCachedModel = Boolean(
+    cachedDetailSnapshot?.info?.currentModel
+    || detailSnapshot?.info?.currentModel
+    || sessionDetailCacheRef.current.get(cacheKey)?.info?.currentModel
+  )
+  const hasCachedMetadata = hasCachedModel || (
+    includeContextUsage && Boolean(sessionContextUsageCacheRef.current.get(cacheKey))
+  )
+  const metadataIsFresh = lastMetadataFetch > 0 && Date.now() - lastMetadataFetch < metadataTtl
+  const shouldFetchMetadata = !sessionMetadataInFlightRef.current.has(cacheKey) && (
+    !hasCachedMetadata && !metadataIsFresh
+    || hasCachedMetadata && Date.now() - lastMetadataFetch >= metadataTtl
+  )
+  if (!shouldFetchMetadata) return
+
+  sessionMetadataInFlightRef.current.add(cacheKey)
+  if (includeContextUsage && foreground && isSelectedTab) {
+    setContextUsageStatus('loading')
+  }
+  void Promise.race([
+    readTuiSessionMetadataAsync(session),
+    new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), METADATA_REQUEST_TIMEOUT_MS)
+    }),
+  ])
+    .then((metadata) => {
+      // Metadata reads are session-scoped and may legitimately overlap (the
+      // reader can show one session while the composer targets another pane).
+      // A single global request id made the newer request discard the older
+      // session's valid result, leaving that composer's chip on "loading".
+      const isStillSelectedTab = cacheKey === selectedSessionKeyRef.current
+      const pinnedKeys = new Set([
+        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
+        selectedSessionKeyRef.current,
+      ].filter((key): key is string => Boolean(key)))
+      touchMapEntry(sessionMetadataFetchedAtRef.current, cacheKey, Date.now())
+      const reportedModel = metadata?.currentModel ?? null
+      setTuiReportedModelByKey((prev) => (
+        Object.prototype.hasOwnProperty.call(prev, cacheKey) && prev[cacheKey] === reportedModel
+          ? prev
+          : { ...prev, [cacheKey]: reportedModel }
+      ))
+      if (!metadata) {
+        pruneSessionCaches(
+          sessionDetailCacheRef.current,
+          sessionContextUsageCacheRef.current,
+          sessionMetadataFetchedAtRef.current,
+          pinnedKeys,
+        )
+        if (includeContextUsage && foreground && isStillSelectedTab) {
+          startTransition(() => setContextUsageStatus('unavailable'))
+        }
+        return
+      }
+      startTransition(() => {
+        if (includeContextUsage && metadata.contextUsage) {
+          touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
+          if (isStillSelectedTab) {
+            setContextUsage(metadata.contextUsage)
+            setContextUsageStatus('ready')
+          }
+        }
+        const currentModel = metadata.currentModel
+        if (currentModel) {
+          setSessionDetail((prev) => {
+            if (!prev) return prev
+            if (
+              prev.info?.sessionId
+              && prev.info.sessionId !== session.sessionId
+            ) {
+              return prev
+            }
+            if (!prev.info) return prev
+            if (prev.info.currentModel === currentModel) return prev
+            return {
+              ...prev,
+              info: {
+                ...prev.info,
+                currentModel,
+              },
+            }
+          })
+          const cached = sessionDetailCacheRef.current.get(cacheKey)
+          if (cached?.info) {
+            touchMapEntry(sessionDetailCacheRef.current, cacheKey, {
+              ...cached,
+              info: {
+                ...cached.info,
+                currentModel,
+              },
+            })
+          }
+        }
+        pruneSessionCaches(
+          sessionDetailCacheRef.current,
+          sessionContextUsageCacheRef.current,
+          sessionMetadataFetchedAtRef.current,
+          pinnedKeys,
+        )
+        if (includeContextUsage && !metadata.contextUsage && isStillSelectedTab) {
+          setContextUsageStatus('unavailable')
+        }
+      })
+    })
+    .catch(() => {
+      setTuiReportedModelByKey((prev) => (
+        Object.prototype.hasOwnProperty.call(prev, cacheKey) && prev[cacheKey] === null
+          ? prev
+          : { ...prev, [cacheKey]: null }
+      ))
+      if (includeContextUsage && foreground && cacheKey === selectedSessionKeyRef.current) {
+        startTransition(() => setContextUsageStatus('unavailable'))
+      }
+    })
+    .finally(() => {
+      sessionMetadataInFlightRef.current.delete(cacheKey)
+    })
 }
