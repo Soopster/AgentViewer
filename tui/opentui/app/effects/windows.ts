@@ -4,6 +4,8 @@ import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import React from 'react'
 import { type WindowItem, type NoticeTone } from '../types'
+import { type Session } from '../../../../lib/types'
+import { sessionKey } from '../sessionList'
 
 export type WindowSurfaceFocusEffectContext = {
   pendingSurfaceFocusRef: React.RefObject<string | null>
@@ -36,4 +38,28 @@ export function runWindowSurfaceFocusEffect(ctx: WindowSurfaceFocusEffectContext
   pendingSurfaceFocusRef.current = null
   setWindowZoom(null)
   setSplitFocusIndex(index)
+}
+
+export type OpenTabsOrderEffectContext = {
+  sessions: Session[]
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+}
+
+export function runOpenTabsOrderEffect(ctx: OpenTabsOrderEffectContext) {
+  const {
+    sessions, setOpenTabSessions,
+  } = ctx
+  if (sessions.length === 0) return
+  setOpenTabSessions((current) => {
+    let changed = false
+    const next = current.map((tab) => {
+      const fresh = sessions.find((s) => sessionKey(s) === sessionKey(tab))
+      if (fresh && fresh !== tab) {
+        changed = true
+        return fresh
+      }
+      return tab
+    })
+    return changed ? next : current
+  })
 }

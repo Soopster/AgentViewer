@@ -311,7 +311,7 @@ import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, ru
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
-import { runWindowSurfaceFocusEffect } from './app/effects/windows'
+import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
 import { runOptionsEffect } from './app/effects/session'
 export { readRootRenderCount } from './app/perf'
@@ -6916,21 +6916,9 @@ function OpenTuiWorkspace() {
   // refreshes (e.g. title updates from polling). Tabs for *other* providers
   // are left untouched — they retain whatever snapshot was captured when the
   // user last visited them.
-  useEffect(() => {
-    if (sessions.length === 0) return
-    setOpenTabSessions((current) => {
-      let changed = false
-      const next = current.map((tab) => {
-        const fresh = sessions.find((s) => sessionKey(s) === sessionKey(tab))
-        if (fresh && fresh !== tab) {
-          changed = true
-          return fresh
-        }
-        return tab
-      })
-      return changed ? next : current
-    })
-  }, [sessions])
+  useEffect(() => runOpenTabsOrderEffect({
+    sessions, setOpenTabSessions,
+  }), [sessions])
 
   // Sync tab-select visual position when active tab changes
   useEffect(() => {
