@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6594,33 +6594,9 @@ function OpenTuiWorkspace() {
     }
   }, [committedSessionKey])
 
-  useEffect(() => {
-    // Skip building the `allowed` Set when both sets are empty — the common
-    // case on a freshly loaded session — otherwise every poll rebuilds an
-    // O(n) Set from the transcript for nothing. We also build the allowed
-    // Set at most once and share it between both state updates.
-    const allowed = new Set(transcriptCards.map((card) => card.key))
-    setExpandedCardKeys((current) => {
-      if (current.size === 0) return current
-      let changed = false
-      const next = new Set<string>()
-      for (const key of current) {
-        if (allowed.has(key)) next.add(key)
-        else changed = true
-      }
-      return changed ? next : current
-    })
-    setCollapsedCardKeys((current) => {
-      if (current.size === 0) return current
-      let changed = false
-      const next = new Set<string>()
-      for (const key of current) {
-        if (allowed.has(key)) next.add(key)
-        else changed = true
-      }
-      return changed ? next : current
-    })
-  }, [transcriptCards])
+  useEffect(() => runExpansionResetEffect({
+    transcriptCards, setExpandedCardKeys, setCollapsedCardKeys,
+  }), [transcriptCards])
 
   useEffect(() => runTranscriptScrollSyncEffect({
     transcriptCards, previousTranscriptRef, committedSessionKey, setTranscriptCursorKey,

@@ -147,3 +147,40 @@ export function runTranscriptScrollSyncEffect(ctx: TranscriptScrollSyncEffectCon
   // includes work over the full transcript for a no-op setter result.
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }
+
+export type ExpansionResetEffectContext = {
+  transcriptCards: TuiTranscriptCard[]
+  setExpandedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setCollapsedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+}
+
+export function runExpansionResetEffect(ctx: ExpansionResetEffectContext) {
+  const {
+    transcriptCards, setExpandedCardKeys, setCollapsedCardKeys,
+  } = ctx
+  // Skip building the `allowed` Set when both sets are empty — the common
+  // case on a freshly loaded session — otherwise every poll rebuilds an
+  // O(n) Set from the transcript for nothing. We also build the allowed
+  // Set at most once and share it between both state updates.
+  const allowed = new Set(transcriptCards.map((card) => card.key))
+  setExpandedCardKeys((current) => {
+    if (current.size === 0) return current
+    let changed = false
+    const next = new Set<string>()
+    for (const key of current) {
+      if (allowed.has(key)) next.add(key)
+      else changed = true
+    }
+    return changed ? next : current
+  })
+  setCollapsedCardKeys((current) => {
+    if (current.size === 0) return current
+    let changed = false
+    const next = new Set<string>()
+    for (const key of current) {
+      if (allowed.has(key)) next.add(key)
+      else changed = true
+    }
+    return changed ? next : current
+  })
+}
