@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -9896,30 +9896,11 @@ function OpenTuiWorkspace() {
     return visibleTabSessions[scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
   }
 
-  useLayoutEffect(() => {
-    const capture = () => {
-      const text = composerTextareaRef.current?.plainText ?? composerDraftRef.current
-      if (composerDraftStorageKeyRef.current) {
-        writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
-        writeWorkspaceDraftParts(composerDraftStorageKeyRef.current, composerPromptPartsRef.current)
-      }
-      setComposerDraft(text)
-    }
-    const leave = () => {
-      capture()
-      // A shell gives the keys back on leaving; a view's own text input keeps its claim.
-      if (typeof surfacePluginKeyCaptureRef.current === 'string') surfacePluginKeyCaptureRef.current = false
-      windowSurfaceCaptureRef.current.clear()
-      for (const key of composerSessions.keys()) {
-        composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
-        composerSessions.set(key, 'composerSendState', 'idle', 'idle')
-      }
-      try { workspaceContext.controller.flush() } catch { /* next update retries */ }
-    }
-    workspaceContext.runtime.flushers.add(capture)
-    workspaceContext.runtime.beforeLeave = leave
-    return () => { workspaceContext.runtime.flushers.delete(capture); if (workspaceContext.runtime.beforeLeave === leave) workspaceContext.runtime.beforeLeave = null }
-  })
+  useLayoutEffect(() => runComposerDraftPersistEffect({
+    composerTextareaRef, composerDraftRef, composerDraftStorageKeyRef, writeWorkspaceDraft,
+    writeWorkspaceDraftParts, composerPromptPartsRef, setComposerDraft, surfacePluginKeyCaptureRef,
+    windowSurfaceCaptureRef, composerSessions, workspaceContext,
+  }))
 
   // One surface's content, for the side panel or a window in the layout.
   // The control center's "new run": the same setup from its popover and its window.

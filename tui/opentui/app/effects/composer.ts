@@ -12,6 +12,8 @@ import { type Timeout } from '@opentui/core'
 import { removeComposerQueueItem } from '../../../../lib/composerAttachments'
 import { type SendState } from '../../../../lib/types'
 import { type QueuedComposerSend } from '../types'
+import { type WorkspaceContextValue } from '../../workspaceContext'
+import { type TuiPluginCapture } from '../../shell/pluginTypes'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -127,4 +129,48 @@ export function runQueuedSendDrainEffect(ctx: QueuedSendDrainEffectContext) {
   // prompt that may already have reached a tool-capable agent.
   commitQueuedComposerSends(remaining)
   void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
+}
+
+export type ComposerDraftPersistEffectContext = {
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  composerDraftRef: React.RefObject<string>
+  composerDraftStorageKeyRef: React.RefObject<string | null>
+  writeWorkspaceDraft: (key: string, text: string) => void
+  writeWorkspaceDraftParts: (key: string, parts: unknown[]) => void
+  composerPromptPartsRef: React.RefObject<ComposerPromptPart[]>
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+  surfacePluginKeyCaptureRef: React.RefObject<TuiPluginCapture>
+  windowSurfaceCaptureRef: React.RefObject<Map<string, boolean | 'input' | 'terminal' | 'none'>>
+  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  workspaceContext: WorkspaceContextValue
+}
+
+export function runComposerDraftPersistEffect(ctx: ComposerDraftPersistEffectContext) {
+  const {
+    composerTextareaRef, composerDraftRef, composerDraftStorageKeyRef, writeWorkspaceDraft,
+    writeWorkspaceDraftParts, composerPromptPartsRef, setComposerDraft, surfacePluginKeyCaptureRef,
+    windowSurfaceCaptureRef, composerSessions, workspaceContext,
+  } = ctx
+  const capture = () => {
+    const text = composerTextareaRef.current?.plainText ?? composerDraftRef.current
+    if (composerDraftStorageKeyRef.current) {
+      writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
+      writeWorkspaceDraftParts(composerDraftStorageKeyRef.current, composerPromptPartsRef.current)
+    }
+    setComposerDraft(text)
+  }
+  const leave = () => {
+    capture()
+    // A shell gives the keys back on leaving; a view's own text input keeps its claim.
+    if (typeof surfacePluginKeyCaptureRef.current === 'string') surfacePluginKeyCaptureRef.current = false
+    windowSurfaceCaptureRef.current.clear()
+    for (const key of composerSessions.keys()) {
+      composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
+      composerSessions.set(key, 'composerSendState', 'idle', 'idle')
+    }
+    try { workspaceContext.controller.flush() } catch { /* next update retries */ }
+  }
+  workspaceContext.runtime.flushers.add(capture)
+  workspaceContext.runtime.beforeLeave = leave
+  return () => { workspaceContext.runtime.flushers.delete(capture); if (workspaceContext.runtime.beforeLeave === leave) workspaceContext.runtime.beforeLeave = null }
 }
