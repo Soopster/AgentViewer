@@ -316,7 +316,7 @@ import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEf
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
-import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect } from './app/effects/liveTranscript'
+import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect, runLiveTranscriptOverlayEffect } from './app/effects/liveTranscript'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2306,49 +2306,12 @@ function OpenTuiWorkspace() {
     [transcriptCards, transcriptView],
   )
 
-  useLayoutEffect(() => {
-    if (!selectedSessionTarget || !sessionDetail) return
-    const key = sessionKey(selectedSessionTarget)
-    const baseline = liveTranscriptBaselineRef.current.get(key)
-    if (!baseline) return
-    const durableSummary = summarizeDurableSessionMessages(sessionDetail.rawMessages)
-    const persistedTurnArrived =
-      durableSummary.count > baseline.count
-      || durableSummary.lastFingerprint !== baseline.lastFingerprint
-      || durableSummary.sequenceFingerprint !== baseline.sequenceFingerprint
-    if (!persistedTurnArrived) return
-    const liveAssistantVisible = Boolean(composerLiveText.trim())
-      || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
-    const turnLanded = awaitingPersistedTurn
-      ? persistedTurnSettled(sessionDetail.rawMessages, baseline.count)
-      : hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)
-    // See refreshSelectedSessionDetail: never finalize under a live stream.
-    const streamStillOwned = ownsComposerStream(key)
-    if (streamStillOwned || (liveAssistantVisible && !turnLanded)) {
-      // The assistant is still streaming. Swap the live user echo for the real
-      // persisted row ONLY once that row has actually landed as a durable
-      // message — `persistedTurnArrived` is a coarse change signal (count OR
-      // fingerprint OR sequence), so removing the echo on any change can drop
-      // the user's message before its persisted card exists, leaving a
-      // poll-timed gap until the assistant finishes. Keep the echo until the
-      // persisted user message is genuinely present (which also avoids a
-      // duplicate, since echo and persisted row have different uuids).
-      if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
-        setLiveTranscriptMessages((prev) => {
-          const next = visibleComposerMessages(prev, persistedComposerMessages)
-          return next.length === prev.length ? prev : next
-        })
-      }
-      return
-    }
-
-    liveTranscriptBaselineRef.current.delete(key)
-    setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== key))
-    liveToolIndexesRef.current.clear()
-    liveToolInputJsonRef.current.clear()
-    setComposerLiveText('')
-    setAwaitingPersistedTurn(false)
-  }, [awaitingPersistedTurn, composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
+  useLayoutEffect(() => runLiveTranscriptOverlayEffect({
+    selectedSessionTarget, sessionDetail, liveTranscriptBaselineRef, composerLiveText,
+    liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
+    setLiveTranscriptMessages, persistedComposerMessages, liveToolIndexesRef, liveToolInputJsonRef,
+    setComposerLiveText, setAwaitingPersistedTurn,
+  }), [awaitingPersistedTurn, composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // Escape hatch mirroring the web composer: if the persisted rows for a
   // completed turn never arrive, force-reveal the polled transcript after a

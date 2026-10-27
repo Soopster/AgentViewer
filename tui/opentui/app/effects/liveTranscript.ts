@@ -11,6 +11,10 @@ import { liveMessageSessionKey } from '../../liveTranscriptState'
 import { type ThreadedMessage } from '../../../../lib/threading'
 import { AWAITING_PERSISTED_TURN_TIMEOUT_MS } from '../timing'
 import { keepFiltered } from '../collections'
+import { visibleComposerMessages } from '../../../../lib/composerTranscript'
+import { summarizeDurableSessionMessages } from '../../messageFingerprint'
+import { hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline } from '../liveStream'
+import { sessionKey } from '../sessionList'
 
 export type TranscriptCardsSyncEffectContext = {
   sessionDetail: TuiSessionDetail | null
@@ -91,4 +95,70 @@ export function runLiveOverlayTimeoutEffect(ctx: LiveOverlayTimeoutEffectContext
     setAwaitingPersistedTurn(false)
   }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
   return () => clearTimeout(timer)
+}
+
+export type LiveTranscriptOverlayEffectContext = {
+  selectedSessionTarget: Session | null
+  sessionDetail: TuiSessionDetail | null
+  liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
+  composerLiveText: string
+  liveTranscriptMessagesForSession: ThreadedMessage[]
+  awaitingPersistedTurn: boolean
+  ownsComposerStream: (key: string) => boolean
+  setLiveTranscriptMessages: React.Dispatch<React.SetStateAction<ThreadedMessage[]>>
+  persistedComposerMessages: { ids: Set<string>; recentUsers: ThreadedMessage[]; }
+  liveToolIndexesRef: React.MutableRefObject<Map<number, string>>
+  liveToolInputJsonRef: React.MutableRefObject<Map<number, string>>
+  setComposerLiveText: React.Dispatch<React.SetStateAction<string>>
+  setAwaitingPersistedTurn: React.Dispatch<React.SetStateAction<boolean>>
+}
+
+export function runLiveTranscriptOverlayEffect(ctx: LiveTranscriptOverlayEffectContext) {
+  const {
+    selectedSessionTarget, sessionDetail, liveTranscriptBaselineRef, composerLiveText,
+    liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
+    setLiveTranscriptMessages, persistedComposerMessages, liveToolIndexesRef, liveToolInputJsonRef,
+    setComposerLiveText, setAwaitingPersistedTurn,
+  } = ctx
+  if (!selectedSessionTarget || !sessionDetail) return
+  const key = sessionKey(selectedSessionTarget)
+  const baseline = liveTranscriptBaselineRef.current.get(key)
+  if (!baseline) return
+  const durableSummary = summarizeDurableSessionMessages(sessionDetail.rawMessages)
+  const persistedTurnArrived =
+    durableSummary.count > baseline.count
+    || durableSummary.lastFingerprint !== baseline.lastFingerprint
+    || durableSummary.sequenceFingerprint !== baseline.sequenceFingerprint
+  if (!persistedTurnArrived) return
+  const liveAssistantVisible = Boolean(composerLiveText.trim())
+    || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
+  const turnLanded = awaitingPersistedTurn
+    ? persistedTurnSettled(sessionDetail.rawMessages, baseline.count)
+    : hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)
+  // See refreshSelectedSessionDetail: never finalize under a live stream.
+  const streamStillOwned = ownsComposerStream(key)
+  if (streamStillOwned || (liveAssistantVisible && !turnLanded)) {
+    // The assistant is still streaming. Swap the live user echo for the real
+    // persisted row ONLY once that row has actually landed as a durable
+    // message — `persistedTurnArrived` is a coarse change signal (count OR
+    // fingerprint OR sequence), so removing the echo on any change can drop
+    // the user's message before its persisted card exists, leaving a
+    // poll-timed gap until the assistant finishes. Keep the echo until the
+    // persisted user message is genuinely present (which also avoids a
+    // duplicate, since echo and persisted row have different uuids).
+    if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
+      setLiveTranscriptMessages((prev) => {
+        const next = visibleComposerMessages(prev, persistedComposerMessages)
+        return next.length === prev.length ? prev : next
+      })
+    }
+    return
+  }
+
+  liveTranscriptBaselineRef.current.delete(key)
+  setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== key))
+  liveToolIndexesRef.current.clear()
+  liveToolInputJsonRef.current.clear()
+  setComposerLiveText('')
+  setAwaitingPersistedTurn(false)
 }
