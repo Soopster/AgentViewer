@@ -269,6 +269,7 @@ import { keepEmpty, keepFiltered, sameKeys, touchMapEntry, pruneSessionCaches } 
 import { ExitConfirmOverlay } from './app/overlays/ExitConfirmOverlay'
 import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
 import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
+import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -19745,41 +19746,7 @@ function OpenTuiWorkspace() {
 
       <WorktreeModalOverlay worktreeModalOpen={worktreeModalOpen} width={width} height={height} theme={theme} worktreeDraft={worktreeDraft} setWorktreeDraft={setWorktreeDraft} submitWorktreeTask={submitWorktreeTask} worktreeBusy={worktreeBusy} />
 
-      {worktreeConfirm && selectedWorktreeTask ? (() => {
-        const overlayWidth = Math.min(Math.max(width - 6, 40), 66)
-        const overlayHeight = 8
-        const isMerge = worktreeConfirm === 'merge'
-        const body = isMerge
-          ? `Squash-merge ${selectedWorktreeTask.branch} into the main checkout (staged, not committed)?`
-          : `Delete the worktree and branch ${selectedWorktreeTask.branch}? Uncommitted work is lost.`
-        return (
-          <box
-            position="absolute"
-            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
-            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
-            width={overlayWidth}
-            height={overlayHeight}
-            border
-            borderStyle="single"
-            borderColor={isMerge ? theme.green : theme.red}
-            backgroundColor={theme.surface}
-            zIndex={70}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1}>
-              <text fg={theme.text}>{isMerge ? 'MERGE WORKTREE TASK?' : 'DISCARD WORKTREE TASK?'}</text>
-            </box>
-            <box paddingX={1} marginTop={1}>
-              <text fg={theme.dim} wrapMode="word" width={overlayWidth - 4}>{body}</text>
-            </box>
-            <box paddingX={1} marginTop={1}>
-              <text fg={isMerge ? theme.green : theme.red} wrapMode="none">
-                {fitText('Enter/Y confirm  ·  Esc/N cancel', overlayWidth - 4)}
-              </text>
-            </box>
-          </box>
-        )
-      })() : null}
+      <WorktreeConfirmOverlay worktreeConfirm={worktreeConfirm} selectedWorktreeTask={selectedWorktreeTask} width={width} height={height} theme={theme} />
 
       {coordModalOpen ? (() => {
         const overlayWidth = Math.max(20, Math.min(Math.max(width - 2, 20), Math.max(92, Math.min(160, Math.floor(width * 0.96)))))
