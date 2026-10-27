@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
@@ -2881,32 +2881,10 @@ function OpenTuiWorkspace() {
     setHistoryIndex(-1)
   })
 
-  const moveComposerHistory = useStableEvent((delta: number) => {
-    if (sentHistory.length === 0) return
-    if (!composerHistoryOpen) {
-      if (delta > 0) {
-        const currentDisplayIndex = historyIndex === -1
-          ? -1
-          : sentHistory.length - 1 - historyIndex
-        openComposerHistory(Math.max(currentDisplayIndex + 1, 0))
-      } else if (historyIndex !== -1) {
-        const currentDisplayIndex = sentHistory.length - 1 - historyIndex
-        if (currentDisplayIndex <= 0) {
-          cancelComposerHistory()
-        } else {
-          openComposerHistory(currentDisplayIndex - 1)
-        }
-      }
-      return
-    }
-
-    const nextDisplayIndex = composerHistoryIndex + delta
-    if (nextDisplayIndex < 0) {
-      cancelComposerHistory()
-      return
-    }
-    selectComposerHistoryEntry(nextDisplayIndex)
-  })
+  const moveComposerHistory = useStableEvent((delta: number) => runMoveComposerHistory({
+    sentHistory, composerHistoryOpen, historyIndex, openComposerHistory, cancelComposerHistory,
+    composerHistoryIndex, selectComposerHistoryEntry,
+  }, delta))
 
   const handleComposerContentChange = useStableEvent(() => {
     const renderable = composerTextareaRef.current

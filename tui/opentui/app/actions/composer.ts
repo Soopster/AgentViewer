@@ -26,6 +26,7 @@ import { frecencyKey, recordFrecencyUse } from '../../../../lib/tuiFrecency'
 import { type TuiMentionResult } from '../types'
 import { type ComposerPromptPartRange } from '../types'
 import { activeMentionAttachments } from '../composerInput'
+import { type ComposerDraftSnapshot } from '../types'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -424,4 +425,45 @@ export function runActiveComposerPromptPartRanges(ctx: ActiveComposerPromptPartR
     cursor = end
   }
   return ranges
+}
+
+export type MoveComposerHistoryContext = {
+  sentHistory: ComposerDraftSnapshot[]
+  composerHistoryOpen: boolean
+  historyIndex: number
+  openComposerHistory: (displayIndex?: number) => void
+  cancelComposerHistory: () => void
+  composerHistoryIndex: number
+  selectComposerHistoryEntry: (displayIndex: number) => void
+}
+
+export function runMoveComposerHistory(ctx: MoveComposerHistoryContext, delta: number) {
+  const {
+    sentHistory, composerHistoryOpen, historyIndex, openComposerHistory, cancelComposerHistory,
+    composerHistoryIndex, selectComposerHistoryEntry,
+  } = ctx
+  if (sentHistory.length === 0) return
+  if (!composerHistoryOpen) {
+    if (delta > 0) {
+      const currentDisplayIndex = historyIndex === -1
+        ? -1
+        : sentHistory.length - 1 - historyIndex
+      openComposerHistory(Math.max(currentDisplayIndex + 1, 0))
+    } else if (historyIndex !== -1) {
+      const currentDisplayIndex = sentHistory.length - 1 - historyIndex
+      if (currentDisplayIndex <= 0) {
+        cancelComposerHistory()
+      } else {
+        openComposerHistory(currentDisplayIndex - 1)
+      }
+    }
+    return
+  }
+
+  const nextDisplayIndex = composerHistoryIndex + delta
+  if (nextDisplayIndex < 0) {
+    cancelComposerHistory()
+    return
+  }
+  selectComposerHistoryEntry(nextDisplayIndex)
 }
