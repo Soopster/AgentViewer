@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3238,71 +3238,10 @@ function OpenTuiWorkspace() {
   const composerMentionProvider = composerMentionSourceSession?.provider ?? 'claude'
   const composerMentionCwd = composerMentionSearchSession?.cwd ?? composerMentionSourceSession?.cwd ?? null
 
-  useEffect(() => {
-    if (!composerMention) {
-      setComposerMentionResults(keepEmpty)
-      return
-    }
-    const agentMatches: TuiMentionResult[] = composerMentionProvider === 'opencode'
-      ? composerMentionAgents
-          .filter((agent) => {
-            const query = composerMention.query.toLowerCase()
-            if (!query) return true
-            return agent.value.toLowerCase().includes(query)
-              || agent.label.toLowerCase().includes(query)
-              || (agent.description?.toLowerCase().includes(query) ?? false)
-          })
-          .slice(0, 8)
-          .map((agent) => ({
-            kind: 'agent' as const,
-            name: agent.value,
-            description: agent.description,
-            mode: agent.mode,
-          }))
-      : []
-    const cwd = composerMentionCwd
-    if (!cwd) {
-      setComposerMentionResults(agentMatches)
-      setComposerMentionIndex(0)
-      return
-    }
-    let cancelled = false
-    const handle = setTimeout(() => {
-      void (async () => {
-        try {
-          const all = await listProjectFiles(cwd, runGitCommand)
-          if (cancelled) return
-          // The substring + fuzzy-subsequence scan over `all` (up to 5 000
-          // entries) is CPU-bound — run it off the render/input thread so a
-          // large repo doesn't stall the composer while the user is typing.
-          // Ranking happens in the worker, before the 12-result cap: a bare `@`
-          // matches every file, so slicing first would leave frecency nothing
-          // to order. Scores come from the in-process table, so this is a map
-          // read rather than a file read per keystroke.
-          const fileMatches = await filterComposerMentionFilesAsync(
-            all,
-            composerMention.query,
-            12,
-            Object.fromEntries(readFrecencyScores()),
-            frecencyPrefix(cwd),
-          )
-          if (cancelled) return
-          const matches: TuiMentionResult[] = [
-            ...agentMatches,
-            ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
-          ]
-          setComposerMentionResults(matches)
-          setComposerMentionIndex(0)
-        } catch {
-          if (!cancelled) setComposerMentionResults(agentMatches)
-        }
-      })()
-    }, 60)
-    return () => {
-      cancelled = true
-      clearTimeout(handle)
-    }
-  }, [composerMention, composerMentionAgents, composerMentionCwd, composerMentionProvider])
+  useEffect(() => runComposerMentionSearchEffect({
+    composerMention, setComposerMentionResults, composerMentionProvider, composerMentionAgents,
+    composerMentionCwd, setComposerMentionIndex,
+  }), [composerMention, composerMentionAgents, composerMentionCwd, composerMentionProvider])
 
   const ensureComposerPastePartTypeId = useStableEvent((renderable: TextareaRenderable): number => {
     let typeId = composerPastePartTypeIdRef.current

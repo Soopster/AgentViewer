@@ -17,6 +17,12 @@ import { type TuiPluginCapture } from '../../shell/pluginTypes'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits } from '../../../../lib/tui/service'
 import { type ClaudePlanLimits } from '../../../../lib/claudePlanLimits'
 import { type Session } from '../../../../lib/types'
+import { frecencyPrefix, readFrecencyScores } from '../../../../lib/tuiFrecency'
+import { filterComposerMentionFilesAsync } from '../../composerMentionWorkerClient'
+import { type SessionComposerAgentOption } from '../../../../lib/types'
+import { listProjectFiles } from '../../../../lib/projectFiles'
+import { runGitCommand } from '../../../../lib/gitNodeProvider'
+import { type TuiMentionResult } from '../types'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -201,4 +207,83 @@ export function runPlanLimitsEffect(ctx: PlanLimitsEffectContext) {
     .then((limits) => { if (!cancelled && limits) setComposerPlanLimits(limits) })
     .catch(() => {})
   return () => { cancelled = true }
+}
+
+export type ComposerMentionSearchEffectContext = {
+  composerMention: { start: number; query: string; } | null
+  setComposerMentionResults: React.Dispatch<React.SetStateAction<TuiMentionResult[]>>
+  composerMentionProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'
+  composerMentionAgents: SessionComposerAgentOption[]
+  composerMentionCwd: string | null
+  setComposerMentionIndex: React.Dispatch<React.SetStateAction<number>>
+}
+
+export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectContext) {
+  const {
+    composerMention, setComposerMentionResults, composerMentionProvider, composerMentionAgents,
+    composerMentionCwd, setComposerMentionIndex,
+  } = ctx
+  if (!composerMention) {
+    setComposerMentionResults(keepEmpty)
+    return
+  }
+  const agentMatches: TuiMentionResult[] = composerMentionProvider === 'opencode'
+    ? composerMentionAgents
+        .filter((agent) => {
+          const query = composerMention.query.toLowerCase()
+          if (!query) return true
+          return agent.value.toLowerCase().includes(query)
+            || agent.label.toLowerCase().includes(query)
+            || (agent.description?.toLowerCase().includes(query) ?? false)
+        })
+        .slice(0, 8)
+        .map((agent) => ({
+          kind: 'agent' as const,
+          name: agent.value,
+          description: agent.description,
+          mode: agent.mode,
+        }))
+    : []
+  const cwd = composerMentionCwd
+  if (!cwd) {
+    setComposerMentionResults(agentMatches)
+    setComposerMentionIndex(0)
+    return
+  }
+  let cancelled = false
+  const handle = setTimeout(() => {
+    void (async () => {
+      try {
+        const all = await listProjectFiles(cwd, runGitCommand)
+        if (cancelled) return
+        // The substring + fuzzy-subsequence scan over `all` (up to 5 000
+        // entries) is CPU-bound — run it off the render/input thread so a
+        // large repo doesn't stall the composer while the user is typing.
+        // Ranking happens in the worker, before the 12-result cap: a bare `@`
+        // matches every file, so slicing first would leave frecency nothing
+        // to order. Scores come from the in-process table, so this is a map
+        // read rather than a file read per keystroke.
+        const fileMatches = await filterComposerMentionFilesAsync(
+          all,
+          composerMention.query,
+          12,
+          Object.fromEntries(readFrecencyScores()),
+          frecencyPrefix(cwd),
+        )
+        if (cancelled) return
+        const matches: TuiMentionResult[] = [
+          ...agentMatches,
+          ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
+        ]
+        setComposerMentionResults(matches)
+        setComposerMentionIndex(0)
+      } catch {
+        if (!cancelled) setComposerMentionResults(agentMatches)
+      }
+    })()
+  }, 60)
+  return () => {
+    cancelled = true
+    clearTimeout(handle)
+  }
 }
