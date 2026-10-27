@@ -312,7 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
-import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
+import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect, runMetricsGaugeEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
@@ -1314,24 +1314,12 @@ function OpenTuiWorkspace() {
   // No-op unless AGENT_VIEWER_TUI_METRICS=1: reports the sizes of the
   // session-keyed maps/sets most likely to grow unbounded, alongside the
   // process-level memory/GC/loop-delay samples in metricsLogger.ts.
-  useEffect(() => registerTuiMetricsGauge(() => ({
-    sessions: sessions.length,
-    runningSessions: runningSessionsRef.current.length,
-    transcriptMessages: sessionDetail?.rawMessages.length ?? 0,
-    threadedMessages: sessionDetail?.threadedMessages.length ?? 0,
-    sessionDetailCache: sessionDetailCacheRef.current.size,
-    transcriptEstimatedBytes: mainTranscriptBudget.bytes,
-    transcriptBrokerObservers: loader.stats.pinned,
-    transcriptBrokerTimer: loader.stats.timer ? 1 : 0,
-    sessionContextUsageCache: sessionContextUsageCacheRef.current.size,
-    sessionMetadataFetchedAt: sessionMetadataFetchedAtRef.current.size,
-    sessionMetadataInFlight: sessionMetadataInFlightRef.current.size,
-    liveToolIndexes: liveToolIndexesRef.current.size,
-    liveToolInputJson: liveToolInputJsonRef.current.size,
-    liveTranscriptBaseline: liveTranscriptBaselineRef.current.size,
-    backgroundRefreshInFlight: backgroundRefreshInFlightRef.current.size,
-    sessionDetailMtime: sessionDetailMtimeRef.current.size,
-  })), [sessions.length, sessionDetail])
+  useEffect(() => runMetricsGaugeEffect({
+    sessions, runningSessionsRef, sessionDetail, sessionDetailCacheRef, loader,
+    sessionContextUsageCacheRef, sessionMetadataFetchedAtRef, sessionMetadataInFlightRef,
+    liveToolIndexesRef, liveToolInputJsonRef, liveTranscriptBaselineRef,
+    backgroundRefreshInFlightRef, sessionDetailMtimeRef,
+  }), [sessions.length, sessionDetail])
   useEffect(() => {
     if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
   }, [composerActive, composerWindowOpen])

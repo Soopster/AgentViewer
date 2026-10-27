@@ -16,6 +16,13 @@ import { coordinatorAlertDelivery } from '../../../../lib/coordinatorSignals'
 import { subscribeInteractiveCoordinatorNotifications, getInteractiveCoordinatorNotifications } from '../../interactiveCoordinatorStore'
 import { findTuiWorktreeTask, type WorktreeTask } from '../../../../lib/tui/service'
 import { WORKTREE_TASK_CWD_SEGMENT } from '../layoutConstants'
+import { type MutableRefObject } from 'react'
+import { type TranscriptSessionLoader } from '../../transcriptSessionLoader'
+import { registerTuiMetricsGauge } from '../../metricsLogger'
+import { TranscriptDetailCache } from '../../transcriptDetailCache'
+import { mainTranscriptBudget } from '../../sessionCacheBudget'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type ContextUsage, type RunningSessionRef, type Session } from '../../../../lib/types'
 
 export type SurfacePlacementEffectContext = {
   workspaceContext: WorkspaceContextValue
@@ -314,4 +321,47 @@ export function runExitDelayEffect(ctx: ExitDelayEffectContext) {
     process.off('SIGTERM', onTerminate)
     process.off('SIGHUP', onTerminate)
   }
+}
+
+export type MetricsGaugeEffectContext = {
+  sessions: Session[]
+  runningSessionsRef: React.RefObject<RunningSessionRef[]>
+  sessionDetail: TuiSessionDetail | null
+  sessionDetailCacheRef: React.RefObject<TranscriptDetailCache>
+  loader: TranscriptSessionLoader
+  sessionContextUsageCacheRef: React.RefObject<Map<string, ContextUsage | null>>
+  sessionMetadataFetchedAtRef: React.RefObject<Map<string, number>>
+  sessionMetadataInFlightRef: React.RefObject<Set<string>>
+  liveToolIndexesRef: React.MutableRefObject<Map<number, string>>
+  liveToolInputJsonRef: React.MutableRefObject<Map<number, string>>
+  liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
+  backgroundRefreshInFlightRef: React.RefObject<Set<string>>
+  sessionDetailMtimeRef: React.RefObject<Map<string, number>>
+}
+
+export function runMetricsGaugeEffect(ctx: MetricsGaugeEffectContext) {
+  const {
+    sessions, runningSessionsRef, sessionDetail, sessionDetailCacheRef, loader,
+    sessionContextUsageCacheRef, sessionMetadataFetchedAtRef, sessionMetadataInFlightRef,
+    liveToolIndexesRef, liveToolInputJsonRef, liveTranscriptBaselineRef,
+    backgroundRefreshInFlightRef, sessionDetailMtimeRef,
+  } = ctx
+return registerTuiMetricsGauge(() => ({
+  sessions: sessions.length,
+  runningSessions: runningSessionsRef.current.length,
+  transcriptMessages: sessionDetail?.rawMessages.length ?? 0,
+  threadedMessages: sessionDetail?.threadedMessages.length ?? 0,
+  sessionDetailCache: sessionDetailCacheRef.current.size,
+  transcriptEstimatedBytes: mainTranscriptBudget.bytes,
+  transcriptBrokerObservers: loader.stats.pinned,
+  transcriptBrokerTimer: loader.stats.timer ? 1 : 0,
+  sessionContextUsageCache: sessionContextUsageCacheRef.current.size,
+  sessionMetadataFetchedAt: sessionMetadataFetchedAtRef.current.size,
+  sessionMetadataInFlight: sessionMetadataInFlightRef.current.size,
+  liveToolIndexes: liveToolIndexesRef.current.size,
+  liveToolInputJson: liveToolInputJsonRef.current.size,
+  liveTranscriptBaseline: liveTranscriptBaselineRef.current.size,
+  backgroundRefreshInFlight: backgroundRefreshInFlightRef.current.size,
+  sessionDetailMtime: sessionDetailMtimeRef.current.size,
+}))
 }
