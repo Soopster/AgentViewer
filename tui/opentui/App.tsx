@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6328,45 +6328,12 @@ function OpenTuiWorkspace() {
     }
   }, [refreshSessions])
 
-  useEffect(() => {
-    if (!bootstrapped) return
-    if (!selectedSessionTarget || selectedSession?.isPending) {
-      setSessionDetail(null)
-      setLoadingDetail(false)
-      setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
-      return
-    }
-
-    // Debounce the actual open so rapid scrubbing through the sidebar doesn't
-    // load + reformat a transcript for every session passed through. The
-    // cleanup clears the pending timer when the selection changes again, so
-    // only the session we land on (and hold for the delay chosen below) renders.
-    // The previously-shown transcript stays visible during the wait — no flash.
-    const target = selectedSessionTarget
-    const navStartedAt = performance.now()
-    const targetKey = sessionKey(target)
-    navSelectStartRef.current = { key: targetKey, at: navStartedAt }
-    const targetLastModified = sessionTranscriptUpdatedAt(target, sessionsByKeyRef.current.get(targetKey))
-    const shared = loader.peek(target, densityRef.current, showToolCallsRef.current)
-    const recordedMtime = shared?.revision ?? sessionDetailMtimeRef.current.get(targetKey)
-    // Mirrors refreshSelectedSessionDetail's cached-and-unchanged fast path: if
-    // that branch will fire, this open does no work and deserves no wait.
-    const opensFromCache = (Boolean(shared) || sessionDetailCacheRef.current.has(targetKey))
-      && typeof targetLastModified === 'number'
-      && recordedMtime != null
-      && recordedMtime >= targetLastModified
-      && !awaitingPersistedTurnRef.current
-      && !liveTranscriptBaselineRef.current.has(targetKey)
-    const timer = setTimeout(() => {
-      noteTuiNavLatency('select-to-open', performance.now() - navStartedAt)
-      // Display is owned by refreshSelectedSessionDetail's cache-first branch,
-      // which is single-flight-gated: if a load is already running (still
-      // scrubbing) it defers without rendering this session, so intermediates
-      // never open. The previously-shown transcript stays put until we settle.
-      void refreshSelectedSessionDetail(target, true)
-    }, opensFromCache ? DETAIL_OPEN_CACHED_DELAY_MS : DETAIL_OPEN_DELAY_MS)
-    return () => clearTimeout(timer)
-  }, [bootstrapped, loader, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
+  useEffect(() => runSessionDetailLoadEffect({
+    bootstrapped, selectedSessionTarget, selectedSession, setSessionDetail, setLoadingDetail,
+    setError, navSelectStartRef, sessionsByKeyRef, loader, densityRef, showToolCallsRef,
+    sessionDetailMtimeRef, sessionDetailCacheRef, awaitingPersistedTurnRef,
+    liveTranscriptBaselineRef, refreshSelectedSessionDetail,
+  }), [bootstrapped, loader, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
   // Close the nav-latency sample: this effect runs after the commit that put the
   // newly-selected session's transcript on screen, so it measures what the user

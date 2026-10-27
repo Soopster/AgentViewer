@@ -20,6 +20,13 @@ import { type Session } from '../../../../lib/types'
 import { CLAUDE_BACKGROUND_METADATA_REFRESH_MS } from '../timing'
 import { DETAIL_REFRESH_MS } from '../timing'
 import { NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS } from '../timing'
+import { type TranscriptSessionLoader } from '../../transcriptSessionLoader'
+import { noteTuiNavLatency } from '../../metricsLogger'
+import { TranscriptDetailCache } from '../../transcriptDetailCache'
+import { type TuiDensity } from '../../../theme'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { sessionTranscriptUpdatedAt } from '../../sessionRefreshPolicy'
+import { DETAIL_OPEN_DELAY_MS, DETAIL_OPEN_CACHED_DELAY_MS } from '../timing'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -394,4 +401,69 @@ export function runOverlaySettleEffect(ctx: OverlaySettleEffectContext) {
     cancelled = true
     clearTimeout(timer)
   }
+}
+
+export type SessionDetailLoadEffectContext = {
+  bootstrapped: boolean
+  selectedSessionTarget: Session | null
+  selectedSession: Session | null
+  setSessionDetail: React.Dispatch<React.SetStateAction<TuiSessionDetail | null>>
+  setLoadingDetail: React.Dispatch<React.SetStateAction<boolean>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  navSelectStartRef: React.RefObject<{ key: string; at: number; } | null>
+  sessionsByKeyRef: React.RefObject<Map<string, Session>>
+  loader: TranscriptSessionLoader
+  densityRef: React.RefObject<TuiDensity>
+  showToolCallsRef: React.RefObject<boolean>
+  sessionDetailMtimeRef: React.RefObject<Map<string, number>>
+  sessionDetailCacheRef: React.RefObject<TranscriptDetailCache>
+  awaitingPersistedTurnRef: React.MutableRefObject<boolean>
+  liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
+  refreshSelectedSessionDetail: (session: Session, foreground?: boolean) => Promise<void>
+}
+
+export function runSessionDetailLoadEffect(ctx: SessionDetailLoadEffectContext) {
+  const {
+    bootstrapped, selectedSessionTarget, selectedSession, setSessionDetail, setLoadingDetail,
+    setError, navSelectStartRef, sessionsByKeyRef, loader, densityRef, showToolCallsRef,
+    sessionDetailMtimeRef, sessionDetailCacheRef, awaitingPersistedTurnRef,
+    liveTranscriptBaselineRef, refreshSelectedSessionDetail,
+  } = ctx
+  if (!bootstrapped) return
+  if (!selectedSessionTarget || selectedSession?.isPending) {
+    setSessionDetail(null)
+    setLoadingDetail(false)
+    setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
+    return
+  }
+
+  // Debounce the actual open so rapid scrubbing through the sidebar doesn't
+  // load + reformat a transcript for every session passed through. The
+  // cleanup clears the pending timer when the selection changes again, so
+  // only the session we land on (and hold for the delay chosen below) renders.
+  // The previously-shown transcript stays visible during the wait — no flash.
+  const target = selectedSessionTarget
+  const navStartedAt = performance.now()
+  const targetKey = sessionKey(target)
+  navSelectStartRef.current = { key: targetKey, at: navStartedAt }
+  const targetLastModified = sessionTranscriptUpdatedAt(target, sessionsByKeyRef.current.get(targetKey))
+  const shared = loader.peek(target, densityRef.current, showToolCallsRef.current)
+  const recordedMtime = shared?.revision ?? sessionDetailMtimeRef.current.get(targetKey)
+  // Mirrors refreshSelectedSessionDetail's cached-and-unchanged fast path: if
+  // that branch will fire, this open does no work and deserves no wait.
+  const opensFromCache = (Boolean(shared) || sessionDetailCacheRef.current.has(targetKey))
+    && typeof targetLastModified === 'number'
+    && recordedMtime != null
+    && recordedMtime >= targetLastModified
+    && !awaitingPersistedTurnRef.current
+    && !liveTranscriptBaselineRef.current.has(targetKey)
+  const timer = setTimeout(() => {
+    noteTuiNavLatency('select-to-open', performance.now() - navStartedAt)
+    // Display is owned by refreshSelectedSessionDetail's cache-first branch,
+    // which is single-flight-gated: if a load is already running (still
+    // scrubbing) it defers without rendering this session, so intermediates
+    // never open. The previously-shown transcript stays put until we settle.
+    void refreshSelectedSessionDetail(target, true)
+  }, opensFromCache ? DETAIL_OPEN_CACHED_DELAY_MS : DETAIL_OPEN_DELAY_MS)
+  return () => clearTimeout(timer)
 }
