@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3473,51 +3473,10 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const insertMentionAtCursor = useStableEvent((entry: TuiMentionResult) => {
-    const renderable = composerTextareaRef.current
-    if (!renderable || !composerMention) return
-    const text = renderable.plainText
-    const cursor = renderable.cursorOffset
-    const before = text.slice(0, composerMention.start)
-    const after = text.slice(cursor)
-    const insertion = entry.kind === 'agent'
-      ? `@${entry.name} `
-      : `@${entry.path} `
-    // A file you mention is a file you are working in; the next `@` ranks by it.
-    if (entry.kind === 'file' && composerMentionCwd) {
-      recordFrecencyUse(frecencyKey(composerMentionCwd, entry.path))
-    }
-    const next = `${before}${insertion}${after}`
-    renderable.setText(next)
-    renderable.cursorOffset = before.length + insertion.length
-    setComposerDraft(next)
-    setComposerMentionAttachments((prev) => {
-      if (entry.kind === 'agent') {
-        if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
-        return [
-          ...prev,
-          {
-            id: `agent-${entry.name}`,
-            type: 'agent',
-            displayName: entry.name,
-            text: `@${entry.name}`,
-          },
-        ]
-      }
-      if (prev.some((attachment) => attachment.path === entry.path)) return prev
-      return [
-        ...prev,
-        {
-          id: `mention-${entry.path}`,
-          type: 'mention',
-          path: entry.path,
-          displayName: entry.basename,
-        },
-      ]
-    })
-    setComposerMention(null)
-    setComposerMentionResults(keepEmpty)
-  })
+  const insertMentionAtCursor = useStableEvent((entry: TuiMentionResult) => runInsertMentionAtCursor({
+    composerTextareaRef, composerMention, composerMentionCwd, setComposerDraft,
+    setComposerMentionAttachments, setComposerMention, setComposerMentionResults,
+  }, entry))
 
   const insertSlashAtCursor = useCallback((command: string) => {
     const renderable = composerTextareaRef.current

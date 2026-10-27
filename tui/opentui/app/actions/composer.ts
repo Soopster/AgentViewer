@@ -22,6 +22,8 @@ import { basename } from 'node:path'
 import { type ComposerSubmission } from '../types'
 import { imageAttachmentCount } from '../composerInput'
 import { normalizePastedFilePath, pastedFileMimeTypeForPath } from '../clipboard'
+import { frecencyKey, recordFrecencyUse } from '../../../../lib/tuiFrecency'
+import { type TuiMentionResult } from '../types'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -284,4 +286,64 @@ export async function runPasteFilePathToComposer(ctx: PasteFilePathToComposerCon
     return true
   }
   return false
+}
+
+export type InsertMentionAtCursorContext = {
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  composerMention: { start: number; query: string; } | null
+  composerMentionCwd: string | null
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+  setComposerMentionAttachments: React.Dispatch<React.SetStateAction<SendAttachment[]>>
+  setComposerMention: React.Dispatch<React.SetStateAction<{ start: number; query: string; } | null>>
+  setComposerMentionResults: React.Dispatch<React.SetStateAction<TuiMentionResult[]>>
+}
+
+export function runInsertMentionAtCursor(ctx: InsertMentionAtCursorContext, entry: TuiMentionResult) {
+  const {
+    composerTextareaRef, composerMention, composerMentionCwd, setComposerDraft,
+    setComposerMentionAttachments, setComposerMention, setComposerMentionResults,
+  } = ctx
+  const renderable = composerTextareaRef.current
+  if (!renderable || !composerMention) return
+  const text = renderable.plainText
+  const cursor = renderable.cursorOffset
+  const before = text.slice(0, composerMention.start)
+  const after = text.slice(cursor)
+  const insertion = entry.kind === 'agent'
+    ? `@${entry.name} `
+    : `@${entry.path} `
+  // A file you mention is a file you are working in; the next `@` ranks by it.
+  if (entry.kind === 'file' && composerMentionCwd) {
+    recordFrecencyUse(frecencyKey(composerMentionCwd, entry.path))
+  }
+  const next = `${before}${insertion}${after}`
+  renderable.setText(next)
+  renderable.cursorOffset = before.length + insertion.length
+  setComposerDraft(next)
+  setComposerMentionAttachments((prev) => {
+    if (entry.kind === 'agent') {
+      if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
+      return [
+        ...prev,
+        {
+          id: `agent-${entry.name}`,
+          type: 'agent',
+          displayName: entry.name,
+          text: `@${entry.name}`,
+        },
+      ]
+    }
+    if (prev.some((attachment) => attachment.path === entry.path)) return prev
+    return [
+      ...prev,
+      {
+        id: `mention-${entry.path}`,
+        type: 'mention',
+        path: entry.path,
+        displayName: entry.basename,
+      },
+    ]
+  })
+  setComposerMention(null)
+  setComposerMentionResults(keepEmpty)
 }
