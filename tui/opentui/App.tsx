@@ -341,6 +341,7 @@ import { useMenuState } from './app/state/menuState'
 import { useSidebarPreferenceState } from './app/state/sidebarPreferenceState'
 import { useWindowGestureState } from './app/state/windowGestureState'
 import { useWindowLayoutState } from './app/state/windowLayoutState'
+import { useWindowOverlayState } from './app/state/windowOverlayState'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -542,30 +543,15 @@ function OpenTuiWorkspace() {
   const watchedRosterRef = useWorkspaceRef<{ runId: string; keys: Set<string> } | null>('watchedRoster', null, true)
   const watchedCoordinator = useCoordinatorWorkspace(coordinatorWorkspace, coordinatorWorkspaceRunId)
   const coordinatorBadges = useMemo(() => watchedCoordinator ? coordinatorWindowBadges(watchedCoordinator) : new Map<string, string>(), [watchedCoordinator])
-  const [windowPickerOpen, setWindowPickerOpen] = useState(false)
-  const [windowSwitcherOpen, setWindowSwitcherOpen] = useState(false)
-  const [overviewPendingTarget, setOverviewPendingTarget] = useWorkspaceState<string | null>('windowOverviewPendingTarget', null, false)
-  const [windowBroadcastOpen, setWindowBroadcastOpen] = useState(false)
-  const [windowSurfacePeek, setWindowSurfacePeek] = useState<WindowSurfaceId | null>(null)
-  const windowSwitcherKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
-  const windowBroadcastKeyRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
-  const windowLayoutRestoreRequestRef = useRef(0)
-  const [windowLayoutPreview, setWindowLayoutPreview] = useState<string | null>(null)
-  const [windowAttention, setWindowAttention] = useWorkspaceState<Map<string, WindowAttention>>('windowAttention', () => new Map())
-  const windowObservedFocusRef = useRef<string | null>(null)
-  // This project's saved layouts, read when the menu opens.
-  const [savedWindowLayouts, setSavedWindowLayouts] = useState<SavedWindowLayout[]>([])
-  // Surfaces (a shell, the diff, files) open as windows in the layout, after
-  // the session panes. A kind lives in one place: here or in the side panel,
-  // because both would hand the same key-handler refs to two mounted views.
-  const [windowSurfaces, setWindowSurfaces] = useWorkspaceState<WindowSurfaceId[]>('windowSurfaces', [])
-  // What each popover window is pinned to (popoverWindows.ts), by window id.
-  const [windowSurfaceMeta, setWindowSurfaceMeta] = useWorkspaceState<Record<WindowSurfaceId, SurfaceMeta>>('windowSurfaceMeta', {})
-  // Popovers opened as tabs of this workspace's tab strip ("Fill this tab"), by
-  // surface id, and the one shown in the reader's place (null: the reader).
-  const [popoverTabs, setPopoverTabs] = useWorkspaceState<WindowSurfaceId[]>('popoverTabs', [])
-  const popoverTabFrameRef = useRef<(() => React.ReactNode) | null>(null)
-  const [activePopoverTab, setActivePopoverTab] = useWorkspaceState<WindowSurfaceId | null>('activePopoverTab', null)
+  const {
+    windowPickerOpen, setWindowPickerOpen, windowSwitcherOpen, setWindowSwitcherOpen,
+    overviewPendingTarget, setOverviewPendingTarget, windowBroadcastOpen, setWindowBroadcastOpen,
+    windowSurfacePeek, setWindowSurfacePeek, windowSwitcherKeyRef, windowBroadcastKeyRef,
+    windowLayoutRestoreRequestRef, windowLayoutPreview, setWindowLayoutPreview, windowAttention,
+    setWindowAttention, windowObservedFocusRef, savedWindowLayouts, setSavedWindowLayouts,
+    windowSurfaces, setWindowSurfaces, windowSurfaceMeta, setWindowSurfaceMeta, popoverTabs,
+    setPopoverTabs, popoverTabFrameRef, activePopoverTab, setActivePopoverTab,
+  } = useWindowOverlayState()
   // The reader's place shows a popover tab instead of the transcript.
   const shownPopoverTab = activePopoverTab && popoverTabs.includes(activePopoverTab) ? activePopoverTab : null
   const {
