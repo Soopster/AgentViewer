@@ -38,6 +38,9 @@ import { createTuiSession, type TuiProviderInstanceChoice } from '../../../../li
 import { type AgentProvider } from '../../../../lib/types'
 import { type NoticeTone } from '../types'
 import { writeTuiProvider } from '../../../../lib/tui/service'
+import { prewarmTuiSession } from '../../../../lib/tui/service'
+import { runComposerSessionPreparation } from '../../splitPaneState'
+import { type TuiEffort } from '../types'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -821,5 +824,47 @@ export async function runChooseProvider(ctx: ChooseProviderContext, nextProvider
     setError(err instanceof Error ? err.message : 'Failed to switch provider')
   } finally {
     providerSwitchRef.current = false
+  }
+}
+
+export type PrepareCreatedSessionForComposerContext = {
+  composerPreparingTargetKeyRef: React.RefObject<string | null>
+  setComposerPreparingTargetKey: React.Dispatch<React.SetStateAction<string | null>>
+  refreshSessions: (nextProvider: ProviderSelection, preserveSelection?: boolean, foreground?: boolean) => Promise<void>
+  provider: ProviderSelection
+  tuiModelOverride: Record<string, string>
+  tuiEffort: TuiEffort
+  refreshSelectedSessionDetail: (session: Session, foreground?: boolean) => Promise<void>
+  fetchComposerAffordances: (target: Session, key: string) => Promise<void>
+}
+
+export async function runPrepareCreatedSessionForComposer(ctx: PrepareCreatedSessionForComposerContext, draft: Session) {
+  const {
+    composerPreparingTargetKeyRef, setComposerPreparingTargetKey, refreshSessions, provider,
+    tuiModelOverride, tuiEffort, refreshSelectedSessionDetail, fetchComposerAffordances,
+  } = ctx
+  const key = sessionKey(draft)
+  composerPreparingTargetKeyRef.current = key
+  setComposerPreparingTargetKey(key)
+  try {
+    await runComposerSessionPreparation({
+      refreshSessions: () => refreshSessions(provider, true, false),
+      prewarmRuntime: () => prewarmTuiSession(draft, {
+        model: tuiModelOverride[key] || undefined,
+        effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+        isPending: draft.isPending === true,
+      }),
+      loadDetail: () => draft.isPending
+        ? Promise.resolve()
+        : refreshSelectedSessionDetail(draft, true),
+      // Provider commands, agents, modes, and permission controls can depend
+      // on the warmed runtime (notably Claude), so load them after prewarm.
+      loadAffordances: () => fetchComposerAffordances(draft, key),
+    })
+  } finally {
+    if (composerPreparingTargetKeyRef.current === key) {
+      composerPreparingTargetKeyRef.current = null
+      setComposerPreparingTargetKey(null)
+    }
   }
 }

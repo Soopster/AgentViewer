@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
@@ -4791,32 +4791,10 @@ function OpenTuiWorkspace() {
     setFolderPickerForNewSession(false)
   })
 
-  const prepareCreatedSessionForComposer = useStableEvent(async (draft: Session) => {
-    const key = sessionKey(draft)
-    composerPreparingTargetKeyRef.current = key
-    setComposerPreparingTargetKey(key)
-    try {
-      await runComposerSessionPreparation({
-        refreshSessions: () => refreshSessions(provider, true, false),
-        prewarmRuntime: () => prewarmTuiSession(draft, {
-          model: tuiModelOverride[key] || undefined,
-          effort: tuiEffort === 'auto' ? undefined : tuiEffort,
-          isPending: draft.isPending === true,
-        }),
-        loadDetail: () => draft.isPending
-          ? Promise.resolve()
-          : refreshSelectedSessionDetail(draft, true),
-        // Provider commands, agents, modes, and permission controls can depend
-        // on the warmed runtime (notably Claude), so load them after prewarm.
-        loadAffordances: () => fetchComposerAffordances(draft, key),
-      })
-    } finally {
-      if (composerPreparingTargetKeyRef.current === key) {
-        composerPreparingTargetKeyRef.current = null
-        setComposerPreparingTargetKey(null)
-      }
-    }
-  })
+  const prepareCreatedSessionForComposer = useStableEvent(async (draft: Session) => runPrepareCreatedSessionForComposer({
+    composerPreparingTargetKeyRef, setComposerPreparingTargetKey, refreshSessions, provider,
+    tuiModelOverride, tuiEffort, refreshSelectedSessionDetail, fetchComposerAffordances,
+  }, draft))
 
   const submitNewSession = useStableEvent(() => {
     if (newSessionBusy) return
