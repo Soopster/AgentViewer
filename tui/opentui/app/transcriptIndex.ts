@@ -1,6 +1,6 @@
 import type { TuiTranscriptCard } from '../../format'
 
-type TranscriptIndexLookup = {
+export type TranscriptIndexLookup = {
   get: (key: string) => number | undefined
 }
 // Build an index only if a detached reader actually asks for one. When the
