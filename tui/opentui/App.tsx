@@ -342,6 +342,7 @@ import { useSidebarPreferenceState } from './app/state/sidebarPreferenceState'
 import { useWindowGestureState } from './app/state/windowGestureState'
 import { useWindowLayoutState } from './app/state/windowLayoutState'
 import { useWindowOverlayState } from './app/state/windowOverlayState'
+import { useWindowPanesState } from './app/state/windowPanesState'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -511,36 +512,15 @@ function OpenTuiWorkspace() {
     const target = windowPresentation?.target ?? presentationResolverRef.current()
     setWindowPresentation(next && target ? { mode: 'fullscreen', target } : null)
   })
-  const [railVisible, setRailVisible] = useAppState('railVisible', true)
-  const [tabsEnabled, setTabsEnabled] = useState(true)
-  const [tabOrientation, setTabOrientation] = useState<'horizontal' | 'vertical'>('horizontal')
-  // Number of read-only split panes mounted beside the reader (0 = off), and
-  // which of the other open tabs they start from.
-  const [splitPaneCount, setSplitPaneCount] = useWorkspaceState('splitPaneCount', 0)
-  // Panes are PINNED to explicit session keys, never derived positionally from
-  // "the tabs that aren't active". A positional derivation reshuffles every
-  // pane the moment the active tab changes (the candidate list reindexes), which
-  // reads as panes randomly swapping while you navigate. The reconcile effect
-  // below is the only thing that rewrites these keys.
-  const [splitPinnedKeys, setSplitPinnedKeys] = useWorkspaceState<string[]>('splitPinnedKeys', [])
-  // Which axis the split divides. Columns is the historical layout; rows is
-  // what makes the split view reachable at all on a narrow terminal, where two
-  // 46-column frames can never sit beside each other.
-  const [splitOrientation, setSplitOrientation] = useWorkspaceState<SplitPaneOrientation>('splitOrientation', 'columns')
-  // Reader's share of that axis. SPLIT_SHARE_EVEN keeps the even split every
-  // layout had before the resize keys; anything else is a deliberate ⌃B < / >.
-  const [splitReaderShare, setSplitReaderShare] = useWorkspaceState<number>('splitReaderShare', SPLIT_SHARE_EVEN)
-  // Window arrangement of the reader and its panes (windowLayout.ts), and which
-  // end of the split the reader sits at. Kept in tui.json beside the orientation.
-  const [splitArrangement, setSplitArrangement] = useWorkspaceState<WindowArrangement>('splitArrangement', 'split')
-  const [splitReaderLast, setSplitReaderLast] = useWorkspaceState('splitReaderLast', false)
-  const [windowSplitTree, setWindowSplitTree] = useWorkspaceState<WindowSplitTree | null>('windowSplitTree', null)
-  const [treeDividerDrag, setTreeDividerDrag] = useState<string | null>(null)
-  const treeDividerCheckpointedRef = useRef(false)
-  const treeDividerActivePathRef = useRef<string | null>(null)
-  const [coordinatorWorkspace, setCoordinatorWorkspace] = useWorkspaceState<ProtocolRunSnapshot | null>('coordinatorWorkspace', null, false)
-  const [coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId] = useWorkspaceState<string | null>('coordinatorWorkspaceRunId', null)
-  const watchedRosterRef = useWorkspaceRef<{ runId: string; keys: Set<string> } | null>('watchedRoster', null, true)
+  const {
+    railVisible, setRailVisible, tabsEnabled, setTabsEnabled, tabOrientation, setTabOrientation,
+    splitPaneCount, setSplitPaneCount, splitPinnedKeys, setSplitPinnedKeys, splitOrientation,
+    setSplitOrientation, splitReaderShare, setSplitReaderShare, splitArrangement,
+    setSplitArrangement, splitReaderLast, setSplitReaderLast, windowSplitTree, setWindowSplitTree,
+    treeDividerDrag, setTreeDividerDrag, treeDividerCheckpointedRef, treeDividerActivePathRef,
+    coordinatorWorkspace, setCoordinatorWorkspace, coordinatorWorkspaceRunId,
+    setCoordinatorWorkspaceRunId, watchedRosterRef,
+  } = useWindowPanesState()
   const watchedCoordinator = useCoordinatorWorkspace(coordinatorWorkspace, coordinatorWorkspaceRunId)
   const coordinatorBadges = useMemo(() => watchedCoordinator ? coordinatorWindowBadges(watchedCoordinator) : new Map<string, string>(), [watchedCoordinator])
   const {
