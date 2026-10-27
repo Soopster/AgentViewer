@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
@@ -2490,35 +2490,10 @@ function OpenTuiWorkspace() {
     }
     return parts
   }, [composerGitBranch, composerGitSummary, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
-  const buildComposerStatsSegments = (lineCount: number, draftLength: number): InlineTextSegment[] => {
-    const segments: InlineTextSegment[] = []
-    if (draftLength === 0) {
-      segments.push({ text: ` ${composerConfig.label} `, fg: theme.surface, bg: composerAccentColor })
-    } else {
-      segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
-      segments.push({ text: ` · ${draftLength} chars`, fg: theme.text })
-    }
-    if (composerAttachmentLabel) {
-      segments.push({ text: ' · ', fg: theme.dim })
-      segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
-    }
-    if (composerKnobSegments.length > 0) {
-      segments.push({ text: ' · ', fg: theme.dim })
-      composerKnobSegments.forEach((segment, index) => {
-        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
-        segments.push(segment)
-      })
-    }
-    if (composerLocationSegments.length > 0) {
-      segments.push({ text: ' · ', fg: theme.dim })
-      segments.push(...composerLocationSegments.map((segment) =>
-        composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
-          ? { ...segment, text: `${composerProjectLabel(composerWorkingDirectory)}  ` }
-          : segment,
-      ))
-    }
-    return segments
-  }
+  const buildComposerStatsSegments = (lineCount: number, draftLength: number) => runBuildComposerStatsSegments({
+    composerConfig, theme, composerAccentColor, composerAttachmentLabel, composerKnobSegments,
+    composerLocationSegments, composerWorkingDirectory,
+  }, lineCount, draftLength)
   const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
     && composerSendState === 'sending'
     && liveToolActivities.some(activity => activity.status === 'running' && /^(Bash|Agent|Task)$/.test(activity.label))

@@ -28,6 +28,10 @@ import { type ComposerPromptPartRange } from '../types'
 import { activeMentionAttachments } from '../composerInput'
 import { type ComposerDraftSnapshot } from '../types'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type ProviderComposerConfig } from '../../../../lib/providerComposer'
+import { type TuiThemePalette } from '../../../theme'
+import { composerProjectLabel } from '../../engineeringLayout'
+import { type InlineTextSegment } from '../inlineText'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -574,4 +578,48 @@ export function runInsertComposerPasteMarker(ctx: InsertComposerPasteMarkerConte
   if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, next)
   setComposerHistoryOpen(false)
   setComposerHistoryIndex(0)
+}
+
+export type BuildComposerStatsSegmentsContext = {
+  composerConfig: ProviderComposerConfig
+  theme: TuiThemePalette
+  composerAccentColor: string
+  composerAttachmentLabel: string | null
+  composerKnobSegments: InlineTextSegment[]
+  composerLocationSegments: InlineTextSegment[]
+  composerWorkingDirectory: string | null
+}
+
+export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsContext, lineCount: number, draftLength: number) {
+  const {
+    composerConfig, theme, composerAccentColor, composerAttachmentLabel, composerKnobSegments,
+    composerLocationSegments, composerWorkingDirectory,
+  } = ctx
+  const segments: InlineTextSegment[] = []
+  if (draftLength === 0) {
+    segments.push({ text: ` ${composerConfig.label} `, fg: theme.surface, bg: composerAccentColor })
+  } else {
+    segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
+    segments.push({ text: ` · ${draftLength} chars`, fg: theme.text })
+  }
+  if (composerAttachmentLabel) {
+    segments.push({ text: ' · ', fg: theme.dim })
+    segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
+  }
+  if (composerKnobSegments.length > 0) {
+    segments.push({ text: ' · ', fg: theme.dim })
+    composerKnobSegments.forEach((segment, index) => {
+      if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+      segments.push(segment)
+    })
+  }
+  if (composerLocationSegments.length > 0) {
+    segments.push({ text: ' · ', fg: theme.dim })
+    segments.push(...composerLocationSegments.map((segment) =>
+      composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
+        ? { ...segment, text: `${composerProjectLabel(composerWorkingDirectory)}  ` }
+        : segment,
+    ))
+  }
+  return segments
 }
