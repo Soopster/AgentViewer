@@ -7,6 +7,11 @@ import { type TextareaRenderable } from '@opentui/core'
 import { type SendAttachment } from '../../../../lib/types'
 import { type ComposerPromptPart } from '../types'
 import { keepEmpty } from '../collections'
+import { type MutableRefObject } from 'react'
+import { type Timeout } from '@opentui/core'
+import { removeComposerQueueItem } from '../../../../lib/composerAttachments'
+import { type SendState } from '../../../../lib/types'
+import { type QueuedComposerSend } from '../types'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -88,4 +93,38 @@ export function runDraftRestoreEffect(ctx: DraftRestoreEffectContext) {
     composerTextareaRef.current?.setText(saved)
   }
   if (savedParts.length > 0) restoreComposerPromptPartExtmarks(savedParts, saved)
+}
+
+export type QueuedSendDrainEffectContext = {
+  activeQueuedComposerSends: QueuedComposerSend[]
+  runningRegistryReady: boolean
+  composerSendState: SendState
+  composerAbortRef: React.MutableRefObject<AbortController | null>
+  composerRetryTimerRef: React.MutableRefObject<NodeJS.Timeout | null>
+  reattachedRunning: boolean
+  composerTargetTurnKnownRunning: boolean
+  queuedComposerSendsRef: React.RefObject<QueuedComposerSend[]>
+  commitQueuedComposerSends: (next: QueuedComposerSend[]) => void
+  sendComposerMessage: (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => Promise<void>
+}
+
+export function runQueuedSendDrainEffect(ctx: QueuedSendDrainEffectContext) {
+  const {
+    activeQueuedComposerSends, runningRegistryReady, composerSendState, composerAbortRef,
+    composerRetryTimerRef, reattachedRunning, composerTargetTurnKnownRunning,
+    queuedComposerSendsRef, commitQueuedComposerSends, sendComposerMessage,
+  } = ctx
+  if (activeQueuedComposerSends.length === 0) return
+  if (!runningRegistryReady) return
+  if (composerSendState !== 'idle' || composerAbortRef.current || composerRetryTimerRef.current) return
+  // A turn we reattached to is still running server-side — flushing now
+  // would start a second concurrent turn. The registry poll clears the flag
+  // when the turn ends.
+  if (reattachedRunning || composerTargetTurnKnownRunning) return
+  const next = activeQueuedComposerSends[0]!
+  const remaining = removeComposerQueueItem(queuedComposerSendsRef.current, next.id)
+  // Persist dequeue before provider I/O so a process crash cannot replay a
+  // prompt that may already have reached a tool-capable agent.
+  commitQueuedComposerSends(remaining)
+  void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
 }

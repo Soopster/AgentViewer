@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6063,21 +6063,11 @@ function OpenTuiWorkspace() {
   // 'error', and auto-firing a queued follow-up after a failed turn is a
   // surprise-send. On error we clear the queue (see the error branch above),
   // so the only state that reaches here with a queued send is a clean idle.
-  useEffect(() => {
-    if (activeQueuedComposerSends.length === 0) return
-    if (!runningRegistryReady) return
-    if (composerSendState !== 'idle' || composerAbortRef.current || composerRetryTimerRef.current) return
-    // A turn we reattached to is still running server-side — flushing now
-    // would start a second concurrent turn. The registry poll clears the flag
-    // when the turn ends.
-    if (reattachedRunning || composerTargetTurnKnownRunning) return
-    const next = activeQueuedComposerSends[0]!
-    const remaining = removeComposerQueueItem(queuedComposerSendsRef.current, next.id)
-    // Persist dequeue before provider I/O so a process crash cannot replay a
-    // prompt that may already have reached a tool-capable agent.
-    commitQueuedComposerSends(remaining)
-    void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
-  }, [activeQueuedComposerSends, composerSendState, composerTargetTurnKnownRunning, reattachedRunning, runningRegistryReady, sendComposerMessage])
+  useEffect(() => runQueuedSendDrainEffect({
+    activeQueuedComposerSends, runningRegistryReady, composerSendState, composerAbortRef,
+    composerRetryTimerRef, reattachedRunning, composerTargetTurnKnownRunning,
+    queuedComposerSendsRef, commitQueuedComposerSends, sendComposerMessage,
+  }), [activeQueuedComposerSends, composerSendState, composerTargetTurnKnownRunning, reattachedRunning, runningRegistryReady, sendComposerMessage])
 
   // Reattach to turns this composer doesn't own a stream for. In-process the
   // running registry is a cheap synchronous read; remotely attached it's the
