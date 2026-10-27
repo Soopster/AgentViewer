@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6530,69 +6530,12 @@ function OpenTuiWorkspace() {
   }, [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
 
 
-  useEffect(() => {
-    let cancelled = false
-    const saved = committedSessionKey ? tabReaderPositionsRef.current.get(committedSessionKey) : undefined
-
-    setTranscriptCursorKey(saved?.state.cursorKey ?? null)
-    setExpandedCardKeys((current) => sameKeys(current, saved?.state.expandedKeys) ? current : new Set(saved?.state.expandedKeys))
-    setCollapsedCardKeys((current) => sameKeys(current, saved?.state.collapsedKeys) ? current : new Set(saved?.state.collapsedKeys))
-    setFollowTail(saved?.state.followTail ?? true)
-    setPendingNewCount(0)
-    setUnreadBoundaryKey(null)
-    setResumeMarkerKey(null)
-    setSearchMode(false)
-    setScrollbackExpanded(saved?.scrollbackExpanded ?? false)
-    setSearchQuery(saved?.searchQuery ?? '')
-    setSearchMatchIndex(saved?.searchMatchIndex ?? 0)
-    setRestoredReaderState({
-      sessionKey: committedSessionKey,
-      loaded: saved !== undefined || committedSessionKey == null,
-      state: saved?.state ?? null,
-    })
-
-    if (saved) {
-      return () => { cancelled = true }
-    }
-
-    if (!committedSessionKey) {
-      return () => {
-        cancelled = true
-      }
-    }
-
-    void (async () => {
-      try {
-        const state = await readTuiSessionReaderState(workspaceStorageKey(workspaceId, committedSessionKey))
-        if (cancelled) return
-        setRestoredReaderState({
-          sessionKey: committedSessionKey,
-          loaded: true,
-          state,
-        })
-        if (state) {
-          setExpandedCardKeys((current) => sameKeys(current, state.expandedKeys) ? current : new Set(state.expandedKeys))
-          setCollapsedCardKeys((current) => sameKeys(current, state.collapsedKeys) ? current : new Set(state.collapsedKeys))
-          if (state.followTail === false) {
-            setTranscriptCursorKey(state.cursorKey)
-            setFollowTail(false)
-            setResumeMarkerKey(state.cursorKey)
-          }
-        }
-      } catch {
-        if (cancelled) return
-        setRestoredReaderState({
-          sessionKey: committedSessionKey,
-          loaded: true,
-          state: null,
-        })
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [committedSessionKey])
+  useEffect(() => runTranscriptCursorEffect({
+    committedSessionKey, tabReaderPositionsRef, setTranscriptCursorKey, setExpandedCardKeys,
+    setCollapsedCardKeys, setFollowTail, setPendingNewCount, setUnreadBoundaryKey,
+    setResumeMarkerKey, setSearchMode, setScrollbackExpanded, setSearchQuery, setSearchMatchIndex,
+    setRestoredReaderState, workspaceId,
+  }), [committedSessionKey])
 
   useEffect(() => runExpansionResetEffect({
     transcriptCards, setExpandedCardKeys, setCollapsedCardKeys,

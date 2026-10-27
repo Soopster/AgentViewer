@@ -11,6 +11,11 @@ import { type TuiTranscriptCard } from '../../../format'
 import { type TuiSessionReaderState } from '../../../../lib/tuiState'
 import { sessionKey } from '../sessionList'
 import { keepEmpty } from '../collections'
+import { type MutableRefObject } from 'react'
+import { type TranscriptWindowPosition } from '../../transcriptWindowState'
+import { workspaceStorageKey } from '../../workspaceContext'
+import { readTuiSessionReaderState } from '../../../../lib/tui/service'
+import { sameKeys } from '../collections'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -183,4 +188,92 @@ export function runExpansionResetEffect(ctx: ExpansionResetEffectContext) {
     }
     return changed ? next : current
   })
+}
+
+export type TranscriptCursorEffectContext = {
+  committedSessionKey: string | null
+  tabReaderPositionsRef: React.MutableRefObject<Map<string, TranscriptWindowPosition>>
+  setTranscriptCursorKey: (action: string | null | ((previous: string | null) => string | null)) => void
+  setExpandedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setCollapsedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setFollowTail: React.Dispatch<React.SetStateAction<boolean>>
+  setPendingNewCount: React.Dispatch<React.SetStateAction<number>>
+  setUnreadBoundaryKey: React.Dispatch<React.SetStateAction<string | null>>
+  setResumeMarkerKey: React.Dispatch<React.SetStateAction<string | null>>
+  setSearchMode: React.Dispatch<React.SetStateAction<boolean>>
+  setScrollbackExpanded: React.Dispatch<React.SetStateAction<boolean>>
+  setSearchQuery: React.Dispatch<React.SetStateAction<string>>
+  setSearchMatchIndex: React.Dispatch<React.SetStateAction<number>>
+  setRestoredReaderState: React.Dispatch<React.SetStateAction<{ sessionKey: string | null; loaded: boolean; state: TuiSessionReaderState | null; }>>
+  workspaceId: string
+}
+
+export function runTranscriptCursorEffect(ctx: TranscriptCursorEffectContext) {
+  const {
+    committedSessionKey, tabReaderPositionsRef, setTranscriptCursorKey, setExpandedCardKeys,
+    setCollapsedCardKeys, setFollowTail, setPendingNewCount, setUnreadBoundaryKey,
+    setResumeMarkerKey, setSearchMode, setScrollbackExpanded, setSearchQuery, setSearchMatchIndex,
+    setRestoredReaderState, workspaceId,
+  } = ctx
+  let cancelled = false
+  const saved = committedSessionKey ? tabReaderPositionsRef.current.get(committedSessionKey) : undefined
+
+  setTranscriptCursorKey(saved?.state.cursorKey ?? null)
+  setExpandedCardKeys((current) => sameKeys(current, saved?.state.expandedKeys) ? current : new Set(saved?.state.expandedKeys))
+  setCollapsedCardKeys((current) => sameKeys(current, saved?.state.collapsedKeys) ? current : new Set(saved?.state.collapsedKeys))
+  setFollowTail(saved?.state.followTail ?? true)
+  setPendingNewCount(0)
+  setUnreadBoundaryKey(null)
+  setResumeMarkerKey(null)
+  setSearchMode(false)
+  setScrollbackExpanded(saved?.scrollbackExpanded ?? false)
+  setSearchQuery(saved?.searchQuery ?? '')
+  setSearchMatchIndex(saved?.searchMatchIndex ?? 0)
+  setRestoredReaderState({
+    sessionKey: committedSessionKey,
+    loaded: saved !== undefined || committedSessionKey == null,
+    state: saved?.state ?? null,
+  })
+
+  if (saved) {
+    return () => { cancelled = true }
+  }
+
+  if (!committedSessionKey) {
+    return () => {
+      cancelled = true
+    }
+  }
+
+  void (async () => {
+    try {
+      const state = await readTuiSessionReaderState(workspaceStorageKey(workspaceId, committedSessionKey))
+      if (cancelled) return
+      setRestoredReaderState({
+        sessionKey: committedSessionKey,
+        loaded: true,
+        state,
+      })
+      if (state) {
+        setExpandedCardKeys((current) => sameKeys(current, state.expandedKeys) ? current : new Set(state.expandedKeys))
+        setCollapsedCardKeys((current) => sameKeys(current, state.collapsedKeys) ? current : new Set(state.collapsedKeys))
+        if (state.followTail === false) {
+          setTranscriptCursorKey(state.cursorKey)
+          setFollowTail(false)
+          setResumeMarkerKey(state.cursorKey)
+        }
+      }
+    } catch {
+      if (cancelled) return
+      setRestoredReaderState({
+        sessionKey: committedSessionKey,
+        loaded: true,
+        state: null,
+      })
+    }
+  })()
+
+  return () => {
+    cancelled = true
+  }
 }
