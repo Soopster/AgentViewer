@@ -32,6 +32,11 @@ import { type ProviderComposerConfig } from '../../../../lib/providerComposer'
 import { type TuiThemePalette } from '../../../theme'
 import { composerProjectLabel } from '../../engineeringLayout'
 import { type InlineTextSegment } from '../inlineText'
+import { readTuiComposerAffordancesAsync } from '../../sessionDetailWorkerClient'
+import { type SlashCommandSuggestion } from '../../../../lib/slashCommands'
+import { type readViewSessionComposerOptions } from '../../../../lib/sessionBackend'
+import { COMPOSER_AFFORDANCES_CACHE_MAX } from '../timing'
+import { touchMapEntry } from '../collections'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -622,4 +627,46 @@ export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsCon
     ))
   }
   return segments
+}
+
+export type FetchComposerAffordancesContext = {
+  composerAffordancesInFlightRef: React.RefObject<Set<string>>
+  composerAffordancesCacheRef: React.RefObject<Map<string, { commands: SlashCommandSuggestion[]; options: Awaited<ReturnType<typeof readViewSessionComposerOptions>>; ts: number; }>>
+  committedSessionKeyRef: React.RefObject<string | null>
+  applyComposerAffordances: (target: Session, commands: SlashCommandSuggestion[], composerOptions: Awaited<ReturnType<typeof readViewSessionComposerOptions>>) => void
+  clearComposerAffordances: () => void
+}
+
+export async function runFetchComposerAffordances(ctx: FetchComposerAffordancesContext, target: Session, key: string) {
+  const {
+    composerAffordancesInFlightRef, composerAffordancesCacheRef, committedSessionKeyRef,
+    applyComposerAffordances, clearComposerAffordances,
+  } = ctx
+  if (composerAffordancesInFlightRef.current.has(key)) return
+  composerAffordancesInFlightRef.current.add(key)
+  try {
+    const { commands: live, options: composerOptions } = await readTuiComposerAffordancesAsync(target)
+    const commands = live.map((entry) => ({
+      command: entry.command,
+      description: entry.description,
+      argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+    }))
+    // Cache even when the session has changed since — the work is done, and
+    // the next visit to this session should not spawn again.
+    touchMapEntry(composerAffordancesCacheRef.current, key, {
+      commands,
+      options: composerOptions,
+      ts: Date.now(),
+    })
+    while (composerAffordancesCacheRef.current.size > COMPOSER_AFFORDANCES_CACHE_MAX) {
+      const oldest = composerAffordancesCacheRef.current.keys().next().value
+      if (oldest === undefined) break
+      composerAffordancesCacheRef.current.delete(oldest)
+    }
+    if (committedSessionKeyRef.current === key) applyComposerAffordances(target, commands, composerOptions)
+  } catch {
+    if (committedSessionKeyRef.current === key) clearComposerAffordances()
+  } finally {
+    composerAffordancesInFlightRef.current.delete(key)
+  }
 }

@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments, runFetchComposerAffordances } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
@@ -2598,35 +2598,10 @@ function OpenTuiWorkspace() {
       setTuiOpenCodeAgent('')
     }
   }, [])
-  const fetchComposerAffordances = useCallback(async (target: Session, key: string) => {
-    if (composerAffordancesInFlightRef.current.has(key)) return
-    composerAffordancesInFlightRef.current.add(key)
-    try {
-      const { commands: live, options: composerOptions } = await readTuiComposerAffordancesAsync(target)
-      const commands = live.map((entry) => ({
-        command: entry.command,
-        description: entry.description,
-        argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
-      }))
-      // Cache even when the session has changed since — the work is done, and
-      // the next visit to this session should not spawn again.
-      touchMapEntry(composerAffordancesCacheRef.current, key, {
-        commands,
-        options: composerOptions,
-        ts: Date.now(),
-      })
-      while (composerAffordancesCacheRef.current.size > COMPOSER_AFFORDANCES_CACHE_MAX) {
-        const oldest = composerAffordancesCacheRef.current.keys().next().value
-        if (oldest === undefined) break
-        composerAffordancesCacheRef.current.delete(oldest)
-      }
-      if (committedSessionKeyRef.current === key) applyComposerAffordances(target, commands, composerOptions)
-    } catch {
-      if (committedSessionKeyRef.current === key) clearComposerAffordances()
-    } finally {
-      composerAffordancesInFlightRef.current.delete(key)
-    }
-  }, [applyComposerAffordances, clearComposerAffordances])
+  const fetchComposerAffordances = useCallback(async (target: Session, key: string) => runFetchComposerAffordances({
+    composerAffordancesInFlightRef, composerAffordancesCacheRef, committedSessionKeyRef,
+    applyComposerAffordances, clearComposerAffordances,
+  }, target, key), [applyComposerAffordances, clearComposerAffordances])
   useEffect(() => runComposerAffordancesClearEffect({
     transcriptSession, committedSessionKey, clearComposerAffordances, composerAffordancesCacheRef,
     applyComposerAffordances, composerActiveRef, fetchComposerAffordances,
