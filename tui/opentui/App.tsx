@@ -326,6 +326,7 @@ import { runComposerKnobSegments } from './app/derived/composerStatus'
 import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
 import { runPluginServices, runFleetPluginServices } from './app/derived/pluginServices'
 import { runTabOptions } from './app/derived/tabs'
+import { runSidebarSessionActivity } from './app/derived/sidebar'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1729,31 +1730,10 @@ function OpenTuiWorkspace() {
   const recentlyWrittenKeys = recentlyWrittenSessions.keys
 
   const sidebarSessionActivityRef = useRef(new Map<string, 'needs-input' | 'running' | 'waiting'>())
-  const sidebarSessionActivity = useMemo(() => {
-    const needsInputKeys = new Set(
-      attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
-    )
-    const activity = new Map<string, 'needs-input' | 'running' | 'waiting'>()
-    for (const running of runningSessions) {
-      const key = sessionKey(running)
-      activity.set(key, needsInputKeys.has(key) ? 'needs-input' : 'running')
-    }
-    for (const waiting of waitingSessions) {
-      const key = sessionKey(waiting)
-      if (!activity.has(key)) activity.set(key, needsInputKeys.has(key) ? 'needs-input' : 'waiting')
-    }
-    for (const note of viewerAttentionNotes) {
-      const key = sessionKey(note)
-      if (!activity.has(key)) activity.set(key, 'needs-input')
-    }
-    // The same map when nothing changed: the attention items are rebuilt on
-    // every selection (they name the composer's target), and a new map here
-    // rebuilt every sidebar row.
-    const previous = sidebarSessionActivityRef.current
-    if (previous.size === activity.size && [...activity].every(([key, value]) => previous.get(key) === value)) return previous
-    sidebarSessionActivityRef.current = activity
-    return activity
-  }, [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
+  const sidebarSessionActivity = useMemo(() => runSidebarSessionActivity({
+    attentionItems, runningSessions, waitingSessions, viewerAttentionNotes,
+    sidebarSessionActivityRef,
+  }), [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
 
   // The session fleet a plugin view reads (the desk's alert book among it).
   // Derived only while such a view is shown, full screen or in a window:
