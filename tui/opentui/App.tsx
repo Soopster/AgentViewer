@@ -387,6 +387,7 @@ import { useRecentlyWrittenKeysGroup } from './app/slices/recentlyWrittenKeys'
 import { useTranscriptDiffHoverScrollTopRefGroup } from './app/slices/transcriptDiffHoverScrollTopRef'
 import { useThemeGroup } from './app/slices/theme'
 import { useComposerInterruptPendingRefGroup } from './app/slices/composerInterruptPendingRef'
+import { useTuiCodexModeByKeyGroup } from './app/slices/tuiCodexModeByKey'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -887,14 +888,8 @@ function OpenTuiWorkspace() {
     composerSessions, composerOwnerKey,
   })
   tuiAddedDirsByKeyRef.current = tuiAddedDirsByKey
-  const [tuiCodexModeByKey, setTuiCodexModeByKey] = useState<Record<string, 'plan' | 'default'>>({})
-  const tuiCodexModeByKeyRef = useRef(tuiCodexModeByKey)
-  const setCodexCollaborationMode = useCallback((target: Session, mode: 'plan' | 'default') => {
-    const next = { ...tuiCodexModeByKeyRef.current, [sessionKey(target)]: mode }
-    tuiCodexModeByKeyRef.current = next
-    setTuiCodexModeByKey(next)
-  }, [])
   const {
+    tuiCodexModeByKey, tuiCodexModeByKeyRef, setCodexCollaborationMode,
     tuiCopilotPermissionModeByKey, setTuiCopilotPermissionModeByKey, tuiCopilotContextTierByKey,
     setTuiCopilotContextTierByKey, tuiCopilotMode, setTuiCopilotMode, tuiOpenCodeAgent,
     setTuiOpenCodeAgent, tuiModelOverride, setTuiModelOverride, tuiReportedModelByKey,
@@ -907,27 +902,16 @@ function OpenTuiWorkspace() {
     setModelPickerError, sentHistory, setSentHistory, historyIndex, setHistoryIndex,
     draftBeforeHistory, setDraftBeforeHistory, thinkingMode, setThinkingMode, openTabSessions,
     setOpenTabSessions, sidebarScrollRef, measuredWindowAreaHeight, setMeasuredWindowAreaHeight,
-    scrollbackSyncedCursorKeyRef,
-  } = useModelState()
-  const tabReaderPositionsRef = useTranscriptWindowPositions()
-  const {
-    velocityScrollStateRef, tabSelectRef, syncingTabSelectionRef, sessionRequestRef,
-    detailRequestRef, backgroundMetadataCursorRef, providerSwitchRef, readerStateWriteTimeoutRef,
-    readerStatePersistSignatureRef, expandedKeysRevisionRef, collapsedKeysRevisionRef,
-    previousTranscriptRef,
-  } = useSelectionRefs()
-  const loader = useTranscriptSessionLoader()
-  const {
+    scrollbackSyncedCursorKeyRef, tabReaderPositionsRef, velocityScrollStateRef, tabSelectRef,
+    syncingTabSelectionRef, sessionRequestRef, detailRequestRef, backgroundMetadataCursorRef,
+    providerSwitchRef, readerStateWriteTimeoutRef, readerStatePersistSignatureRef,
+    expandedKeysRevisionRef, collapsedKeysRevisionRef, previousTranscriptRef, loader,
     sessionDetailCacheRef, sessionContextUsageCacheRef, sessionMetadataFetchedAtRef,
-    sessionMetadataInFlightRef,
-  } = useSessionCaches()
-  const composerAbortRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'composerAbortRef', null)
-  const activeComposerSendCleanupRef = composerSessions.ref<Promise<void> | null>(composerOwnerKey, 'activeComposerSendCleanupRef', null)
-  // Transient auto-retry bookkeeping (mirrors the web composer): only retry a
-  // turn that streamed no output yet, bounded attempts, timer cleared on cancel.
-  const composerTurnProducedOutputRef = composerSessions.ref(composerOwnerKey, 'composerTurnProducedOutputRef', false)
-  const composerRetryCountRef = composerSessions.ref(composerOwnerKey, 'composerRetryCountRef', 0)
-  const composerRetryTimerRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'composerRetryTimerRef', null)
+    sessionMetadataInFlightRef, composerAbortRef, activeComposerSendCleanupRef,
+    composerTurnProducedOutputRef, composerRetryCountRef, composerRetryTimerRef,
+  } = useTuiCodexModeByKeyGroup({
+    composerSessions, composerOwnerKey,
+  })
   useEffect(() => () => {
     for (const key of composerSessions.keys()) {
       composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
