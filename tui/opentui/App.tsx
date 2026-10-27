@@ -293,6 +293,7 @@ import { PluginManagerPopover, PromptLibraryPopover, ContextMenu, WindowBroadcas
 import { handleLetterShortcutKeys } from './app/keys/letterShortcuts'
 import { handleReaderKeys } from './app/keys/readerKeys'
 import { handleWindowAndTabKeys } from './app/keys/windowTabKeys'
+import { handleSidebarKeys } from './app/keys/sidebarKeys'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -15627,102 +15628,7 @@ function OpenTuiWorkspace() {
       })
       return
     }
-
-    if (effectiveFocus === 'sessions' && sidebarSubagentCursor && !key.ctrl && !key.meta
-      && ['x', 'd', 'r', 't', 'b'].includes(key.name.toLowerCase())) {
-      handled(() => showNotice('info', 'Captured subagent transcripts are read only · Enter to view'))
-      return
-    }
-    if (effectiveFocus === 'sessions' && key.name === 'a' && !key.ctrl && !key.shift && !key.meta) {
-      handled(() => {
-        setSidebarView((current) => {
-          const next = current === 'sessions' ? 'coordinator' : 'sessions'
-          showToggleOutcome('Sidebar view:', next)
-          return next
-        })
-      })
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && (key.name === 'j' || key.name === 'down')) {
-      handled(() => moveCoordinatorSelection(1))
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && (key.name === 'k' || key.name === 'up')) {
-      handled(() => moveCoordinatorSelection(-1))
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'g' && !key.shift) {
-      handled(() => jumpCoordinatorSelection('first'))
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && isShifted('G')) {
-      handled(() => jumpCoordinatorSelection('last'))
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'return') {
-      handled(() => openSelectedCoordinatorAgent())
-      return
-    }
-
-    // Herdr's Goto-picker filters (b/w/i/d there; those keys are global
-    // toggles here, so one key cycles them).
-    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'f' && !key.ctrl && !key.meta && !key.shift) {
-      handled(() => showToggleOutcome('Agents:', cycleCoordinatorFilter()))
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && (key.name === 'j' || key.name === 'down')) {
-      handled(() => {
-        moveSelection(1)
-      })
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && (key.name === 'k' || key.name === 'up')) {
-      handled(() => {
-        moveSelection(-1)
-      })
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'g' && !key.shift) {
-      handled(() => {
-        const first = sidebarEntries.find(entry => entry.type === 'session' || entry.type === 'subagent')
-        focusSidebarEntry(first)
-      })
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('G')) {
-      handled(() => {
-        const last = [...sidebarEntries].reverse().find(entry => entry.type === 'session' || entry.type === 'subagent')
-        focusSidebarEntry(last)
-      })
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('Y')) {
-      handled(toggleHideScratch)
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'x' && !key.shift && !key.ctrl && !key.meta) {
-      handled(toggleSelectedSessionSettled)
-      return
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('S')) {
-      handled(() => {
-        toggleSidebarSort()
-        showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
-      })
-      return
-    }
+    if (handleSidebarKeys({ effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView, showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry, toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort })) return
     if (handleWindowAndTabKeys({ effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key, workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab })) return
     if (handleReaderKeys({ effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep, jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl, moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView, jumpToUnreadBoundary, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor, replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys, transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey, setTranscriptDiffRowCursorForCard, committedSessionKey, transcriptDiffSelectionAnchorByCardKey, transcriptDiffNotes, toggleTranscriptDiffCardSet, setTranscriptDiffPlainCardKeys, clearTranscriptDiffSelectionForCard, setTranscriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys, showNotice, openTranscriptDiffNote, deleteTranscriptDiffNote, sendTranscriptDiffNoteToComposer, selectedAgentToolCard, selectedAgentToolExpanded, resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode, copySelectedMessage, setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch, jumpToMatchingCard })) return
     if (handleLetterShortcutKeys({ sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode, setFocusMode, density, setDensity, isShifted, transcriptWidth, setTranscriptWidth, openTranscriptViewMenu, refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail })) return
