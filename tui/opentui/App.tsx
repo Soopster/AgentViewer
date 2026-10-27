@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession } from './app/actions/sessionData'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6066,39 +6066,11 @@ function OpenTuiWorkspace() {
 
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.
-  const startFreshSession = useStableEvent(async (targetProvider: AgentProvider, cwd: string) => {
-    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
-    if (newSessionBusy) return
-    setNewSessionBusy(true)
-    {
-      try {
-        // A new chat goes to the instance the list is narrowed to, else to the
-        // one the selected session belongs to.
-        const fromAgent = selectedSession?.provider === targetProvider ? selectedSession : null
-        const pickedInstance = targetProvider === provider ? providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId) : undefined
-        const result = await createTuiSession({ provider: targetProvider, cwd, providerInstanceId: pickedInstance?.providerInstanceId ?? fromAgent?.providerInstanceId })
-        await openCreatedSession({
-          sessionId: result.sessionId,
-          provider: result.provider,
-          ...(result.providerInstanceId ? { providerInstanceId: result.providerInstanceId } : {}),
-          ...(pickedInstance?.providerInstanceId === result.providerInstanceId ? { providerDisplayName: pickedInstance?.label } : fromAgent && fromAgent.providerInstanceId === result.providerInstanceId ? { providerDisplayName: fromAgent.providerDisplayName } : {}),
-          cwd: result.cwd,
-          createdAt: Date.now(),
-          lastModified: Date.now(),
-          summary: 'New session',
-          isPending: result.isPending,
-        })
-        setNewSessionModalOpen(false)
-        showNotice('info', result.isPending
-          ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
-          : 'New session created.')
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create session')
-      } finally {
-        setNewSessionBusy(false)
-      }
-    }
-  })
+  const startFreshSession = useStableEvent(async (targetProvider: AgentProvider, cwd: string) => runStartFreshSession({
+    setWorkspaceHasSession, setWorkspaceLaunched, newSessionBusy, setNewSessionBusy,
+    selectedSession, provider, providerInstances, providerInstanceId, openCreatedSession,
+    setNewSessionModalOpen, showNotice, setError,
+  }, targetProvider, cwd))
 
   // /handoff <provider>: continue this conversation on another provider. A new
   // session opens in the same folder with the handoff — the brief plus the recent

@@ -33,6 +33,10 @@ import { workspaceStorageKey } from '../../workspaceContext'
 import { type TuiTranscriptCard } from '../../../format'
 import { writeTuiSessionReaderState } from '../../../../lib/tui/service'
 import { type TuiSessionReaderState } from '../../../../lib/tuiState'
+import { formatProviderLabel } from '../../../format'
+import { createTuiSession, type TuiProviderInstanceChoice } from '../../../../lib/tui/service'
+import { type AgentProvider } from '../../../../lib/types'
+import { type NoticeTone } from '../types'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -691,4 +695,58 @@ export function runPersistReaderState(ctx: PersistReaderStateContext) {
       setError(err instanceof Error ? err.message : 'Failed to store reader position')
     })
   }, 150)
+}
+
+export type StartFreshSessionContext = {
+  setWorkspaceHasSession: React.Dispatch<React.SetStateAction<boolean>>
+  setWorkspaceLaunched: React.Dispatch<React.SetStateAction<boolean>>
+  newSessionBusy: boolean
+  setNewSessionBusy: React.Dispatch<React.SetStateAction<boolean>>
+  selectedSession: Session | null
+  provider: ProviderSelection
+  providerInstances: TuiProviderInstanceChoice[]
+  providerInstanceId: string | null
+  openCreatedSession: (draft: Session) => Promise<void>
+  setNewSessionModalOpen: React.Dispatch<React.SetStateAction<boolean>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export async function runStartFreshSession(ctx: StartFreshSessionContext, targetProvider: AgentProvider, cwd: string) {
+  const {
+    setWorkspaceHasSession, setWorkspaceLaunched, newSessionBusy, setNewSessionBusy,
+    selectedSession, provider, providerInstances, providerInstanceId, openCreatedSession,
+    setNewSessionModalOpen, showNotice, setError,
+  } = ctx
+  setWorkspaceHasSession(true); setWorkspaceLaunched(true)
+  if (newSessionBusy) return
+  setNewSessionBusy(true)
+  {
+    try {
+      // A new chat goes to the instance the list is narrowed to, else to the
+      // one the selected session belongs to.
+      const fromAgent = selectedSession?.provider === targetProvider ? selectedSession : null
+      const pickedInstance = targetProvider === provider ? providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId) : undefined
+      const result = await createTuiSession({ provider: targetProvider, cwd, providerInstanceId: pickedInstance?.providerInstanceId ?? fromAgent?.providerInstanceId })
+      await openCreatedSession({
+        sessionId: result.sessionId,
+        provider: result.provider,
+        ...(result.providerInstanceId ? { providerInstanceId: result.providerInstanceId } : {}),
+        ...(pickedInstance?.providerInstanceId === result.providerInstanceId ? { providerDisplayName: pickedInstance?.label } : fromAgent && fromAgent.providerInstanceId === result.providerInstanceId ? { providerDisplayName: fromAgent.providerDisplayName } : {}),
+        cwd: result.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: 'New session',
+        isPending: result.isPending,
+      })
+      setNewSessionModalOpen(false)
+      showNotice('info', result.isPending
+        ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
+        : 'New session created.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create session')
+    } finally {
+      setNewSessionBusy(false)
+    }
+  }
 }
