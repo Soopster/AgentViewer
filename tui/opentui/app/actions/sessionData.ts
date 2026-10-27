@@ -28,6 +28,11 @@ import { keepEmpty } from '../collections'
 import { extractPendingPermissions, type PendingPermission } from '../../../../lib/permissions'
 import { join } from 'node:path'
 import { type RunningRegistryEntry } from '../types'
+import { type Timeout } from '@opentui/core'
+import { workspaceStorageKey } from '../../workspaceContext'
+import { type TuiTranscriptCard } from '../../../format'
+import { writeTuiSessionReaderState } from '../../../../lib/tui/service'
+import { type TuiSessionReaderState } from '../../../../lib/tuiState'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -626,4 +631,64 @@ export function runReconcileSelectedRunningRegistry(ctx: ReconcileSelectedRunnin
       })
     }
   }
+}
+
+export type PersistReaderStateContext = {
+  readerStateWriteTimeoutRef: React.RefObject<NodeJS.Timeout | null>
+  selectedSessionKey: string | null
+  restoredReaderState: { sessionKey: string | null; loaded: boolean; state: TuiSessionReaderState | null; }
+  readTranscriptCursorKey: () => string | null
+  followTail: boolean
+  expandedKeysRevisionRef: React.RefObject<number>
+  collapsedKeysRevisionRef: React.RefObject<number>
+  readerStatePersistSignatureRef: React.RefObject<string | null>
+  transcriptCards: TuiTranscriptCard[]
+  expandedCardKeys: Set<string>
+  collapsedCardKeys: Set<string>
+  workspaceId: string
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export function runPersistReaderState(ctx: PersistReaderStateContext) {
+  const {
+    readerStateWriteTimeoutRef, selectedSessionKey, restoredReaderState, readTranscriptCursorKey,
+    followTail, expandedKeysRevisionRef, collapsedKeysRevisionRef, readerStatePersistSignatureRef,
+    transcriptCards, expandedCardKeys, collapsedCardKeys, workspaceId, setError,
+  } = ctx
+  if (readerStateWriteTimeoutRef.current) {
+    clearTimeout(readerStateWriteTimeoutRef.current)
+    readerStateWriteTimeoutRef.current = null
+  }
+  if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
+    return
+  }
+  const transcriptCursorKey = readTranscriptCursorKey()
+
+  const persistSignature = [
+    selectedSessionKey,
+    followTail ? 'follow' : 'free',
+    transcriptCursorKey ?? '',
+    expandedKeysRevisionRef.current,
+    collapsedKeysRevisionRef.current,
+  ].join('|')
+  if (readerStatePersistSignatureRef.current === persistSignature) return
+
+  // Build the persist payload inside the debounce timer so the O(n) work
+  // over transcriptCards + expanded/collapsed keys only runs once per pause
+  // — not on every j/k keystroke. This was a visible hitch on large
+  // sessions when rapidly navigating the cursor on Windows.
+  readerStateWriteTimeoutRef.current = setTimeout(() => {
+    const validKeys = new Set(transcriptCards.map((card) => card.key))
+    const persistState: TuiSessionReaderState = {
+      followTail,
+      cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
+      topKey: null,
+      expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
+      collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
+    }
+    readerStatePersistSignatureRef.current = persistSignature
+    void writeTuiSessionReaderState(workspaceStorageKey(workspaceId, selectedSessionKey), persistState).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store reader position')
+    })
+  }, 150)
 }

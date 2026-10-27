@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState } from './app/actions/sessionData'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7555,44 +7555,11 @@ function OpenTuiWorkspace() {
 
   // Saves the reader position, debounced. Run when its inputs change, and when
   // the cursor moves (the cursor is not root state, so it is subscribed to).
-  const persistReaderState = useStableEvent(() => {
-    if (readerStateWriteTimeoutRef.current) {
-      clearTimeout(readerStateWriteTimeoutRef.current)
-      readerStateWriteTimeoutRef.current = null
-    }
-    if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
-      return
-    }
-    const transcriptCursorKey = readTranscriptCursorKey()
-
-    const persistSignature = [
-      selectedSessionKey,
-      followTail ? 'follow' : 'free',
-      transcriptCursorKey ?? '',
-      expandedKeysRevisionRef.current,
-      collapsedKeysRevisionRef.current,
-    ].join('|')
-    if (readerStatePersistSignatureRef.current === persistSignature) return
-
-    // Build the persist payload inside the debounce timer so the O(n) work
-    // over transcriptCards + expanded/collapsed keys only runs once per pause
-    // — not on every j/k keystroke. This was a visible hitch on large
-    // sessions when rapidly navigating the cursor on Windows.
-    readerStateWriteTimeoutRef.current = setTimeout(() => {
-      const validKeys = new Set(transcriptCards.map((card) => card.key))
-      const persistState: TuiSessionReaderState = {
-        followTail,
-        cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
-        topKey: null,
-        expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
-        collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
-      }
-      readerStatePersistSignatureRef.current = persistSignature
-      void writeTuiSessionReaderState(workspaceStorageKey(workspaceId, selectedSessionKey), persistState).catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to store reader position')
-      })
-    }, 150)
-  })
+  const persistReaderState = useStableEvent(() => runPersistReaderState({
+    readerStateWriteTimeoutRef, selectedSessionKey, restoredReaderState, readTranscriptCursorKey,
+    followTail, expandedKeysRevisionRef, collapsedKeysRevisionRef, readerStatePersistSignatureRef,
+    transcriptCards, expandedCardKeys, collapsedCardKeys, workspaceId, setError,
+  }))
   useEffect(() => { persistReaderState() }, [
     collapsedCardKeys,
     expandedCardKeys,
