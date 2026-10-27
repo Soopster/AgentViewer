@@ -286,6 +286,10 @@ import { BookmarksOverlay } from './app/overlays/BookmarksOverlay'
 import { SelectMenusOverlay } from './app/overlays/SelectMenusOverlay'
 import { SessionRail } from './app/overlays/SessionRail'
 import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
+import { cycleDensityValue, currentProjectName } from './app/viewHelpers'
+import { TUI_HANDOFF_COMMAND, CODEX_LIVE_ASSISTANT_UUID, CLAUDE_LIVE_ASSISTANT_UUID_PREFIX, TUI_SLASH_HINTS } from './app/composerConstants'
+import { pluginSurfaceWants, TUI_KEYED_PLUGIN_COMMANDS } from './app/pluginCommands'
+import { PluginManagerPopover, PromptLibraryPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover, PlaybookManagerPopover } from './app/lazyOverlays'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -297,60 +301,12 @@ export { inlineSegmentActionAt, inlineSegmentIndexAt, renderInlineMarkdownSpans 
 // Plugin commands with a TUI binding, matched by the global key router.
 // The plugin choice of this workspace, before the first frame offers any command.
 applyPluginSettings(readPluginSettingsFile())
-// Whether a plugin surface declares a service, required or optional.
-function pluginSurfaceWants(id: PluginSurfaceId, service: PluginServiceId): boolean {
-  const surface = getPluginSurface(id)
-  return surface.services.includes(service) || (surface.optionalServices?.includes(service) ?? false)
-}
-// Shifted chords first: a terminal that cannot report Shift sends ⌃⇧A as ⌃A,
-// but one that can must reach ⌃⇧A's command, not ⌃A's.
-const TUI_KEYED_PLUGIN_COMMANDS = listPluginCommands('tui').filter((command): command is ResolvedPluginCommand & { tuiKey: PluginKeyChord } => Boolean(command.tuiKey))
-  .sort((a, b) => Number(Boolean(b.tuiKey.shift)) - Number(Boolean(a.tuiKey.shift)))
-
-// Overlays load when first opened — see lazyComponent.tsx.
-const PluginManagerPopover = lazyComponent(() => import('./PluginManagerPopover').then((module) => module.PluginManagerPopover))
-const PromptLibraryPopover = lazyComponent(() => import('./PromptLibraryPopover').then((module) => module.PromptLibraryPopover))
-const ContextMenu = lazyComponent(() => import('./ContextMenu').then((module) => module.ContextMenu))
-const WindowBroadcastPopover = lazyComponent(() => import('./WindowBroadcastPopover').then((module) => module.WindowBroadcastPopover))
-const WindowLayoutPicker = lazyComponent(() => import('./WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
-const DailySummaryPopover = lazyComponent(() => import('./DailySummaryPopover').then((module) => module.DailySummaryPopover))
-const RemoteCoordinatorPopover = lazyComponent(() => import('./RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
-const PlaybookManagerPopover = lazyComponent(() => import('./PlaybookManagerPopover').then((module) => module.PlaybookManagerPopover))
 
 registerExtraTreeSitterParsers()
 startTuiMetricsLogger()
 
 if (PERF_LOG) {
   try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
-}
-
-// A TUI view, not a provider command: the web composer has no handoff, so it stays out of the shared catalog.
-const TUI_HANDOFF_COMMAND: SlashCommandSuggestion = {
-  command: '/handoff',
-  description: 'Continue this conversation on another provider',
-  argumentHint: '<provider>',
-}
-
-const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
-const CLAUDE_LIVE_ASSISTANT_UUID_PREFIX = 'live-claude-assistant:'
-const TUI_SLASH_HINTS: Record<string, string[]> = {
-  claude: ['/sessions', '/message', '/clear', '/compact', '/help', '/model'],
-  codex: ['/sessions', '/message', '/clear', '/diff', '/status', '/compact'],
-  opencode: ['/sessions', '/message', '/clear', '/summarize', '/help'],
-  copilot: ['/sessions', '/message', '/help', '/clear'],
-  pi: ['/sessions', '/message', '/help', '/model', '/thinking', '/compact'],
-}
-
-function cycleDensityValue(current: TuiDensity): TuiDensity {
-  return current === 'comfortable'
-    ? 'balanced'
-    : current === 'balanced'
-    ? 'dense'
-    : 'comfortable'
-}
-
-function currentProjectName(session: Session | null): string {
-  return session ? formatSessionProject(session) : 'no-project'
 }
 
 export default function OpenTuiApp() {
