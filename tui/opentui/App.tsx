@@ -379,6 +379,7 @@ import { useComposerKeysTargetTurnGroup } from './app/slices/composerKeysTargetT
 import { useComposerMentionVisibleCountGroup } from './app/slices/composerMentionVisibleCount'
 import { useComposerWaitingStatusSeedGroup } from './app/slices/composerWaitingStatusSeed'
 import { useModelPickerFocusedDescriptionGroup } from './app/slices/modelPickerFocusedDescription'
+import { useComposerHeightGroup } from './app/slices/composerHeight'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2062,58 +2063,16 @@ function OpenTuiWorkspace() {
   const composerDraftShapeRef = useRef<ComposerDraftShape | null>(null)
   const composerDraftLines = composerDraftLineCount(composerDraft, composerTextareaRef.current?.plainText === composerDraft ? composerTextareaRef.current.editorView.getTotalVirtualLineCount() : null)
   const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
-  const composerHeight = embeddedComposer
-    ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
-        composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT,
-        COMPOSER_MAX_HEIGHT,
-        Math.floor(height * 0.35),
-      ))
-    : Math.max(
-        fullscreenMode ? COMPOSER_MIN_HEIGHT - 1 : COMPOSER_MIN_HEIGHT,
-        Math.min(
-          fullscreenMode ? COMPOSER_MAX_HEIGHT - 2 : COMPOSER_MAX_HEIGHT,
-          composerDraftLines + composerDockChromeHeight,
-        ),
-      )
-  const presentationHidesComposer = fullscreenMode && windowPresentation?.target !== composerTargetSessionIdentity
-  const composerDockHeight = composerWindowOpen || composerHidden || presentationHidesComposer ? 0 : composerHeight
-  const composerDockTextareaHeight = embeddedComposer
-    ? Math.max(1, composerDockHeight - CHAT_COMPOSER_CHROME_HEIGHT)
-    : Math.max(2, composerDockHeight - composerDockChromeHeight)
-  const composerTargetSessionInfo = useMemo(() => {
-    if (!composerTargetSession) return null
-    const targetKey = sessionKey(composerTargetSession)
-    const activeDetail = sessionDetail?.info
-    if (
-      selectedSessionKey === targetKey
-      && activeDetail
-      && activeDetail.sessionId === composerTargetSession.sessionId
-      && activeDetail.provider === composerTargetSession.provider
-    ) {
-      return activeDetail
-    }
-    return sessionDetailCacheRef.current.get(targetKey)?.info ?? null
-  }, [composerTargetSession, selectedSessionKey, sessionDetail])
-  const composerCurrentModel = useMemo(() => {
-    if (!composerTargetSession) return null
-    const targetKey = sessionKey(composerTargetSession)
-    const modelOverride = tuiModelOverride[targetKey]
-    const selectedDetailModel = composerTargetSessionInfo?.currentModel
-    const reportedModel = tuiReportedModelByKey[targetKey]
-    const contextModel = selectedSessionKey === targetKey ? contextUsage?.model : undefined
-    const rawModel = modelOverride ?? selectedDetailModel ?? reportedModel ?? contextModel
-    if (!rawModel) return null
-    const model = formatModelChipValue(rawModel)
-    return model && model.toLowerCase() !== 'unknown' ? model : null
-  }, [composerTargetSession, composerTargetSessionInfo, contextUsage, selectedSessionKey, tuiModelOverride, tuiReportedModelByKey])
-  const composerModelLookupSettled = Boolean(
-    composerTargetSessionIdentity
-    && Object.prototype.hasOwnProperty.call(tuiReportedModelByKey, composerTargetSessionIdentity),
-  )
-  const filteredModelPickerOptions = useMemo(
-    () => filterModelPickerOptions(modelPickerOptions, modelPickerQuery),
-    [modelPickerOptions, modelPickerQuery],
-  )
+  const {
+    presentationHidesComposer, composerDockHeight, composerDockTextareaHeight,
+    composerTargetSessionInfo, composerCurrentModel, composerModelLookupSettled,
+    filteredModelPickerOptions,
+  } = useComposerHeightGroup({
+    embeddedComposer, composerDraftLines, height, fullscreenMode, composerDockChromeHeight,
+    windowPresentation, composerTargetSessionIdentity, composerWindowOpen, composerHidden,
+    composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
+    tuiModelOverride, tuiReportedModelByKey, contextUsage, modelPickerOptions, modelPickerQuery,
+  })
   const highlightedModelPickerOption = filteredModelPickerOptions[modelPickerIndex]
   const modelPickerEffortOptions = useMemo(
     () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
