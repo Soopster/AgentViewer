@@ -312,6 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect } from './app/effects/windows'
+import { runSurfacePlacementEffect } from './app/effects/app'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7259,20 +7260,10 @@ function OpenTuiWorkspace() {
     void writeTuiSurfacePanelPlacement(next).catch(() => {})
   })
 
-  useEffect(() => {
-    let cancelled = false
-    void readTuiSurfacePanelPlacement().then((placement) => { if (!cancelled && !workspaceContext.runtime.restoredKeys.has('surfacePanelPlacement')) setSurfacePanelPlacement(placement) }).catch(() => {})
-    void readTuiWindowArrangement().then((stored) => {
-      if (cancelled) return
-      if (workspaceContext.runtime.restoredKeys.has('splitArrangement') || workspaceContext.runtime.values.get('legacyInitialWorkspace') !== true) return
-      setSplitArrangement(stored.arrangement)
-      setSplitReaderLast(stored.readerLast)
-      setSplitSecondaryShare(stored.secondaryShare)
-      setSplitBottomShare(stored.bottomShare)
-      setSplitWeights(stored.weights ?? {})
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
+  useEffect(() => runSurfacePlacementEffect({
+    workspaceContext, setSurfacePanelPlacement, setSplitArrangement, setSplitReaderLast,
+    setSplitSecondaryShare, setSplitBottomShare, setSplitWeights,
+  }), [])
 
   const showToggleOutcome = useStableEvent((label: string, outcome: string | boolean) => {
     const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
