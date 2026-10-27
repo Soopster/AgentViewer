@@ -17,6 +17,11 @@ import { join } from 'node:path'
 import { type ComposerPromptPart, type QueuedComposerSend, type TuiLiveToolActivity, type SteeredComposerSend } from '../types'
 import { sessionKey } from '../sessionList'
 import { keepEmpty, keepFiltered } from '../collections'
+import { readFile, stat } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { type ComposerSubmission } from '../types'
+import { imageAttachmentCount } from '../composerInput'
+import { normalizePastedFilePath, pastedFileMimeTypeForPath } from '../clipboard'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -214,4 +219,69 @@ export function cancelComposerSend(ctx: CancelComposerSendContext) {
   setLiveStatus(null)
   setLiveSubagentText({})
   setLiveToolActivities(keepEmpty)
+}
+
+export type PasteFilePathToComposerContext = {
+  composerTargetSession: Session | null
+  selectedSession: Session | null
+  insertCompactPastedText: (text: string, marker: string) => void
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  composerDraft: string
+  prepareComposerSubmission: (visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]) => ComposerSubmission
+  composerMentionAttachments: SendAttachment[]
+  composerPromptParts: ComposerPromptPart[]
+  attachComposerAttachment: (attachment: SendAttachment, marker: string, noticeText: string) => void
+}
+
+export async function runPasteFilePathToComposer(ctx: PasteFilePathToComposerContext, text: string) {
+  const {
+    composerTargetSession, selectedSession, insertCompactPastedText, composerTextareaRef,
+    composerDraft, prepareComposerSubmission, composerMentionAttachments, composerPromptParts,
+    attachComposerAttachment,
+  } = ctx
+  const cwd = composerTargetSession?.cwd ?? selectedSession?.cwd ?? null
+  const filePath = normalizePastedFilePath(text, cwd)
+  if (!filePath) return false
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) return false
+  } catch {
+    return false
+  }
+  const mimeType = pastedFileMimeTypeForPath(filePath)
+  const filename = basename(filePath)
+  if (mimeType === 'image/svg+xml') {
+    const content = await readFile(filePath, 'utf8').catch(() => null)
+    if (!content) return false
+    insertCompactPastedText(content, `[SVG: ${filename || 'image'}]`)
+    return true
+  }
+  if (mimeType.startsWith('image/')) {
+    const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
+    const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
+    const marker = `[Image ${imageAttachmentCount(activeAttachments) + 1}]`
+    attachComposerAttachment({
+      id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
+      type: 'image',
+      path: filePath,
+      displayName: filename,
+      mimeType,
+    }, marker, `Attached ${filename}`)
+    return true
+  }
+  if (mimeType === 'application/pdf') {
+    const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
+    const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
+    const pdfCount = activeAttachments.filter((attachment) => attachment.mimeType === 'application/pdf').length
+    const marker = `[PDF ${pdfCount + 1}]`
+    attachComposerAttachment({
+      id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
+      type: 'file',
+      path: filePath,
+      displayName: filename,
+      mimeType,
+    }, marker, `Attached ${filename}`)
+    return true
+  }
+  return false
 }

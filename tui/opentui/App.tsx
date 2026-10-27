@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -8972,53 +8972,11 @@ function OpenTuiWorkspace() {
     }])
   })
 
-  const pasteFilePathToComposer = useStableEvent(async (text: string): Promise<boolean> => {
-    const cwd = composerTargetSession?.cwd ?? selectedSession?.cwd ?? null
-    const filePath = normalizePastedFilePath(text, cwd)
-    if (!filePath) return false
-    try {
-      const info = await stat(filePath)
-      if (!info.isFile()) return false
-    } catch {
-      return false
-    }
-    const mimeType = pastedFileMimeTypeForPath(filePath)
-    const filename = basename(filePath)
-    if (mimeType === 'image/svg+xml') {
-      const content = await readFile(filePath, 'utf8').catch(() => null)
-      if (!content) return false
-      insertCompactPastedText(content, `[SVG: ${filename || 'image'}]`)
-      return true
-    }
-    if (mimeType.startsWith('image/')) {
-      const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
-      const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
-      const marker = `[Image ${imageAttachmentCount(activeAttachments) + 1}]`
-      attachComposerAttachment({
-        id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
-        type: 'image',
-        path: filePath,
-        displayName: filename,
-        mimeType,
-      }, marker, `Attached ${filename}`)
-      return true
-    }
-    if (mimeType === 'application/pdf') {
-      const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
-      const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
-      const pdfCount = activeAttachments.filter((attachment) => attachment.mimeType === 'application/pdf').length
-      const marker = `[PDF ${pdfCount + 1}]`
-      attachComposerAttachment({
-        id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
-        type: 'file',
-        path: filePath,
-        displayName: filename,
-        mimeType,
-      }, marker, `Attached ${filename}`)
-      return true
-    }
-    return false
-  })
+  const pasteFilePathToComposer = useStableEvent(async (text: string) => runPasteFilePathToComposer({
+    composerTargetSession, selectedSession, insertCompactPastedText, composerTextareaRef,
+    composerDraft, prepareComposerSubmission, composerMentionAttachments, composerPromptParts,
+    attachComposerAttachment,
+  }, text))
 
   const insertComposerTextAtCursor = useStableEvent((textToInsert: string) => {
     const renderable = composerTextareaRef.current
