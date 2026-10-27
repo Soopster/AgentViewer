@@ -309,7 +309,7 @@ import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlActi
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
-import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer } from './app/actions/windowRender'
+import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10688,36 +10688,10 @@ function OpenTuiWorkspace() {
   // A frame's tab strip, over its title: one tab per member, the shown one lit.
   // A tab is clicked to show it and dragged to move it; × closes it.
   // `reserve` is the title bar's right end, where the frame's own buttons are.
-  const renderWindowTabs = (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => {
-    const stack = windowStackFor(key)
-    if (!stack) return null
-    const available = Math.max(8, frameWidth - reserve - left)
-    const each = Math.max(6, Math.floor(available / stack.length))
-    return (
-      <box id={`window-tabs:${index}`} position="absolute" top={top} left={left} width={available} height={1} flexDirection="row" zIndex={4} backgroundColor={theme.surface} overflow="hidden">
-        {stack.map((member) => {
-          const active = member === key
-          return (
-            <box key={member} id={`window-tab:${member}`} flexDirection="row" flexShrink={0} width={each} height={1} backgroundColor={active ? theme.surface3 : theme.surface}
-              onMouseDown={(event) => {
-                if (event.button !== 0) return
-                // Inside a surface frame the frame's own title handler would take
-                // the press over as a drag of the whole window.
-                event.stopPropagation()
-                sessionDragImplRef.current.pressTab(member, index, event, () => activateWindowTab(member))
-              }}
-              // Until the gesture layer exists, the tab itself gets the drag and the release.
-              onMouseDrag={(event) => sessionDragHandlers.move(event)}
-              onMouseUp={(event) => sessionDragHandlers.release(event)}
-            >
-              <text fg={active ? theme.cyan : theme.muted} wrapMode="none" selectable={false}>{fitText(` ${windowKeyTitle(member)}`, each - 2)}</text>
-              <WindowButton id={`window-tab-close:${member}`} label="× " theme={theme} tone="danger" onPress={() => closeWindowTab(member)} />
-            </box>
-          )
-        })}
-      </box>
-    )
-  }
+  const renderWindowTabs = (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => runRenderWindowTabs({
+    windowStackFor, theme, sessionDragImplRef, activateWindowTab, sessionDragHandlers,
+    windowKeyTitle, closeWindowTab,
+  }, key, index, frameWidth, top, left, reserve)
 
   // Dragging the panel's inner border by `delta` cells toward the reader (positive) or away.
   const resizeSurfacePanelBy = (delta: number) => {
