@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8884,46 +8884,13 @@ function OpenTuiWorkspace() {
   // A surface into the layout: out of the side panel, into a window, focused.
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
-  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => {
-    if (isPluginSurfaceId(kind) && !isPluginEnabled(getPluginSurface(kind).pluginId)) {
-      showNotice('info', `${getPluginSurface(kind).title.slice(2)} is off · turn its plugin on in Plugins (⌃K palette)`)
-      return
-    }
-    const activePanel = activeSurface(surfacePanel)
-    const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
-    const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
-    if (existing && !movingPanel && !(options.another && MULTI_INSTANCE_SURFACES.has(kind))) {
-      pendingSurfaceFocusRef.current = existing
-      setFocusedPane('messages')
-      setWindowSurfaces((current) => [...current])
-      return
-    }
-    let surface: WindowSurfaceId = kind
-    // Ids held by background tabs and the floating window are taken too.
-    const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
-    for (let instance = 2; taken.has(surface); instance += 1) surface = `${kind}#${instance}`
-    checkpointWindowLayout()
-    if (!movingPanel && pluginOverlay === kind) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
-    const remaining = surfacePanel.surfaces.filter((entry) => entry.id !== movingPanel?.id)
-    if (movingPanel) {
-      copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, undefined, movingPanel.id), surfaceViewNamespace(kind, surface))
-      const selected = workspaceContext.runtime.values.get(`${surfaceViewNamespace(kind, surface)}:process:selectedId`)
-      if (typeof selected === 'string') windowShellSelectionRef.current.set(surface, selected)
-      setSurfacePanel(current => closeSurfaceIn(current, movingPanel.id))
-    }
-    // A panel with nothing left in it would only take width from the windows.
-    if (movingPanel && remaining.length === 0) setSurfacePanelOpen(false)
-    setSurfacePanelFocused(false)
-    setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
-    setWindowSurfaceMeta(current => ({ ...current, [surface]: { ...current[surface], cwd: movingPanel?.cwd ?? gitRepoCwd } }))
-    // A split holds two windows; a surface beyond that needs a stack or grid to appear.
-    if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
-    // Focused once the layout has placed it: until then its index is unknown,
-    // because opening it may drop a session pane to make room.
-    pendingSurfaceFocusRef.current = surface
-    setFocusedPane('messages')
-    showNotice('info', `${surfaceTitle(surface)} in a window · ⇥ panel puts it back`)
-  })
+  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => runOpenSurfaceWindow({
+    showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
+    setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
+    workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
+    setSurfacePanelFocused, setWindowSurfaceMeta, gitRepoCwd, windowSplitTree, splitArrangement,
+    splitPaneCount, setWindowArrangement, splitReaderLast,
+  }, kind, options))
   const returningPopoverRef = useRef(false)
   const closeSurfaceWindow = useStableEvent((surface: WindowSurfaceId, moving = false) => {
     if (!moving && !returningPopoverRef.current) {

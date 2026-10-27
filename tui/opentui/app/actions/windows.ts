@@ -41,6 +41,11 @@ import { writeTuiSplitOrientation } from '../../../../lib/tui/service'
 import { calculateSplitPaneLayout } from '../../splitPaneState'
 import { MIN_READER_WIDTH, SPLIT_PANE_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS } from '../layoutConstants'
 import { RUNNING_INSIDE_TMUX } from '../commands'
+import { activeSurface, closeSurface as closeSurfaceIn } from '../../surfacePanelState'
+import { type MutableRefObject } from 'react'
+import { isPluginEnabled } from '../../../../lib/plugins/enablement'
+import { getPluginSurface, isPluginSurfaceId } from '../../../../lib/plugins/catalog'
+import { surfaceTitle } from '../../windowSurfaceNames'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -653,4 +658,78 @@ export function runApplySplitPaneCount(ctx: ApplySplitPaneCountContext, next: nu
       ? `Split panes: ${next} · use ? palette (tmux captures ⌃B)`
       : `Split panes: ${next} · ⌃B o next pane · ⌃B x close`
   ))
+}
+
+export type OpenSurfaceWindowContext = {
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  surfacePanel: SurfacePanelState
+  windowSurfaces: string[]
+  pendingSurfaceFocusRef: React.RefObject<string | null>
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+  setWindowSurfaces: React.Dispatch<React.SetStateAction<string[]>>
+  popoverTabs: string[]
+  parkedWindowKeysRef: React.RefObject<Set<string>>
+  checkpointWindowLayout: () => void
+  pluginOverlay: 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  workspaceContext: WorkspaceContextValue
+  windowShellSelectionRef: React.MutableRefObject<Map<string, string | null>>
+  setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
+  setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
+  setWindowSurfaceMeta: React.Dispatch<React.SetStateAction<Record<string, SurfaceMeta>>>
+  gitRepoCwd: string
+  windowSplitTree: WindowSplitTree | null
+  splitArrangement: WindowArrangement
+  splitPaneCount: number
+  setWindowArrangement: (arrangement: WindowArrangement, readerLast: boolean) => void
+  splitReaderLast: boolean
+}
+
+export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string }) {
+  const {
+    showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
+    setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
+    workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
+    setSurfacePanelFocused, setWindowSurfaceMeta, gitRepoCwd, windowSplitTree, splitArrangement,
+    splitPaneCount, setWindowArrangement, splitReaderLast,
+  } = ctx
+  if (options === undefined) options = {}
+  if (isPluginSurfaceId(kind) && !isPluginEnabled(getPluginSurface(kind).pluginId)) {
+    showNotice('info', `${getPluginSurface(kind).title.slice(2)} is off · turn its plugin on in Plugins (⌃K palette)`)
+    return
+  }
+  const activePanel = activeSurface(surfacePanel)
+  const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
+  const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
+  if (existing && !movingPanel && !(options.another && MULTI_INSTANCE_SURFACES.has(kind))) {
+    pendingSurfaceFocusRef.current = existing
+    setFocusedPane('messages')
+    setWindowSurfaces((current) => [...current])
+    return
+  }
+  let surface: WindowSurfaceId = kind
+  // Ids held by background tabs and the floating window are taken too.
+  const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
+  for (let instance = 2; taken.has(surface); instance += 1) surface = `${kind}#${instance}`
+  checkpointWindowLayout()
+  if (!movingPanel && pluginOverlay === kind) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, surface), isPluginSurfaceId(kind) ? getPluginSurface(kind).pluginId : undefined)
+  const remaining = surfacePanel.surfaces.filter((entry) => entry.id !== movingPanel?.id)
+  if (movingPanel) {
+    copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, undefined, movingPanel.id), surfaceViewNamespace(kind, surface))
+    const selected = workspaceContext.runtime.values.get(`${surfaceViewNamespace(kind, surface)}:process:selectedId`)
+    if (typeof selected === 'string') windowShellSelectionRef.current.set(surface, selected)
+    setSurfacePanel(current => closeSurfaceIn(current, movingPanel.id))
+  }
+  // A panel with nothing left in it would only take width from the windows.
+  if (movingPanel && remaining.length === 0) setSurfacePanelOpen(false)
+  setSurfacePanelFocused(false)
+  setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
+  setWindowSurfaceMeta(current => ({ ...current, [surface]: { ...current[surface], cwd: movingPanel?.cwd ?? gitRepoCwd } }))
+  // A split holds two windows; a surface beyond that needs a stack or grid to appear.
+  if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
+  // Focused once the layout has placed it: until then its index is unknown,
+  // because opening it may drop a session pane to make room.
+  pendingSurfaceFocusRef.current = surface
+  setFocusedPane('messages')
+  showNotice('info', `${surfaceTitle(surface)} in a window · ⇥ panel puts it back`)
 }
