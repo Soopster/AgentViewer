@@ -271,6 +271,7 @@ import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
 import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
 import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
+import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -18713,46 +18714,7 @@ function OpenTuiWorkspace() {
 
       <TranscriptSearchBar searchMode={searchMode} width={width} theme={theme} searchMatches={searchMatches} searchMatchIndex={searchMatchIndex} searchQuery={searchQuery} setSearchQuery={setSearchQuery} jumpToTranscriptIndex={jumpToTranscriptIndex} setSearchMode={setSearchMode} />
 
-      {sessionSearchMode ? (
-        <box paddingX={1}>
-          <box
-            width={Math.max(width - 2, 20)}
-            height={4}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            flexDirection="column"
-          >
-            <box paddingX={1} height={1}>
-              <text fg={theme.dim}>
-                {fitText(
-                  `SESSION SEARCH  ${filteredSessionsForSidebar.length}/${sessions.length} matches  enter select  esc clear`,
-                  width - 6,
-                )}
-              </text>
-            </box>
-            <box paddingX={1} height={1}>
-              <input
-                focused
-                value={sessionSearchQuery}
-                placeholder="Type to filter sessions..."
-                maxLength={SEARCH_MAX_CHARS}
-                onInput={setSessionSearchQuery}
-                onSubmit={() => {
-                  const firstSession = sidebarEntries
-                    .map(sidebarEntrySession)
-                    .find((session): session is Session => Boolean(session))
-                  if (firstSession) {
-                    setSelectedSessionKey(sessionKey(firstSession))
-                  }
-                  setSessionSearchMode(false)
-                }}
-              />
-            </box>
-          </box>
-        </box>
-      ) : null}
+      <SessionSearchBar sessionSearchMode={sessionSearchMode} width={width} theme={theme} filteredSessionsForSidebar={filteredSessionsForSidebar} sessions={sessions} sessionSearchQuery={sessionSearchQuery} setSessionSearchQuery={setSessionSearchQuery} sidebarEntries={sidebarEntries} setSelectedSessionKey={setSelectedSessionKey} setSessionSearchMode={setSessionSearchMode} />
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
 
