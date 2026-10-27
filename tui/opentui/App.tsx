@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
@@ -2791,34 +2791,9 @@ function OpenTuiWorkspace() {
     setComposerPaneTargetKey(namespace)
   })
 
-  const activeComposerPromptPartRanges = useStableEvent((text: string, parts: ComposerPromptPart[]): ComposerPromptPartRange[] => {
-    const renderable = composerTextareaRef.current
-    const typeId = composerPastePartTypeIdRef.current
-    const byId = new Map(parts.map((part) => [part.id, part]))
-    if (renderable && typeId != null) {
-      return renderable.extmarks
-        .getAllForTypeId(typeId)
-        .flatMap((extmark: { start: number; end: number; data?: { partId?: unknown } }) => {
-          const partId = typeof extmark.data?.partId === 'string' ? extmark.data.partId : ''
-          const part = byId.get(partId)
-          if (!part) return []
-          const marker = text.slice(extmark.start, extmark.end) || part.marker
-          return [{ ...part, marker, start: extmark.start, end: extmark.end }]
-        })
-        .sort((a, b) => a.start - b.start)
-    }
-
-    let cursor = 0
-    const ranges: ComposerPromptPartRange[] = []
-    for (const part of parts) {
-      const start = text.indexOf(part.marker, cursor)
-      if (start === -1) continue
-      const end = start + part.marker.length
-      ranges.push({ ...part, start, end })
-      cursor = end
-    }
-    return ranges
-  })
+  const activeComposerPromptPartRanges = useStableEvent((text: string, parts: ComposerPromptPart[]) => runActiveComposerPromptPartRanges({
+    composerTextareaRef, composerPastePartTypeIdRef,
+  }, text, parts))
 
   const prepareComposerSubmission = useStableEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]) => runPrepareComposerSubmission({
     activeComposerPromptPartRanges,
