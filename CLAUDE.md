@@ -2690,7 +2690,8 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 
 | File | Lines | What lives there |
 |---|---:|---|
-| `tui/opentui/App.tsx` | ~22730 | OpenTUI root; entire reader, composer, key handling, `cardDisplayData` memo, scrollbox layout |
+| `tui/opentui/App.tsx` | ~20490 | OpenTUI root: the `OpenTuiWorkspace` component (state, 3,600-line `useKeyboard`, JSX overlays) plus lazy overlay loaders. Everything that sat outside the component now lives in `tui/opentui/app/` (below) |
+| `tui/opentui/app/*` | ~9,500 total | Modules extracted from App.tsx: `TranscriptCard.tsx` (1.7k), `SplitTranscriptPane.tsx`, `TranscriptWindowBody.tsx`, `transcriptRows.ts`/`transcriptStyle.tsx` (card grouping, colours), `liveStream.ts` (SSE/live-turn extraction), `inlineText.tsx`, `composerInput.ts`, `clipboard.ts`, `themes.ts`, `commands.ts`/`pickers.ts`, `sessionList.ts`, `types.ts`, constants (`timing.ts`, `layoutConstants.ts`), `perf.ts` |
 | `components/MessageView.tsx` | ~10460 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
 | `components/MessageItem.tsx` | ~6750 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
 | `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
@@ -2706,6 +2707,8 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 | `app/globals.css` | ~1000 | All ~30 themes' CSS vars + base styles (each `[data-theme="…"]` block is contiguous) |
 | `tui/format.ts` | ~2915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
 | `tui/theme.ts` | ~990 | LIGHT/DARK/CYBER palettes + `getProviderAccent` |
+
+`tui/opentui/app/` modules must never import `App.tsx` (no cycles). Module singletons (`perf.ts` render counter, `transcriptStyle.tsx` turn-summary opener, `diffCache.ts`, `clipboard.ts`) live in exactly one module and are written through functions (`noteRootRender`, `registerTurnSummaryOpener`), because an importer cannot assign to another module's `let`. Smokes still import a few names from `./App`, which re-exports them.
 
 Recommended access patterns:
 
