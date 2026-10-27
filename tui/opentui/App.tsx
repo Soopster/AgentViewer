@@ -356,6 +356,7 @@ import { WorkspaceBody } from './app/overlays/WorkspaceBody'
 import { useRenderSurfaceLayerGroup } from './app/slices/renderSurfaceLayer'
 import { useSubmitComposerFromDockGroup } from './app/slices/submitComposerFromDock'
 import { useComposerDockStatsForGroup } from './app/slices/composerDockStatsFor'
+import { useStatusLabelGroup } from './app/slices/statusLabel'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7633,41 +7634,15 @@ function OpenTuiWorkspace() {
       selectedSessionTarget, refreshSelectedSessionDetail,
     })) return
   })
-
-  const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
-  const readerMode = followTail ? null : pendingNewCount > 0 ? 'new content' : 'reading'
-  const readerContextMeta = useMemo(
-    () => fitText(
-      joinMeta([
-        currentProjectName(selectedSession),
-        readerModel,
-      ]),
-      Math.min(Math.max(Math.floor(rightPaneWidth * 0.28), 18), 42),
-    ),
-    [selectedSession, readerModel, rightPaneWidth],
-  )
-  const previewBarText = useMemo(
-    () => selectedSession
-      ? fitText(
-          `${formatSessionTitle(selectedSession)}  ·  preview  ·  ↵ open  ·  tab focus`,
-          Math.max(rightPaneWidth - 2, 16),
-        )
-      : '',
-    [rightPaneWidth, selectedSession],
-  )
-
-  const providerOptions = useMemo(() => providerSelectOptions(providerInstances), [providerInstances, disabledPlugins])
-  const providerAccent = getProviderAccent(provider)
-  const composerPlaceholder = composerTargetSession
-    ? (visibleComposerSending
-        ? 'Follow-up…'
-        : composerExample)
-    : composerConfig.placeholderNoSession
-  const composerActiveAttachments = useMemo(
-    () => prepareComposerSubmission(composerDraft, composerMentionAttachments, composerPromptParts).attachments,
-    [composerDraft, composerMentionAttachments, composerPromptParts, prepareComposerSubmission],
-  )
-  const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
+  const {
+    readerContextMeta, previewBarText, providerOptions, providerAccent, composerPlaceholder,
+    composerAttachmentLabel,
+  } = useStatusLabelGroup({
+    loadingSessions, refreshingSessions, followTail, pendingNewCount, selectedSession, readerModel,
+    rightPaneWidth, providerInstances, disabledPlugins, provider, composerTargetSession,
+    visibleComposerSending, composerExample, composerConfig, prepareComposerSubmission,
+    composerDraft, composerMentionAttachments, composerPromptParts,
+  })
   if (composerDraftShapeRef.current) composerDraftShapeRef.current.attachments = composerAttachmentLabel ?? ''
   const {
     composerDockStatsFor, composerWindowMetaSegments, composerWindowDraftFor,
