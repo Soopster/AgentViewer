@@ -359,6 +359,7 @@ import { useComposerDockStatsForGroup } from './app/slices/composerDockStatsFor'
 import { useStatusLabelGroup } from './app/slices/statusLabel'
 import { useControlWindowIndexGroup } from './app/slices/controlWindowIndex'
 import { useOpenMoveWorkspaceMenuGroup } from './app/slices/openMoveWorkspaceMenu'
+import { useDragSplitDividerGroup } from './app/slices/dragSplitDivider'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6822,65 +6823,16 @@ function OpenTuiWorkspace() {
       else if (target.zone) dropSessionInWindow(press.session, target.zone, press.fromPane)
     },
   }
-
-  // The divider between the reader and its panes, dragged to a new share.
-  const dragSplitDivider = useStableEvent((event: { x: number; y: number }) => runDragSplitDivider({
+  const {
+    dragSplitDivider, endSplitDividerDrag, toggleSplitPanes, applySplitOrientation,
+    rotateSplitOrientation,
+  } = useDragSplitDividerGroup({
     splitDividerPoint, checkpointWindowLayout, windowAreaRect, setSplitDividerPoint,
     splitDividerDragging, fittedWindows, rectOf, setSplitWeights, splitSecondaryShare,
     setSplitSecondaryShare, stackedSplit, splitReaderLast, splitReaderShare, setSplitReaderShare,
-  }, event))
-  const endSplitDividerDrag = useStableEvent(() => {
-    const kind = splitDividerDragging
-    setSplitDividerDragging(null)
-    setSplitDividerPoint(null)
-    if (kind === 'secondary' || (kind && typeof kind === 'object')) {
-      void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
-    } else {
-      void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
-    }
-  })
-
-  // ⌃B z is the quick on/off: it restores the pane count you last had open
-  // rather than always coming back with a single pane.
-  const lastSplitPaneCountRef = useRef(1)
-  const toggleSplitPanes = useStableEvent(() => {
-    if (splitPaneCount > 0) {
-      lastSplitPaneCountRef.current = splitPaneCount
-      applySplitPaneCount(0)
-      return
-    }
-    if (splitCandidateSessions.length === 0) {
-      showNotice('error', 'Open another tab to split the transcript view')
-      return
-    }
-    const maxPanes = Math.min(SPLIT_PANE_MAX, splitCandidateSessions.length)
-    applySplitPaneCount(Math.min(lastSplitPaneCountRef.current, maxPanes))
-  })
-
-  // Orientation and the reader/pane ratio are layout preferences, not per-pane
-  // state: every pane shares them, and both persist so a split comes back the
-  // shape you left it.
-  const applySplitOrientation = useStableEvent((next: SplitPaneOrientation, quiet?: boolean) => {
-    checkpointWindowLayout()
-    if (next === splitOrientation) {
-      if (!quiet) showNotice('info', next === 'rows' ? 'Split panes already stacked' : 'Split panes already side-by-side')
-      return
-    }
-    setSplitOrientation(next)
-    void writeTuiSplitOrientation(next).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to store split orientation')
-    })
-    if (!quiet) showNotice('info', next === 'rows' ? 'Split panes: stacked' : 'Split panes: side-by-side')
-  })
-
-  const rotateSplitOrientation = useStableEvent(() => {
-    if (reconciledSplitTree) {
-      checkpointWindowLayout()
-      const path = splitPath(reconciledSplitTree.root, splitFocusIndex ?? -1)
-      if (path) setWindowSplitTree({ ...reconciledSplitTree, root: rotateWindowSplitTree(reconciledSplitTree.root, path.slice(0, -1)) })
-      return
-    }
-    applySplitOrientation(splitOrientation === 'rows' ? 'columns' : 'rows')
+    setSplitDividerDragging, splitArrangement, splitBottomShare, splitWeights, splitPaneCount,
+    applySplitPaneCount, splitCandidateSessions, showNotice, splitOrientation, setSplitOrientation,
+    setError, reconciledSplitTree, splitFocusIndex, setWindowSplitTree,
   })
 
   const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => runResizeSplitReader({
