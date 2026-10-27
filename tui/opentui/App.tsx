@@ -382,6 +382,7 @@ import { useModelPickerFocusedDescriptionGroup } from './app/slices/modelPickerF
 import { useComposerHeightGroup } from './app/slices/composerHeight'
 import { useToggleSidebarSortGroup } from './app/slices/toggleSidebarSort'
 import { useTaskPanelMessagesGroup } from './app/slices/taskPanelMessages'
+import { useComposerProviderGroup } from './app/slices/composerProvider'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1496,40 +1497,14 @@ function OpenTuiWorkspace() {
       return next.length === prev.length ? prev : next
     })
   }, [selectedSessionKey])
-
-  const composerProvider = composerTargetSession?.provider ?? selectedSession?.provider ?? null
-  const composerPermissionMode = useMemo<TuiPermissionMode>(() => {
-    if (composerTargetSession?.provider !== 'claude') return 'default'
-    return tuiPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'auto'
-  }, [composerTargetSession, tuiPermissionModeByKey])
-  const composerCodexApproval = composerTargetSession?.provider === 'codex'
-    ? tuiCodexApprovalByKey[sessionKey(composerTargetSession)] ?? 'auto'
-    : 'auto'
-  const composerCodexMode = composerTargetSession?.provider === 'codex'
-    ? tuiCodexModeByKey[sessionKey(composerTargetSession)] ?? 'default'
-    : 'default'
-  const composerCopilotPermissionMode = composerTargetSession?.provider === 'copilot'
-    ? tuiCopilotPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'off'
-    : 'off'
-  const composerCopilotContextTier = composerTargetSession?.provider === 'copilot'
-    ? tuiCopilotContextTierByKey[sessionKey(composerTargetSession)] ?? 'default'
-    : 'default'
-  const composerConfig = useMemo(() => getProviderComposer(composerProvider), [composerProvider])
-  const composerExampleSeed = useMemo(() => {
-    const source = composerTargetSession?.sessionId ?? composerProvider ?? ''
-    let hash = 0
-    for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0
-    return hash
-  }, [composerTargetSession?.sessionId, composerProvider])
-  const composerExample = useMemo(
-    () => pickProviderExample(composerProvider, composerExampleSeed),
-    [composerProvider, composerExampleSeed],
-  )
-  const composerAccentColor = useMemo(() => {
-    const key = composerConfig.tuiAccentKey
-    const value = (theme as unknown as Record<string, string>)[key]
-    return value ?? theme.cyan
-  }, [composerConfig.tuiAccentKey, theme])
+  const {
+    composerProvider, composerPermissionMode, composerCodexApproval, composerCodexMode,
+    composerCopilotPermissionMode, composerCopilotContextTier, composerConfig, composerExample,
+    composerAccentColor,
+  } = useComposerProviderGroup({
+    composerTargetSession, selectedSession, tuiPermissionModeByKey, tuiCodexApprovalByKey,
+    tuiCodexModeByKey, tuiCopilotPermissionModeByKey, tuiCopilotContextTierByKey, theme,
+  })
 
   useEffect(() => {
     if (canUseChannelBridge) return
