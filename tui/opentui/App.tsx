@@ -331,6 +331,7 @@ import { useNavigationRefs } from './app/state/navigationRefs'
 import { useSessionCaches } from './app/state/sessionCaches'
 import { useSelectionRefs } from './app/state/selectionRefs'
 import { useModelState } from './app/state/modelState'
+import { useLiveTurnState } from './app/state/liveTurnState'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1104,26 +1105,16 @@ function OpenTuiWorkspace() {
   const [steeredSendNotice, setSteeredSendNotice] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'steeredSendNotice', null)
   const steeredEchoCounterRef = useRef(0)
   const steeredComposerSendsRef = composerSessions.ref<SteeredComposerSend[]>(composerOwnerKey, 'steeredComposerSendsRef', [])
-  const [livePromptSuggestion, setLivePromptSuggestion] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'livePromptSuggestion', null)
-  const [liveStatus, setLiveStatus] = useComposerSessionState<'requesting' | 'compacting' | 'retrying' | null>(composerSessions, composerOwnerKey, 'liveStatus', null)
-  const [liveSubagentText, setLiveSubagentText] = useComposerSessionState<Record<string, string>>(composerSessions, composerOwnerKey, 'liveSubagentText', {})
-  const [liveOutputTokens, setLiveOutputTokens] = useComposerSessionState(composerSessions, composerOwnerKey, 'liveOutputTokens', 0)
-  const [liveToolActivities, setLiveToolActivities] = useComposerSessionState<TuiLiveToolActivity[]>(composerSessions, composerOwnerKey, 'liveToolActivities', [])
-  const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
-  const [composerEnableWorkflow, setComposerEnableWorkflow] = useState(false)
-  // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
-  // body so the TUI composer matches the web composer's send-time controls
-  // (model / reasoning effort / provider permission mode). Defaults of `auto`
-  // / `default` mean "let the SDK keep whatever the session was using".
-  const [tuiEffort, setTuiEffort] = useState<TuiEffort>('auto')
-  const [tuiPermissionModeByKey, setTuiPermissionModeByKey] = useState<Record<string, TuiPermissionMode>>({})
-  const tuiPermissionModeByKeyRef = useRef<Record<string, TuiPermissionMode>>({})
-  const [tuiCodexApprovalByKey, setTuiCodexApprovalByKey] = useState<Record<string, TuiCodexApproval>>({})
-  // Codex's collaboration mode per session (the CLI's ⇧Tab Plan/Default). Read
-  // through the ref at send time, so `/plan <goal>` sends in the mode it just set.
-  // /add-dir roots per Claude session; sent with every turn (spawn-time option).
-  const [tuiAddedDirsByKey, setTuiAddedDirsByKey] = useState<Record<string, string[]>>({})
-  const tuiAddedDirsByKeyRef = useRef(tuiAddedDirsByKey)
+  const {
+    livePromptSuggestion, setLivePromptSuggestion, liveStatus, setLiveStatus, liveSubagentText,
+    setLiveSubagentText, liveOutputTokens, setLiveOutputTokens, liveToolActivities,
+    setLiveToolActivities, taskBudgetTokens, composerEnableWorkflow, setComposerEnableWorkflow,
+    tuiEffort, setTuiEffort, tuiPermissionModeByKey, setTuiPermissionModeByKey,
+    tuiPermissionModeByKeyRef, tuiCodexApprovalByKey, setTuiCodexApprovalByKey, tuiAddedDirsByKey,
+    setTuiAddedDirsByKey, tuiAddedDirsByKeyRef,
+  } = useLiveTurnState({
+    composerSessions, composerOwnerKey,
+  })
   tuiAddedDirsByKeyRef.current = tuiAddedDirsByKey
   const [tuiCodexModeByKey, setTuiCodexModeByKey] = useState<Record<string, 'plan' | 'default'>>({})
   const tuiCodexModeByKeyRef = useRef(tuiCodexModeByKey)
