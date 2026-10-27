@@ -285,6 +285,7 @@ import { TranscriptViewMenuOverlay } from './app/overlays/TranscriptViewMenuOver
 import { BookmarksOverlay } from './app/overlays/BookmarksOverlay'
 import { SelectMenusOverlay } from './app/overlays/SelectMenusOverlay'
 import { SessionRail } from './app/overlays/SessionRail'
+import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -17924,33 +17925,7 @@ function OpenTuiWorkspace() {
         {/* Reserve the task-panel column in flow, then extend its frame through
             the docked composer so both share the right-hand column. */}
         {taskPanelVisible ? <box width={effectiveTaskPanelWidth} /> : null}
-        {taskPanelVisible ? (
-          <box
-            id="task-side-panel-frame"
-            position="absolute"
-            top={0}
-            right={effectiveSurfacePanelWidth}
-            width={effectiveTaskPanelWidth}
-            height={surfacePanelHeight}
-            overflow="hidden"
-            zIndex={4}
-          >
-            <TaskSidePanel
-              messages={taskPanelMessages}
-              todos={composerLiveTodos}
-              session={selectedSession}
-              theme={theme}
-              width={effectiveTaskPanelWidth}
-              height={surfacePanelHeight}
-              onSelectTask={(uuid) => {
-                const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
-                if (idx >= 0) jumpToTranscriptIndex(idx)
-              }}
-              tab={taskPanelTab}
-              liveSubagentText={liveSubagentText}
-            />
-          </box>
-        ) : null}
+        <TaskSidePanelFrame taskPanelVisible={taskPanelVisible} effectiveSurfacePanelWidth={effectiveSurfacePanelWidth} effectiveTaskPanelWidth={effectiveTaskPanelWidth} surfacePanelHeight={surfacePanelHeight} taskPanelMessages={taskPanelMessages} composerLiveTodos={composerLiveTodos} selectedSession={selectedSession} theme={theme} visibleTranscriptCards={visibleTranscriptCards} jumpToTranscriptIndex={jumpToTranscriptIndex} taskPanelTab={taskPanelTab} liveSubagentText={liveSubagentText} />
 
         {/* Width reservation only — the panel itself is positioned absolutely
             below so it can share the full-height right-hand column. */}
