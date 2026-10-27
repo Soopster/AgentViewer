@@ -8,7 +8,7 @@ export function focusAfterWindowClose(focused: number | null, closing: number, c
 }
 
 export type WindowControlAction =
-  | 'move-workspace' | 'focus' | 'manage' | 'zoom' | 'resize' | 'swap' | 'tab' | 'detach' | 'float' | 'close'
+  | 'move-workspace' | 'focus' | 'manage' | 'zoom' | 'fullscreen' | 'resize' | 'swap' | 'tab' | 'detach' | 'float' | 'close'
   | 'layout' | 'split-columns' | 'split-rows' | 'shrink' | 'grow' | 'reader-shrink' | 'reader-grow'
   | 'row-shrink' | 'row-grow' | 'equalize' | 'undo' | 'menu'
 
@@ -20,7 +20,8 @@ export const WINDOW_CONTROL_ACTIONS: ReadonlyArray<{
   { id: 'focus', label: 'Focus window' },
   { id: 'move-workspace', label: 'Move to workspace…' },
   { id: 'manage', label: 'Manage windows', keys: '⌃K w' },
-  { id: 'zoom', label: 'Zoom / restore', keys: 'm', available: c => !c.floating },
+  { id: 'fullscreen', label: 'Fullscreen window' },
+  { id: 'zoom', label: 'Zoom / restore', keys: 'm' },
   { id: 'resize', label: 'Resize…', available: c => !c.floating && !c.zoomed },
   { id: 'swap', label: 'Swap direction…', available: c => !c.floating && !c.zoomed },
   { id: 'tab', label: 'Tab with previous window', available: c => c.canTab },
@@ -42,7 +43,7 @@ export const WINDOW_CONTROL_ACTIONS: ReadonlyArray<{
 ]
 
 export const WINDOW_MENU_ACTIONS: readonly WindowControlAction[] = [
-  'focus', 'manage', 'split-columns', 'split-rows', 'zoom', 'resize', 'swap', 'tab', 'detach', 'float', 'move-workspace', 'layout', 'close',
+  'focus', 'manage', 'split-columns', 'split-rows', 'zoom', 'fullscreen', 'resize', 'swap', 'tab', 'detach', 'float', 'move-workspace', 'layout', 'close',
 ]
 export const WINDOW_RESIZE_ACTIONS: readonly WindowControlAction[] = ['shrink', 'grow', 'reader-shrink', 'reader-grow', 'row-shrink', 'row-grow', 'equalize']
 export const WINDOW_MANAGEMENT_HINT = 'arrows focus · shift+arrows swap · tab/1–9 select'
