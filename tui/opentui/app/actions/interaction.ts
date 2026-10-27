@@ -24,6 +24,14 @@ import { patchTuiSession, type TuiSessionDetail } from '../../../../lib/tui/serv
 import { type ProviderSelection } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
 import { touchMapEntry } from '../collections'
+import { type MutableRefObject } from 'react'
+import { type WorkspaceContextValue } from '../../workspaceContext'
+import { type CliRenderer } from '@opentui/core'
+import { interruptTuiSessionTurn } from '../../../../lib/tui/service'
+import { type RunningSessionRef } from '../../../../lib/types'
+import { resolve } from 'node:path'
+import { type QueuedComposerSend } from '../types'
+import { ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS } from '../timing'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -314,4 +322,72 @@ export async function runCommitRename(ctx: CommitRenameContext) {
   } catch {
     // rename failed silently — session list will show original title on next poll
   }
+}
+
+export type ConfirmExitContext = {
+  exitInProgressRef: React.RefObject<boolean>
+  setExitCleanupInProgress: React.Dispatch<React.SetStateAction<boolean>>
+  setQueuedComposerSends: React.Dispatch<React.SetStateAction<QueuedComposerSend[]>>
+  queuedComposerSendsRef: React.RefObject<QueuedComposerSend[]>
+  workspaceContext: WorkspaceContextValue
+  activeComposerSendCleanupRef: React.MutableRefObject<Promise<void> | null>
+  composerAbortRef: React.MutableRefObject<AbortController | null>
+  activeComposerTurnRequestIdRef: React.MutableRefObject<string | null>
+  composerTargetSessionRef: React.RefObject<Session | null>
+  runningSessionsRef: React.RefObject<RunningSessionRef[]>
+  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  persistTheme: () => void
+  renderer: CliRenderer
+}
+
+export function runConfirmExit(ctx: ConfirmExitContext) {
+  const {
+    exitInProgressRef, setExitCleanupInProgress, setQueuedComposerSends, queuedComposerSendsRef,
+    workspaceContext, activeComposerSendCleanupRef, composerAbortRef,
+    activeComposerTurnRequestIdRef, composerTargetSessionRef, runningSessionsRef, composerSessions,
+    persistTheme, renderer,
+  } = ctx
+  if (exitInProgressRef.current) return
+  exitInProgressRef.current = true
+  setExitCleanupInProgress(true)
+  setQueuedComposerSends(queuedComposerSendsRef.current)
+  try { workspaceContext.controller.flush() } catch { /* exit reports existing errors */ }
+
+  const cleanupPromise = activeComposerSendCleanupRef.current
+  const controller = composerAbortRef.current
+  const activeTurnRequestId = activeComposerTurnRequestIdRef.current
+  const activeTurnTarget = composerTargetSessionRef.current
+  const runningRefs = [...runningSessionsRef.current]
+  for (const key of composerSessions.keys()) composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
+
+  void (async () => {
+    const cleanupTasks: Promise<unknown>[] = []
+    // Attached, the turns belong to the daemon: closing this window is a
+    // detach, and interrupting them here would stop work in every other
+    // client's view of it. Only the local stream above is dropped.
+    if (!ATTACHED_DAEMON_HOST && activeTurnTarget && activeTurnRequestId) {
+      cleanupTasks.push(interruptTuiSessionTurn({
+        sessionId: activeTurnTarget.sessionId,
+        provider: activeTurnTarget.provider,
+        providerInstanceId: activeTurnTarget.providerInstanceId,
+        turnRequestId: activeTurnRequestId,
+      }).catch(() => undefined))
+    }
+    if (!ATTACHED_DAEMON_HOST && runningRefs.length > 0) {
+      cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
+    }
+    for (const key of composerSessions.keys()) {
+      const cleanup = composerSessions.peekRef<Promise<void> | null>(key, 'activeComposerSendCleanupRef')?.current
+      if (cleanup) cleanupTasks.push(cleanup.catch(() => undefined))
+    }
+    if (cleanupTasks.length > 0) {
+      await Promise.race([
+        Promise.all(cleanupTasks).then(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, EXIT_CLEANUP_TIMEOUT_MS)),
+      ])
+    }
+    persistTheme()
+    renderer.destroy()
+    process.exit(0)
+  })()
 }

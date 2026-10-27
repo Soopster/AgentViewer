@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -4921,51 +4921,12 @@ function OpenTuiWorkspace() {
     try { writeTuiThemeSync(currentThemeRef.current, themeFollowsTerminalRef.current) } catch { /* best-effort */ }
   }, [])
 
-  const confirmExit = useStableEvent(() => {
-    if (exitInProgressRef.current) return
-    exitInProgressRef.current = true
-    setExitCleanupInProgress(true)
-    setQueuedComposerSends(queuedComposerSendsRef.current)
-    try { workspaceContext.controller.flush() } catch { /* exit reports existing errors */ }
-
-    const cleanupPromise = activeComposerSendCleanupRef.current
-    const controller = composerAbortRef.current
-    const activeTurnRequestId = activeComposerTurnRequestIdRef.current
-    const activeTurnTarget = composerTargetSessionRef.current
-    const runningRefs = [...runningSessionsRef.current]
-    for (const key of composerSessions.keys()) composerSessions.peekRef<AbortController | null>(key, 'composerAbortRef')?.current?.abort()
-
-    void (async () => {
-      const cleanupTasks: Promise<unknown>[] = []
-      // Attached, the turns belong to the daemon: closing this window is a
-      // detach, and interrupting them here would stop work in every other
-      // client's view of it. Only the local stream above is dropped.
-      if (!ATTACHED_DAEMON_HOST && activeTurnTarget && activeTurnRequestId) {
-        cleanupTasks.push(interruptTuiSessionTurn({
-          sessionId: activeTurnTarget.sessionId,
-          provider: activeTurnTarget.provider,
-          providerInstanceId: activeTurnTarget.providerInstanceId,
-          turnRequestId: activeTurnRequestId,
-        }).catch(() => undefined))
-      }
-      if (!ATTACHED_DAEMON_HOST && runningRefs.length > 0) {
-        cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
-      }
-      for (const key of composerSessions.keys()) {
-        const cleanup = composerSessions.peekRef<Promise<void> | null>(key, 'activeComposerSendCleanupRef')?.current
-        if (cleanup) cleanupTasks.push(cleanup.catch(() => undefined))
-      }
-      if (cleanupTasks.length > 0) {
-        await Promise.race([
-          Promise.all(cleanupTasks).then(() => undefined),
-          new Promise<void>((resolve) => setTimeout(resolve, EXIT_CLEANUP_TIMEOUT_MS)),
-        ])
-      }
-      persistTheme()
-      renderer.destroy()
-      process.exit(0)
-    })()
-  })
+  const confirmExit = useStableEvent(() => runConfirmExit({
+    exitInProgressRef, setExitCleanupInProgress, setQueuedComposerSends, queuedComposerSendsRef,
+    workspaceContext, activeComposerSendCleanupRef, composerAbortRef,
+    activeComposerTurnRequestIdRef, composerTargetSessionRef, runningSessionsRef, composerSessions,
+    persistTheme, renderer,
+  }))
 
   const requestExit = useCallback(() => {
     setExitConfirmOpen(true)
