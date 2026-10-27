@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -6173,29 +6173,10 @@ function OpenTuiWorkspace() {
   })
 
   // Ask for `wanted` panes from the open tabs; say so when there are not enough.
-  const requestWindowPanes = useStableEvent((wanted: number, label: string) => {
-    let available = splitCandidateSessions.length
-    // Short of tabs, the layout fills from the rail's most recent sessions, as
-    // a window manager tiles the windows it has rather than leaving holes.
-    if (available < wanted) {
-      const taken = new Set([...openTabSessions.map((tab) => sessionKey(tab)), selectedSessionKey])
-      const extra = sessions.filter((session) => !taken.has(sessionKey(session))).slice(0, wanted - available)
-      if (extra.length > 0) {
-        setOpenTabSessions((prev) => [...prev, ...extra.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
-        available += extra.length
-      }
-    }
-    if (available === 0) {
-      showNotice('error', 'No other sessions to arrange · start one, or drag a session from the sidebar onto the reader')
-      return
-    }
-    const count = Math.min(wanted, available)
-    setSplitPaneCount(count)
-    void writeTuiSplitPanes(count).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to store split view setting')
-    })
-    showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
-  })
+  const requestWindowPanes = useStableEvent((wanted: number, label: string) => runRequestWindowPanes({
+    splitCandidateSessions, openTabSessions, selectedSessionKey, sessions, setOpenTabSessions,
+    showNotice, setSplitPaneCount, setError,
+  }, wanted, label))
 
   // What a right-click on a session offers, depending on where it is now.
   const openSessionMenu = useStableEvent((session: Session, source: 'rail' | 'tab' | 'pane', point: { x: number; y: number }, paneIndex?: number) => {

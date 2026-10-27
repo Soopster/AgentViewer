@@ -1618,3 +1618,42 @@ export function runBreakOutWindowTab(ctx: BreakOutWindowTabContext, key: string)
   floatWindowKey(key)
   showNotice('info', 'Detached into a floating window · no room beside this pane')
 }
+
+export type RequestWindowPanesContext = {
+  splitCandidateSessions: Session[]
+  openTabSessions: Session[]
+  selectedSessionKey: string | null
+  sessions: Session[]
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export function runRequestWindowPanes(ctx: RequestWindowPanesContext, wanted: number, label: string) {
+  const {
+    splitCandidateSessions, openTabSessions, selectedSessionKey, sessions, setOpenTabSessions,
+    showNotice, setSplitPaneCount, setError,
+  } = ctx
+  let available = splitCandidateSessions.length
+  // Short of tabs, the layout fills from the rail's most recent sessions, as
+  // a window manager tiles the windows it has rather than leaving holes.
+  if (available < wanted) {
+    const taken = new Set([...openTabSessions.map((tab) => sessionKey(tab)), selectedSessionKey])
+    const extra = sessions.filter((session) => !taken.has(sessionKey(session))).slice(0, wanted - available)
+    if (extra.length > 0) {
+      setOpenTabSessions((prev) => [...prev, ...extra.filter((session) => !prev.some((tab) => sessionKey(tab) === sessionKey(session)))])
+      available += extra.length
+    }
+  }
+  if (available === 0) {
+    showNotice('error', 'No other sessions to arrange · start one, or drag a session from the sidebar onto the reader')
+    return
+  }
+  const count = Math.min(wanted, available)
+  setSplitPaneCount(count)
+  void writeTuiSplitPanes(count).catch((err) => {
+    setError(err instanceof Error ? err.message : 'Failed to store split view setting')
+  })
+  showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
+}
