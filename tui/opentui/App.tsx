@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
@@ -4846,32 +4846,9 @@ function OpenTuiWorkspace() {
   })
 
   // /fork: continue in a copy of this conversation, leaving the original as it is.
-  const forkIntoNewSession = useStableEvent(async (target: Session, sendInFork?: string) => {
-    if (target.isPending) {
-      showNotice('info', 'Nothing to fork yet — send a first message')
-      return
-    }
-    try {
-      const forked = await forkTuiSession(target)
-      const fork: Session = {
-        ...target,
-        sessionId: forked.sessionId,
-        createdAt: Date.now(),
-        lastModified: Date.now(),
-        summary: `${sendInFork ? 'Side conversation from' : 'Fork of'} ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
-        customTitle: undefined,
-        isPending: false,
-      }
-      // Codex /side: the aside is sent in the fork once it is the composer's target.
-      if (sendInFork) pendingForkSendRef.current = { key: sessionKey(fork), text: sendInFork }
-      await openCreatedSession(fork)
-      showNotice('info', sendInFork
-        ? 'Side conversation — a fork of this chat; the original is unchanged.'
-        : 'Forked — you are now in the copy; the original is unchanged.')
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Fork failed')
-    }
-  })
+  const forkIntoNewSession = useStableEvent(async (target: Session, sendInFork?: string) => runForkIntoNewSession({
+    showNotice, pendingForkSendRef, openCreatedSession,
+  }, target, sendInFork))
 
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.

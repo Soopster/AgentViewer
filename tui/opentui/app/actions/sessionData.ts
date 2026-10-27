@@ -41,6 +41,7 @@ import { writeTuiProvider } from '../../../../lib/tui/service'
 import { prewarmTuiSession } from '../../../../lib/tui/service'
 import { runComposerSessionPreparation } from '../../splitPaneState'
 import { type TuiEffort } from '../types'
+import { forkTuiSession } from '../../../../lib/tui/service'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -866,5 +867,41 @@ export async function runPrepareCreatedSessionForComposer(ctx: PrepareCreatedSes
       composerPreparingTargetKeyRef.current = null
       setComposerPreparingTargetKey(null)
     }
+  }
+}
+
+export type ForkIntoNewSessionContext = {
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  pendingForkSendRef: React.RefObject<{ key: string; text: string; } | null>
+  openCreatedSession: (draft: Session) => Promise<void>
+}
+
+export async function runForkIntoNewSession(ctx: ForkIntoNewSessionContext, target: Session, sendInFork?: string) {
+  const {
+    showNotice, pendingForkSendRef, openCreatedSession,
+  } = ctx
+  if (target.isPending) {
+    showNotice('info', 'Nothing to fork yet — send a first message')
+    return
+  }
+  try {
+    const forked = await forkTuiSession(target)
+    const fork: Session = {
+      ...target,
+      sessionId: forked.sessionId,
+      createdAt: Date.now(),
+      lastModified: Date.now(),
+      summary: `${sendInFork ? 'Side conversation from' : 'Fork of'} ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+      customTitle: undefined,
+      isPending: false,
+    }
+    // Codex /side: the aside is sent in the fork once it is the composer's target.
+    if (sendInFork) pendingForkSendRef.current = { key: sessionKey(fork), text: sendInFork }
+    await openCreatedSession(fork)
+    showNotice('info', sendInFork
+      ? 'Side conversation — a fork of this chat; the original is unchanged.'
+      : 'Forked — you are now in the copy; the original is unchanged.')
+  } catch (err) {
+    showNotice('error', err instanceof Error ? err.message : 'Fork failed')
   }
 }
