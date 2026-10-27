@@ -317,7 +317,7 @@ import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffec
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect, runLiveTranscriptOverlayEffect } from './app/effects/liveTranscript'
-import { runPersistBridgeMessagesEffect, runLoadBridgeMessagesEffect } from './app/effects/bridge'
+import { runPersistBridgeMessagesEffect, runLoadBridgeMessagesEffect, runBridgeSubscribeEffect } from './app/effects/bridge'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2014,32 +2014,10 @@ function OpenTuiWorkspace() {
   }, [canUseIdeBridge])
 
   // Subscribe only while a Claude session can actively use the bridge.
-  useEffect(() => {
-    if (!canUseChannelBridge || (!channelBridgeOpen && !routeComposerToBridge)) return
-    const config = readBridgeConfigFromEnv()
-    let entrySeq = 0
-    const unsubscribe = subscribeToChannelEvents(
-      config,
-      (event: ChannelEvent) => {
-        if (event.type === 'reply') {
-          const timestamp = new Date(Date.now() + entrySeq * 100).toISOString()
-          setBridgeTranscriptEntries((prev) => [...prev, { kind: 'reply', text: event.text, timestamp }])
-          entrySeq += 1
-        }
-      },
-      (status) => {
-        if (status !== 'connected' || !selectedSessionTarget) return
-        void flushChannelBridgeOutbox(
-          channelBridgeFileOutboxStorage,
-          config,
-          selectedSessionTarget.sessionId,
-        ).then((result) => {
-          if (result.error) showNotice('error', `Channel message remains queued: ${result.error.message}`)
-        })
-      },
-    )
-    return unsubscribe
-  }, [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge, selectedSessionTarget?.sessionId])
+  useEffect(() => runBridgeSubscribeEffect({
+    canUseChannelBridge, channelBridgeOpen, routeComposerToBridge, setBridgeTranscriptEntries,
+    selectedSessionTarget, showNotice,
+  }), [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge, selectedSessionTarget?.sessionId])
 
   // Load persisted bridge messages when selected session changes
   useEffect(() => runLoadBridgeMessagesEffect({
