@@ -344,6 +344,7 @@ import { useWindowLayoutState } from './app/state/windowLayoutState'
 import { useWindowOverlayState } from './app/state/windowOverlayState'
 import { useWindowPanesState } from './app/state/windowPanesState'
 import { useProviderThemeState } from './app/state/providerThemeState'
+import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9254,37 +9255,7 @@ function OpenTuiWorkspace() {
 
       {/* Every border between neighbouring panes: the frame before it, its
           right or bottom border, redrawn so it is hittable, and dragged. */}
-      {!fullscreenMode && windowZoom === null && !windowSurfacePeek ? fittedWindows.groups.flatMap((group) => group.members.slice(0, -1).map((member, index) => {
-        const rect = rectOf(`split-pane:${member}`)
-        if (!rect) return null
-        const id = `window-border:${group.key}:${index}`
-        const lit = hoveredWindowBorder === id || (typeof splitDividerDragging === 'object' && splitDividerDragging?.group === group.key && splitDividerDragging.index === index)
-        const vertical = group.axis === 'x'
-        const length = Math.max(1, (vertical ? rect.height : rect.width) - 2)
-        return (
-          <box
-            key={id}
-            id={id}
-            position="absolute"
-            top={vertical ? rect.y + 1 : rect.y + rect.height - 1}
-            left={vertical ? rect.x + rect.width - 1 : rect.x + 1}
-            width={vertical ? 1 : length}
-            height={vertical ? length : 1}
-            zIndex={40}
-            onMouseOver={() => setHoveredWindowBorder(id)}
-            onMouseOut={() => setHoveredWindowBorder((current) => (current === id ? null : current))}
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.stopPropagation()
-              setSplitDividerDragging({ group: group.key, index })
-            }}
-          >
-            <text fg={lit ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
-              {vertical ? Array.from({ length }, () => '│').join('\n') : '─'.repeat(length)}
-            </text>
-          </box>
-        )
-      })) : null}
+      <WindowGroupDividers fullscreenMode={fullscreenMode} windowZoom={windowZoom} windowSurfacePeek={windowSurfacePeek} fittedWindows={fittedWindows} rectOf={rectOf} hoveredWindowBorder={hoveredWindowBorder} splitDividerDragging={splitDividerDragging} setHoveredWindowBorder={setHoveredWindowBorder} setSplitDividerDragging={setSplitDividerDragging} theme={theme} />
 
       {treeGeometry && !fullscreenMode && windowZoom === null && !windowSurfacePeek ? treeGeometry.dividers.map(divider => {
         const area = rectOf('window-area')
