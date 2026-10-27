@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8718,51 +8718,10 @@ function OpenTuiWorkspace() {
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the
   // one writer of the count — it persists and narrates every change.
-  const applySplitPaneCount = useStableEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => {
-    checkpointWindowLayout()
-    setSplitPaneCount(next)
-    void writeTuiSplitPanes(next).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to store split view setting')
-    })
-    if (windowSplitTree) {
-      showNotice('info', label ?? `${next} session pane${next === 1 ? '' : 's'} open`)
-      return
-    }
-    if (next === 0) {
-      showNotice('info', label ?? 'Split transcript view off')
-      return
-    }
-    // Narrate the requested NEXT layout. Reading splitPaneWidth here would use
-    // the previous render, which made the first successful split falsely claim
-    // that even wide terminals were too narrow.
-    // Project against the orientation being applied, not the one still in
-    // state: an orientation change and a pane add land in the same keystroke,
-    // and reading the rendered axis here told a working stacked split it had
-    // no room.
-    const nextStacked = (orientation ?? splitOrientation) === 'rows'
-    const nextLayout = calculateSplitPaneLayout({
-      availableExtent: nextStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth,
-      requestedCount: next,
-      availableCount: Math.min(next, splitCandidateSessions.length),
-      maxPanes: SPLIT_PANE_MAX,
-      minPaneExtent: nextStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
-      minReaderExtent: nextStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
-      readerShare: splitReaderShare,
-    })
-    if (nextLayout.visibleCount < next) {
-      // Stacked is the escape hatch from a narrow terminal, so offer it rather
-      // than only saying "widen the terminal".
-      showNotice('info', nextStacked
-        ? `Split panes: ${nextLayout.visibleCount}/${next} visible (terminal too short — ⌃B % for side-by-side)`
-        : `Split panes: ${nextLayout.visibleCount}/${next} visible (⌃B " to stack instead, or hide the rail with h)`)
-      return
-    }
-    showNotice('info', label ?? (
-      RUNNING_INSIDE_TMUX
-        ? `Split panes: ${next} · use ? palette (tmux captures ⌃B)`
-        : `Split panes: ${next} · ⌃B o next pane · ⌃B x close`
-    ))
-  })
+  const applySplitPaneCount = useStableEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => runApplySplitPaneCount({
+    checkpointWindowLayout, setSplitPaneCount, setError, windowSplitTree, showNotice,
+    splitOrientation, mainContentHeight, readerAreaWidth, splitCandidateSessions, splitReaderShare,
+  }, next, label, orientation))
 
   // tmux shape: % splits the focused frame right; " splits it below.
   // Existing branches retain their orientation, allowing mixed layouts.

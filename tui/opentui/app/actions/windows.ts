@@ -38,6 +38,9 @@ import { type SurfacePanelState } from '../../surfacePanelState'
 import { type WorkspaceContextValue } from '../../workspaceContext'
 import { copySurfaceViewState, surfaceViewNamespace } from '../../windowViewState'
 import { writeTuiSplitOrientation } from '../../../../lib/tui/service'
+import { calculateSplitPaneLayout } from '../../splitPaneState'
+import { MIN_READER_WIDTH, SPLIT_PANE_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS } from '../layoutConstants'
+import { RUNNING_INSIDE_TMUX } from '../commands'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -587,4 +590,67 @@ export function runRestoreWindowSnapshot(ctx: RestoreWindowSnapshotContext, prev
     writeTuiSplitReaderShare(layout.readerShare),
     writeTuiWindowArrangement({ arrangement: layout.arrangement, readerLast: layout.readerLast, secondaryShare: layout.secondaryShare, bottomShare: layout.bottomShare, weights: layout.weights ?? {} }),
   ]).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store restored layout'))
+}
+
+export type ApplySplitPaneCountContext = {
+  checkpointWindowLayout: () => void
+  setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  windowSplitTree: WindowSplitTree | null
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  splitOrientation: SplitPaneOrientation
+  mainContentHeight: number
+  readerAreaWidth: number
+  splitCandidateSessions: Session[]
+  splitReaderShare: number
+}
+
+export function runApplySplitPaneCount(ctx: ApplySplitPaneCountContext, next: number, label?: string, orientation?: SplitPaneOrientation) {
+  const {
+    checkpointWindowLayout, setSplitPaneCount, setError, windowSplitTree, showNotice,
+    splitOrientation, mainContentHeight, readerAreaWidth, splitCandidateSessions, splitReaderShare,
+  } = ctx
+  checkpointWindowLayout()
+  setSplitPaneCount(next)
+  void writeTuiSplitPanes(next).catch((err) => {
+    setError(err instanceof Error ? err.message : 'Failed to store split view setting')
+  })
+  if (windowSplitTree) {
+    showNotice('info', label ?? `${next} session pane${next === 1 ? '' : 's'} open`)
+    return
+  }
+  if (next === 0) {
+    showNotice('info', label ?? 'Split transcript view off')
+    return
+  }
+  // Narrate the requested NEXT layout. Reading splitPaneWidth here would use
+  // the previous render, which made the first successful split falsely claim
+  // that even wide terminals were too narrow.
+  // Project against the orientation being applied, not the one still in
+  // state: an orientation change and a pane add land in the same keystroke,
+  // and reading the rendered axis here told a working stacked split it had
+  // no room.
+  const nextStacked = (orientation ?? splitOrientation) === 'rows'
+  const nextLayout = calculateSplitPaneLayout({
+    availableExtent: nextStacked ? Math.max(mainContentHeight - 2, 8) : readerAreaWidth,
+    requestedCount: next,
+    availableCount: Math.min(next, splitCandidateSessions.length),
+    maxPanes: SPLIT_PANE_MAX,
+    minPaneExtent: nextStacked ? SPLIT_PANE_MIN_ROWS : SPLIT_PANE_MIN_WIDTH,
+    minReaderExtent: nextStacked ? MIN_READER_ROWS : MIN_READER_WIDTH,
+    readerShare: splitReaderShare,
+  })
+  if (nextLayout.visibleCount < next) {
+    // Stacked is the escape hatch from a narrow terminal, so offer it rather
+    // than only saying "widen the terminal".
+    showNotice('info', nextStacked
+      ? `Split panes: ${nextLayout.visibleCount}/${next} visible (terminal too short — ⌃B % for side-by-side)`
+      : `Split panes: ${nextLayout.visibleCount}/${next} visible (⌃B " to stack instead, or hide the rail with h)`)
+    return
+  }
+  showNotice('info', label ?? (
+    RUNNING_INSIDE_TMUX
+      ? `Split panes: ${next} · use ? palette (tmux captures ⌃B)`
+      : `Split panes: ${next} · ⌃B o next pane · ⌃B x close`
+  ))
 }
