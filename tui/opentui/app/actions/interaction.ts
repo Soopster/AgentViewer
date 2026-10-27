@@ -828,3 +828,42 @@ export function runReplySelectedMessage(ctx: ReplySelectedMessageContext, cardOv
   })
   setComposerActive(true)
 }
+
+export type MoveAgentToolCursorContext = {
+  groupedToolView: boolean
+  readCursorIndex: () => number
+  visibleTranscriptCards: TuiTranscriptCard[]
+  resolvedExpandedKeys: Set<string>
+  agentToolCursorByGroupKey: Record<string, string>
+  setAgentToolCursorByGroupKey: React.Dispatch<React.SetStateAction<Record<string, string>>>
+}
+
+export function runMoveAgentToolCursor(ctx: MoveAgentToolCursorContext, delta: -1 | 1) {
+  const {
+    groupedToolView, readCursorIndex, visibleTranscriptCards, resolvedExpandedKeys,
+    agentToolCursorByGroupKey, setAgentToolCursorByGroupKey,
+  } = ctx
+  if (!groupedToolView) return false
+  const cursorIndex = readCursorIndex()
+  const groupCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+  if (!groupCard || !resolvedExpandedKeys.has(groupCard.key)) return false
+  const toolCards = agentToolCardsFor(groupCard)
+  if (toolCards.length === 0) return false
+  const currentKey = agentToolCursorByGroupKey[groupCard.key] ?? null
+  const currentIndex = currentKey
+    ? toolCards.findIndex((toolCard) => toolCard.key === currentKey)
+    : -1
+  if (currentIndex === -1) {
+    if (delta < 0) return false
+    const first = toolCards[0]
+    if (!first) return false
+    setAgentToolCursorByGroupKey((current) => current[groupCard.key] === first.key ? current : { ...current, [groupCard.key]: first.key })
+    return true
+  }
+  const nextIndex = currentIndex + delta
+  if (nextIndex < 0 || nextIndex >= toolCards.length) return false
+  const next = toolCards[nextIndex]
+  if (!next) return false
+  setAgentToolCursorByGroupKey((current) => current[groupCard.key] === next.key ? current : { ...current, [groupCard.key]: next.key })
+  return true
+}

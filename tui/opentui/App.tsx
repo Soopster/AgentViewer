@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
@@ -3876,31 +3876,10 @@ function OpenTuiWorkspace() {
   })
 
 
-  const moveAgentToolCursor = useStableEvent((delta: -1 | 1): boolean => {
-    if (!groupedToolView) return false
-    const cursorIndex = readCursorIndex()
-    const groupCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
-    if (!groupCard || !resolvedExpandedKeys.has(groupCard.key)) return false
-    const toolCards = agentToolCardsFor(groupCard)
-    if (toolCards.length === 0) return false
-    const currentKey = agentToolCursorByGroupKey[groupCard.key] ?? null
-    const currentIndex = currentKey
-      ? toolCards.findIndex((toolCard) => toolCard.key === currentKey)
-      : -1
-    if (currentIndex === -1) {
-      if (delta < 0) return false
-      const first = toolCards[0]
-      if (!first) return false
-      setAgentToolCursorByGroupKey((current) => current[groupCard.key] === first.key ? current : { ...current, [groupCard.key]: first.key })
-      return true
-    }
-    const nextIndex = currentIndex + delta
-    if (nextIndex < 0 || nextIndex >= toolCards.length) return false
-    const next = toolCards[nextIndex]
-    if (!next) return false
-    setAgentToolCursorByGroupKey((current) => current[groupCard.key] === next.key ? current : { ...current, [groupCard.key]: next.key })
-    return true
-  })
+  const moveAgentToolCursor = useStableEvent((delta: -1 | 1) => runMoveAgentToolCursor({
+    groupedToolView, readCursorIndex, visibleTranscriptCards, resolvedExpandedKeys,
+    agentToolCursorByGroupKey, setAgentToolCursorByGroupKey,
+  }, delta))
 
   // Returns the number of cards to move for one j/k/↑/↓ tick. With velocity
   // scroll off (or on a fresh tap) this is just 1; while the same direction
