@@ -352,6 +352,7 @@ import { ComposerDock } from './app/overlays/ComposerDock'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
 import { runProjectedWindowGeometry } from './app/derived/windowGeometry'
+import { WorkspaceBody } from './app/overlays/WorkspaceBody'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8037,231 +8038,181 @@ function OpenTuiWorkspace() {
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); restoreWindowPresentation() } }}>
             <text fg={theme.cyan} selectable={false} wrapMode="none">{fullscreenMode ? ' FULLSCREEN · Shift+Z restore ' : ' ZOOM · Ctrl+B m restore '}</text>
           </box> : null}
-      <box
-        flexGrow={surfacePanelAtBottom ? 0 : 1}
-        flexShrink={surfacePanelAtBottom ? 0 : undefined}
-        // No padding or gap: frames meet the screen edge and each other, and
-        // the docked composer follows this row directly.
-        height={mainContentHeight}
-        flexDirection="row"
-        backgroundColor={theme.bg}
-      >
-        <SessionRail showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} />
-
-        {showTabs && verticalTabsWidth > 0 ? <VerticalTabs
-          options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys}
-          width={verticalTabsWidth} height={mainContentHeight} theme={theme}
-          onClose={index => {
-            if (index < visibleTabSessions.length) closeSessionTab(visibleTabSessions[index])
-            else { const id = popoverTabs[index - visibleTabSessions.length]; if (id) closePopoverTab(id) }
-          }}
-          onHorizontal={() => {
-            setTabOrientation('horizontal')
-            void writeTuiTabOrientation('horizontal').catch(err => setError(String(err)))
-          }}
-          onPress={(index, event) => {
-            const session = visibleTabSessions[index]
-            if (event.button === 2) {
-              event.stopPropagation()
-              if (session) splitPaneActions.sessionMenu(session, 'tab', event)
-              else { const id = popoverTabs[index - visibleTabSessions.length]; if (id) openPopoverTabMenu(id, event) }
-            } else if (event.button === 0) {
-              if (session) sessionDragHandlers.press(session, null, event, () => selectStripIndex(index))
-              else selectStripIndex(index)
-            }
-          }}
-          onDrag={event => sessionDragHandlers.move(event)}
-          onRelease={event => { if (event.button === 0) sessionDragHandlers.release(event) }}
-        /> : null}
-        <box width={readerAreaWidth} flexDirection="column">
-          {showHorizontalTabs ? (
-            <box
-              id="session-tab-strip"
-              height={TAB_BAR_HEIGHT}
-              paddingTop={1}
-              flexShrink={0}
-              paddingX={1}
-              overflow="hidden"
-              backgroundColor={theme.bg}
-            >
-              <tab-select
-                id="session-tabs"
-                ref={tabSelectRef}
-                options={tabOptions}
-                width={tabStripWidth(readerAreaWidth)}
-                height={1}
-                tabWidth={tabWidth}
-                backgroundColor={theme.bg}
-                focusedBackgroundColor={theme.surface3}
-                textColor={theme.muted}
-                focusedTextColor={theme.text}
-                selectedBackgroundColor={theme.surface}
-                selectedTextColor={theme.cyan}
-                selectedDescriptionColor={theme.dim}
-                showDescription={false}
-                showUnderline={false}
-                showScrollArrows={true}
-                wrapSelection={false}
-                // A tab opens on release, and a press that moves drags it onto the
-                // window area, as a rail row does.
-                onMouseDown={(event) => {
-                  const popoverTab = popoverTabAt(event.x)
-                  if (popoverTab) {
-                    event.stopPropagation()
-                    if (event.button === 2) openPopoverTabMenu(popoverTab, event)
-                    else if (event.button === 0 && tabCloseHit(event.x)) closePopoverTab(popoverTab)
-                    else if (event.button === 0) showPopoverTab(popoverTab)
-                    return
-                  }
-                  if (event.button === 2) {
-                    const tab = tabAt(event.x)
-                    if (tab) splitPaneActions.sessionMenu(tab, 'tab', event)
-                    return
-                  }
-                  if (event.button !== 0) return
-                  const tab = tabAt(event.x)
-                  if (tab && tabCloseHit(event.x)) {
-                    event.stopPropagation()
-                    event.preventDefault()
-                    closeSessionTab(tab)
-                    return
-                  }
-                  if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
-                }}
-                onMouseDrag={(event) => sessionDragHandlers.move(event)}
-                onMouseUp={(event) => {
-                  if (event.button !== 0) return
-                  sessionDragHandlers.release(event)
-                }}
-                onChange={(index: number) => selectStripIndex(index)}
-              />
-            </box>
-          ) : showPreviewBar && selectedSession ? (
-            <box paddingX={1} backgroundColor={theme.surface2}>
-              <text fg={theme.cyan} wrapMode="none">{previewBarText}</text>
-            </box>
-          ) : null}
-
-          {/* Reader + split panes share one frame area. Side-by-side lays it
-              out as columns; stacked as rows, which is the only shape a split
-              can take on a terminal too narrow for two 46-column frames. */}
-          {/* Reader + split panes share one frame area, laid out by the
-              window arrangement: along one axis (the tmux-style split, which
-              is the only shape a narrow terminal can take), the reader beside
-              a stack, or a grid. */}
-          {windowOverflowRows > 0 ? (
-            <box id="window-overflow" ref={windowOverflowRef} height={1} flexShrink={0} flexDirection="row" overflow="hidden" backgroundColor={theme.surface2}>
-              <text fg={theme.amber} width={` +${overflowWindowItems.length} hidden · `.length} flexShrink={0} wrapMode="none">{` +${overflowWindowItems.length} hidden · `}</text>
-              {overflowWindowItems.map((item, index) => {
-                const title = fitText(item.kind === 'session' ? `${badgeForWindow(sessionKey(item.session)) ? `${badgeForWindow(sessionKey(item.session), true)} · ` : ''}${formatSessionTitle(item.session)}` : surfaceTitle(item.surface), 24).trimEnd()
-                const label = `${index > 0 ? ' · ' : ''}${title}`
-                return (
-                  <box key={item.kind === 'session' ? sessionKey(item.session) : item.surface} width={label.length} flexShrink={0}
-                    onMouseDown={(event) => {
-                      if (event.button !== 0) return
-                      event.stopPropagation()
-                      if (item.kind === 'session') pickWindowTarget(sessionKey(item.session))
-                      else showNotice('info', `${surfaceTitle(item.surface)} is preserved · enlarge the terminal to restore it`)
-                    }}>
-                    <text fg={theme.muted} wrapMode="none" selectable={false}>{label}</text>
-                  </box>
-                )
-              })}
-              <text fg={theme.dim} flexShrink={0} wrapMode="none"> · enlarge to restore</text>
-            </box>
-          ) : null}
-          <box
-            id="window-area"
-            ref={windowAreaRef}
-            flexDirection="row"
-            flexGrow={1}
-          >
-          {workspacesEnabled && !workspaceLaunched ? (
-            <WorkspaceLauncher theme={theme} cwd={workspaceCwd}
-              onOpenSession={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setFocusedPane('sessions') }}
-              onNewAgent={() => { setWorkspaceLaunched(true); setWorkspaceHasSession(true); setNewSessionCwd(workspaceCwd); setNewSessionModalOpen(true) }}
-              onTerminal={() => { setWorkspaceLaunched(true); openSurfaceWindow('terminal') }}
-              onLayout={() => { setWorkspaceLaunched(true); setWindowPickerOpen(true) }} />
-          ) : windowSurfacePeek ? (
-            // The surface layer draws the peeked window over the whole area.
-            <box visible={false}>{readerFrameNode()}</box>
-          ) : !hasPrimaryFrame && orderedWindowKeys.length === 0 ? (
-            <box flexGrow={1} alignItems="center" justifyContent="center" flexDirection="column">
-              <text fg={theme.dim}>No panes open</text>
-              <box onMouseDown={event => { if (event.button !== 0) return; event.stopPropagation(); setWorkspaceHasSession(true); setFocusedPane('sessions') }}><text fg={theme.cyan} selectable={false}>Open session from the sidebar</text></box>
-            </box>
-          ) : treeGeometry ? (
-            <>
-              {windowItems.map((item, index) => {
-                const rect = treeGeometry!.rects.get(index)!
-                // The reader draws this window (below, under the window's id).
-                const hidden = windowHiddenByZoom(index) || index === popoverHostSlot
-                return <box key={windowItemKey(item)} position="absolute" left={zoomedIndex === index ? 0 : rect.x} top={zoomedIndex === index ? 0 : rect.y}
-                  width={zoomedIndex === index ? readerAreaWidth : rect.width} height={zoomedIndex === index ? windowAreaHeight : rect.height}
-                  visible={!hidden} flexDirection="column">
-                  {renderWindowItem(item, index, zoomAware(index, { width: rect.width, height: rect.height, boxHeight: rect.height }), hidden)}
-                </box>
-              })}
-              {/* The window the reader draws carries that window's id, so anything that
-                  finds a window by id (splits, drops, control mode) finds it here. */}
-              {/* The popover tab, over the window it took (or in its own slot). */}
-              <box key="tree-reader" position="absolute" left={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.x ?? 0)} top={windowZoom === 'reader' ? 0 : (treeGeometry.rects.get(-1)?.y ?? 0)}
-                width={windowZoom === 'reader' ? readerAreaWidth : treeGeometry.rects.get(-1)?.width ?? 0} height={windowZoom === 'reader' ? windowAreaHeight : treeGeometry.rects.get(-1)?.height ?? 0}
-                visible={hasPrimaryFrame && (!zooming || windowZoom === 'reader')} flexDirection="row">{hasPrimaryFrame ? readerFrameNode() : null}</box>
-            </>
-          ) : (
-            // Full screen with nothing selected: only a popover tab can be shown.
-            readerFrameNode()
-          )}
-          {renderSurfaceLayer()}
-          <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
-            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
-            foreground={theme.cyan} background={theme.surface} />
-
-          </box>
-        </box>
-
-        {/* Reserve the task-panel column in flow, then extend its frame through
-            the docked composer so both share the right-hand column. */}
-        {taskPanelVisible ? <box width={effectiveTaskPanelWidth} /> : null}
-        <TaskSidePanelFrame taskPanelVisible={taskPanelVisible} effectiveSurfacePanelWidth={effectiveSurfacePanelWidth} effectiveTaskPanelWidth={effectiveTaskPanelWidth} surfacePanelHeight={surfacePanelHeight} taskPanelMessages={taskPanelMessages} composerLiveTodos={composerLiveTodos} selectedSession={selectedSession} theme={theme} visibleTranscriptCards={visibleTranscriptCards} jumpToTranscriptIndex={jumpToTranscriptIndex} taskPanelTab={taskPanelTab} liveSubagentText={liveSubagentText} />
-
-        {/* Width reservation only — the panel itself is positioned absolutely
-            below so it can share the full-height right-hand column. */}
-        {surfacePanelOnRight ? (
-          <box width={effectiveSurfacePanelWidth} />
-        ) : null}
-
-        {surfacePanelOnRight ? (
-          // Beside the reader it spans the right-hand column, composer rows included.
-          <box
-            id="surface-panel-frame"
-            position="absolute"
-            top={0}
-            right={0}
-            width={effectiveSurfacePanelWidth}
-            height={surfacePanelHeight}
-            overflow="hidden"
-            zIndex={5}
-          >
-            {surfacePanelElement}
-          </box>
-        ) : null}
-
-
-        <SelectMenusOverlay themeMode={themeMode} theme={theme} providerMenuOpen={providerMenuOpen} presentationFocusMode={presentationFocusMode} providerOptions={providerOptions} providerMenuIndex={providerMenuIndex} setProviderMenuIndex={setProviderMenuIndex} chooseProvider={chooseProvider} modelPickerOpen={modelPickerOpen} width={width} height={height} composerAccentColor={composerAccentColor} modelPickerTarget={modelPickerTarget} modelPickerPermissionLabel={modelPickerPermissionLabel} modelPickerOptions={modelPickerOptions} modelPickerIndex={modelPickerIndex} composerCopilotContextTier={composerCopilotContextTier} modelPickerFocus={modelPickerFocus} filteredModelPickerOptions={filteredModelPickerOptions} modelPickerLoading={modelPickerLoading} modelPickerError={modelPickerError} modelPickerQuery={modelPickerQuery} setModelPickerQuery={setModelPickerQuery} setModelPickerIndex={setModelPickerIndex} applyModelPickerOption={applyModelPickerOption} compactModelPickerEffortOptions={compactModelPickerEffortOptions} modelPickerEffortIndex={modelPickerEffortIndex} setModelPickerEffortIndex={setModelPickerEffortIndex} applyModelPickerEffort={applyModelPickerEffort} compactModelPickerPermissionOptions={compactModelPickerPermissionOptions} modelPickerPermissionIndex={modelPickerPermissionIndex} setModelPickerPermissionIndex={setModelPickerPermissionIndex} applyModelPickerPermission={applyModelPickerPermission} modelPickerFocusedLabel={modelPickerFocusedLabel} modelPickerFocusedOption={modelPickerFocusedOption} modelPickerFocusedDescription={modelPickerFocusedDescription} />
-
-        <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} />
-
-        <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} transcriptViewMenuOriginRef={transcriptViewMenuOriginRef} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} setTranscriptView={setTranscriptView} chooseTranscriptView={chooseTranscriptView} lightweightWindows={lightweightWindows} />
-
-        <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} />
-
-        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} />
-
-        <BookmarksOverlay bookmarksOverlayOpen={bookmarksOverlayOpen} width={width} bookmarksOverlay={bookmarksOverlay} focusMode={focusMode} height={height} bookmarksOverlayIndex={bookmarksOverlayIndex} theme={theme} />
-
-      </box>
+      <WorkspaceBody
+        surfacePanelAtBottom={surfacePanelAtBottom}
+        mainContentHeight={mainContentHeight}
+        theme={theme}
+        showRail={showRail}
+        sidebarWidth={sidebarWidth}
+        sidebarExtraRows={sidebarExtraRows}
+        sidebarView={sidebarView}
+        effectiveFocus={effectiveFocus}
+        coordinatorSidebarHeader={coordinatorSidebarHeader}
+        sidebarHeaderBaseText={sidebarHeaderBaseText}
+        toggleSidebarSort={toggleSidebarSort}
+        showToggleOutcome={showToggleOutcome}
+        sidebarSort={sidebarSort}
+        sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth}
+        sidebarProviderBadgeText={sidebarProviderBadgeText}
+        sidebarProviderAccent={sidebarProviderAccent}
+        workspacesEnabled={workspacesEnabled}
+        openSpaces={openSpaces}
+        fullScreenPopoverOpen={fullScreenPopoverOpen}
+        setAllProjects={setAllProjects}
+        allProjects={allProjects}
+        sidebarInnerWidth={sidebarInnerWidth}
+        sidebarRowBudget={sidebarRowBudget}
+        density={density}
+        sidebarScrollbarOptions={sidebarScrollbarOptions}
+        loadingSessions={loadingSessions}
+        sessions={sessions}
+        sidebarEntries={sidebarEntries}
+        sidebarScrollRef={sidebarScrollRef}
+        sidebarRowElements={sidebarRowElements}
+        showTabs={showTabs}
+        verticalTabsWidth={verticalTabsWidth}
+        tabOptions={tabOptions}
+        activeStripIndex={activeStripIndex}
+        runningTabKeys={runningTabKeys}
+        visibleTabSessions={visibleTabSessions}
+        closeSessionTab={closeSessionTab}
+        popoverTabs={popoverTabs}
+        closePopoverTab={closePopoverTab}
+        setTabOrientation={setTabOrientation}
+        setError={setError}
+        splitPaneActions={splitPaneActions}
+        openPopoverTabMenu={openPopoverTabMenu}
+        sessionDragHandlers={sessionDragHandlers}
+        selectStripIndex={selectStripIndex}
+        readerAreaWidth={readerAreaWidth}
+        showHorizontalTabs={showHorizontalTabs}
+        TAB_BAR_HEIGHT={TAB_BAR_HEIGHT}
+        tabSelectRef={tabSelectRef}
+        tabWidth={tabWidth}
+        popoverTabAt={popoverTabAt}
+        tabCloseHit={tabCloseHit}
+        showPopoverTab={showPopoverTab}
+        tabAt={tabAt}
+        selectTabSession={selectTabSession}
+        showPreviewBar={showPreviewBar}
+        selectedSession={selectedSession}
+        previewBarText={previewBarText}
+        windowOverflowRows={windowOverflowRows}
+        windowOverflowRef={windowOverflowRef}
+        overflowWindowItems={overflowWindowItems}
+        badgeForWindow={badgeForWindow}
+        pickWindowTarget={pickWindowTarget}
+        showNotice={showNotice}
+        windowAreaRef={windowAreaRef}
+        workspaceLaunched={workspaceLaunched}
+        workspaceCwd={workspaceCwd}
+        setWorkspaceLaunched={setWorkspaceLaunched}
+        setWorkspaceHasSession={setWorkspaceHasSession}
+        setFocusedPane={setFocusedPane}
+        setNewSessionCwd={setNewSessionCwd}
+        setNewSessionModalOpen={setNewSessionModalOpen}
+        openSurfaceWindow={openSurfaceWindow}
+        setWindowPickerOpen={setWindowPickerOpen}
+        windowSurfacePeek={windowSurfacePeek}
+        readerFrameNode={readerFrameNode}
+        hasPrimaryFrame={hasPrimaryFrame}
+        orderedWindowKeys={orderedWindowKeys}
+        treeGeometry={treeGeometry}
+        windowItems={windowItems}
+        windowHiddenByZoom={windowHiddenByZoom}
+        popoverHostSlot={popoverHostSlot}
+        windowItemKey={windowItemKey}
+        zoomedIndex={zoomedIndex}
+        windowAreaHeight={windowAreaHeight}
+        renderWindowItem={renderWindowItem}
+        zoomAware={zoomAware}
+        windowZoom={windowZoom}
+        zooming={zooming}
+        renderSurfaceLayer={renderSurfaceLayer}
+        selectedWindowHandleRef={selectedWindowHandleRef}
+        selectedSessionKey={selectedSessionKey}
+        windowControlsBlocked={windowControlsBlocked}
+        shownPopoverTab={shownPopoverTab}
+        taskPanelVisible={taskPanelVisible}
+        effectiveTaskPanelWidth={effectiveTaskPanelWidth}
+        effectiveSurfacePanelWidth={effectiveSurfacePanelWidth}
+        surfacePanelHeight={surfacePanelHeight}
+        taskPanelMessages={taskPanelMessages}
+        composerLiveTodos={composerLiveTodos}
+        visibleTranscriptCards={visibleTranscriptCards}
+        jumpToTranscriptIndex={jumpToTranscriptIndex}
+        taskPanelTab={taskPanelTab}
+        liveSubagentText={liveSubagentText}
+        surfacePanelOnRight={surfacePanelOnRight}
+        surfacePanelElement={surfacePanelElement}
+        themeMode={themeMode}
+        providerMenuOpen={providerMenuOpen}
+        presentationFocusMode={presentationFocusMode}
+        providerOptions={providerOptions}
+        providerMenuIndex={providerMenuIndex}
+        setProviderMenuIndex={setProviderMenuIndex}
+        chooseProvider={chooseProvider}
+        modelPickerOpen={modelPickerOpen}
+        width={width}
+        height={height}
+        composerAccentColor={composerAccentColor}
+        modelPickerTarget={modelPickerTarget}
+        modelPickerPermissionLabel={modelPickerPermissionLabel}
+        modelPickerOptions={modelPickerOptions}
+        modelPickerIndex={modelPickerIndex}
+        composerCopilotContextTier={composerCopilotContextTier}
+        modelPickerFocus={modelPickerFocus}
+        filteredModelPickerOptions={filteredModelPickerOptions}
+        modelPickerLoading={modelPickerLoading}
+        modelPickerError={modelPickerError}
+        modelPickerQuery={modelPickerQuery}
+        setModelPickerQuery={setModelPickerQuery}
+        setModelPickerIndex={setModelPickerIndex}
+        applyModelPickerOption={applyModelPickerOption}
+        compactModelPickerEffortOptions={compactModelPickerEffortOptions}
+        modelPickerEffortIndex={modelPickerEffortIndex}
+        setModelPickerEffortIndex={setModelPickerEffortIndex}
+        applyModelPickerEffort={applyModelPickerEffort}
+        compactModelPickerPermissionOptions={compactModelPickerPermissionOptions}
+        modelPickerPermissionIndex={modelPickerPermissionIndex}
+        setModelPickerPermissionIndex={setModelPickerPermissionIndex}
+        applyModelPickerPermission={applyModelPickerPermission}
+        modelPickerFocusedLabel={modelPickerFocusedLabel}
+        modelPickerFocusedOption={modelPickerFocusedOption}
+        modelPickerFocusedDescription={modelPickerFocusedDescription}
+        themeMenuOpen={themeMenuOpen}
+        themeMenuOriginRef={themeMenuOriginRef}
+        themeMenuGroup={themeMenuGroup}
+        themeMenuQuery={themeMenuQuery}
+        themeMenuIndex={themeMenuIndex}
+        focusMode={focusMode}
+        setThemeMenuQuery={setThemeMenuQuery}
+        setThemeMenuIndex={setThemeMenuIndex}
+        setThemeMode={setThemeMode}
+        chooseTheme={chooseTheme}
+        themeFollowsTerminal={themeFollowsTerminal}
+        transcriptViewMenuOpen={transcriptViewMenuOpen}
+        transcriptViewMenuOriginRef={transcriptViewMenuOriginRef}
+        transcriptViewMenuIndex={transcriptViewMenuIndex}
+        setTranscriptViewMenuIndex={setTranscriptViewMenuIndex}
+        setTranscriptView={setTranscriptView}
+        chooseTranscriptView={chooseTranscriptView}
+        lightweightWindows={lightweightWindows}
+        commandPaletteOpen={commandPaletteOpen}
+        filteredCommands={filteredCommands}
+        paletteDisplayRows={paletteDisplayRows}
+        commandPaletteIndex={commandPaletteIndex}
+        commandPaletteBodyRows={commandPaletteBodyRows}
+        commandPaletteTopOffset={commandPaletteTopOffset}
+        commandPaletteQuery={commandPaletteQuery}
+        chordHelp={chordHelp}
+        composerDockHeight={composerDockHeight}
+        composerStatusBlockHeight={composerStatusBlockHeight}
+        toasts={toasts}
+        bookmarksOverlayOpen={bookmarksOverlayOpen}
+        bookmarksOverlay={bookmarksOverlay}
+        bookmarksOverlayIndex={bookmarksOverlayIndex}
+      />
 
       {/* Under the reader the panel takes these rows in flow. The main row above
           keeps to its height (it would otherwise grow into them, and the
