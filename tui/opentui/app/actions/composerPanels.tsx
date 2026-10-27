@@ -8,6 +8,7 @@ import { composerSnapshotText, attachmentCountLabel, compactComposerEntryText, c
 import { basename, join } from 'node:path'
 import { type TuiMentionResult } from '../types'
 import { type QueuedComposerSend } from '../types'
+import { type RewindCandidate } from '../../rewindTargets'
 
 export type RenderComposerSlashPanelContext = {
   composerActive: boolean
@@ -291,6 +292,51 @@ export function runRenderComposerQueuePanel(ctx: RenderComposerQueuePanelContext
       {hiddenCount > 0 ? (
         <text fg={theme.dim} wrapMode="none">{fitText(`  +${hiddenCount} more queued`, rowWidth)}</text>
       ) : null}
+    </box>
+  )
+}
+
+export type RenderComposerRewindPanelContext = {
+  composerActive: boolean
+  composerRewindItems: RewindCandidate[] | null
+  composerRewindVisibleCount: number
+  composerRewindIndex: number
+  theme: TuiThemePalette
+  composerAccentColor: string
+}
+
+export function runRenderComposerRewindPanel(ctx: RenderComposerRewindPanelContext, panelWidth: number, rowWidth: number) {
+  const {
+    composerActive, composerRewindItems, composerRewindVisibleCount, composerRewindIndex, theme,
+    composerAccentColor,
+  } = ctx
+  if (!composerActive || !composerRewindItems || composerRewindVisibleCount <= 0) return null
+  const total = composerRewindItems.length
+  const start = Math.max(0, Math.min(composerRewindIndex - Math.floor((composerRewindVisibleCount - 1) / 2), total - composerRewindVisibleCount))
+  const end = Math.min(total, start + composerRewindVisibleCount)
+  return (
+    <box
+      width={panelWidth}
+      height={composerRewindVisibleCount + 3}
+      paddingX={1}
+      backgroundColor={theme.surface2}
+      border
+      borderStyle="single"
+      borderColor={theme.border2}
+      flexDirection="column"
+    >
+      <text fg={composerAccentColor} wrapMode="none">
+        {fitText(`rewind to before · ↑↓ choose · enter rewind · tab rewind + files · esc cancel  (${composerRewindIndex + 1}/${total})${start > 0 ? ' ↑' : ''}${end < total ? ' ↓' : ''}`, rowWidth)}
+      </text>
+      {composerRewindItems.slice(start, end).map((entry, offset) => {
+        const active = start + offset === composerRewindIndex
+        return (
+          <box key={`rewind:${entry.uuid}`} flexDirection="row" height={1} width={rowWidth}>
+            <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+            <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compactComposerEntryText(entry.text), Math.max(rowWidth - 2, 8))}</text>
+          </box>
+        )
+      })}
     </box>
   )
 }
