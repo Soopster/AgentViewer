@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10027,38 +10027,11 @@ function OpenTuiWorkspace() {
     applySplitOrientation(splitOrientation === 'rows' ? 'columns' : 'rows')
   })
 
-  const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => {
-    if (reconciledSplitTree) {
-      if (direction === 0) { checkpointWindowLayout(); setWindowSplitTree({ ...reconciledSplitTree, root: evenWindowSplitTree(reconciledSplitTree.root) }) }
-      else resizeTreeWindow(-1, direction)
-      return
-    }
-    checkpointWindowLayout()
-    if (visibleSplitPaneCount === 0) {
-      showNotice('error', 'No split panes open (⌃B % to split)')
-      return
-    }
-    const next = direction === 0
-      ? SPLIT_SHARE_EVEN
-      : adjustSplitReaderShare(
-        splitReaderShare,
-        direction * SPLIT_SHARE_STEP,
-        evenSplitReaderShare(visibleSplitPaneCount),
-      )
-    if (next === splitReaderShare) {
-      showNotice('info', direction === 0
-        ? 'Split sizes are already even'
-        : direction > 0 ? 'Reader is already at its widest' : 'Reader is already at its narrowest')
-      return
-    }
-    setSplitReaderShare(next)
-    void writeTuiSplitReaderShare(next).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to store split ratio')
-    })
-    showNotice('info', next === SPLIT_SHARE_EVEN
-      ? 'Split ratio: even'
-      : `Reader ${Math.round(next * 100)}% of the ${splitOrientation === 'rows' ? 'height' : 'width'}`)
-  })
+  const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => runResizeSplitReader({
+    reconciledSplitTree, checkpointWindowLayout, setWindowSplitTree, resizeTreeWindow,
+    visibleSplitPaneCount, showNotice, splitReaderShare, setSplitReaderShare, setError,
+    splitOrientation,
+  }, direction))
 
   // ── Split pane focus ───────────────────────────────────────────────────────
   // Focus is a third keyboard owner alongside the sidebar and the reader. It is

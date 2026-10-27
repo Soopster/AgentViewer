@@ -58,6 +58,7 @@ import { type WindowDropZone } from '../../windowLayout'
 import { planWindowSessionDrop } from '../../windowOperations'
 import { readerShareAt } from '../../windowLayout'
 import { SPLIT_SHARE_MAX, SPLIT_SHARE_MIN } from '../../splitPaneState'
+import { adjustSplitReaderShare, evenSplitReaderShare, SPLIT_SHARE_STEP } from '../../splitPaneState'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1143,4 +1144,55 @@ export function runDragSplitDivider(ctx: DragSplitDividerContext, event: { x: nu
   const share = readerShareAt(area, stackedSplit ? event.y : event.x, stackedSplit ? 'y' : 'x', splitReaderLast)
   const next = Math.min(SPLIT_SHARE_MAX, Math.max(SPLIT_SHARE_MIN, Math.round(share * 100) / 100))
   if (next !== splitReaderShare) setSplitReaderShare(next)
+}
+
+export type ResizeSplitReaderContext = {
+  reconciledSplitTree: WindowSplitTree | null
+  checkpointWindowLayout: () => void
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  resizeTreeWindow: (slot: number, direction: 1 | -1) => void
+  visibleSplitPaneCount: number
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  splitReaderShare: number
+  setSplitReaderShare: React.Dispatch<React.SetStateAction<number>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  splitOrientation: SplitPaneOrientation
+}
+
+export function runResizeSplitReader(ctx: ResizeSplitReaderContext, direction: 1 | -1 | 0) {
+  const {
+    reconciledSplitTree, checkpointWindowLayout, setWindowSplitTree, resizeTreeWindow,
+    visibleSplitPaneCount, showNotice, splitReaderShare, setSplitReaderShare, setError,
+    splitOrientation,
+  } = ctx
+  if (reconciledSplitTree) {
+    if (direction === 0) { checkpointWindowLayout(); setWindowSplitTree({ ...reconciledSplitTree, root: evenWindowSplitTree(reconciledSplitTree.root) }) }
+    else resizeTreeWindow(-1, direction)
+    return
+  }
+  checkpointWindowLayout()
+  if (visibleSplitPaneCount === 0) {
+    showNotice('error', 'No split panes open (⌃B % to split)')
+    return
+  }
+  const next = direction === 0
+    ? SPLIT_SHARE_EVEN
+    : adjustSplitReaderShare(
+      splitReaderShare,
+      direction * SPLIT_SHARE_STEP,
+      evenSplitReaderShare(visibleSplitPaneCount),
+    )
+  if (next === splitReaderShare) {
+    showNotice('info', direction === 0
+      ? 'Split sizes are already even'
+      : direction > 0 ? 'Reader is already at its widest' : 'Reader is already at its narrowest')
+    return
+  }
+  setSplitReaderShare(next)
+  void writeTuiSplitReaderShare(next).catch((err) => {
+    setError(err instanceof Error ? err.message : 'Failed to store split ratio')
+  })
+  showNotice('info', next === SPLIT_SHARE_EVEN
+    ? 'Split ratio: even'
+    : `Reader ${Math.round(next * 100)}% of the ${splitOrientation === 'rows' ? 'height' : 'width'}`)
 }
