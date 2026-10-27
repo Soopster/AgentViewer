@@ -325,6 +325,7 @@ import { runFleetEntries } from './app/derived/fleet'
 import { runComposerKnobSegments } from './app/derived/composerStatus'
 import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
 import { runPluginServices, runFleetPluginServices } from './app/derived/pluginServices'
+import { runTabOptions } from './app/derived/tabs'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -3711,39 +3712,11 @@ function OpenTuiWorkspace() {
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
   }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length, verticalTabsWidth])
-  const tabOptions = useMemo((): TabSelectOption[] => (
-    visibleTabSessions.map((s) => {
-      // Every open session can be on screen, so the strip marks none of them;
-      // its description says which window shows it.
-      const splitPosition = splitPinnedKeys.indexOf(sessionKey(s))
-      const inSplit = splitPosition >= 0 && splitPosition < splitPaneCount
-      // Herdr's rollup reaches the tab too. Leading, so a narrow tab's
-      // truncation cuts the title rather than the mark.
-      const team = teamAttention.get(sessionKey(s))
-      const teamPrefix = (coordinatorBadges.has(sessionKey(s)) ? `${coordinatorBadges.get(sessionKey(s))} ` : '') + (team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : '')
-      const stateGlyph = tabStateGlyphs.get(sessionKey(s))
-      const label = (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
-        ? `PREVIEW · ${formatSessionTitle(s)}`
-        : formatSessionTitle(s))
-      return {
-        // tab-select draws a name in tabWidth - 2 cells from its second column,
-        // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
-        name: tabStripName(label, tabWidth),
-        description: isPreviewMode && selectedSessionKey === sessionKey(s)
-          ? 'Preview tab'
-          : inSplit
-            ? `in window ${splitPosition + 1}`
-            : sessionProviderLabel(s),
-        value: sessionKey(s),
-      }
-    })
-  ).concat(popoverTabs.map((id) => {
-    // Popover tabs follow the session tabs, each naming what it is pinned to.
-    const pinned = windowSurfaceMeta[id]?.session
-    const pinnedSession = pinned ? openTabByKey.get(pinned) ?? sessions.find((entry) => sessionKey(entry) === pinned) : null
-    const label = `${surfaceTitle(id)}${pinnedSession ? ` · ${formatSessionTitle(pinnedSession)}` : ''}`
-    return { name: tabStripName(label, tabWidth), description: 'popover tab', value: `popover:${id}` }
-  })), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
+  const tabOptions = useMemo(() => runTabOptions({
+    visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
+    tabStateGlyphs, isPreviewMode, selectedSessionKey, tabWidth, popoverTabs, windowSurfaceMeta,
+    openTabByKey, sessions,
+  }), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
   // Index in the strip: session tabs, then popover tabs.
   const activeStripIndex = shownPopoverTab ? visibleTabSessions.length + popoverTabs.indexOf(shownPopoverTab) : activeTabIndex
   const tabStripLength = visibleTabSessions.length + popoverTabs.length
