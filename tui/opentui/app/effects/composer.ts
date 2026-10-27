@@ -14,6 +14,9 @@ import { type SendState } from '../../../../lib/types'
 import { type QueuedComposerSend } from '../types'
 import { type WorkspaceContextValue } from '../../workspaceContext'
 import { type TuiPluginCapture } from '../../shell/pluginTypes'
+import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits } from '../../../../lib/tui/service'
+import { type ClaudePlanLimits } from '../../../../lib/claudePlanLimits'
+import { type Session } from '../../../../lib/types'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -173,4 +176,29 @@ export function runComposerDraftPersistEffect(ctx: ComposerDraftPersistEffectCon
   workspaceContext.runtime.flushers.add(capture)
   workspaceContext.runtime.beforeLeave = leave
   return () => { workspaceContext.runtime.flushers.delete(capture); if (workspaceContext.runtime.beforeLeave === leave) workspaceContext.runtime.beforeLeave = null }
+}
+
+export type PlanLimitsEffectContext = {
+  composerTargetSession: Session | null
+  setComposerPlanLimits: React.Dispatch<React.SetStateAction<ClaudePlanLimits | null>>
+  composerActive: boolean
+  turnRunningForComposer: boolean
+}
+
+export function runPlanLimitsEffect(ctx: PlanLimitsEffectContext) {
+  const {
+    composerTargetSession, setComposerPlanLimits, composerActive, turnRunningForComposer,
+  } = ctx
+  const target = composerTargetSession
+  if (!target || target.provider !== 'claude') {
+    setComposerPlanLimits(null)
+    return
+  }
+  setComposerPlanLimits(peekTuiClaudePlanLimits(target))
+  if (!composerActive || turnRunningForComposer) return
+  let cancelled = false
+  void readTuiClaudePlanLimits(target)
+    .then((limits) => { if (!cancelled && limits) setComposerPlanLimits(limits) })
+    .catch(() => {})
+  return () => { cancelled = true }
 }

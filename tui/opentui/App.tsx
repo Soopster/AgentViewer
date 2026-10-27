@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3636,20 +3636,9 @@ function OpenTuiWorkspace() {
   const turnRunningForComposer = visibleComposerSending || reattachedRunning || visibleAwaitingPersistedTurn
   // Plan limits are re-read between turns (a turn is what spends them) and as
   // the composer engages, through the session's warm entry — never a spawn.
-  useEffect(() => {
-    const target = composerTargetSession
-    if (!target || target.provider !== 'claude') {
-      setComposerPlanLimits(null)
-      return
-    }
-    setComposerPlanLimits(peekTuiClaudePlanLimits(target))
-    if (!composerActive || turnRunningForComposer) return
-    let cancelled = false
-    void readTuiClaudePlanLimits(target)
-      .then((limits) => { if (!cancelled && limits) setComposerPlanLimits(limits) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [composerActive, composerTargetSession?.provider, composerTargetSession?.providerInstanceId, composerTargetSession?.sessionId, turnRunningForComposer])
+  useEffect(() => runPlanLimitsEffect({
+    composerTargetSession, setComposerPlanLimits, composerActive, turnRunningForComposer,
+  }), [composerActive, composerTargetSession?.provider, composerTargetSession?.providerInstanceId, composerTargetSession?.sessionId, turnRunningForComposer])
   // What ⌃C and ⏎ actually do. The post-turn sync keeps the status row but
   // ends the turn: ⌃C cancels nothing and ⏎ sends at once, so the key hints
   // must not go on offering "cancel" and "queue" through it.
