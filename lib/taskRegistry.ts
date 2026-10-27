@@ -53,6 +53,8 @@ export type TaskState = {
   toolUseId?: string
   prompt?: string
   lastToolName?: string
+  command?: string
+  output?: string
   outputFile?: string
   error?: string
   totalTokens?: number
@@ -377,7 +379,8 @@ function upsertFromSystemEvent(
     patch.status = status ?? 'completed'
     if (!existing?.subject && summary) patch.subject = summary
     if (summary) patch.summary = summary
-    patch.outputFile = readStringField(payload, 'output_file', 'outputFile')
+    const outputFile = readStringField(payload, 'output_file', 'outputFile')
+    if (outputFile) patch.outputFile = outputFile
   } else {
     return
   }
@@ -463,6 +466,21 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
       if (block.type !== 'tool_thread') continue
       const thread = block as ToolThread
       const name = thread.toolUse.name
+
+      if (name === 'Bash' && message.provider === 'claude' && thread.result) {
+        const raw = resultText(thread.result)
+        const id = raw.match(/(?:background with ID:|background task ID:)\s*([A-Za-z0-9_-]+)/i)?.[1]
+        if (id) {
+          const command = readStringField(thread.toolUse.input, 'command')
+          const outputFile = raw.match(/Output is being written to:\s*(\S+)/i)?.[1]
+          upsert(registry, id, {
+            subject: readStringField(thread.toolUse.input, 'description') ?? command,
+            command, outputFile, taskType: 'local_bash', isBackgrounded: true,
+            toolUseId: thread.toolUse.id, status: 'in_progress',
+          }, uuid, ts, { kind: 'started', status: 'in_progress', toolName: 'Bash' })
+        }
+        continue
+      }
 
       if (name === 'TaskCreate') {
         const inp = thread.toolUse.input
@@ -645,6 +663,17 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
     }
   }
 
+  const tasksByTool = new Map([...registry.values()].filter(task => task.toolUseId).map(task => [task.toolUseId, task]))
+  for (const message of messages) {
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_thread' || block.toolUse.name !== 'Bash') continue
+      const task = tasksByTool.get(block.toolUse.id)
+      if (task) {
+        task.command = readStringField(block.toolUse.input, 'command')
+        task.taskType = 'local_bash'
+      }
+    }
+  }
   return registry
 }
 

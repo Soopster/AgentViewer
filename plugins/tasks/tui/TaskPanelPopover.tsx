@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { open } from 'node:fs/promises'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import type { ThreadedMessage } from '../../../lib/threading'
@@ -211,6 +212,38 @@ export function TaskPanelPopover({
     [rows],
   )
 
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const detailTask = detailId ? registry.get(detailId) : undefined
+  const [shellOutput, setShellOutput] = useState('')
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    setShellOutput('')
+    if (!detailTask) return
+    let cancelled = false
+    const refresh = async () => {
+      let file
+      try {
+        if (detailTask.outputFile) {
+          file = await open(detailTask.outputFile, 'r')
+          const stat = await file.stat()
+          if (!stat.isFile()) return
+          const size = Math.min(stat.size, 32_768)
+          const buffer = Buffer.alloc(size)
+          const { bytesRead } = await file.read(buffer, 0, size, Math.max(0, stat.size - size))
+          if (!cancelled) setShellOutput(buffer.subarray(0, bytesRead).toString('utf8'))
+        }
+      } catch {
+        // The SDK may not have created the output file yet.
+      } finally {
+        await file?.close()
+        if (!cancelled) setNow(Date.now())
+      }
+    }
+    void refresh()
+    const timer = setInterval(() => { void refresh() }, 1000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [detailId, detailTask?.outputFile])
+
   const [selectedTaskIdx, setSelectedTaskIdx] = useState(0)
   const clampedSelected = Math.min(Math.max(selectedTaskIdx, 0), Math.max(taskRowIndexes.length - 1, 0))
 
@@ -241,6 +274,16 @@ export function TaskPanelPopover({
   }, [clampedSelected, highlightedTask?.id, highlightedTask?.events.length])
 
   const handleKey = useCallback((key: TaskPanelKeyEvent) => {
+    if (detailTask) {
+      if (key.name === 'left') { setDetailId(null); return }
+      if (['escape', 'return', 'enter', 'space'].includes(key.name)) { onClose(); return }
+      if (key.name === 'x' && onStopTask && isStoppableTask(detailTask)) { onStopTask(detailTask.id); return }
+      if (key.name === 'down' || key.name === 'j') scrollRef.current?.scrollBy(1)
+      if (key.name === 'up' || key.name === 'k') scrollRef.current?.scrollBy(-1)
+      if (key.name === 'd') scrollRef.current?.scrollBy(10)
+      if (key.name === 'u') scrollRef.current?.scrollBy(-10)
+      return
+    }
     if (key.name === 'escape') { onClose(); return }
     if (key.name === 'j' || key.name === 'down') {
       setSelectedTaskIdx((i) => Math.min(i + 1, Math.max(taskRowIndexes.length - 1, 0)))
@@ -279,10 +322,13 @@ export function TaskPanelPopover({
       const flatIdx = taskRowIndexes[clampedSelected]
       if (flatIdx == null) return
       const row = rows[flatIdx]
-      if (row?.kind === 'task') onSelectTask(row.task.latestEventUuid)
+      if (row?.kind === 'task') {
+        if (row.task.taskType === 'local_bash') setDetailId(row.task.id)
+        else onSelectTask(row.task.latestEventUuid)
+      }
       return
     }
-  }, [clampedSelected, onClose, onSelectTask, onStopTask, rows, taskRowIndexes])
+  }, [detailTask, clampedSelected, onClose, onSelectTask, onStopTask, rows, taskRowIndexes])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -303,7 +349,7 @@ export function TaskPanelPopover({
       {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={docked ? undefined : " Tasks "}
+      title={docked ? undefined : (detailTask ? " Shell details " : " Tasks / shells ")}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
@@ -317,13 +363,13 @@ export function TaskPanelPopover({
         borderColor={theme.border}
       >
         <text fg={theme.muted}>
-          {`${registry.size} task${registry.size === 1 ? '' : 's'}`}
+          {detailTask ? 'Shell details' : `${registry.size} tasks · ${[...registry.values()].filter(task => task.taskType === 'local_bash').length} shells`}
         </text>
         {onStopTask && highlightedTask && isStoppableTask(highlightedTask) ? (
           <text fg={theme.amber}>{`  x stop #${highlightedTask.id}`}</text>
         ) : null}
         <box flexGrow={1} />
-        <text fg={theme.dim}>{'j/k navigate · d/u scroll · enter latest · c create · esc close'}</text>
+        <text fg={theme.dim}>{detailTask ? '← back · Esc/Enter/Space close · x stop · d/u scroll' : 'j/k navigate · enter details/latest · c create · esc close'}</text>
       </box>
 
       <scrollbox
@@ -334,7 +380,17 @@ export function TaskPanelPopover({
         scrollY
         scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
       >
-        {rows.length === 0 ? (
+        {detailTask ? (
+          <box paddingX={1} paddingY={1} flexDirection="column">
+            <text fg={statusColor(detailTask.status, theme)}>{`Status:  ${STATUS_LABEL[detailTask.status]}`}</text>
+            <text fg={theme.text}>{`Runtime: ${detailTask.durationMs != null ? formatDuration(detailTask.durationMs) : detailTask.firstSeenAt ? formatDuration(Math.max(0, (detailTask.status === 'in_progress' ? now : Date.parse(detailTask.lastUpdatedAt ?? detailTask.firstSeenAt)) - Date.parse(detailTask.firstSeenAt))) : 'unknown'}`}</text>
+            <text fg={theme.text} wrapMode="word">{`Command: ${detailTask.command ?? detailTask.subject}`}</text>
+            <box marginTop={1} flexDirection="column">
+              <text fg={theme.muted}>Output:</text>
+              <text fg={theme.text} wrapMode="word">{shellOutput || detailTask.output || 'No output available'}</text>
+            </box>
+          </box>
+        ) : rows.length === 0 ? (
           <box paddingX={1} paddingY={1}>
             <text fg={theme.dim}>no tasks in this session</text>
           </box>
