@@ -16,6 +16,12 @@ import { type ProtocolAgent } from '../../../../lib/agentProtocol'
 import { join } from 'node:path'
 import { calculateSplitPaneLayout, resolveCoordinationTranscriptTarget, type SplitPaneOrientation, planTeammateWatch } from '../../splitPaneState'
 import { MIN_READER_WIDTH, SPLIT_PANE_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS } from '../layoutConstants'
+import { type MutableRefObject } from 'react'
+import { type WindowSplitTree, type WindowSplitNode } from '../../windowSplitTree'
+import { planCoordinatorWorkspace } from '../../coordinatorWorkspace'
+import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
+import { type PaneFocus } from '../types'
+import { keepEmpty } from '../collections'
 
 export type SubmitCoordinatedRunContext = {
   coordTextareaRef: React.RefObject<TextareaRenderable | null>
@@ -267,4 +273,62 @@ export function runWatchCoordinationAgentSessions(ctx: WatchCoordinationAgentSes
   showNotice('info', shown.length
     ? `Watching ${shown.map((entry) => entry.name).join(', ')}${hidden > 0 ? ` · ${hidden} more need${hidden === 1 ? 's' : ''} room (${stacked ? 'taller terminal' : '⌃B " to stack'} or ←/→ tabs)` : ''} · ⌃B x close`
     : `Opened ${plan.watched.map((entry) => entry.name).join(', ')} as tabs · no room for a pane (${stacked ? 'taller terminal' : '⌃B " to stack'})`, 5000)
+}
+
+export type WatchCoordinatorRunContext = {
+  sessionsByKeyRef: React.RefObject<Map<string, Session>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  checkpointWindowLayout: () => void
+  watchedRosterRef: React.MutableRefObject<{ runId: string; keys: Set<string>; } | null>
+  setCoordinatorWorkspace: React.Dispatch<React.SetStateAction<ProtocolRunSnapshot | null>>
+  setCoordinatorWorkspaceRunId: React.Dispatch<React.SetStateAction<string | null>>
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  selectTabSession: (session: Session) => void
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+  setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
+  setWindowOrder: React.Dispatch<React.SetStateAction<string[]>>
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  setWindowSurfaces: React.Dispatch<React.SetStateAction<string[]>>
+  setWindowZoom: React.Dispatch<React.SetStateAction<number | 'reader' | null>>
+  setWindowSurfacePeek: React.Dispatch<React.SetStateAction<string | null>>
+  setFullscreenMode: React.Dispatch<React.SetStateAction<boolean>>
+  setSplitFocusIndex: React.Dispatch<React.SetStateAction<number | null>>
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+}
+
+export function runWatchCoordinatorRun(ctx: WatchCoordinatorRunContext, snapshot: ProtocolRunSnapshot) {
+  const {
+    sessionsByKeyRef, showNotice, checkpointWindowLayout, watchedRosterRef,
+    setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, setOpenTabSessions, selectTabSession,
+    setSplitPinnedKeys, setSplitPaneCount, setWindowOrder, setWindowSplitTree, setWindowSurfaces,
+    setWindowZoom, setWindowSurfacePeek, setFullscreenMode, setSplitFocusIndex, setFocusedPane,
+  } = ctx
+  const plan = planCoordinatorWorkspace(snapshot, sessionsByKeyRef.current)
+  if (!plan.lead) { showNotice('info', 'This run has no readable lead transcript', 5000); return }
+  checkpointWindowLayout()
+  watchedRosterRef.current = { runId: snapshot.run.id, keys: new Set(plan.targets.map(target => target.sessionKey)) }
+  setCoordinatorWorkspace(snapshot)
+  setCoordinatorWorkspaceRunId(snapshot.run.id)
+  const lead = plan.lead
+  const panes = plan.targets.filter(target => target.sessionKey !== lead.sessionKey)
+  setOpenTabSessions(current => {
+    const keys = new Set(current.map(sessionKey))
+    return [...current, ...plan.targets.filter(target => !keys.has(target.sessionKey)).map(target => target.session)]
+  })
+  selectTabSession(lead.session)
+  // The lead's window on the left, teammates stacked beside it.
+  const keys = [lead.sessionKey, ...panes.map(target => target.sessionKey)]
+  const stack = (first: number, count: number): WindowSplitNode => count <= 1
+    ? { slot: first } : { axis: 'y', ratio: 1 / count, first: { slot: first }, second: stack(first + 1, count - 1) }
+  setSplitPinnedKeys(keys)
+  setSplitPaneCount(keys.length)
+  setWindowOrder(keys)
+  setWindowSplitTree({ primary: false, keys, root: panes.length ? { axis: 'x', ratio: 0.55, first: { slot: 0 }, second: stack(1, panes.length) } : { slot: 0 } })
+  setWindowSurfaces(keepEmpty)
+  setWindowZoom(null)
+  setWindowSurfacePeek(null)
+  setFullscreenMode(false)
+  setSplitFocusIndex(null)
+  setFocusedPane('messages')
+  showNotice('info', `Watching this run · lead + ${panes.length} teammate${panes.length === 1 ? '' : 's'} · ⌃B p switch · ⌃B a attention · ⌃B w save${plan.skipped.length ? ` · ${plan.skipped.length} unreadable participant(s) skipped` : ''}`, 7000)
 }

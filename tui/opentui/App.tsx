@@ -306,7 +306,7 @@ import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
-import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions } from './app/actions/coordination'
+import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6103,36 +6103,12 @@ function OpenTuiWorkspace() {
     else { selectTabSession(target.session); setFocusedPane('messages') }
   })
 
-  const watchCoordinatorRun = useStableEvent((snapshot: ProtocolRunSnapshot) => {
-    const plan = planCoordinatorWorkspace(snapshot, sessionsByKeyRef.current)
-    if (!plan.lead) { showNotice('info', 'This run has no readable lead transcript', 5000); return }
-    checkpointWindowLayout()
-    watchedRosterRef.current = { runId: snapshot.run.id, keys: new Set(plan.targets.map(target => target.sessionKey)) }
-    setCoordinatorWorkspace(snapshot)
-    setCoordinatorWorkspaceRunId(snapshot.run.id)
-    const lead = plan.lead
-    const panes = plan.targets.filter(target => target.sessionKey !== lead.sessionKey)
-    setOpenTabSessions(current => {
-      const keys = new Set(current.map(sessionKey))
-      return [...current, ...plan.targets.filter(target => !keys.has(target.sessionKey)).map(target => target.session)]
-    })
-    selectTabSession(lead.session)
-    // The lead's window on the left, teammates stacked beside it.
-    const keys = [lead.sessionKey, ...panes.map(target => target.sessionKey)]
-    const stack = (first: number, count: number): WindowSplitNode => count <= 1
-      ? { slot: first } : { axis: 'y', ratio: 1 / count, first: { slot: first }, second: stack(first + 1, count - 1) }
-    setSplitPinnedKeys(keys)
-    setSplitPaneCount(keys.length)
-    setWindowOrder(keys)
-    setWindowSplitTree({ primary: false, keys, root: panes.length ? { axis: 'x', ratio: 0.55, first: { slot: 0 }, second: stack(1, panes.length) } : { slot: 0 } })
-    setWindowSurfaces(keepEmpty)
-    setWindowZoom(null)
-    setWindowSurfacePeek(null)
-    setFullscreenMode(false)
-    setSplitFocusIndex(null)
-    setFocusedPane('messages')
-    showNotice('info', `Watching this run · lead + ${panes.length} teammate${panes.length === 1 ? '' : 's'} · ⌃B p switch · ⌃B a attention · ⌃B w save${plan.skipped.length ? ` · ${plan.skipped.length} unreadable participant(s) skipped` : ''}`, 7000)
-  })
+  const watchCoordinatorRun = useStableEvent((snapshot: ProtocolRunSnapshot) => runWatchCoordinatorRun({
+    sessionsByKeyRef, showNotice, checkpointWindowLayout, watchedRosterRef,
+    setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, setOpenTabSessions, selectTabSession,
+    setSplitPinnedKeys, setSplitPaneCount, setWindowOrder, setWindowSplitTree, setWindowSurfaces,
+    setWindowZoom, setWindowSurfacePeek, setFullscreenMode, setSplitFocusIndex, setFocusedPane,
+  }, snapshot))
 
   // Herdr's everyday view: the lead's chat in the reader and teammates live
   // beside it. Each watched teammate becomes an open tab pinned to a split
