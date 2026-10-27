@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -4756,68 +4756,11 @@ function OpenTuiWorkspace() {
     jumpToTranscriptIndex(searchMatches[nextMatchIndex] ?? 0)
   })
 
-  const toggleExpansion = useStableEvent((scope: 'selected' | 'parent' = 'selected') => {
-    const cursorIndex = readCursorIndex()
-    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
-    if (!card) return
-    const agentToolCards = groupedToolView && resolvedExpandedKeys.has(card.key)
-      ? agentToolCardsFor(card)
-      : []
-    const agentToolKey = agentToolCursorByGroupKey[card.key] ?? null
-    const selectedAgentTool = scope === 'selected' && agentToolKey
-      ? agentToolCards.find((toolCard) => toolCard.key === agentToolKey) ?? null
-      : null
-    const targetCard = selectedAgentTool ?? card
-    const isAgentToolTarget = selectedAgentTool !== null
-    const shouldAutoFold = (
-      transcriptView === 'conversation'
-      || isChatLikeView
-      || transcriptView === 'agents'
-    ) && targetCard.autoFold
-    const isExpanded = isAgentToolTarget
-      ? agentToolCardIsExpanded(targetCard, expandedCardKeys, collapsedCardKeys)
-      : resolvedExpandedKeys.has(targetCard.key)
-
-    if (!isAgentToolTarget && !isExpanded && card.key.startsWith('agents-tools:')) {
-      const firstTool = agentToolCardsFor(card)[0]
-      if (firstTool) {
-        setAgentToolCursorByGroupKey((current) => (
-          current[card.key] === firstTool.key
-            ? current
-            : { ...current, [card.key]: firstTool.key }
-        ))
-      }
-    }
-
-    if (shouldAutoFold) {
-      setCollapsedCardKeys((current) => {
-        if (!current.has(targetCard.key)) return current
-        const next = new Set(current)
-        next.delete(targetCard.key)
-        return next
-      })
-      setExpandedCardKeys((current) => {
-        const next = new Set(current)
-        if (isExpanded) next.delete(targetCard.key)
-        else next.add(targetCard.key)
-        return next
-      })
-      return
-    }
-
-    setExpandedCardKeys((current) => {
-      if (!current.has(targetCard.key)) return current
-      const next = new Set(current)
-      next.delete(targetCard.key)
-      return next
-    })
-    setCollapsedCardKeys((current) => {
-      const next = new Set(current)
-      if (isExpanded) next.add(targetCard.key)
-      else next.delete(targetCard.key)
-      return next
-    })
-  })
+  const toggleExpansion = useStableEvent((scope: 'selected' | 'parent' = 'selected') => runToggleExpansion({
+    readCursorIndex, visibleTranscriptCards, groupedToolView, resolvedExpandedKeys,
+    agentToolCursorByGroupKey, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys,
+    setAgentToolCursorByGroupKey, setCollapsedCardKeys, setExpandedCardKeys,
+  }, scope))
 
   // The instance list is re-read on open: one added to provider-instances.json
   // while the TUI runs is offered without a restart.

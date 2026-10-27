@@ -16,6 +16,9 @@ import { keepFiltered } from '../collections'
 import { openExternalUrl } from '../../terminalBrowser'
 import { type PermissionResponse } from '../../../../lib/permissions'
 import { type TuiPermissionMode } from '../types'
+import { type TuiTranscriptCard } from '../../../format'
+import { type TuiTranscriptView } from '../../../theme'
+import { agentToolCardsFor, agentToolCardIsExpanded } from '../transcriptRows'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -155,4 +158,88 @@ export async function runRespondToTuiPermission(ctx: RespondToTuiPermissionConte
   } finally {
     setPermissionActionLoading(null)
   }
+}
+
+export type ToggleExpansionContext = {
+  readCursorIndex: () => number
+  visibleTranscriptCards: TuiTranscriptCard[]
+  groupedToolView: boolean
+  resolvedExpandedKeys: Set<string>
+  agentToolCursorByGroupKey: Record<string, string>
+  transcriptView: TuiTranscriptView
+  isChatLikeView: boolean
+  expandedCardKeys: Set<string>
+  collapsedCardKeys: Set<string>
+  setAgentToolCursorByGroupKey: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  setCollapsedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setExpandedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+}
+
+export function runToggleExpansion(ctx: ToggleExpansionContext, scope?: 'selected' | 'parent') {
+  const {
+    readCursorIndex, visibleTranscriptCards, groupedToolView, resolvedExpandedKeys,
+    agentToolCursorByGroupKey, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys,
+    setAgentToolCursorByGroupKey, setCollapsedCardKeys, setExpandedCardKeys,
+  } = ctx
+  if (scope === undefined) scope = 'selected'
+  const cursorIndex = readCursorIndex()
+  const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+  if (!card) return
+  const agentToolCards = groupedToolView && resolvedExpandedKeys.has(card.key)
+    ? agentToolCardsFor(card)
+    : []
+  const agentToolKey = agentToolCursorByGroupKey[card.key] ?? null
+  const selectedAgentTool = scope === 'selected' && agentToolKey
+    ? agentToolCards.find((toolCard) => toolCard.key === agentToolKey) ?? null
+    : null
+  const targetCard = selectedAgentTool ?? card
+  const isAgentToolTarget = selectedAgentTool !== null
+  const shouldAutoFold = (
+    transcriptView === 'conversation'
+    || isChatLikeView
+    || transcriptView === 'agents'
+  ) && targetCard.autoFold
+  const isExpanded = isAgentToolTarget
+    ? agentToolCardIsExpanded(targetCard, expandedCardKeys, collapsedCardKeys)
+    : resolvedExpandedKeys.has(targetCard.key)
+
+  if (!isAgentToolTarget && !isExpanded && card.key.startsWith('agents-tools:')) {
+    const firstTool = agentToolCardsFor(card)[0]
+    if (firstTool) {
+      setAgentToolCursorByGroupKey((current) => (
+        current[card.key] === firstTool.key
+          ? current
+          : { ...current, [card.key]: firstTool.key }
+      ))
+    }
+  }
+
+  if (shouldAutoFold) {
+    setCollapsedCardKeys((current) => {
+      if (!current.has(targetCard.key)) return current
+      const next = new Set(current)
+      next.delete(targetCard.key)
+      return next
+    })
+    setExpandedCardKeys((current) => {
+      const next = new Set(current)
+      if (isExpanded) next.delete(targetCard.key)
+      else next.add(targetCard.key)
+      return next
+    })
+    return
+  }
+
+  setExpandedCardKeys((current) => {
+    if (!current.has(targetCard.key)) return current
+    const next = new Set(current)
+    next.delete(targetCard.key)
+    return next
+  })
+  setCollapsedCardKeys((current) => {
+    const next = new Set(current)
+    if (isExpanded) next.add(targetCard.key)
+    else next.delete(targetCard.key)
+    return next
+  })
 }
