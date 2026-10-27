@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6392,35 +6392,10 @@ function OpenTuiWorkspace() {
   // each step re-checks that no real open is (or is about to be) running —
   // the threading worker is serial, so a prefetch posted ahead of a real open
   // would delay it.
-  useEffect(() => {
-    if (!bootstrapped || !committedSessionKey) return undefined
-    let cancelled = false
-    const run = async () => {
-      const sessionEntries = sidebarSessionEntriesRef.current
-      const idx = sessionEntries.findIndex((session) => sessionKey(session) === committedSessionKey)
-      if (idx < 0) return
-      const neighbors: Session[] = []
-      for (let distance = 1; distance <= NEIGHBOR_PREFETCH_RADIUS; distance++) {
-        const below = sessionEntries[idx + distance]
-        if (below && !below.isPending) neighbors.push(below)
-        const above = sessionEntries[idx - distance]
-        if (above && !above.isPending) neighbors.push(above)
-      }
-      for (const neighbor of neighbors) {
-        if (cancelled) return
-        // Yield to real work: an open in flight (or queued), or the user has
-        // already scrubbed off the settled session.
-        if (foregroundLoadInFlightRef.current || pendingForegroundLoadRef.current) return
-        if (selectedSessionKeyRef.current !== committedSessionKey) return
-        await prefetchSessionDetail(neighbor)
-      }
-    }
-    const timer = setTimeout(() => { void run() }, NEIGHBOR_PREFETCH_DELAY_MS)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [bootstrapped, committedSessionKey, prefetchSessionDetail])
+  useEffect(() => runOverlaySettleEffect({
+    bootstrapped, committedSessionKey, sidebarSessionEntriesRef, foregroundLoadInFlightRef,
+    pendingForegroundLoadRef, selectedSessionKeyRef, prefetchSessionDetail,
+  }), [bootstrapped, committedSessionKey, prefetchSessionDetail])
 
   // Clear stale live todos on session switch
   useEffect(() => {

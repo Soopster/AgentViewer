@@ -19,6 +19,7 @@ import { sameKeys } from '../collections'
 import { type Session } from '../../../../lib/types'
 import { CLAUDE_BACKGROUND_METADATA_REFRESH_MS } from '../timing'
 import { DETAIL_REFRESH_MS } from '../timing'
+import { NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS } from '../timing'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -348,5 +349,49 @@ export function runDetailRefreshIntervalEffect(ctx: DetailRefreshIntervalEffectC
   return () => {
     active = false
     clearInterval(interval)
+  }
+}
+
+export type OverlaySettleEffectContext = {
+  bootstrapped: boolean
+  committedSessionKey: string | null
+  sidebarSessionEntriesRef: React.RefObject<Session[]>
+  foregroundLoadInFlightRef: React.RefObject<boolean>
+  pendingForegroundLoadRef: React.RefObject<Session | null>
+  selectedSessionKeyRef: React.RefObject<string | null>
+  prefetchSessionDetail: (session: Session) => Promise<void>
+}
+
+export function runOverlaySettleEffect(ctx: OverlaySettleEffectContext) {
+  const {
+    bootstrapped, committedSessionKey, sidebarSessionEntriesRef, foregroundLoadInFlightRef,
+    pendingForegroundLoadRef, selectedSessionKeyRef, prefetchSessionDetail,
+  } = ctx
+  if (!bootstrapped || !committedSessionKey) return undefined
+  let cancelled = false
+  const run = async () => {
+    const sessionEntries = sidebarSessionEntriesRef.current
+    const idx = sessionEntries.findIndex((session) => sessionKey(session) === committedSessionKey)
+    if (idx < 0) return
+    const neighbors: Session[] = []
+    for (let distance = 1; distance <= NEIGHBOR_PREFETCH_RADIUS; distance++) {
+      const below = sessionEntries[idx + distance]
+      if (below && !below.isPending) neighbors.push(below)
+      const above = sessionEntries[idx - distance]
+      if (above && !above.isPending) neighbors.push(above)
+    }
+    for (const neighbor of neighbors) {
+      if (cancelled) return
+      // Yield to real work: an open in flight (or queued), or the user has
+      // already scrubbed off the settled session.
+      if (foregroundLoadInFlightRef.current || pendingForegroundLoadRef.current) return
+      if (selectedSessionKeyRef.current !== committedSessionKey) return
+      await prefetchSessionDetail(neighbor)
+    }
+  }
+  const timer = setTimeout(() => { void run() }, NEIGHBOR_PREFETCH_DELAY_MS)
+  return () => {
+    cancelled = true
+    clearTimeout(timer)
   }
 }
