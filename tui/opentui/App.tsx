@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5431,43 +5431,12 @@ function OpenTuiWorkspace() {
   // Name → isolated worktree + branch + fresh session cwd'd into it, composer
   // focused for the first prompt. The task then runs without touching the main
   // checkout until the user merges it back.
-  const submitWorktreeTask = useStableEvent(async () => {
-    const name = worktreeDraft.trim()
-    // Ref-guarded: Enter can arrive via both the input's onSubmit and the
-    // keyboard branch in the same tick, before worktreeBusy state lands.
-    if (!name || worktreeSubmitInFlightRef.current) return
-    worktreeSubmitInFlightRef.current = true
-    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
-    setWorktreeBusy(true)
-    try {
-      const task = await createTuiWorktreeTask(baseCwd, name)
-      const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
-      const result = await createTuiSession({ provider: targetProvider, cwd: task.path, title: name })
-      const draft: Session = {
-        sessionId: result.sessionId,
-        provider: result.provider,
-        cwd: result.cwd,
-        createdAt: Date.now(),
-        lastModified: Date.now(),
-        summary: name,
-        isPending: result.isPending,
-      }
-      setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
-      setSelectedSessionKey(sessionKey(draft))
-      setComposerPaneTargetKey(sessionKey(draft))
-      setComposerPreferredTargetKey(sessionKey(draft))
-      await prepareCreatedSessionForComposer(draft)
-      setWorktreeModalOpen(false)
-      setWorktreeDraft('')
-      setComposerActive(true)
-      showNotice('info', `Worktree task on ${task.branch} — the session runs in an isolated checkout.`, 5000)
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to create worktree task')
-    } finally {
-      worktreeSubmitInFlightRef.current = false
-      setWorktreeBusy(false)
-    }
-  })
+  const submitWorktreeTask = useStableEvent(async () => runSubmitWorktreeTask({
+    worktreeDraft, worktreeSubmitInFlightRef, selectedSession, sessionDetail, setWorktreeBusy,
+    provider, setOpenTabSessions, setSelectedSessionKey, setComposerPaneTargetKey,
+    setComposerPreferredTargetKey, prepareCreatedSessionForComposer, setWorktreeModalOpen,
+    setWorktreeDraft, setComposerActive, showNotice,
+  }))
 
   // Adopt the task's work: commit whatever the agent left uncommitted, then
   // squash-merge into the main checkout, leaving the result STAGED for review.

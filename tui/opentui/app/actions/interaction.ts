@@ -45,6 +45,7 @@ import { recordContextTransfer } from '../../../../lib/contextTransfers'
 import { toggleTuiSessionBookmark } from '../../../../lib/tui/service'
 import { TERMINAL_SELECTION_COPY_WINDOW_MS } from '../layoutConstants'
 import { cardClipboardText, writeClipboard } from '../clipboard'
+import { createTuiWorktreeTask } from '../../../../lib/tui/service'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -641,5 +642,67 @@ export async function runCopySelectedMessage(ctx: CopySelectedMessageContext, ca
     showNotice('info', 'Copied selected message to clipboard')
   } catch (err) {
     showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
+  }
+}
+
+export type SubmitWorktreeTaskContext = {
+  worktreeDraft: string
+  worktreeSubmitInFlightRef: React.RefObject<boolean>
+  selectedSession: Session | null
+  sessionDetail: TuiSessionDetail | null
+  setWorktreeBusy: React.Dispatch<React.SetStateAction<boolean>>
+  provider: ProviderSelection
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  setComposerPaneTargetKey: React.Dispatch<React.SetStateAction<string | null>>
+  setComposerPreferredTargetKey: React.Dispatch<React.SetStateAction<string | null>>
+  prepareCreatedSessionForComposer: (draft: Session) => Promise<void>
+  setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+}
+
+export async function runSubmitWorktreeTask(ctx: SubmitWorktreeTaskContext) {
+  const {
+    worktreeDraft, worktreeSubmitInFlightRef, selectedSession, sessionDetail, setWorktreeBusy,
+    provider, setOpenTabSessions, setSelectedSessionKey, setComposerPaneTargetKey,
+    setComposerPreferredTargetKey, prepareCreatedSessionForComposer, setWorktreeModalOpen,
+    setWorktreeDraft, setComposerActive, showNotice,
+  } = ctx
+  const name = worktreeDraft.trim()
+  // Ref-guarded: Enter can arrive via both the input's onSubmit and the
+  // keyboard branch in the same tick, before worktreeBusy state lands.
+  if (!name || worktreeSubmitInFlightRef.current) return
+  worktreeSubmitInFlightRef.current = true
+  const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+  setWorktreeBusy(true)
+  try {
+    const task = await createTuiWorktreeTask(baseCwd, name)
+    const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+    const result = await createTuiSession({ provider: targetProvider, cwd: task.path, title: name })
+    const draft: Session = {
+      sessionId: result.sessionId,
+      provider: result.provider,
+      cwd: result.cwd,
+      createdAt: Date.now(),
+      lastModified: Date.now(),
+      summary: name,
+      isPending: result.isPending,
+    }
+    setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
+    setSelectedSessionKey(sessionKey(draft))
+    setComposerPaneTargetKey(sessionKey(draft))
+    setComposerPreferredTargetKey(sessionKey(draft))
+    await prepareCreatedSessionForComposer(draft)
+    setWorktreeModalOpen(false)
+    setWorktreeDraft('')
+    setComposerActive(true)
+    showNotice('info', `Worktree task on ${task.branch} — the session runs in an isolated checkout.`, 5000)
+  } catch (err) {
+    showNotice('error', err instanceof Error ? err.message : 'Failed to create worktree task')
+  } finally {
+    worktreeSubmitInFlightRef.current = false
+    setWorktreeBusy(false)
   }
 }
