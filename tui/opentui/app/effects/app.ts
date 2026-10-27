@@ -12,6 +12,8 @@ import { readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeade
 import { type ProviderSelection } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
 import { type PaneFocus, type NoticeTone } from '../types'
+import { coordinatorAlertDelivery } from '../../../../lib/coordinatorSignals'
+import { subscribeInteractiveCoordinatorNotifications, getInteractiveCoordinatorNotifications } from '../../interactiveCoordinatorStore'
 
 export type SurfacePlacementEffectContext = {
   workspaceContext: WorkspaceContextValue
@@ -205,5 +207,33 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
 
   return () => {
     cancelled = true
+  }
+}
+
+export type RendererListenersEffectContext = {
+  terminalFocusedRef: React.RefObject<boolean | null>
+  renderer: CliRenderer
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  notifyTeamEvent: (title: string, body: string) => void
+}
+
+export function runRendererListenersEffect(ctx: RendererListenersEffectContext) {
+  const {
+    terminalFocusedRef, renderer, showNotice, notifyTeamEvent,
+  } = ctx
+  const onFocus = () => { terminalFocusedRef.current = true }
+  const onBlur = () => { terminalFocusedRef.current = false }
+  renderer.on('focus', onFocus)
+  renderer.on('blur', onBlur)
+  const unsubscribe = subscribeInteractiveCoordinatorNotifications(({ session, signal, viewing }) => {
+    // Herdr's delivery setting: read at delivery, so a change applies at once.
+    const delivery = coordinatorAlertDelivery(getInteractiveCoordinatorNotifications(), viewing, terminalFocusedRef.current)
+    if (delivery.notice) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
+    if (delivery.desktop) notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
+  })
+  return () => {
+    unsubscribe()
+    renderer.off('focus', onFocus)
+    renderer.off('blur', onBlur)
   }
 }

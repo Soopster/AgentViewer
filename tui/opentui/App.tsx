@@ -312,7 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
-import { runSurfacePlacementEffect, runThemeFollowEffect } from './app/effects/app'
+import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
@@ -5846,23 +5846,9 @@ function OpenTuiWorkspace() {
   // blurred — focus is unknown until the terminal reports it, which counts as
   // focused so a terminal without focus reporting is not spammed.
   const terminalFocusedRef = useRef<boolean | null>(null)
-  useEffect(() => {
-    const onFocus = () => { terminalFocusedRef.current = true }
-    const onBlur = () => { terminalFocusedRef.current = false }
-    renderer.on('focus', onFocus)
-    renderer.on('blur', onBlur)
-    const unsubscribe = subscribeInteractiveCoordinatorNotifications(({ session, signal, viewing }) => {
-      // Herdr's delivery setting: read at delivery, so a change applies at once.
-      const delivery = coordinatorAlertDelivery(getInteractiveCoordinatorNotifications(), viewing, terminalFocusedRef.current)
-      if (delivery.notice) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
-      if (delivery.desktop) notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
-    })
-    return () => {
-      unsubscribe()
-      renderer.off('focus', onFocus)
-      renderer.off('blur', onBlur)
-    }
-  }, [renderer])
+  useEffect(() => runRendererListenersEffect({
+    terminalFocusedRef, renderer, showNotice, notifyTeamEvent,
+  }), [renderer])
 
   // Watch active runs started this session: notify on terminal status and on
   // newly blocked teammates, then drop finished runs from the watch list.
