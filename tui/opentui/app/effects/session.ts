@@ -16,6 +16,8 @@ import { type TranscriptWindowPosition } from '../../transcriptWindowState'
 import { workspaceStorageKey } from '../../workspaceContext'
 import { readTuiSessionReaderState } from '../../../../lib/tui/service'
 import { sameKeys } from '../collections'
+import { type Session } from '../../../../lib/types'
+import { CLAUDE_BACKGROUND_METADATA_REFRESH_MS } from '../timing'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -275,5 +277,40 @@ export function runTranscriptCursorEffect(ctx: TranscriptCursorEffectContext) {
 
   return () => {
     cancelled = true
+  }
+}
+
+export type SessionPollIntervalEffectContext = {
+  bootstrapped: boolean
+  tabsEnabled: boolean
+  openTabSessions: Session[]
+  providerSwitchRef: React.RefObject<boolean>
+  selectedSessionKeyRef: React.RefObject<string | null>
+  openTabSessionsRef: React.RefObject<Session[]>
+  backgroundMetadataCursorRef: React.RefObject<number>
+}
+
+export function runSessionPollIntervalEffect(ctx: SessionPollIntervalEffectContext) {
+  const {
+    bootstrapped, tabsEnabled, openTabSessions, providerSwitchRef, selectedSessionKeyRef,
+    openTabSessionsRef, backgroundMetadataCursorRef,
+  } = ctx
+  if (!bootstrapped || !tabsEnabled || openTabSessions.length === 0) return undefined
+  let active = true
+  const interval = setInterval(() => {
+    if (!active || providerSwitchRef.current) return
+    const selectedKey = selectedSessionKeyRef.current
+    const backgroundTabs = openTabSessionsRef.current.filter((tab) => sessionKey(tab) !== selectedKey)
+    if (backgroundTabs.length === 0) return
+    const cursor = backgroundMetadataCursorRef.current % backgroundTabs.length
+    backgroundMetadataCursorRef.current = (backgroundMetadataCursorRef.current + 1) % backgroundTabs.length
+    const target = backgroundTabs[cursor]
+    if (!target) return
+    // Context usage metadata is disabled for open tabs.
+    // void refreshSessionMetadata(target, false)
+  }, CLAUDE_BACKGROUND_METADATA_REFRESH_MS)
+  return () => {
+    active = false
+    clearInterval(interval)
   }
 }

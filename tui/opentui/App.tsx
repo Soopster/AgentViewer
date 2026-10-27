@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6508,26 +6508,10 @@ function OpenTuiWorkspace() {
     }
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
-  useEffect(() => {
-    if (!bootstrapped || !tabsEnabled || openTabSessions.length === 0) return undefined
-    let active = true
-    const interval = setInterval(() => {
-      if (!active || providerSwitchRef.current) return
-      const selectedKey = selectedSessionKeyRef.current
-      const backgroundTabs = openTabSessionsRef.current.filter((tab) => sessionKey(tab) !== selectedKey)
-      if (backgroundTabs.length === 0) return
-      const cursor = backgroundMetadataCursorRef.current % backgroundTabs.length
-      backgroundMetadataCursorRef.current = (backgroundMetadataCursorRef.current + 1) % backgroundTabs.length
-      const target = backgroundTabs[cursor]
-      if (!target) return
-      // Context usage metadata is disabled for open tabs.
-      // void refreshSessionMetadata(target, false)
-    }, CLAUDE_BACKGROUND_METADATA_REFRESH_MS)
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
+  useEffect(() => runSessionPollIntervalEffect({
+    bootstrapped, tabsEnabled, openTabSessions, providerSwitchRef, selectedSessionKeyRef,
+    openTabSessionsRef, backgroundMetadataCursorRef,
+  }), [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
 
 
   useEffect(() => runTranscriptCursorEffect({
