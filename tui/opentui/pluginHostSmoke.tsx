@@ -458,11 +458,24 @@ console.log('Checkpoints, file history and pull requests open as lazy plugins; f
 // interactive coordinator store, its session and feed) as it was, and calls
 // nothing that stops a run or a teammate.
 const portable = async (letter: string) => { await key('k', { ctrl: true }); await key(letter) }
+const checkWindowRoundTrip = async (id: string, marker: string) => {
+  const frame = () => setup.renderer.root.findDescendantById(`surface-frame:${id}`)
+  await key('w', { ctrl: true, shift: true })
+  await waitFor(`${id} placement choice or window`, () => screen().includes('beside') || !!frame())
+  if (!frame()) await key('return')
+  await waitFor(`${id} docked`, () => !!frame() && screen().includes(marker))
+  await portable('w')
+  await waitFor(`${id} yields to window management`, () => screen().includes('MANAGE WINDOWS'))
+  await key('escape')
+  await key('w', { ctrl: true, shift: true })
+  await waitFor(`${id} returned to overlay`, () => !frame() && screen().includes(marker))
+}
 check(!tuiPluginViews.isLoaded('coordination'), 'the Coordination plugin loaded before a coordination view was opened')
 check(!tuiPluginViews.isLoaded('desk'), 'the Desk plugin loaded before the desk was opened')
 await portable('a')
 await waitFor('the control center', () => screen().includes('AGENT CONTROL CENTER'))
 check(tuiPluginViews.isLoaded('coordination'), 'the control center opened without its plugin module')
+await checkWindowRoundTrip('coordination', 'AGENT CONTROL CENTER')
 await key('escape')
 await waitFor('the control center closed', () => !screen().includes('AGENT CONTROL CENTER'))
 await key('a', { ctrl: true, shift: true })
@@ -500,6 +513,7 @@ console.log('Coordination opens as a lazy plugin (⌃K a, ⌃⇧A, ⌃K t); turn
 await portable('b')
 await waitFor('the desk', () => screen().includes('AGENT VIEWER ▸ DESK'))
 check(tuiPluginViews.isLoaded('desk'), 'the desk opened without its plugin module')
+await checkWindowRoundTrip('desk', 'AGENT VIEWER ▸ DESK')
 await key('escape')
 await waitFor('the desk closed', () => !screen().includes('AGENT VIEWER ▸ DESK'))
 applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'desk', false))
