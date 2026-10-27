@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10619,45 +10619,15 @@ function OpenTuiWorkspace() {
     setContextMenu({ ...point, title: 'Move to workspace…', items })
   })
 
-  const splitFocusedWindow = useStableEvent((orientation: SplitPaneOrientation, target: number | null = splitFocusIndex) => {
-    if (target === FLOATING_PANE_INDEX) { showNotice('info', 'Dock the floating window before splitting it'); return }
-    if (orderedWindowKeys.length >= 31) { showNotice('info', 'This workspace has reached its 32-window limit'); return }
-    if (windowZoom !== null || fullscreenMode) { showNotice('info', 'Restore the layout before splitting a window'); return }
-    if (visibleSplitPaneCount !== orderedWindowKeys.length) { showNotice('info', 'Enlarge the terminal to show all windows before adding a split'); return }
-    const axis = orientation === 'columns' ? 'x' : 'y'
-    const targetRect = rectOf(target === null ? 'transcript-reader' : `split-pane:${target}`)
-    const targetMinimum = axis === 'x' ? (target === null ? MIN_READER_WIDTH : SPLIT_PANE_MIN_WIDTH) : (target === null ? MIN_READER_ROWS : SPLIT_PANE_MIN_ROWS)
-    const addedMinimum = axis === 'x' ? SPLIT_PANE_MIN_WIDTH : SPLIT_PANE_MIN_ROWS
-    if (!targetRect || (axis === 'x' ? targetRect.width : targetRect.height) < targetMinimum + addedMinimum) {
-      showNotice('info', `That window is too ${axis === 'x' ? 'narrow' : 'short'} to split · enlarge it first`); return
-    }
-    const candidate = splitCandidateSessions.find(session => !orderedWindowKeys.includes(sessionKey(session)) && !parkedWindowKeysRef.current.has(sessionKey(session)))
-    const taken = new Set([...windowSurfaces, ...popoverTabs, ...[...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)])
-    const surface = candidate ? null : nextSurfaceId('terminal', taken)
-    const key = candidate ? sessionKey(candidate) : surfaceWindowKey(surface!)
-    const keys = [...orderedWindowKeys, key]
-    const rects = windowLayoutRects(fittedWindows, { width: readerAreaWidth, height: windowAreaHeight, orientation: splitOrientation, readerLast: splitReaderLast })
-    const root = reconciledSplitTree?.root ?? splitTreeFromRects(rects.map((rect, index) => ({ ...rect, slot: index - 1 })))
-    const next: WindowSplitTree = { ...(primaryLeaf ? {} : { primary: false }), keys, root: splitWindowLeaf(root, target ?? popoverHostSlot, orderedWindowKeys.length, axis) }
-    const result = computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits)
-    if (result.layout.visibleCount !== keys.length) { showNotice('info', `That window is too ${axis === 'x' ? 'narrow' : 'short'} to split · enlarge it first`); return }
-    checkpointWindowLayout()
-    setWindowSplitTree(next)
-    setWindowOrder(keys)
-    if (candidate) {
-      const pins = [...splitPinnedSessions.slice(0, splitPaneCount).map(sessionKey), key]
-      setSplitPinnedKeys(pins)
-      setSplitPaneCount(pins.length)
-      void writeTuiSplitPanes(pins.length).catch(() => {})
-    } else {
-      setWindowSurfaces(current => [...current, surface!])
-      pendingSurfaceFocusRef.current = surface!
-    }
-    setSurfacePanelFocused(false)
-    setFocusedPane('messages')
-    setSplitFocusIndex(orderedWindowKeys.length)
-    showNotice('info', `${orientation === 'columns' ? 'Split right' : 'Split below'} · ${candidate ? formatSessionTitle(candidate) : 'new shell window'}`)
-  })
+  const splitFocusedWindow = useStableEvent((orientation: SplitPaneOrientation, target: number | null = splitFocusIndex) => runSplitFocusedWindow({
+    splitFocusIndex, showNotice, orderedWindowKeys, windowZoom, fullscreenMode,
+    visibleSplitPaneCount, rectOf, splitCandidateSessions, parkedWindowKeysRef, windowSurfaces,
+    popoverTabs, fittedWindows, readerAreaWidth, windowAreaHeight, splitOrientation,
+    splitReaderLast, reconciledSplitTree, primaryLeaf, popoverHostSlot, splitTreeLimits,
+    checkpointWindowLayout, setWindowSplitTree, setWindowOrder, splitPinnedSessions,
+    splitPaneCount, setSplitPinnedKeys, setSplitPaneCount, setWindowSurfaces,
+    pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane, setSplitFocusIndex,
+  }, orientation, target))
   const resizeTreeWindow = useStableEvent((slot: number, direction: 1 | -1) => {
     if (!reconciledSplitTree || !treeGeometry) return
     const path = splitPath(reconciledSplitTree.root, slot)
