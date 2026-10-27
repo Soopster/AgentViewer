@@ -30,6 +30,9 @@ import { type readViewSessionComposerOptions } from '../../../../lib/sessionBack
 import { resolve } from 'node:path'
 import { type TuiEffort } from '../types'
 import { COMPOSER_AFFORDANCES_TTL_MS } from '../timing'
+import { peekGitSummaryCached, readGitSummaryCached } from '../../gitSummaryCache'
+import { type GitSummary } from '../../../../lib/gitProvider'
+import { COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS } from '../timing'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -387,4 +390,47 @@ export function runComposerAffordancesClearEffect(ctx: ComposerAffordancesClearE
   if ((target.provider ?? 'claude') === 'claude' && !composerActiveRef.current) return
   void fetchComposerAffordances(target, committedSessionKey)
 // eslint-disable-next-line react-hooks/exhaustive-deps
+}
+
+export type ComposerGitSummaryEffectContext = {
+  composerWorkingDirectory: string | null
+  setComposerGitSummary: React.Dispatch<React.SetStateAction<GitSummary | null>>
+}
+
+export function runComposerGitSummaryEffect(ctx: ComposerGitSummaryEffectContext) {
+  const {
+    composerWorkingDirectory, setComposerGitSummary,
+  } = ctx
+  if (!composerWorkingDirectory) {
+    setComposerGitSummary(null)
+    return
+  }
+
+  let cancelled = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  // Only clear the indicator when this cwd has nothing cached. Blanking it on
+  // every switch made the branch flicker off and back on when moving between
+  // two sessions in the same repository.
+  setComposerGitSummary(peekGitSummaryCached(composerWorkingDirectory))
+  // Each poll is three `git` processes, one of them a full `status -u`; at a
+  // fixed 5s an idle TUI spawned them all day, and they were a fifth of its
+  // idle samples. An unchanged answer doubles the wait (to
+  // COMPOSER_GIT_SUMMARY_IDLE_POLL_MS); any change — a turn editing files —
+  // snaps it back, so the indicator is current exactly when it is moving.
+  let delay = COMPOSER_GIT_SUMMARY_POLL_MS
+  let lastSignature: string | null = null
+  const refresh = async (force: boolean) => {
+    const summary = await readGitSummaryCached(composerWorkingDirectory, { force })
+    if (cancelled) return
+    setComposerGitSummary(summary)
+    const signature = JSON.stringify(summary)
+    delay = signature === lastSignature ? Math.min(delay * 2, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS) : COMPOSER_GIT_SUMMARY_POLL_MS
+    lastSignature = signature
+    timer = setTimeout(() => { void refresh(true) }, delay)
+  }
+  void refresh(false)
+  return () => {
+    cancelled = true
+    if (timer) clearTimeout(timer)
+  }
 }

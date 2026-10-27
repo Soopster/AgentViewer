@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -2936,40 +2936,9 @@ function OpenTuiWorkspace() {
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
   const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
-  useEffect(() => {
-    if (!composerWorkingDirectory) {
-      setComposerGitSummary(null)
-      return
-    }
-
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    // Only clear the indicator when this cwd has nothing cached. Blanking it on
-    // every switch made the branch flicker off and back on when moving between
-    // two sessions in the same repository.
-    setComposerGitSummary(peekGitSummaryCached(composerWorkingDirectory))
-    // Each poll is three `git` processes, one of them a full `status -u`; at a
-    // fixed 5s an idle TUI spawned them all day, and they were a fifth of its
-    // idle samples. An unchanged answer doubles the wait (to
-    // COMPOSER_GIT_SUMMARY_IDLE_POLL_MS); any change — a turn editing files —
-    // snaps it back, so the indicator is current exactly when it is moving.
-    let delay = COMPOSER_GIT_SUMMARY_POLL_MS
-    let lastSignature: string | null = null
-    const refresh = async (force: boolean) => {
-      const summary = await readGitSummaryCached(composerWorkingDirectory, { force })
-      if (cancelled) return
-      setComposerGitSummary(summary)
-      const signature = JSON.stringify(summary)
-      delay = signature === lastSignature ? Math.min(delay * 2, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS) : COMPOSER_GIT_SUMMARY_POLL_MS
-      lastSignature = signature
-      timer = setTimeout(() => { void refresh(true) }, delay)
-    }
-    void refresh(false)
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [composerWorkingDirectory])
+  useEffect(() => runComposerGitSummaryEffect({
+    composerWorkingDirectory, setComposerGitSummary,
+  }), [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
     if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path' })
