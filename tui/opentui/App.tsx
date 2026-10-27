@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8645,42 +8645,12 @@ function OpenTuiWorkspace() {
   const rememberClosedWindow = useStableEvent((key: string) => {
     setClosedWindows(previous => [...previous.slice(-19), { key, snapshot: captureWindowLayout() }])
   })
-  const reopenClosedWindow = useStableEvent(() => {
-    const closed = closedWindows.at(-1)
-    if (!closed) { showNotice('info', 'No closed panes to reopen'); return }
-    const saved = closed.snapshot, key = closed.key
-    const existing = new Set([...orderedWindowKeys, ...liveWindowStacks.flat(), floatingKey])
-    setClosedWindows(previous => previous.slice(0, -1))
-    if (existing.has(key)) { showNotice('info', 'That pane is already open'); return }
-    checkpointWindowLayout()
-    setOpenTabSessions(current => [...current, ...saved.tabs.filter(tab => !current.some(entry => sessionKey(entry) === sessionKey(tab)))])
-    if (isSurfaceWindowKey(key) && (saved.layout.popoverTabs ?? []).includes(surfaceIdOfKey(key))) {
-      const id = surfaceIdOfKey(key)
-      setPopoverTabs(current => current.includes(id) ? current : [...current, id])
-      setWindowSurfaceMeta(current => ({ ...current, [id]: saved.layout.surfaceMeta[id] ?? {} }))
-      setActivePopoverTab(id); setSplitFocusIndex(null)
-      if (surfaceKindOf(id) === 'teammates' && !teammatesOpen) openTeammatesPanel()
-      showNotice('info', 'Closed tab reopened')
-      return
-    }
-    const oldStack = saved.layout.stacks.find(stack => stack.includes(key))
-    const anchor = oldStack?.find(member => existing.has(member))
-    if (anchor) {
-      setWindowStacks(addToStack(liveWindowStacks, anchor, key))
-      const frame = liveWindowStacks.find(stack => stack.includes(anchor))?.find(member => orderedWindowKeys.includes(member)) ?? anchor
-      commitWindowKeys(replaceWindowKey(orderedWindowKeys, frame, key))
-    } else if (saved.layout.floating?.key === key && !floatingKey) setFloatingWindow(saved.layout.floating)
-    else {
-      const keys = [...orderedWindowKeys]
-      const oldKeys = orderWindows(saved.layout.order, saved.layout.panes.slice(0, saved.layout.count), saved.layout.surfaces)
-      keys.splice(Math.max(0, Math.min(oldKeys.indexOf(key), keys.length)), 0, key)
-      commitWindowKeys(keys)
-      if (saved.layout.splitTree && keys.length === oldKeys.length && keys.every((entry, index) => entry === oldKeys[index])) setWindowSplitTree(saved.layout.splitTree)
-    }
-    if (isSurfaceWindowKey(key) && saved.layout.surfaceMeta[surfaceIdOfKey(key)]) setWindowSurfaceMeta(current => ({ ...current, [surfaceIdOfKey(key)]: saved.layout.surfaceMeta[surfaceIdOfKey(key)]! }))
-    setOverviewPendingTarget(key)
-    showNotice('info', 'Closed pane reopened')
-  })
+  const reopenClosedWindow = useStableEvent(() => runReopenClosedWindow({
+    closedWindows, showNotice, orderedWindowKeys, liveWindowStacks, floatingKey, setClosedWindows,
+    checkpointWindowLayout, setOpenTabSessions, setPopoverTabs, setWindowSurfaceMeta,
+    setActivePopoverTab, setSplitFocusIndex, teammatesOpen, openTeammatesPanel, setWindowStacks,
+    commitWindowKeys, setFloatingWindow, setWindowSplitTree, setOverviewPendingTarget,
+  }))
 
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the

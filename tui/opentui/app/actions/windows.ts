@@ -52,6 +52,7 @@ import { nextSurfaceId } from '../../popoverWindows'
 import { formatSessionTitle } from '../../../format'
 import { replacePrimaryWindow, reconcileWindowSplitTree } from '../../windowSplitTree'
 import { addToStack, replaceWindowKey, stackOf } from '../../windowTabs'
+import { orderWindows } from '../../windowOrder'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -953,4 +954,69 @@ export function runTabWindowOnto(ctx: TabWindowOntoContext, key: string, anchor:
   setWindowStacks(addToStack(liveWindowStacks, anchor, key))
   commitWindowKeys(replaceWindowKey(shownFirstWindowKeys().filter((entry) => entry !== key), frame, key))
   showNotice('info', `${fitText(windowKeyTitle(key), 40).trimEnd()} · a tab of ${fitText(windowKeyTitle(anchor), 30).trimEnd()}`)
+}
+
+export type ReopenClosedWindowContext = {
+  closedWindows: { key: string; snapshot: ReturnType<() => { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: SurfacePanelState; panelOpen: boolean; }>; }[]
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  orderedWindowKeys: string[]
+  liveWindowStacks: WindowStack[]
+  floatingKey: string | null
+  setClosedWindows: React.Dispatch<React.SetStateAction<{ key: string; snapshot: ReturnType<() => { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: SurfacePanelState; panelOpen: boolean; }>; }[]>>
+  checkpointWindowLayout: () => void
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setPopoverTabs: React.Dispatch<React.SetStateAction<string[]>>
+  setWindowSurfaceMeta: React.Dispatch<React.SetStateAction<Record<string, SurfaceMeta>>>
+  setActivePopoverTab: React.Dispatch<React.SetStateAction<string | null>>
+  setSplitFocusIndex: React.Dispatch<React.SetStateAction<number | null>>
+  teammatesOpen: boolean
+  openTeammatesPanel: () => void
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  setOverviewPendingTarget: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export function runReopenClosedWindow(ctx: ReopenClosedWindowContext) {
+  const {
+    closedWindows, showNotice, orderedWindowKeys, liveWindowStacks, floatingKey, setClosedWindows,
+    checkpointWindowLayout, setOpenTabSessions, setPopoverTabs, setWindowSurfaceMeta,
+    setActivePopoverTab, setSplitFocusIndex, teammatesOpen, openTeammatesPanel, setWindowStacks,
+    commitWindowKeys, setFloatingWindow, setWindowSplitTree, setOverviewPendingTarget,
+  } = ctx
+  const closed = closedWindows.at(-1)
+  if (!closed) { showNotice('info', 'No closed panes to reopen'); return }
+  const saved = closed.snapshot, key = closed.key
+  const existing = new Set([...orderedWindowKeys, ...liveWindowStacks.flat(), floatingKey])
+  setClosedWindows(previous => previous.slice(0, -1))
+  if (existing.has(key)) { showNotice('info', 'That pane is already open'); return }
+  checkpointWindowLayout()
+  setOpenTabSessions(current => [...current, ...saved.tabs.filter(tab => !current.some(entry => sessionKey(entry) === sessionKey(tab)))])
+  if (isSurfaceWindowKey(key) && (saved.layout.popoverTabs ?? []).includes(surfaceIdOfKey(key))) {
+    const id = surfaceIdOfKey(key)
+    setPopoverTabs(current => current.includes(id) ? current : [...current, id])
+    setWindowSurfaceMeta(current => ({ ...current, [id]: saved.layout.surfaceMeta[id] ?? {} }))
+    setActivePopoverTab(id); setSplitFocusIndex(null)
+    if (surfaceKindOf(id) === 'teammates' && !teammatesOpen) openTeammatesPanel()
+    showNotice('info', 'Closed tab reopened')
+    return
+  }
+  const oldStack = saved.layout.stacks.find(stack => stack.includes(key))
+  const anchor = oldStack?.find(member => existing.has(member))
+  if (anchor) {
+    setWindowStacks(addToStack(liveWindowStacks, anchor, key))
+    const frame = liveWindowStacks.find(stack => stack.includes(anchor))?.find(member => orderedWindowKeys.includes(member)) ?? anchor
+    commitWindowKeys(replaceWindowKey(orderedWindowKeys, frame, key))
+  } else if (saved.layout.floating?.key === key && !floatingKey) setFloatingWindow(saved.layout.floating)
+  else {
+    const keys = [...orderedWindowKeys]
+    const oldKeys = orderWindows(saved.layout.order, saved.layout.panes.slice(0, saved.layout.count), saved.layout.surfaces)
+    keys.splice(Math.max(0, Math.min(oldKeys.indexOf(key), keys.length)), 0, key)
+    commitWindowKeys(keys)
+    if (saved.layout.splitTree && keys.length === oldKeys.length && keys.every((entry, index) => entry === oldKeys[index])) setWindowSplitTree(saved.layout.splitTree)
+  }
+  if (isSurfaceWindowKey(key) && saved.layout.surfaceMeta[surfaceIdOfKey(key)]) setWindowSurfaceMeta(current => ({ ...current, [surfaceIdOfKey(key)]: saved.layout.surfaceMeta[surfaceIdOfKey(key)]! }))
+  setOverviewPendingTarget(key)
+  showNotice('info', 'Closed pane reopened')
 }
