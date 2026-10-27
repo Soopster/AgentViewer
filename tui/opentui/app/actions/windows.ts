@@ -1468,3 +1468,51 @@ export function runOpenPopoverWindow(ctx: OpenPopoverWindowContext, kind: Popove
   setFocusedPane('messages')
   showNotice('info', `${POPOVER_WINDOWS[kind].title.slice(2)} in a window · ⌃⇧W or ⤢ for full screen`)
 }
+
+export type ResizeFocusedWindowContext = {
+  splitFocusIndex: number | null
+  reconciledSplitTree: WindowSplitTree | null
+  resizeTreeWindow: (slot: number, direction: 1 | -1) => void
+  fittedWindows: WindowLayout
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  checkpointWindowLayout: () => void
+  splitWeights: Partial<Record<WindowGroupKey, number[]>>
+  setSplitWeights: React.Dispatch<React.SetStateAction<Partial<Record<WindowGroupKey, number[]>>>>
+  splitArrangement: WindowArrangement
+  splitReaderLast: boolean
+  splitSecondaryShare: number
+  splitBottomShare: number
+}
+
+export function runResizeFocusedWindow(ctx: ResizeFocusedWindowContext, direction: 1 | -1, focus?: number | null) {
+  const {
+    splitFocusIndex, reconciledSplitTree, resizeTreeWindow, fittedWindows, showNotice,
+    checkpointWindowLayout, splitWeights, setSplitWeights, splitArrangement, splitReaderLast,
+    splitSecondaryShare, splitBottomShare,
+  } = ctx
+  if (focus === undefined) focus = splitFocusIndex
+  if (reconciledSplitTree) { resizeTreeWindow(focus ?? -1, direction); return }
+  const group = focus === null ? undefined : fittedWindows.groups.find((entry) => entry.members.includes(focus))
+  if (focus === null || !group) {
+    showNotice('info', 'Focus a pane that shares a divider with another pane')
+    return
+  }
+  const horizontal = group.axis === 'x'
+  const extents = group.members.map((member) => (horizontal ? fittedWindows.panes[member]!.width : fittedWindows.panes[member]!.height))
+  const at = group.members.indexOf(focus)
+  const neighbour = at < group.members.length - 1 ? at + 1 : at - 1
+  const min = horizontal ? SPLIT_PANE_MIN_WIDTH : SPLIT_PANE_MIN_ROWS
+  const step = horizontal ? 4 : 2
+  const pair = extents[at]! + extents[neighbour]!
+  const next = Math.max(min, Math.min(pair - min, extents[at]! + direction * step))
+  if (next === extents[at]) {
+    showNotice('info', direction > 0 ? 'That pane is as large as its neighbour allows' : 'That pane is at its smallest')
+    return
+  }
+  checkpointWindowLayout()
+  extents[at] = next
+  extents[neighbour] = pair - next
+  const weights = { ...splitWeights, [group.key]: extents }
+  setSplitWeights(weights)
+  void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights }).catch(() => {})
+}

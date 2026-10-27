@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -7671,32 +7671,11 @@ function OpenTuiWorkspace() {
   })
 
   // ⌃B [ ]: shrink or grow the focused pane within its row or column, against its neighbour.
-  const resizeFocusedWindow = useStableEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => {
-    if (reconciledSplitTree) { resizeTreeWindow(focus ?? -1, direction); return }
-    const group = focus === null ? undefined : fittedWindows.groups.find((entry) => entry.members.includes(focus))
-    if (focus === null || !group) {
-      showNotice('info', 'Focus a pane that shares a divider with another pane')
-      return
-    }
-    const horizontal = group.axis === 'x'
-    const extents = group.members.map((member) => (horizontal ? fittedWindows.panes[member]!.width : fittedWindows.panes[member]!.height))
-    const at = group.members.indexOf(focus)
-    const neighbour = at < group.members.length - 1 ? at + 1 : at - 1
-    const min = horizontal ? SPLIT_PANE_MIN_WIDTH : SPLIT_PANE_MIN_ROWS
-    const step = horizontal ? 4 : 2
-    const pair = extents[at]! + extents[neighbour]!
-    const next = Math.max(min, Math.min(pair - min, extents[at]! + direction * step))
-    if (next === extents[at]) {
-      showNotice('info', direction > 0 ? 'That pane is as large as its neighbour allows' : 'That pane is at its smallest')
-      return
-    }
-    checkpointWindowLayout()
-    extents[at] = next
-    extents[neighbour] = pair - next
-    const weights = { ...splitWeights, [group.key]: extents }
-    setSplitWeights(weights)
-    void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights }).catch(() => {})
-  })
+  const resizeFocusedWindow = useStableEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => runResizeFocusedWindow({
+    splitFocusIndex, reconciledSplitTree, resizeTreeWindow, fittedWindows, showNotice,
+    checkpointWindowLayout, splitWeights, setSplitWeights, splitArrangement, splitReaderLast,
+    splitSecondaryShare, splitBottomShare,
+  }, direction, focus))
 
   // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
   const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => {
