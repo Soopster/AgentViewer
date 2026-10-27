@@ -316,6 +316,7 @@ import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEf
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
+import { runTranscriptCardsSyncEffect } from './app/effects/liveTranscript'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2377,42 +2378,9 @@ function OpenTuiWorkspace() {
   // to a variant that isn't yet cached. The synchronous fallback above keeps the
   // UI responsive in the meantime; this effect just ensures subsequent toggles
   // hit the cache instead of running a main-thread format every time.
-  useEffect(() => {
-    if (!sessionDetail || !transcriptSession) return
-    const attachedCardsMatch = attachedTranscriptCardsForVariant(sessionDetail, density, showToolCalls) !== null
-    const cachedSync = getTranscriptCardsSync(
-      transcriptSession,
-      sessionDetail.threadedMessages,
-      density,
-      showToolCalls,
-    )
-    if (attachedCardsMatch || cachedSync) {
-      setError((current) => current?.startsWith('Failed to format transcript') ? null : current)
-      return
-    }
-    let cancelled = false
-    setError((current) => current?.startsWith('Failed to format transcript') ? null : current)
-    void formatTranscriptCardsAsync(
-      transcriptSession,
-      sessionDetail.threadedMessages,
-      density,
-      showToolCalls,
-    ).then(() => {
-      // Re-render so baseTranscriptCards picks the cards up from the sync
-      // cache — required for over-SYNC_FORMAT_CARD_LIMIT sessions, which
-      // render empty until this format lands.
-      if (!cancelled) setWorkerCardCacheVersion((version) => version + 1)
-    }).catch((cause) => {
-      if (!cancelled) {
-        setError(cause instanceof Error
-          ? `Failed to format transcript: ${cause.message}`
-          : 'Failed to format transcript')
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [density, sessionDetail, transcriptSession, showToolCalls])
+  useEffect(() => runTranscriptCardsSyncEffect({
+    sessionDetail, transcriptSession, density, showToolCalls, setError, setWorkerCardCacheVersion,
+  }), [density, sessionDetail, transcriptSession, showToolCalls])
   const baseTranscriptIndexByKey = useMemo(
     () => createLazyTranscriptIndexLookup(baseAndBridgeTranscriptCards),
     [baseAndBridgeTranscriptCards],
