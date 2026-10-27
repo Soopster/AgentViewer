@@ -35,6 +35,11 @@ import { join, resolve } from 'node:path'
 import { type ComposerPromptPart } from '../types'
 import { writeClipboard } from '../clipboard'
 import { tuiCommandEquivalent } from '../commands'
+import { type SurfacePanelState, openSurface as openSurfaceIn } from '../../surfacePanelState'
+import { isPluginEnabled } from '../../../../lib/plugins/enablement'
+import { getPluginSurface, isPluginSurfaceId } from '../../../../lib/plugins/catalog'
+import { type PluginServiceId } from '../../../../lib/plugins/types'
+import { type RightPanelSurfaceKind } from '../../../../lib/rightPanel'
 
 export type ExecuteCommandPaletteContext = {
   focusedWindowItem: WindowItem | null
@@ -1051,4 +1056,66 @@ export function runRunTuiLocalCommand(ctx: RunTuiLocalCommandContext, target: Se
     return true
   }
   return false
+}
+
+export type RunPluginCommandContext = {
+  selectedSession: Session | null
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  pluginServiceGaps: Partial<Record<PluginServiceId, string>>
+  gitRepoCwd: string
+  setEditorInitialPath: React.Dispatch<React.SetStateAction<string | null>>
+  setEditorInitialLine: React.Dispatch<React.SetStateAction<number | null>>
+  setCheckpointFocusPrompt: React.Dispatch<React.SetStateAction<{ sessionId: string; text: string; timestamp?: string; } | null>>
+  setCoordBoardRunId: React.Dispatch<React.SetStateAction<string | null>>
+  openTeammatesPanel: () => void
+  setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
+  setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
+  setPluginOpenRequests: React.Dispatch<React.SetStateAction<Partial<Record<'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'analytics' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk', { count: number; session: Session | null; }>>>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'analytics' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+}
+
+export function runRunPluginCommand(ctx: RunPluginCommandContext, command: ResolvedPluginCommand, session?: Session | null) {
+  const {
+    selectedSession, showNotice, pluginServiceGaps, gitRepoCwd, setEditorInitialPath,
+    setEditorInitialLine, setCheckpointFocusPrompt, setCoordBoardRunId, openTeammatesPanel,
+    setSurfacePanelOpen, setSurfacePanelFocused, setSurfacePanel, setPluginOpenRequests,
+    setPluginOverlay,
+  } = ctx
+  if (session === undefined) session = selectedSession
+  if (!isPluginSurfaceId(command.opens)) return
+  if (!isPluginEnabled(command.pluginId)) {
+    showNotice('info', `${command.label} is off · turn its plugin on in Plugins (⌃K palette)`)
+    return
+  }
+  // A service the host cannot offer right now says why, rather than opening an empty view.
+  const gap = getPluginSurface(command.opens).services.map((id) => pluginServiceGaps[id]).find(Boolean)
+  if (gap) { showNotice('error', gap); return }
+  if (command.requires === 'session' && !session) { showNotice('info', `${command.label} needs a session`); return }
+  if (command.requires === 'repository' && !gitRepoCwd) {
+    showNotice('info', 'Selected session has no working directory', 3000)
+    return
+  }
+  // A command names no file, so the editor opens where it was; nor a turn.
+  if (command.opens === 'editor') { setEditorInitialPath(null); setEditorInitialLine(null) }
+  if (command.opens === 'checkpoints') setCheckpointFocusPrompt(null)
+  // A command opens the control center on the latest run.
+  if (command.opens === 'coordination') setCoordBoardRunId(null)
+  // Teammates are the store's: opening them is opening the conversation's team.
+  if (command.opens === 'teammates') { openTeammatesPanel(); return }
+  if (command.placement === 'panel') {
+    // A side-panel tab: the one already open, or a new one. Several may exist
+    // (shells); one in a window is its own and stays where it is.
+    const kind = command.opens as RightPanelSurfaceKind
+    setSurfacePanelOpen(true)
+    setSurfacePanelFocused(true)
+    setSurfacePanel((current) => {
+      const existing = current.surfaces.find((surface) => surface.kind === kind)
+      return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, kind)
+    })
+    return
+  }
+  const opens = command.opens
+  setPluginOpenRequests((current) => ({ ...current, [opens]: { count: (current[opens]?.count ?? 0) + 1, session } }))
+  setPluginOverlay(opens)
 }
