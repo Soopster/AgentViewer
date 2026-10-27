@@ -317,7 +317,7 @@ import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffec
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect, runLiveTranscriptOverlayEffect } from './app/effects/liveTranscript'
-import { runPersistBridgeMessagesEffect } from './app/effects/bridge'
+import { runPersistBridgeMessagesEffect, runLoadBridgeMessagesEffect } from './app/effects/bridge'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2042,27 +2042,10 @@ function OpenTuiWorkspace() {
   }, [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge, selectedSessionTarget?.sessionId])
 
   // Load persisted bridge messages when selected session changes
-  useEffect(() => {
-    if (!canUseChannelBridge || !selectedSessionTarget) {
-      setBridgeTranscriptEntries(keepEmpty)
-      persistedBridgeCountRef.current = 0
-      return
-    }
-    let isMounted = true
-    ;(async () => {
-      const persisted = await loadBridgeMessagesForSession(selectedSessionTarget.provider, selectedSessionTarget.sessionId)
-      if (isMounted) {
-        const entries = persisted.map((msg) => ({
-          kind: msg.kind,
-          text: msg.text,
-          timestamp: msg.timestamp,
-        }))
-        setBridgeTranscriptEntries((current) => current.length === 0 && entries.length === 0 ? current : entries)
-        persistedBridgeCountRef.current = entries.length
-      }
-    })().catch(console.error)
-    return () => { isMounted = false }
-  }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
+  useEffect(() => runLoadBridgeMessagesEffect({
+    canUseChannelBridge, selectedSessionTarget, setBridgeTranscriptEntries,
+    persistedBridgeCountRef,
+  }), [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
   useEffect(() => runPersistBridgeMessagesEffect({
