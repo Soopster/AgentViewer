@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5309,36 +5309,11 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const respondToTuiPermission = useStableEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => {
-    if (permission.asyncQuestion) { setAsyncQuestionPrompt(null); return }
-    const target = composerTargetSession
-    if (!target || permissionActionLoading) return
-    setPermissionActionLoading(permission.id)
-    try {
-      if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
-        await openExternalUrl(permission.url)
-      }
-      await runTuiSessionAction(
-        { ...target, sessionId: permission.sessionId ?? target.sessionId },
-        { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider, ...(permissionMode ? { permissionMode } : {}) },
-      )
-      if (permission.provider === 'codex' && permission.questions?.length) {
-        setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, null))
-      }
-      setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
-      setPermissionOptionIndex(0)
-    } catch (err) {
-      if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
-        setPermissionOptionIndex(0)
-        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
-      } else {
-        showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
-      }
-    } finally {
-      setPermissionActionLoading(null)
-    }
-  })
+  const respondToTuiPermission = useStableEvent(async (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => runRespondToTuiPermission({
+    setAsyncQuestionPrompt, composerTargetSession, permissionActionLoading,
+    setPermissionActionLoading, setLiveTranscriptMessages, setPendingPermissions,
+    setPermissionOptionIndex, showNotice,
+  }, permission, response, permissionMode))
 
   // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
   // exits plan mode for this turn) and switches the composer + warm query to the
