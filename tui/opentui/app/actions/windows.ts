@@ -61,6 +61,7 @@ import { SPLIT_SHARE_MAX, SPLIT_SHARE_MIN } from '../../splitPaneState'
 import { adjustSplitReaderShare, evenSplitReaderShare, SPLIT_SHARE_STEP } from '../../splitPaneState'
 import { placePaneSlot, movePaneToEdge, placeWindowSplit } from '../../windowSplitTree'
 import { stackSuccessor } from '../../windowTabs'
+import { clampFloatingRect } from '../../windowTabs'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1310,4 +1311,56 @@ export function runNestedDropPlan(ctx: NestedDropPlanContext, movingKey: string,
     if (!frame || (horizontal ? frame.width : frame.height) < required) return null
   }
   return { tree: next, geometry, key: movingKey }
+}
+
+export type MoveFloatGestureContext = {
+  floatGestureRef: React.RefObject<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean; } | null>
+  floatingWindow: { key: string; rect: FloatingRect; slot: number; } | null
+  checkpointWindowLayout: () => void
+  floatDockTarget: (point: { x: number; y: number; }) => { kind: 'tab'; pane: number; } | { kind: 'edge'; } | null
+  windowAreaRect: () => { x: number; y: number; width: number; height: number; } | null
+  rectOf: (id: string) => { x: number; y: number; width: number; height: number; } | null
+  dropTargetAt: (point: { x: number; y: number; }) => { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title: boolean; }
+  nestedDropPlan: (movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean; }) => { tree: WindowSplitTree; geometry: { layout: WindowLayout; rects: Map<number, SplitRect>; dividers: SplitDivider[]; }; key: string; } | null
+  setFloatDockHint: React.Dispatch<React.SetStateAction<{ label: string; rect: { x: number; y: number; width: number; height: number; }; x: number; y: number; } | null>>
+  windowNumberOffset: 1 | 2
+  readerAreaWidth: number
+  windowAreaHeight: number
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+}
+
+export function runMoveFloatGesture(ctx: MoveFloatGestureContext, event: { x: number; y: number }) {
+  const {
+    floatGestureRef, floatingWindow, checkpointWindowLayout, floatDockTarget, windowAreaRect,
+    rectOf, dropTargetAt, nestedDropPlan, setFloatDockHint, windowNumberOffset, readerAreaWidth,
+    windowAreaHeight, setFloatingWindow,
+  } = ctx
+  const gesture = floatGestureRef.current
+  if (!gesture || !floatingWindow) return
+  if (!gesture.moved) {
+    if (Math.abs(event.x - gesture.x) + Math.abs(event.y - gesture.y) < 2) return
+    checkpointWindowLayout()
+    gesture.moved = true
+  }
+  if (gesture.mode === 'move') {
+    const dock = floatDockTarget(event)
+    const area = windowAreaRect()
+    const pane = dock?.kind === 'tab' ? rectOf(`split-pane:${dock.pane}`) : null
+    const target = dropTargetAt(event)
+    const edge = target.pane === null ? target.zone : target.insert
+    const plan = edge && edge !== 'center' && !target.title ? nestedDropPlan(floatingWindow.key, target) : null
+    const splitRect = plan?.geometry.rects.get(plan.tree.keys.indexOf(floatingWindow.key))
+    setFloatDockHint(splitRect && area
+      ? { label: 'Split here', rect: { ...splitRect, x: splitRect.x + area.x, y: splitRect.y + area.y }, x: event.x, y: event.y }
+      : dock && area
+      ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + windowNumberOffset}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
+      : null)
+  }
+  const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
+  const dx = event.x - gesture.x
+  const dy = event.y - gesture.y
+  const rect = gesture.mode === 'move'
+    ? { ...gesture.rect, x: gesture.rect.x + dx, y: gesture.rect.y + dy }
+    : { ...gesture.rect, width: gesture.rect.width + dx, height: gesture.rect.height + dy }
+  setFloatingWindow({ ...floatingWindow, rect: clampFloatingRect(rect, area) })
 }

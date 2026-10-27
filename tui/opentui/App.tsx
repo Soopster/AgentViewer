@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9541,36 +9541,11 @@ function OpenTuiWorkspace() {
     return null
   }
   const [floatDockHint, setFloatDockHint] = useState<{ label: string; rect: { x: number; y: number; width: number; height: number }; x: number; y: number } | null>(null)
-  const moveFloatGesture = (event: { x: number; y: number }) => {
-    const gesture = floatGestureRef.current
-    if (!gesture || !floatingWindow) return
-    if (!gesture.moved) {
-      if (Math.abs(event.x - gesture.x) + Math.abs(event.y - gesture.y) < 2) return
-      checkpointWindowLayout()
-      gesture.moved = true
-    }
-    if (gesture.mode === 'move') {
-      const dock = floatDockTarget(event)
-      const area = windowAreaRect()
-      const pane = dock?.kind === 'tab' ? rectOf(`split-pane:${dock.pane}`) : null
-      const target = dropTargetAt(event)
-      const edge = target.pane === null ? target.zone : target.insert
-      const plan = edge && edge !== 'center' && !target.title ? nestedDropPlan(floatingWindow.key, target) : null
-      const splitRect = plan?.geometry.rects.get(plan.tree.keys.indexOf(floatingWindow.key))
-      setFloatDockHint(splitRect && area
-        ? { label: 'Split here', rect: { ...splitRect, x: splitRect.x + area.x, y: splitRect.y + area.y }, x: event.x, y: event.y }
-        : dock && area
-        ? { label: dock.kind === 'tab' ? `Add as a tab of window ${dock.pane + windowNumberOffset}` : 'Dock into the layout', rect: pane ? { ...pane, height: Math.min(pane.height, 3) } : area, x: event.x, y: event.y }
-        : null)
-    }
-    const area = windowAreaRect() ?? { width: readerAreaWidth, height: windowAreaHeight }
-    const dx = event.x - gesture.x
-    const dy = event.y - gesture.y
-    const rect = gesture.mode === 'move'
-      ? { ...gesture.rect, x: gesture.rect.x + dx, y: gesture.rect.y + dy }
-      : { ...gesture.rect, width: gesture.rect.width + dx, height: gesture.rect.height + dy }
-    setFloatingWindow({ ...floatingWindow, rect: clampFloatingRect(rect, area) })
-  }
+  const moveFloatGesture = (event: { x: number; y: number }) => runMoveFloatGesture({
+    floatGestureRef, floatingWindow, checkpointWindowLayout, floatDockTarget, windowAreaRect,
+    rectOf, dropTargetAt, nestedDropPlan, setFloatDockHint, windowNumberOffset, readerAreaWidth,
+    windowAreaHeight, setFloatingWindow,
+  }, event)
   floatGestureImplRef.current = { start: (event) => startFloatGesture('move', event), move: (event) => moveFloatGesture(event), end: (event) => endFloatGesture(event) }
   const endFloatGesture = (event?: { x: number; y: number }) => {
     const gesture = floatGestureRef.current
