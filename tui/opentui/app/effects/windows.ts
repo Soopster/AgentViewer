@@ -63,3 +63,35 @@ export function runOpenTabsOrderEffect(ctx: OpenTabsOrderEffectContext) {
     return changed ? next : current
   })
 }
+
+export type SplitPinnedFillEffectContext = {
+  splitPaneCount: number
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+  parkedWindowKeysRef: React.RefObject<Set<string>>
+  openTabSessions: Session[]
+  selectedSessionKey: string | null
+}
+
+export function runSplitPinnedFillEffect(ctx: SplitPinnedFillEffectContext) {
+  const {
+    splitPaneCount, setSplitPinnedKeys, parkedWindowKeysRef, openTabSessions, selectedSessionKey,
+  } = ctx
+  if (splitPaneCount === 0) {
+    setSplitPinnedKeys((current) => (current.length === 0 ? current : []))
+    return
+  }
+  setSplitPinnedKeys((current) => {
+    const parked = parkedWindowKeysRef.current
+    const candidateKeys = openTabSessions.map((tab) => sessionKey(tab)).filter((tabKey) => !parked.has(tabKey))
+    // A previewed session is a window before it is a tab.
+    const next = [...new Set(current)].filter((pinnedKey) => candidateKeys.includes(pinnedKey) || pinnedKey === selectedSessionKey)
+    for (const candidateKey of candidateKeys) {
+      if (next.length >= splitPaneCount) break
+      if (!next.includes(candidateKey)) next.push(candidateKey)
+    }
+    const trimmed = next.slice(0, splitPaneCount)
+    const unchanged = trimmed.length === current.length
+      && trimmed.every((pinnedKey, i) => pinnedKey === current[i])
+    return unchanged ? current : trimmed
+  })
+}

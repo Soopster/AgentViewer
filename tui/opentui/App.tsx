@@ -311,7 +311,7 @@ import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, ru
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
-import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect } from './app/effects/windows'
+import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
 import { runOptionsEffect } from './app/effects/session'
 export { readRootRenderCount } from './app/perf'
@@ -6868,26 +6868,9 @@ function OpenTuiWorkspace() {
   // Reconcile window pins against the open tabs:
   //   · a pin whose tab was closed is dropped (the previewed session excepted)
   //   · short lists fill from the remaining tabs in tab order
-  useEffect(() => {
-    if (splitPaneCount === 0) {
-      setSplitPinnedKeys((current) => (current.length === 0 ? current : []))
-      return
-    }
-    setSplitPinnedKeys((current) => {
-      const parked = parkedWindowKeysRef.current
-      const candidateKeys = openTabSessions.map((tab) => sessionKey(tab)).filter((tabKey) => !parked.has(tabKey))
-      // A previewed session is a window before it is a tab.
-      const next = [...new Set(current)].filter((pinnedKey) => candidateKeys.includes(pinnedKey) || pinnedKey === selectedSessionKey)
-      for (const candidateKey of candidateKeys) {
-        if (next.length >= splitPaneCount) break
-        if (!next.includes(candidateKey)) next.push(candidateKey)
-      }
-      const trimmed = next.slice(0, splitPaneCount)
-      const unchanged = trimmed.length === current.length
-        && trimmed.every((pinnedKey, i) => pinnedKey === current[i])
-      return unchanged ? current : trimmed
-    })
-  }, [openTabSessions, selectedSessionKey, splitPaneCount])
+  useEffect(() => runSplitPinnedFillEffect({
+    splitPaneCount, setSplitPinnedKeys, parkedWindowKeysRef, openTabSessions, selectedSessionKey,
+  }), [openTabSessions, selectedSessionKey, splitPaneCount])
 
   // New participants append once; gates/status polls never reorder or focus.
   // Explicitly closed panes stay closed on subsequent refreshes.
