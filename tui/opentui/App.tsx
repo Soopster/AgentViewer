@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5784,50 +5784,10 @@ function OpenTuiWorkspace() {
   // /handoff <provider>: continue this conversation on another provider. A new
   // session opens in the same folder with the handoff — the brief plus the recent
   // exchange — as its draft, so the user reads it (and edits it) before it is sent.
-  const handoffToProvider = useStableEvent(async (target: Session, providerName: string) => {
-    const nextProvider = providerName.trim().toLowerCase()
-    if (!isAgentProvider(nextProvider)) {
-      showNotice('info', 'Usage: /handoff <claude|codex|opencode|copilot|pi>', 5000)
-      return
-    }
-    if (newSessionBusy) return
-    const detail = sessionDetail && sessionDetail.info?.sessionId === target.sessionId ? sessionDetail : null
-    if (!detail) {
-      showNotice('info', 'Nothing to hand off yet — send a first message')
-      return
-    }
-    setNewSessionBusy(true)
-    try {
-      const prompt = buildContextHandoffPrompt({
-        fromProvider: target.provider ?? 'claude',
-        brief: buildHandoffBriefMarkdown({ session: target, detail, git: null, bookmarkIds: new Set() }),
-        raw: detail.rawMessages,
-      })
-      const created = await createTuiSession({ provider: nextProvider, cwd: target.cwd ?? process.cwd() })
-      const next: Session = {
-        sessionId: created.sessionId,
-        provider: created.provider,
-        cwd: created.cwd,
-        createdAt: Date.now(),
-        lastModified: Date.now(),
-        summary: `Handoff from ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
-        isPending: created.isPending,
-      }
-      recordContextTransfer({
-        type: 'handoff',
-        source: { provider: target.provider, sessionId: target.sessionId },
-        target: { provider: created.provider, sessionId: created.sessionId },
-        strategy: 'context_handoff',
-      })
-      writeWorkspaceDraft(sessionKey(next), prompt)
-      await openCreatedSession(next)
-      showNotice('info', `Continuing on ${formatProviderLabel(created.provider)} — the handoff is in the composer; the original is unchanged`, 6000)
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Handoff failed')
-    } finally {
-      setNewSessionBusy(false)
-    }
-  })
+  const handoffToProvider = useStableEvent(async (target: Session, providerName: string) => runHandoffToProvider({
+    showNotice, newSessionBusy, sessionDetail, setNewSessionBusy, writeWorkspaceDraft,
+    openCreatedSession,
+  }, target, providerName))
 
   // CLI built-ins that are TUI views rather than agent requests. The Claude SDK
   // answers these "isn't available in this environment" (or, for /todos, not at

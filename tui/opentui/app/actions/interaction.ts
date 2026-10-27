@@ -37,6 +37,11 @@ import { formatProviderLabel } from '../../../format'
 import { forkTuiSession, rewindTuiSession } from '../../../../lib/tui/service'
 import { type AgentProvider } from '../../../../lib/types'
 import { forkPointBefore, type RewindCandidate } from '../../rewindTargets'
+import { isAgentProvider } from '../../../../lib/provider'
+import { createTuiSession } from '../../../../lib/tui/service'
+import { buildContextHandoffPrompt } from '../../../../lib/contextHandoff'
+import { buildHandoffBriefMarkdown } from '../../../../lib/handoffBrief'
+import { recordContextTransfer } from '../../../../lib/contextTransfers'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -470,5 +475,63 @@ export async function runRewindConversationToPrompt(ctx: RewindConversationToPro
   } catch (err) {
     showNotice('error', err instanceof Error ? err.message : 'Rewind failed')
     return false
+  }
+}
+
+export type HandoffToProviderContext = {
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  newSessionBusy: boolean
+  sessionDetail: TuiSessionDetail | null
+  setNewSessionBusy: React.Dispatch<React.SetStateAction<boolean>>
+  writeWorkspaceDraft: (key: string, text: string) => void
+  openCreatedSession: (draft: Session) => Promise<void>
+}
+
+export async function runHandoffToProvider(ctx: HandoffToProviderContext, target: Session, providerName: string) {
+  const {
+    showNotice, newSessionBusy, sessionDetail, setNewSessionBusy, writeWorkspaceDraft,
+    openCreatedSession,
+  } = ctx
+  const nextProvider = providerName.trim().toLowerCase()
+  if (!isAgentProvider(nextProvider)) {
+    showNotice('info', 'Usage: /handoff <claude|codex|opencode|copilot|pi>', 5000)
+    return
+  }
+  if (newSessionBusy) return
+  const detail = sessionDetail && sessionDetail.info?.sessionId === target.sessionId ? sessionDetail : null
+  if (!detail) {
+    showNotice('info', 'Nothing to hand off yet — send a first message')
+    return
+  }
+  setNewSessionBusy(true)
+  try {
+    const prompt = buildContextHandoffPrompt({
+      fromProvider: target.provider ?? 'claude',
+      brief: buildHandoffBriefMarkdown({ session: target, detail, git: null, bookmarkIds: new Set() }),
+      raw: detail.rawMessages,
+    })
+    const created = await createTuiSession({ provider: nextProvider, cwd: target.cwd ?? process.cwd() })
+    const next: Session = {
+      sessionId: created.sessionId,
+      provider: created.provider,
+      cwd: created.cwd,
+      createdAt: Date.now(),
+      lastModified: Date.now(),
+      summary: `Handoff from ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+      isPending: created.isPending,
+    }
+    recordContextTransfer({
+      type: 'handoff',
+      source: { provider: target.provider, sessionId: target.sessionId },
+      target: { provider: created.provider, sessionId: created.sessionId },
+      strategy: 'context_handoff',
+    })
+    writeWorkspaceDraft(sessionKey(next), prompt)
+    await openCreatedSession(next)
+    showNotice('info', `Continuing on ${formatProviderLabel(created.provider)} — the handoff is in the composer; the original is unchanged`, 6000)
+  } catch (err) {
+    showNotice('error', err instanceof Error ? err.message : 'Handoff failed')
+  } finally {
+    setNewSessionBusy(false)
   }
 }
