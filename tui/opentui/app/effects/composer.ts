@@ -23,6 +23,13 @@ import { type SessionComposerAgentOption } from '../../../../lib/types'
 import { listProjectFiles } from '../../../../lib/projectFiles'
 import { runGitCommand } from '../../../../lib/gitNodeProvider'
 import { type TuiMentionResult } from '../types'
+import { prewarmTuiSession } from '../../../../lib/tui/service'
+import { shouldPrewarmTuiRuntime } from '../../sessionPrewarm'
+import { type SlashCommandSuggestion } from '../../../../lib/slashCommands'
+import { type readViewSessionComposerOptions } from '../../../../lib/sessionBackend'
+import { resolve } from 'node:path'
+import { type TuiEffort } from '../types'
+import { COMPOSER_AFFORDANCES_TTL_MS } from '../timing'
 
 export type ComposerPreferredTargetEffectContext = {
   composerPreferredTargetKey: string | null
@@ -286,4 +293,65 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
     cancelled = true
     clearTimeout(handle)
   }
+}
+
+export type ComposerPrewarmEffectContext = {
+  transcriptSession: Session | null
+  committedSessionKey: string | null
+  sessionsByKeyRef: React.RefObject<Map<string, Session>>
+  composerActive: boolean
+  composerAffordancesCacheRef: React.RefObject<Map<string, { commands: SlashCommandSuggestion[]; options: Awaited<ReturnType<typeof readViewSessionComposerOptions>>; ts: number; }>>
+  composerPrewarmInFlightRef: React.RefObject<Set<string>>
+  tuiModelOverride: Record<string, string>
+  tuiEffort: TuiEffort
+  fetchComposerAffordances: (target: Session, key: string) => Promise<void>
+}
+
+export function runComposerPrewarmEffect(ctx: ComposerPrewarmEffectContext) {
+  const {
+    transcriptSession, committedSessionKey, sessionsByKeyRef, composerActive,
+    composerAffordancesCacheRef, composerPrewarmInFlightRef, tuiModelOverride, tuiEffort,
+    fetchComposerAffordances,
+  } = ctx
+  // Most providers can warm on selection without mutating the session.
+  // Existing Claude sessions cannot: SDK resume rewrites the transcript and
+  // moves its last-activity mtime, so their prewarm waits for composer use.
+  const target = transcriptSession
+  if (!target || !committedSessionKey) return
+  const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
+  const isPending = fullSession?.isPending === true
+  // Pi's ~19s cold open is what prewarm hides for a pending session
+  // (createPiAgentSession is idempotent on the id). Claude also benefits:
+  // prewarmViewSession forces the SDK to adopt the reserved id as its real
+  // session id, so the first real send finds a warm pool entry instead of
+  // cold-spawning. ACP sessions are also pool-owned and can start against the
+  // reserved id. Pending Codex/Copilot sessions still have no resumable
+  // identity yet, so prewarmViewSession no-ops them — skip the work here too.
+  if (!shouldPrewarmTuiRuntime(target.provider, isPending, composerActive)) return
+  const needsAffordances = !isPending && (() => {
+    const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
+    return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
+  })()
+  let cancelled = false
+  const prewarm = composerPrewarmInFlightRef.current.has(committedSessionKey)
+    ? Promise.resolve()
+    : (() => {
+        composerPrewarmInFlightRef.current.add(committedSessionKey)
+        return prewarmTuiSession(
+          { ...target, cwd: fullSession?.cwd },
+          {
+            model: tuiModelOverride[committedSessionKey] || undefined,
+            effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+            isPending,
+          },
+        ).catch(() => { /* best-effort: the send pays the usual cold cost */ })
+          .finally(() => { composerPrewarmInFlightRef.current.delete(committedSessionKey) })
+      })()
+  if (needsAffordances) {
+    void prewarm.then(() => {
+      if (!cancelled) void fetchComposerAffordances(target, committedSessionKey)
+    })
+  }
+  return () => { cancelled = true }
+// eslint-disable-next-line react-hooks/exhaustive-deps
 }

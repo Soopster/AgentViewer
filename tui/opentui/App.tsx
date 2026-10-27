@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3173,49 +3173,11 @@ function OpenTuiWorkspace() {
   // resumes the Codex thread; running the affordances fetch AFTER it lets the
   // Claude branch reuse the warm Query instead of spawning a second CLI.
   const composerPrewarmInFlightRef = useRef(new Set<string>())
-  useEffect(() => {
-    // Most providers can warm on selection without mutating the session.
-    // Existing Claude sessions cannot: SDK resume rewrites the transcript and
-    // moves its last-activity mtime, so their prewarm waits for composer use.
-    const target = transcriptSession
-    if (!target || !committedSessionKey) return
-    const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
-    const isPending = fullSession?.isPending === true
-    // Pi's ~19s cold open is what prewarm hides for a pending session
-    // (createPiAgentSession is idempotent on the id). Claude also benefits:
-    // prewarmViewSession forces the SDK to adopt the reserved id as its real
-    // session id, so the first real send finds a warm pool entry instead of
-    // cold-spawning. ACP sessions are also pool-owned and can start against the
-    // reserved id. Pending Codex/Copilot sessions still have no resumable
-    // identity yet, so prewarmViewSession no-ops them — skip the work here too.
-    if (!shouldPrewarmTuiRuntime(target.provider, isPending, composerActive)) return
-    const needsAffordances = !isPending && (() => {
-      const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
-      return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
-    })()
-    let cancelled = false
-    const prewarm = composerPrewarmInFlightRef.current.has(committedSessionKey)
-      ? Promise.resolve()
-      : (() => {
-          composerPrewarmInFlightRef.current.add(committedSessionKey)
-          return prewarmTuiSession(
-            { ...target, cwd: fullSession?.cwd },
-            {
-              model: tuiModelOverride[committedSessionKey] || undefined,
-              effort: tuiEffort === 'auto' ? undefined : tuiEffort,
-              isPending,
-            },
-          ).catch(() => { /* best-effort: the send pays the usual cold cost */ })
-            .finally(() => { composerPrewarmInFlightRef.current.delete(committedSessionKey) })
-        })()
-    if (needsAffordances) {
-      void prewarm.then(() => {
-        if (!cancelled) void fetchComposerAffordances(target, committedSessionKey)
-      })
-    }
-    return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [committedSessionKey, composerActive, fetchComposerAffordances, tuiEffort, tuiModelOverride])
+  useEffect(() => runComposerPrewarmEffect({
+    transcriptSession, committedSessionKey, sessionsByKeyRef, composerActive,
+    composerAffordancesCacheRef, composerPrewarmInFlightRef, tuiModelOverride, tuiEffort,
+    fetchComposerAffordances,
+  }), [committedSessionKey, composerActive, fetchComposerAffordances, tuiEffort, tuiModelOverride])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'
