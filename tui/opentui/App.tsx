@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10945,65 +10945,15 @@ function OpenTuiWorkspace() {
     windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
     splitFocusedWindow, openWindowControlMenu,
   }, key, action, direction))
-  const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => {
-    const index = controlWindowIndex(key)
-    if (index === undefined) return
-    leaveWindowControls()
-    setControlMenuTarget(key)
-    const frame = rectOf(index === null ? 'transcript-reader' : index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`)
-    const targetItem = index === null ? null : index === FLOATING_PANE_INDEX ? floatingItem : windowItems[index]
-    const button = rectOf(index === null || (targetItem?.kind === 'session' && index === selectedWindowIndex) ? 'reader-window-menu' : targetItem?.kind === 'surface' ? `surface-window-menu:${targetItem.surface}` : `split-pane-menu:${index}`)
-    const anchor = point ?? { x: button?.x ?? frame?.x ?? 0, y: button?.y ?? frame?.y ?? 0 }
-    const context: WindowControlContext = { floating: index === FLOATING_PANE_INDEX,
-      tabbed: Boolean(windowStackFor(key)), canTab: index === null || index === FLOATING_PANE_INDEX ? windowItems.length > 0 : windowItems.length > 1, zoomed: windowZoom !== null }
-    const wrap = (run: () => void) => () => { if (controlWindowIndex(key) !== undefined) run() }
-    const item = index === null ? null : index === FLOATING_PANE_INDEX ? floatingItem : windowItems[index]
-    // A popover tab holds the reader's place: the reader's menu is its menu.
-    const popoverTab = index === null ? shownPopoverTab : null
-    const session = index === null ? (popoverTab ? null : selectedSession) : item?.kind === 'session' ? item.session : null
-    const actions = section === 'resize' ? WINDOW_RESIZE_ACTIONS : WINDOW_MENU_ACTIONS
-    let items: ContextMenuItem[] = actions.flatMap(id => {
-      const action = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === id)!
-      if (action.available && !action.available(context)) return []
-      if (section === 'resize' && ((!treeGeometry && !fittedWindows.groups.some(group => index !== null && group.members.includes(index)) && ['shrink', 'grow'].includes(id)) || (!treeGeometry?.dividers.some(divider => divider.axis === 'y') && splitArrangement !== 'grid' && ['row-shrink', 'row-grow'].includes(id)))) return []
-      return [{ label: id === 'close' ? (context.tabbed || popoverTab ? 'Close tab' : session ? 'Close pane' : 'Close window') : id === 'float' ? (context.floating ? 'Dock window' : 'Float window') : id === 'zoom' ? (context.zoomed ? 'Restore layout' : 'Zoom window') : action.label,
-        hint: id === 'manage' ? action.keys : undefined, danger: id === 'close', run: wrap(() => {
-          if (id === 'close' && popoverTab) closePopoverTab(popoverTab)
-          else if (id === 'resize' || id === 'swap') openWindowControlMenu(key, anchor, id)
-          else runWindowControlAction(key, id)
-        }) }]
-    })
-    if (section === 'swap') items = (['left', 'right', 'up', 'down'] as const).map(direction => ({
-      label: `Swap ${direction}`, run: wrap(() => runWindowControlAction(key, 'swap', direction)),
-    }))
-    if (section === 'session' && session) items = [
-      ...(index === null ? [] : [{ label: 'Focus session', run: wrap(() => { focusControlWindow(key) }) }]),
-      { label: 'Copy session ID', run: wrap(() => { void writeClipboard(session.sessionId, renderer).catch(err => showNotice('error', String(err))) }) },
-    ]
-    if (!section && session) items.push({ label: 'Session actions…', run: wrap(() => openWindowControlMenu(key, anchor, 'session')) })
-    if (!section && popoverTab) items.push(
-      { label: 'Open as a window', run: wrap(() => popoverTabToWindow(popoverTab)) },
-      { label: 'Open full screen', hint: '⌃⇧W', run: wrap(() => popoverTabToFullScreen(popoverTab)) },
-    )
-    if (!section && item?.kind === 'surface') {
-      const kind = surfaceKindOf(item.surface)
-      if (isPopoverWindowKind(kind)) items.push(
-        { label: 'Open full screen', run: wrap(() => returnPopoverWindow(item.surface)) },
-        { label: 'Open as a tab here', run: wrap(() => { const pin = windowSurfaceMeta[item.surface] ?? {}; returningPopoverRef.current = true; closeSurfaceWindow(item.surface, true); returningPopoverRef.current = false; openPopoverTab(kind, pin) }) },
-        { label: 'Move to a new workspace', run: wrap(() => { const pin = windowSurfaceMeta[item.surface] ?? {}; returningPopoverRef.current = true; closeSurfaceWindow(item.surface, true); returningPopoverRef.current = false; openPopoverInNewTab(kind, pin) }) },
-      )
-      else {
-        if (SURFACE_POPOVER_KINDS.has(kind)) items.push(
-          { label: 'Open full screen', run: wrap(() => { closeSurfaceWindow(item.surface, true); setPopoverOpen(kind, true) }) },
-          { label: 'Open as a tab here', run: wrap(() => { closeSurfaceWindow(item.surface, true); openPopoverTab(kind, {}) }) },
-        )
-        items.push({ label: 'Move to side panel', run: wrap(() => moveSurfaceToPanel(item.surface)) })
-        if (MULTI_INSTANCE_SURFACES.has(kind)) items.push({ label: `Open another ${WINDOW_SURFACE_TITLES[kind].slice(2)} window`, run: wrap(() => openSurfaceWindow(kind, { another: true })) })
-      }
-    }
-    if (section) items.push({ label: 'Back…', run: wrap(() => openWindowControlMenu(key, anchor)) })
-    setContextMenu({ ...anchor, title: section ? `Window ${section}` : popoverTab ? fitText(windowSurfaceTitle(popoverTab), 34).trimEnd() : fitText(windowKeyTitle(key === 'reader' ? selectedSessionKey ?? key : key), 34).trimEnd(), items })
-  })
+  const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => runOpenWindowControlMenu({
+    controlWindowIndex, leaveWindowControls, setControlMenuTarget, rectOf, floatingItem,
+    windowItems, selectedWindowIndex, windowStackFor, windowZoom, shownPopoverTab, selectedSession,
+    treeGeometry, fittedWindows, splitArrangement, closePopoverTab, openWindowControlMenu,
+    runWindowControlAction, focusControlWindow, renderer, showNotice, popoverTabToWindow,
+    popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
+    closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
+    openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
+  }, key, point, section))
   useEffect(() => {
     if (!contextMenu) { if (controlMenuTarget) setControlMenuTarget(null); return }
     if (controlMenuTarget && controlWindowIndex(controlMenuTarget) === undefined) { setContextMenu(null); setControlMenuTarget(null) }

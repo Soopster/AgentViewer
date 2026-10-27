@@ -25,6 +25,15 @@ import { surfaceWindowKey } from '../../windowOrder'
 import { type WindowDirection } from '../../windowLayout'
 import { type ContextMenuItem } from '../../ContextMenu'
 import { writeTuiSplitReaderShare, writeTuiWindowArrangement } from '../../../../lib/tui/service'
+import { type WindowLayout } from '../../windowLayout'
+import { type SplitRect, type SplitDivider } from '../../windowSplitTree'
+import { type CliRenderer } from '@opentui/core'
+import { WINDOW_SURFACE_TITLES, surfaceKindOf, type WindowSurfaceKind } from '../../windowSurfaceNames'
+import { WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, type WindowControlContext } from '../../windowControls'
+import { isPopoverWindowKind } from '../../popoverWindows'
+import { fitText } from '../../textLayout'
+import { MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS } from '../layoutConstants'
+import { writeClipboard } from '../clipboard'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -362,4 +371,111 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
       case 'resize': break
     }
   } finally { windowResizeGroupRef.current = false }
+}
+
+export type OpenWindowControlMenuContext = {
+  controlWindowIndex: (key: string) => number | null | undefined
+  leaveWindowControls: () => void
+  setControlMenuTarget: React.Dispatch<React.SetStateAction<string | null>>
+  rectOf: (id: string) => { x: number; y: number; width: number; height: number; } | null
+  floatingItem: WindowItem | null
+  windowItems: WindowItem[]
+  selectedWindowIndex: number
+  windowStackFor: (key: string) => WindowStack | null
+  windowZoom: number | 'reader' | null
+  shownPopoverTab: string | null
+  selectedSession: Session | null
+  treeGeometry: { layout: WindowLayout; rects: Map<number, SplitRect>; dividers: SplitDivider[]; } | null
+  fittedWindows: WindowLayout
+  splitArrangement: WindowArrangement
+  closePopoverTab: (id: WindowSurfaceId, keep?: boolean) => void
+  openWindowControlMenu: (key: string, point?: { x: number; y: number; }, section?: 'resize' | 'swap' | 'session') => void
+  runWindowControlAction: (key: string, action: WindowControlAction, direction?: WindowDirection) => void
+  focusControlWindow: (key: string) => boolean
+  renderer: CliRenderer
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  popoverTabToWindow: (id: WindowSurfaceId) => void
+  popoverTabToFullScreen: (id: WindowSurfaceId) => void
+  returnPopoverWindow: (surface: WindowSurfaceId) => void
+  windowSurfaceMeta: Record<string, SurfaceMeta>
+  returningPopoverRef: React.RefObject<boolean>
+  closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
+  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  setPopoverOpen: (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => void
+  moveSurfaceToPanel: (surface: WindowSurfaceId) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; title: string; items: ContextMenuItem[]; } | null>>
+  windowSurfaceTitle: (surface: WindowSurfaceId) => string
+  windowKeyTitle: (key: string) => string
+  selectedSessionKey: string | null
+}
+
+export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') {
+  const {
+    controlWindowIndex, leaveWindowControls, setControlMenuTarget, rectOf, floatingItem,
+    windowItems, selectedWindowIndex, windowStackFor, windowZoom, shownPopoverTab, selectedSession,
+    treeGeometry, fittedWindows, splitArrangement, closePopoverTab, openWindowControlMenu,
+    runWindowControlAction, focusControlWindow, renderer, showNotice, popoverTabToWindow,
+    popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
+    closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
+    openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
+  } = ctx
+  const index = controlWindowIndex(key)
+  if (index === undefined) return
+  leaveWindowControls()
+  setControlMenuTarget(key)
+  const frame = rectOf(index === null ? 'transcript-reader' : index === FLOATING_PANE_INDEX ? 'floating-window' : `split-pane:${index}`)
+  const targetItem = index === null ? null : index === FLOATING_PANE_INDEX ? floatingItem : windowItems[index]
+  const button = rectOf(index === null || (targetItem?.kind === 'session' && index === selectedWindowIndex) ? 'reader-window-menu' : targetItem?.kind === 'surface' ? `surface-window-menu:${targetItem.surface}` : `split-pane-menu:${index}`)
+  const anchor = point ?? { x: button?.x ?? frame?.x ?? 0, y: button?.y ?? frame?.y ?? 0 }
+  const context: WindowControlContext = { floating: index === FLOATING_PANE_INDEX,
+    tabbed: Boolean(windowStackFor(key)), canTab: index === null || index === FLOATING_PANE_INDEX ? windowItems.length > 0 : windowItems.length > 1, zoomed: windowZoom !== null }
+  const wrap = (run: () => void) => () => { if (controlWindowIndex(key) !== undefined) run() }
+  const item = index === null ? null : index === FLOATING_PANE_INDEX ? floatingItem : windowItems[index]
+  // A popover tab holds the reader's place: the reader's menu is its menu.
+  const popoverTab = index === null ? shownPopoverTab : null
+  const session = index === null ? (popoverTab ? null : selectedSession) : item?.kind === 'session' ? item.session : null
+  const actions = section === 'resize' ? WINDOW_RESIZE_ACTIONS : WINDOW_MENU_ACTIONS
+  let items: ContextMenuItem[] = actions.flatMap(id => {
+    const action = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === id)!
+    if (action.available && !action.available(context)) return []
+    if (section === 'resize' && ((!treeGeometry && !fittedWindows.groups.some(group => index !== null && group.members.includes(index)) && ['shrink', 'grow'].includes(id)) || (!treeGeometry?.dividers.some(divider => divider.axis === 'y') && splitArrangement !== 'grid' && ['row-shrink', 'row-grow'].includes(id)))) return []
+    return [{ label: id === 'close' ? (context.tabbed || popoverTab ? 'Close tab' : session ? 'Close pane' : 'Close window') : id === 'float' ? (context.floating ? 'Dock window' : 'Float window') : id === 'zoom' ? (context.zoomed ? 'Restore layout' : 'Zoom window') : action.label,
+      hint: id === 'manage' ? action.keys : undefined, danger: id === 'close', run: wrap(() => {
+        if (id === 'close' && popoverTab) closePopoverTab(popoverTab)
+        else if (id === 'resize' || id === 'swap') openWindowControlMenu(key, anchor, id)
+        else runWindowControlAction(key, id)
+      }) }]
+  })
+  if (section === 'swap') items = (['left', 'right', 'up', 'down'] as const).map(direction => ({
+    label: `Swap ${direction}`, run: wrap(() => runWindowControlAction(key, 'swap', direction)),
+  }))
+  if (section === 'session' && session) items = [
+    ...(index === null ? [] : [{ label: 'Focus session', run: wrap(() => { focusControlWindow(key) }) }]),
+    { label: 'Copy session ID', run: wrap(() => { void writeClipboard(session.sessionId, renderer).catch(err => showNotice('error', String(err))) }) },
+  ]
+  if (!section && session) items.push({ label: 'Session actions…', run: wrap(() => openWindowControlMenu(key, anchor, 'session')) })
+  if (!section && popoverTab) items.push(
+    { label: 'Open as a window', run: wrap(() => popoverTabToWindow(popoverTab)) },
+    { label: 'Open full screen', hint: '⌃⇧W', run: wrap(() => popoverTabToFullScreen(popoverTab)) },
+  )
+  if (!section && item?.kind === 'surface') {
+    const kind = surfaceKindOf(item.surface)
+    if (isPopoverWindowKind(kind)) items.push(
+      { label: 'Open full screen', run: wrap(() => returnPopoverWindow(item.surface)) },
+      { label: 'Open as a tab here', run: wrap(() => { const pin = windowSurfaceMeta[item.surface] ?? {}; returningPopoverRef.current = true; closeSurfaceWindow(item.surface, true); returningPopoverRef.current = false; openPopoverTab(kind, pin) }) },
+      { label: 'Move to a new workspace', run: wrap(() => { const pin = windowSurfaceMeta[item.surface] ?? {}; returningPopoverRef.current = true; closeSurfaceWindow(item.surface, true); returningPopoverRef.current = false; openPopoverInNewTab(kind, pin) }) },
+    )
+    else {
+      if (SURFACE_POPOVER_KINDS.has(kind)) items.push(
+        { label: 'Open full screen', run: wrap(() => { closeSurfaceWindow(item.surface, true); setPopoverOpen(kind, true) }) },
+        { label: 'Open as a tab here', run: wrap(() => { closeSurfaceWindow(item.surface, true); openPopoverTab(kind, {}) }) },
+      )
+      items.push({ label: 'Move to side panel', run: wrap(() => moveSurfaceToPanel(item.surface)) })
+      if (MULTI_INSTANCE_SURFACES.has(kind)) items.push({ label: `Open another ${WINDOW_SURFACE_TITLES[kind].slice(2)} window`, run: wrap(() => openSurfaceWindow(kind, { another: true })) })
+    }
+  }
+  if (section) items.push({ label: 'Back…', run: wrap(() => openWindowControlMenu(key, anchor)) })
+  setContextMenu({ ...anchor, title: section ? `Window ${section}` : popoverTab ? fitText(windowSurfaceTitle(popoverTab), 34).trimEnd() : fitText(windowKeyTitle(key === 'reader' ? selectedSessionKey ?? key : key), 34).trimEnd(), items })
 }
