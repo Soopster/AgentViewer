@@ -50,6 +50,9 @@ import { arrangePaneTree, reconcileWindowSplitTree, type WindowSplitTree } from 
 import { type FloatingRect, type WindowStack } from '../../windowTabs'
 import { type WindowItem } from '../types'
 import { FLOATING_PANE_INDEX } from '../layoutConstants'
+import { type SendAttachment } from '../../../../lib/types'
+import { join } from 'node:path'
+import { type ComposerPromptPart, type ComposerDraftSnapshot } from '../types'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -778,4 +781,50 @@ export function runSelectSidebarSession(ctx: SelectSidebarSessionContext, sessio
   setSelectedSessionKey(key)
   setError(null)
   setFocusedPane('sessions')
+}
+
+export type ReplySelectedMessageContext = {
+  readCursorIndex: () => number
+  visibleTranscriptCards: TuiTranscriptCard[]
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  composerDraft: string
+  applyComposerSnapshot: (snapshot: ComposerDraftSnapshot) => void
+  composerMentionAttachments: SendAttachment[]
+  composerPromptParts: ComposerPromptPart[]
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+}
+
+export function runReplySelectedMessage(ctx: ReplySelectedMessageContext, cardOverride?: TuiTranscriptCard) {
+  const {
+    readCursorIndex, visibleTranscriptCards, showNotice, composerTextareaRef, composerDraft,
+    applyComposerSnapshot, composerMentionAttachments, composerPromptParts, setComposerActive,
+  } = ctx
+  const cursorIndex = readCursorIndex()
+  const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
+  if (!card) {
+    showNotice('error', 'No message selected')
+    return
+  }
+  const text = cardClipboardText(card).trim()
+  if (!text) {
+    showNotice('error', 'Selected message has no reply text')
+    return
+  }
+
+  const quoted = text
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n')
+  const existing = composerTextareaRef.current?.plainText ?? composerDraft
+  const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
+  const next = `${existing}${separator}${quoted}\n\n`
+
+  applyComposerSnapshot({
+    text: next,
+    attachments: [...composerMentionAttachments],
+    promptParts: [...composerPromptParts],
+    cursorOffset: next.length,
+  })
+  setComposerActive(true)
 }

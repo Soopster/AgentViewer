@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
@@ -6203,35 +6203,10 @@ function OpenTuiWorkspace() {
     terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
   }, cardOverride))
 
-  const replySelectedMessage = useStableEvent((cardOverride?: TuiTranscriptCard) => {
-    const cursorIndex = readCursorIndex()
-    const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
-    if (!card) {
-      showNotice('error', 'No message selected')
-      return
-    }
-    const text = cardClipboardText(card).trim()
-    if (!text) {
-      showNotice('error', 'Selected message has no reply text')
-      return
-    }
-
-    const quoted = text
-      .split('\n')
-      .map((line) => `> ${line}`)
-      .join('\n')
-    const existing = composerTextareaRef.current?.plainText ?? composerDraft
-    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
-    const next = `${existing}${separator}${quoted}\n\n`
-
-    applyComposerSnapshot({
-      text: next,
-      attachments: [...composerMentionAttachments],
-      promptParts: [...composerPromptParts],
-      cursorOffset: next.length,
-    })
-    setComposerActive(true)
-  })
+  const replySelectedMessage = useStableEvent((cardOverride?: TuiTranscriptCard) => runReplySelectedMessage({
+    readCursorIndex, visibleTranscriptCards, showNotice, composerTextareaRef, composerDraft,
+    applyComposerSnapshot, composerMentionAttachments, composerPromptParts, setComposerActive,
+  }, cardOverride))
 
   // Toggle a bookmark on the card under the transcript cursor.
   const toggleBookmarkForCursor = useStableEvent(async () => runToggleBookmarkForCursor({
