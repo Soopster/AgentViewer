@@ -275,6 +275,7 @@ import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
 import { CoordRunModal } from './app/overlays/CoordRunModal'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
+import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -19455,32 +19456,7 @@ function OpenTuiWorkspace() {
         </>
       ) : null}
       <SessionDragOverlay sessionDrag={sessionDrag} rectOf={rectOf} windowAreaRect={windowAreaRect} nestedDragPreview={nestedDragPreview} windowNumberOffset={windowNumberOffset} windowKeyTitle={windowKeyTitle} windowItems={windowItems} hasPrimaryFrame={hasPrimaryFrame} theme={theme} height={height} width={width} />
-      {splitDividerDragging && splitDividerPoint ? (
-        // The size the drag is setting, beside the pointer.
-        <box
-          id="split-divider-readout"
-          position="absolute"
-          top={Math.max(0, splitDividerPoint.y - 1)}
-          left={Math.min(Math.max(0, splitDividerPoint.x + 2), Math.max(0, width - 24))}
-          height={1}
-          zIndex={901}
-          backgroundColor={theme.cyan}
-          paddingX={1}
-        >
-          <text fg={theme.bg} wrapMode="none" selectable={false}>
-            {splitDividerDragging && typeof splitDividerDragging === 'object'
-              ? (() => {
-                  const group = fittedWindows.groups.find((entry) => entry.key === splitDividerDragging.group)
-                  const member = group?.members[splitDividerDragging.index]
-                  const pane = member === undefined ? undefined : fittedWindows.panes[member]
-                  return group?.axis === 'y' ? `${pane?.height ?? 0} rows · pane ${(member ?? 0) + 1}` : `${pane?.width ?? 0} cols · pane ${(member ?? 0) + 1}`
-                })()
-              : splitDividerDragging === 'secondary'
-              ? `top ${Math.round((splitSecondaryShare === SPLIT_SHARE_EVEN ? 0.5 : splitSecondaryShare) * 100)}% · ${arrangedLayout?.panes[0]?.height ?? 0} rows`
-              : `reader ${Math.round((splitReaderShare === SPLIT_SHARE_EVEN ? 0.5 : splitReaderShare) * 100)}% · ${rightPaneWidth}×${readerRowBudget}`}
-          </text>
-        </box>
-      ) : null}
+      <SplitDividerLabel splitDividerDragging={splitDividerDragging} splitDividerPoint={splitDividerPoint} width={width} theme={theme} fittedWindows={fittedWindows} splitSecondaryShare={splitSecondaryShare} arrangedLayout={arrangedLayout} splitReaderShare={splitReaderShare} rightPaneWidth={rightPaneWidth} readerRowBudget={readerRowBudget} />
 
       {windowControlMode && !windowControlsBlocked ? <WindowControlOverlay mode={windowControlMode} theme={theme} width={width} height={height}
         readWindows={readControlWindows} onPick={pickControlWindow} onMenu={openWindowControlMenu} /> : null}
