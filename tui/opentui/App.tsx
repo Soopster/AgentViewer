@@ -317,6 +317,7 @@ import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffec
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect, runComposerGitSummaryEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 import { runTranscriptCardsSyncEffect, runLiveOverlayTimeoutEffect, runLiveTranscriptOverlayEffect } from './app/effects/liveTranscript'
+import { runPersistBridgeMessagesEffect } from './app/effects/bridge'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2064,26 +2065,9 @@ function OpenTuiWorkspace() {
   }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
-  useEffect(() => {
-    if (!canUseChannelBridge || !selectedSessionTarget) return
-    const newCount = bridgeTranscriptEntries.length
-    const persistedCount = persistedBridgeCountRef.current
-    if (newCount <= persistedCount) return
-
-    // Persist only the new entries
-    const newEntries = bridgeTranscriptEntries.slice(persistedCount)
-    let cancelled = false
-    ;(async () => {
-      for (const entry of newEntries) {
-        if (cancelled) return
-        await addBridgeMessage(selectedSessionTarget.provider, selectedSessionTarget.sessionId, entry.kind, entry.text, entry.timestamp)
-      }
-      if (!cancelled) {
-        persistedBridgeCountRef.current = newCount
-      }
-    })().catch(console.error)
-    return () => { cancelled = true }
-  }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
+  useEffect(() => runPersistBridgeMessagesEffect({
+    canUseChannelBridge, selectedSessionTarget, bridgeTranscriptEntries, persistedBridgeCountRef,
+  }), [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
 
   const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
   const persistedComposerMessages = useMemo(() => {
