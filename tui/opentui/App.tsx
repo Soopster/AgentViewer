@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -4094,45 +4094,12 @@ function OpenTuiWorkspace() {
   }, [focusedSessionPaneKey, selectedSessionKey])
   // `w` closes a window's tab and shows the next one there — the nearest tab
   // no other window shows — or closes the window when every tab is on screen.
-  const closeWindowSessionTab = useStableEvent((session: Session) => {
-    const key = sessionKey(session)
-    const index = openTabSessions.findIndex(tab => sessionKey(tab) === key)
-    const rest = openTabSessions.filter(tab => sessionKey(tab) !== key)
-    const at = Math.min(Math.max(index, 0), rest.length)
-    // A replacement must be unowned: taking a floating window or another
-    // frame's background tab would make the same transcript appear twice.
-    const onScreen = new Set([...orderedWindowKeys, ...liveWindowStacks.flat(), ...(floatingKey ? [floatingKey] : [])])
-    const next = [...rest.slice(at), ...rest.slice(0, at).reverse()].find(tab => !onScreen.has(sessionKey(tab)))
-    if (windowStackFor(key)) {
-      closeWindowTab(key)
-      setOpenTabSessions(rest)
-      return
-    }
-    if (floatingKey === key) {
-      if (next && floatingWindow) {
-        checkpointWindowLayout()
-        setFloatingWindow({ ...floatingWindow, key: sessionKey(next) })
-        setSelectedSessionKey(sessionKey(next))
-      } else {
-        closeFloatingWindow()
-        if (!windowItems.length) setSelectedSessionKey(null)
-      }
-      setOpenTabSessions(rest)
-      return
-    }
-    const windowIndex = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === key)
-    if (!next || windowIndex < 0) {
-      if (windowIndex >= 0) closeSplitPane(windowIndex)
-      setOpenTabSessions(rest)
-      return
-    }
-    checkpointWindowLayout()
-    const nextKey = sessionKey(next)
-    commitWindowKeys(orderedWindowKeys.map(entry => entry === key ? nextKey : entry))
-    setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === key ? nextKey : entry)))
-    setOpenTabSessions(rest)
-    setSelectedSessionKey(nextKey)
-  })
+  const closeWindowSessionTab = useStableEvent((session: Session) => runCloseWindowSessionTab({
+    openTabSessions, orderedWindowKeys, liveWindowStacks, floatingKey, windowStackFor,
+    closeWindowTab, setOpenTabSessions, floatingWindow, checkpointWindowLayout, setFloatingWindow,
+    setSelectedSessionKey, closeFloatingWindow, windowItems, closeSplitPane, commitWindowKeys,
+    setWindowStacks,
+  }, session))
   // The selected session is always on screen: in the focused session window,
   // else the one focused last, else a new window. Browsing the rail is
   // debounced, or every j would remount a window.

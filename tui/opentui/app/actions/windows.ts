@@ -733,3 +733,68 @@ export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: Window
   setFocusedPane('messages')
   showNotice('info', `${surfaceTitle(surface)} in a window · ⇥ panel puts it back`)
 }
+
+export type CloseWindowSessionTabContext = {
+  openTabSessions: Session[]
+  orderedWindowKeys: string[]
+  liveWindowStacks: WindowStack[]
+  floatingKey: string | null
+  windowStackFor: (key: string) => WindowStack | null
+  closeWindowTab: (key: string, remember?: boolean) => void
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  floatingWindow: { key: string; rect: FloatingRect; slot: number; } | null
+  checkpointWindowLayout: () => void
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  closeFloatingWindow: (remember?: boolean) => void
+  windowItems: WindowItem[]
+  closeSplitPane: (paneIndex?: number) => void
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+}
+
+export function runCloseWindowSessionTab(ctx: CloseWindowSessionTabContext, session: Session) {
+  const {
+    openTabSessions, orderedWindowKeys, liveWindowStacks, floatingKey, windowStackFor,
+    closeWindowTab, setOpenTabSessions, floatingWindow, checkpointWindowLayout, setFloatingWindow,
+    setSelectedSessionKey, closeFloatingWindow, windowItems, closeSplitPane, commitWindowKeys,
+    setWindowStacks,
+  } = ctx
+  const key = sessionKey(session)
+  const index = openTabSessions.findIndex(tab => sessionKey(tab) === key)
+  const rest = openTabSessions.filter(tab => sessionKey(tab) !== key)
+  const at = Math.min(Math.max(index, 0), rest.length)
+  // A replacement must be unowned: taking a floating window or another
+  // frame's background tab would make the same transcript appear twice.
+  const onScreen = new Set([...orderedWindowKeys, ...liveWindowStacks.flat(), ...(floatingKey ? [floatingKey] : [])])
+  const next = [...rest.slice(at), ...rest.slice(0, at).reverse()].find(tab => !onScreen.has(sessionKey(tab)))
+  if (windowStackFor(key)) {
+    closeWindowTab(key)
+    setOpenTabSessions(rest)
+    return
+  }
+  if (floatingKey === key) {
+    if (next && floatingWindow) {
+      checkpointWindowLayout()
+      setFloatingWindow({ ...floatingWindow, key: sessionKey(next) })
+      setSelectedSessionKey(sessionKey(next))
+    } else {
+      closeFloatingWindow()
+      if (!windowItems.length) setSelectedSessionKey(null)
+    }
+    setOpenTabSessions(rest)
+    return
+  }
+  const windowIndex = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === key)
+  if (!next || windowIndex < 0) {
+    if (windowIndex >= 0) closeSplitPane(windowIndex)
+    setOpenTabSessions(rest)
+    return
+  }
+  checkpointWindowLayout()
+  const nextKey = sessionKey(next)
+  commitWindowKeys(orderedWindowKeys.map(entry => entry === key ? nextKey : entry))
+  setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === key ? nextKey : entry)))
+  setOpenTabSessions(rest)
+  setSelectedSessionKey(nextKey)
+}
