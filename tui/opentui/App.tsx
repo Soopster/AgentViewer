@@ -366,6 +366,7 @@ import { usePluginSessionForGroup } from './app/slices/pluginSessionFor'
 import { useCopySelectedMessageGroup } from './app/slices/copySelectedMessage'
 import { useToggleVoiceGroup } from './app/slices/toggleVoice'
 import { useInsertComposerPasteMarkerGroup } from './app/slices/insertComposerPasteMarker'
+import { useFooterSegmentsGroup } from './app/slices/footerSegments'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5057,99 +5058,20 @@ function OpenTuiWorkspace() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transcriptView])
-
-  // Status bar: grouped keybindings rendered as colored inline segments —
-  // keys pop in the accent color, labels stay muted, groups split by a dim
-  // divider so the bar scans at a glance instead of reading as one dim wall.
-  const footerSegments = useMemo(() => runFooterSegments({
+  const {
+    footerSegments, composerStatusMessage, composerTargetMessage, composerIdleFooterHint,
+    resizeSidebar, resizeTaskPanel, showNotice, toggleSelectedSessionSettled, openTurnCheckpoint,
+  } = useFooterSegmentsGroup({
     composerActive, composerKeysTargetTurn, effectiveFocus, sidebarView, isScrollbackView,
     scrollbackExpanded, commandChordPending, theme, splitChordPending, attentionNeedsInputCount,
-    width, statusBarInDock, composerDockTextareaWidth,
-  }), [width, attentionNeedsInputCount, commandChordPending, composerActive, composerDockTextareaWidth, composerKeysTargetTurn, isScrollbackView, scrollbackExpanded, splitChordPending, splitFocusIndex, statusBarInDock, effectiveFocus, sidebarView, theme])
-
-  const composerStatusMessage = visibleComposerError
-    ? visibleComposerError
-    : activeQueuedComposerSends.length > 0 && !composerQueueDurable
-      ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
-    // Embedded composers show this in the compact row above the draft.
-    : visibleAwaitingPersistedTurn && !embeddedComposer
-      ? 'Syncing transcript…'
-      : activeQueuedComposerSends.length > 0 && turnRunningForComposer
-        ? (activeQueuedComposerSends.length === 1
-          ? `Queued · sends after current turn: "${activeQueuedComposerSends[0]!.text.slice(0, 60)}${activeQueuedComposerSends[0]!.text.length > 60 ? '…' : ''}"`
-          : `${activeQueuedComposerSends.length} queued · send in order after current turn`)
-        : steeredSendNotice && turnRunningForComposer
-          ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
-          : visibleComposerSending
-          // "Using N tools" is not repeated here: the pinned turn-status row
-          // and the tool-activity row above already carry it, and a third copy
-          // just steals transcript rows.
-          ? visibleComposerLiveText
-            ? 'Streaming assistant response.'
-            : null
-          // Plain reattached state renders as its own banner row (counted in
-          // composerStatusBlockHeight), not through this message slot.
-          : null
-  // An explicit pane target outranks the auto-targeting note: the user aimed
-  // this composer at a split pane and must be able to see that before sending.
-  const composerTargetMessage = composerPaneTargetKey && composerTargetSession
-    ? `To: ${formatSessionTitle(composerTargetSession)}`
-    : composerPaneTargetKey
-    ? 'Session target is unavailable — select a session to retarget'
-    : composerAutoTargetingRunning && composerTargetSession
-      ? `To: ${formatSessionTitle(composerTargetSession)}`
-      : composerTargetSession ? `To: ${formatSessionTitle(composerTargetSession)}` : null
-  const composerIdleFooterHint = useMemo(
-    () => formatTuiComposerIdleHint(composerConfig.footerHintIdle, sentHistory.length),
-    [composerConfig.footerHintIdle, sentHistory.length],
-  )
-
-  const resizeSidebar = useStableEvent((delta: number) => {
-    const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
-    if (nextWidth === sidebarWidth) return
-    setSidebarWidthPreference(nextWidth)
-    void writeTuiSidebarWidth(nextWidth).catch((err) => {
-      setError(err instanceof Error ? err.message : 'Failed to store sidebar width')
-    })
-  })
-
-  const resizeTaskPanel = useStableEvent((delta: number) => {
-    const nextWidth = taskPanelOpen
-      ? clamp(taskPanelWidth + delta, TASK_PANEL_MIN_WIDTH, maxTaskPanelWidth)
-      : TASK_PANEL_DEFAULT_WIDTH + delta
-    setTaskPanelExpanded(false)
-    setTaskPanelWidth(Math.round(nextWidth / TASK_PANEL_RESIZE_STEP) * TASK_PANEL_RESIZE_STEP)
-  })
-
-  // Adapter over the toast store, kept as the single feedback entry point (also
-  // handed to popovers via their `onNotice` prop). info/error tones map to the
-  // matching toast kinds; the store handles stacking and per-toast auto-dismiss.
-  const showNotice = useCallback((tone: NoticeTone, text: string, durationMs?: number) => {
-    const options = durationMs != null ? { durationMs } : undefined
-    if (tone === 'error') toast.error(text, options)
-    else toast.info(text, options)
-  }, [])
-
-  // `x` in the rail: settle the selected session, or reopen a settled one.
-  // Optimistic — the row changes now and the next listing confirms it.
-  const toggleSelectedSessionSettled = useStableEvent(() => runToggleSelectedSessionSettled({
-    selectedSession, setSessions, pendingInboxEditsRef, showNotice, showSettled,
-  }))
-
-  // A turn summary's click: the checkpoint popover, opened on that turn.
-  const openTurnCheckpoint = useStableEvent((promptKey: string) => {
-    if (!gitRepoCwd) {
-      showNotice('info', 'Turn diffs need a git repository')
-      return
-    }
-    const sessionId = sessionDetail?.info?.sessionId
-    const prompt = rewindCandidates(sessionDetail?.rawMessages ?? []).find((candidate) => candidate.uuid === promptKey)
-    if (!isPluginEnabled('checkpoints')) {
-      showNotice('info', 'Checkpoints are off · turn them on in Plugins (⌃K palette)')
-      return
-    }
-    setCheckpointFocusPrompt(sessionId && prompt ? { sessionId, text: prompt.text, timestamp: prompt.timestamp } : null)
-    setPluginOverlay('checkpoints')
+    width, statusBarInDock, composerDockTextareaWidth, splitFocusIndex, visibleComposerError,
+    activeQueuedComposerSends, composerQueueDurable, visibleAwaitingPersistedTurn,
+    embeddedComposer, turnRunningForComposer, steeredSendNotice, visibleComposerSending,
+    visibleComposerLiveText, composerPaneTargetKey, composerTargetSession,
+    composerAutoTargetingRunning, composerConfig, sentHistory, sidebarWidth, maxSidebarWidth,
+    setSidebarWidthPreference, setError, taskPanelOpen, taskPanelWidth, maxTaskPanelWidth,
+    setTaskPanelExpanded, setTaskPanelWidth, selectedSession, setSessions, pendingInboxEditsRef,
+    showSettled, gitRepoCwd, sessionDetail, setCheckpointFocusPrompt, setPluginOverlay,
   })
   useEffect(() => registerTurnSummaryOpener(openTurnCheckpoint), [])
 
