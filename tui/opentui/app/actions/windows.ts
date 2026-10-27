@@ -1196,3 +1196,60 @@ export function runResizeSplitReader(ctx: ResizeSplitReaderContext, direction: 1
     ? 'Split ratio: even'
     : `Reader ${Math.round(next * 100)}% of the ${splitOrientation === 'rows' ? 'height' : 'width'}`)
 }
+
+export type CancelPointerGestureContext = {
+  treeDividerDrag: string | null
+  setTreeDividerDrag: React.Dispatch<React.SetStateAction<string | null>>
+  treeDividerActivePathRef: React.RefObject<string | null>
+  treeDividerCheckpointedRef: React.RefObject<boolean>
+  undoWindowLayout: () => void
+  floatGestureRef: React.RefObject<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean; } | null>
+  setFloatGesturing: React.Dispatch<React.SetStateAction<boolean>>
+  setFloatDockHint: React.Dispatch<React.SetStateAction<{ label: string; rect: { x: number; y: number; width: number; height: number; }; x: number; y: number; } | null>>
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  sessionPressRef: React.RefObject<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void; } | null>
+  setSessionPressing: React.Dispatch<React.SetStateAction<boolean>>
+  setSessionDrag: React.Dispatch<React.SetStateAction<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title?: boolean; x: number; y: number; } | null>>
+  splitDividerDragging: 'primary' | 'secondary' | { group: WindowGroupKey; index: number; } | null
+  splitDividerPoint: { x: number; y: number; } | null
+  setSplitDividerDragging: React.Dispatch<React.SetStateAction<'primary' | 'secondary' | { group: WindowGroupKey; index: number; } | null>>
+  setSplitDividerPoint: React.Dispatch<React.SetStateAction<{ x: number; y: number; } | null>>
+}
+
+export function runCancelPointerGesture(ctx: CancelPointerGestureContext) {
+  const {
+    treeDividerDrag, setTreeDividerDrag, treeDividerActivePathRef, treeDividerCheckpointedRef,
+    undoWindowLayout, floatGestureRef, setFloatGesturing, setFloatDockHint, setFloatingWindow,
+    sessionPressRef, setSessionPressing, setSessionDrag, splitDividerDragging, splitDividerPoint,
+    setSplitDividerDragging, setSplitDividerPoint,
+  } = ctx
+  if (treeDividerDrag !== null) {
+    setTreeDividerDrag(null)
+    treeDividerActivePathRef.current = null
+    if (treeDividerCheckpointedRef.current) undoWindowLayout()
+    treeDividerCheckpointedRef.current = false
+    return true
+  }
+  if (floatGestureRef.current) {
+    const gesture = floatGestureRef.current
+    floatGestureRef.current = null
+    setFloatGesturing(false)
+    setFloatDockHint(null)
+    setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+    return true
+  }
+  if (sessionPressRef.current?.dragging) {
+    sessionPressRef.current = null
+    setSessionPressing(false)
+    setSessionDrag(null)
+    return true
+  }
+  if (splitDividerDragging) {
+    const moved = splitDividerPoint !== null
+    setSplitDividerDragging(null)
+    setSplitDividerPoint(null)
+    if (moved) undoWindowLayout()
+    return true
+  }
+  return false
+}

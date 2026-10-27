@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9599,37 +9599,12 @@ function OpenTuiWorkspace() {
     }
   }
   // Esc during a drag puts everything back as it was when the drag started.
-  const cancelPointerGesture = (): boolean => {
-    if (treeDividerDrag !== null) {
-      setTreeDividerDrag(null)
-      treeDividerActivePathRef.current = null
-      if (treeDividerCheckpointedRef.current) undoWindowLayout()
-      treeDividerCheckpointedRef.current = false
-      return true
-    }
-    if (floatGestureRef.current) {
-      const gesture = floatGestureRef.current
-      floatGestureRef.current = null
-      setFloatGesturing(false)
-      setFloatDockHint(null)
-      setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
-      return true
-    }
-    if (sessionPressRef.current?.dragging) {
-      sessionPressRef.current = null
-      setSessionPressing(false)
-      setSessionDrag(null)
-      return true
-    }
-    if (splitDividerDragging) {
-      const moved = splitDividerPoint !== null
-      setSplitDividerDragging(null)
-      setSplitDividerPoint(null)
-      if (moved) undoWindowLayout()
-      return true
-    }
-    return false
-  }
+  const cancelPointerGesture = () => runCancelPointerGesture({
+    treeDividerDrag, setTreeDividerDrag, treeDividerActivePathRef, treeDividerCheckpointedRef,
+    undoWindowLayout, floatGestureRef, setFloatGesturing, setFloatDockHint, setFloatingWindow,
+    sessionPressRef, setSessionPressing, setSessionDrag, splitDividerDragging, splitDividerPoint,
+    setSplitDividerDragging, setSplitDividerPoint,
+  })
 
   // Set the window order and keep the pins in the same order: sessions fill
   // their slots in pin order, so a pin order that disagreed would undo the move.
