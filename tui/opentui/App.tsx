@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor } from './app/actions/interaction'
@@ -5598,30 +5598,9 @@ function OpenTuiWorkspace() {
 
   // `x` in the rail: settle the selected session, or reopen a settled one.
   // Optimistic — the row changes now and the next listing confirms it.
-  const toggleSelectedSessionSettled = useStableEvent(() => {
-    const target = selectedSession
-    if (!target) return
-    const action = target.inbox?.settledAt ? 'reopen' : 'settle'
-    const key = sessionKey(target)
-    const apply = (settledAt: number | undefined) => setSessions((current) => current.map((session) => {
-      if (sessionKey(session) !== key) return session
-      const inbox = { ...session.inbox, settledAt }
-      if (settledAt === undefined) delete inbox.settledAt
-      else delete inbox.snoozedUntil
-      return { ...session, inbox }
-    }))
-    const settledAt = action === 'settle' ? Date.now() : undefined
-    pendingInboxEditsRef.current.set(key, { settledAt, until: Date.now() + PENDING_INBOX_EDIT_MS })
-    apply(settledAt)
-    showNotice('info', action === 'settle'
-      ? `Settled · ${showSettled ? 'marked ✓' : 'hidden once you move off it'} · x again to reopen`
-      : 'Reopened')
-    void updateTuiSessionInbox(target, action).catch((err) => {
-      pendingInboxEditsRef.current.delete(key)
-      apply(target.inbox?.settledAt)
-      showNotice('error', err instanceof Error ? err.message : 'Failed to update the session')
-    })
-  })
+  const toggleSelectedSessionSettled = useStableEvent(() => runToggleSelectedSessionSettled({
+    selectedSession, setSessions, pendingInboxEditsRef, showNotice, showSettled,
+  }))
 
   // A turn summary's click: the checkpoint popover, opened on that turn.
   const openTurnCheckpoint = useStableEvent((promptKey: string) => {

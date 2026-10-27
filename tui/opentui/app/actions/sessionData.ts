@@ -42,6 +42,8 @@ import { prewarmTuiSession } from '../../../../lib/tui/service'
 import { runComposerSessionPreparation } from '../../splitPaneState'
 import { type TuiEffort } from '../types'
 import { forkTuiSession } from '../../../../lib/tui/service'
+import { updateTuiSessionInbox } from '../../../../lib/tui/service'
+import { PENDING_INBOX_EDIT_MS } from '../sessionList'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -904,4 +906,40 @@ export async function runForkIntoNewSession(ctx: ForkIntoNewSessionContext, targ
   } catch (err) {
     showNotice('error', err instanceof Error ? err.message : 'Fork failed')
   }
+}
+
+export type ToggleSelectedSessionSettledContext = {
+  selectedSession: Session | null
+  setSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  pendingInboxEditsRef: React.RefObject<Map<string, PendingInboxEdit>>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  showSettled: boolean
+}
+
+export function runToggleSelectedSessionSettled(ctx: ToggleSelectedSessionSettledContext) {
+  const {
+    selectedSession, setSessions, pendingInboxEditsRef, showNotice, showSettled,
+  } = ctx
+  const target = selectedSession
+  if (!target) return
+  const action = target.inbox?.settledAt ? 'reopen' : 'settle'
+  const key = sessionKey(target)
+  const apply = (settledAt: number | undefined) => setSessions((current) => current.map((session) => {
+    if (sessionKey(session) !== key) return session
+    const inbox = { ...session.inbox, settledAt }
+    if (settledAt === undefined) delete inbox.settledAt
+    else delete inbox.snoozedUntil
+    return { ...session, inbox }
+  }))
+  const settledAt = action === 'settle' ? Date.now() : undefined
+  pendingInboxEditsRef.current.set(key, { settledAt, until: Date.now() + PENDING_INBOX_EDIT_MS })
+  apply(settledAt)
+  showNotice('info', action === 'settle'
+    ? `Settled · ${showSettled ? 'marked ✓' : 'hidden once you move off it'} · x again to reopen`
+    : 'Reopened')
+  void updateTuiSessionInbox(target, action).catch((err) => {
+    pendingInboxEditsRef.current.delete(key)
+    apply(target.inbox?.settledAt)
+    showNotice('error', err instanceof Error ? err.message : 'Failed to update the session')
+  })
 }
