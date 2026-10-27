@@ -19,6 +19,12 @@ import { planCoordinatorWorkspace } from '../../coordinatorWorkspace'
 import { type SavedWindowLayout } from '../../windowLayoutStore'
 import { writeTuiSplitPanes } from '../../../../lib/tui/service'
 import { SPLIT_SHARE_EVEN, type SplitPaneOrientation } from '../../splitPaneState'
+import { evenWindowSplitTree } from '../../windowSplitTree'
+import { WINDOW_CONTROL_ACTIONS, type WindowControlAction } from '../../windowControls'
+import { surfaceWindowKey } from '../../windowOrder'
+import { type WindowDirection } from '../../windowLayout'
+import { type ContextMenuItem } from '../../ContextMenu'
+import { writeTuiSplitReaderShare, writeTuiWindowArrangement } from '../../../../lib/tui/service'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -236,4 +242,124 @@ export function runApplySavedWindowLayout(ctx: ApplySavedWindowLayoutContext, id
   setWorkspaceReaderSession(restoredSession ?? null)
   if (restoredSession && sessionKey(restoredSession) !== selectedSessionKey) setSelectedSessionKey(sessionKey(restoredSession))
   showNotice('info', `${saved.name} restored${missing > 0 ? ` · ${missing} session${missing === 1 ? '' : 's'} no longer here` : ''}`)
+}
+
+export type RunWindowControlActionContext = {
+  controlWindowIndex: (key: string) => number | null | undefined
+  setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; title: string; items: ContextMenuItem[]; } | null>>
+  windowControlMode: 'identify' | 'manage' | null
+  endWindowResizeGroup: () => void
+  windowResizeGroupRef: React.RefObject<boolean>
+  shownPopoverTab: string | null
+  closePopoverTab: (id: WindowSurfaceId, keep?: boolean) => void
+  tabFocusedWindow: (target?: number | null) => void
+  floatWindowKey: (key: string, session?: Session) => void
+  openPopoverTabMoveMenu: (id: WindowSurfaceId) => void
+  focusControlWindow: (key: string) => boolean
+  openMoveWorkspaceMenu: (sourceId: string, target: string, singleTab?: boolean, point?: { x: number; y: number; }) => void
+  workspaceId: string
+  enterWindowControls: (mode: 'identify' | 'manage') => void
+  visibleSplitPaneCount: number
+  toggleFullscreenMode: (forced?: boolean) => void
+  toggleWindowZoom: (target?: number | null) => void
+  resizeFocusedWindow: (direction: 1 | -1, focus?: number | null) => void
+  resizeSecondaryDivider: (direction: 1 | -1) => void
+  checkpointWindowLayout: () => void
+  reconciledSplitTree: WindowSplitTree | null
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  setSplitReaderShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitSecondaryShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitBottomShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitWeights: React.Dispatch<React.SetStateAction<Partial<Record<WindowGroupKey, number[]>>>>
+  splitArrangement: WindowArrangement
+  splitReaderLast: boolean
+  undoWindowLayout: () => void
+  swapWindowInDirection: (direction: WindowDirection, target?: number | null) => void
+  breakOutWindowTab: (key: string) => void
+  toggleFloatingFocused: (target?: number | null) => void
+  windowStackFor: (key: string) => WindowStack | null
+  closeWindowTab: (key: string, remember?: boolean) => void
+  closeFloatingWindow: (remember?: boolean) => void
+  windowItems: WindowItem[]
+  closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
+  closeSplitPane: (paneIndex?: number) => void
+  leaveWindowControls: () => void
+  setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
+  splitFocusedWindow: (orientation: SplitPaneOrientation, target?: number | null) => void
+  openWindowControlMenu: (key: string, point?: { x: number; y: number; }, section?: 'resize' | 'swap' | 'session') => void
+}
+
+export function runRunWindowControlAction(ctx: RunWindowControlActionContext, key: string, action: WindowControlAction, direction?: WindowDirection) {
+  const {
+    controlWindowIndex, setContextMenu, windowControlMode, endWindowResizeGroup,
+    windowResizeGroupRef, shownPopoverTab, closePopoverTab, tabFocusedWindow, floatWindowKey,
+    openPopoverTabMoveMenu, focusControlWindow, openMoveWorkspaceMenu, workspaceId,
+    enterWindowControls, visibleSplitPaneCount, toggleFullscreenMode, toggleWindowZoom,
+    resizeFocusedWindow, resizeSecondaryDivider, checkpointWindowLayout, reconciledSplitTree,
+    setWindowSplitTree, setSplitReaderShare, setSplitSecondaryShare, setSplitBottomShare,
+    setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout, swapWindowInDirection,
+    breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
+    windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
+    splitFocusedWindow, openWindowControlMenu,
+  } = ctx
+  const index = controlWindowIndex(key)
+  if (index === undefined) { setContextMenu(null); return }
+  const spec = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === action)!
+  const grouped = windowControlMode === 'manage' && spec.resize
+  if (!grouped) endWindowResizeGroup()
+  windowResizeGroupRef.current = Boolean(grouped)
+  // A popover tab in the reader's place: what moves is the popover, not the
+  // session hidden behind it.
+  if (index === null && shownPopoverTab && (action === 'float' || action === 'move-workspace' || action === 'close' || action === 'tab')) {
+    const id = shownPopoverTab
+    if (action === 'close') closePopoverTab(id)
+    else if (action === 'tab') tabFocusedWindow(null)
+    else if (action === 'float') { closePopoverTab(id, true); floatWindowKey(surfaceWindowKey(id)) }
+    else openPopoverTabMoveMenu(id)
+    return
+  }
+  try {
+    switch (action) {
+      case 'focus': focusControlWindow(key); break
+      case 'move-workspace': openMoveWorkspaceMenu(workspaceId, key); break
+      case 'manage': focusControlWindow(key); enterWindowControls('manage'); break
+      case 'zoom': focusControlWindow(key); if (index === null && visibleSplitPaneCount === 0) toggleFullscreenMode(); else toggleWindowZoom(index); break
+      case 'shrink': resizeFocusedWindow(-1, index); break
+      case 'grow': resizeFocusedWindow(1, index); break
+      case 'reader-shrink': resizeFocusedWindow(-1, index); break
+      case 'reader-grow': resizeFocusedWindow(1, index); break
+      case 'row-shrink': resizeSecondaryDivider(-1); break
+      case 'row-grow': resizeSecondaryDivider(1); break
+      case 'equalize':
+        checkpointWindowLayout()
+        if (reconciledSplitTree) setWindowSplitTree({ ...reconciledSplitTree, root: evenWindowSplitTree(reconciledSplitTree.root) })
+        setSplitReaderShare(SPLIT_SHARE_EVEN)
+        setSplitSecondaryShare(SPLIT_SHARE_EVEN)
+        setSplitBottomShare(SPLIT_SHARE_EVEN)
+        setSplitWeights({})
+        void writeTuiSplitReaderShare(SPLIT_SHARE_EVEN).catch(() => {})
+        void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: SPLIT_SHARE_EVEN, bottomShare: SPLIT_SHARE_EVEN, weights: {} }).catch(() => {})
+        break
+      case 'undo': undoWindowLayout(); break
+      case 'swap': if (direction) swapWindowInDirection(direction, index); break
+      case 'tab': tabFocusedWindow(index); break
+      case 'detach': if (index !== null) breakOutWindowTab(key); break
+      case 'float': toggleFloatingFocused(index); break
+      case 'close':
+        if (index === null) break
+        if (windowStackFor(key)) closeWindowTab(key)
+        else if (index === FLOATING_PANE_INDEX) closeFloatingWindow()
+        else {
+          const item = windowItems[index]
+          if (item?.kind === 'surface') closeSurfaceWindow(item.surface)
+          else closeSplitPane(index)
+        }
+        break
+      case 'layout': focusControlWindow(key); leaveWindowControls(); setWindowPickerOpen(true); break
+      case 'split-columns': splitFocusedWindow('columns', index); break
+      case 'split-rows': splitFocusedWindow('rows', index); break
+      case 'menu': openWindowControlMenu(key); break
+      case 'resize': break
+    }
+  } finally { windowResizeGroupRef.current = false }
 }

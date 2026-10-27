@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10933,68 +10933,18 @@ function OpenTuiWorkspace() {
     if (!visible.some(window => window.focused) && visible[0]) focusControlWindow(visible[0].key)
     setWindowControlMode(mode)
   })
-  const runWindowControlAction = useStableEvent((key: string, action: WindowControlAction, direction?: WindowDirection) => {
-    const index = controlWindowIndex(key)
-    if (index === undefined) { setContextMenu(null); return }
-    const spec = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === action)!
-    const grouped = windowControlMode === 'manage' && spec.resize
-    if (!grouped) endWindowResizeGroup()
-    windowResizeGroupRef.current = Boolean(grouped)
-    // A popover tab in the reader's place: what moves is the popover, not the
-    // session hidden behind it.
-    if (index === null && shownPopoverTab && (action === 'float' || action === 'move-workspace' || action === 'close' || action === 'tab')) {
-      const id = shownPopoverTab
-      if (action === 'close') closePopoverTab(id)
-      else if (action === 'tab') tabFocusedWindow(null)
-      else if (action === 'float') { closePopoverTab(id, true); floatWindowKey(surfaceWindowKey(id)) }
-      else openPopoverTabMoveMenu(id)
-      return
-    }
-    try {
-      switch (action) {
-        case 'focus': focusControlWindow(key); break
-        case 'move-workspace': openMoveWorkspaceMenu(workspaceId, key); break
-        case 'manage': focusControlWindow(key); enterWindowControls('manage'); break
-        case 'zoom': focusControlWindow(key); if (index === null && visibleSplitPaneCount === 0) toggleFullscreenMode(); else toggleWindowZoom(index); break
-        case 'shrink': resizeFocusedWindow(-1, index); break
-        case 'grow': resizeFocusedWindow(1, index); break
-        case 'reader-shrink': resizeFocusedWindow(-1, index); break
-        case 'reader-grow': resizeFocusedWindow(1, index); break
-        case 'row-shrink': resizeSecondaryDivider(-1); break
-        case 'row-grow': resizeSecondaryDivider(1); break
-        case 'equalize':
-          checkpointWindowLayout()
-          if (reconciledSplitTree) setWindowSplitTree({ ...reconciledSplitTree, root: evenWindowSplitTree(reconciledSplitTree.root) })
-          setSplitReaderShare(SPLIT_SHARE_EVEN)
-          setSplitSecondaryShare(SPLIT_SHARE_EVEN)
-          setSplitBottomShare(SPLIT_SHARE_EVEN)
-          setSplitWeights({})
-          void writeTuiSplitReaderShare(SPLIT_SHARE_EVEN).catch(() => {})
-          void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: SPLIT_SHARE_EVEN, bottomShare: SPLIT_SHARE_EVEN, weights: {} }).catch(() => {})
-          break
-        case 'undo': undoWindowLayout(); break
-        case 'swap': if (direction) swapWindowInDirection(direction, index); break
-        case 'tab': tabFocusedWindow(index); break
-        case 'detach': if (index !== null) breakOutWindowTab(key); break
-        case 'float': toggleFloatingFocused(index); break
-        case 'close':
-          if (index === null) break
-          if (windowStackFor(key)) closeWindowTab(key)
-          else if (index === FLOATING_PANE_INDEX) closeFloatingWindow()
-          else {
-            const item = windowItems[index]
-            if (item?.kind === 'surface') closeSurfaceWindow(item.surface)
-            else closeSplitPane(index)
-          }
-          break
-        case 'layout': focusControlWindow(key); leaveWindowControls(); setWindowPickerOpen(true); break
-        case 'split-columns': splitFocusedWindow('columns', index); break
-        case 'split-rows': splitFocusedWindow('rows', index); break
-        case 'menu': openWindowControlMenu(key); break
-        case 'resize': break
-      }
-    } finally { windowResizeGroupRef.current = false }
-  })
+  const runWindowControlAction = useStableEvent((key: string, action: WindowControlAction, direction?: WindowDirection) => runRunWindowControlAction({
+    controlWindowIndex, setContextMenu, windowControlMode, endWindowResizeGroup,
+    windowResizeGroupRef, shownPopoverTab, closePopoverTab, tabFocusedWindow, floatWindowKey,
+    openPopoverTabMoveMenu, focusControlWindow, openMoveWorkspaceMenu, workspaceId,
+    enterWindowControls, visibleSplitPaneCount, toggleFullscreenMode, toggleWindowZoom,
+    resizeFocusedWindow, resizeSecondaryDivider, checkpointWindowLayout, reconciledSplitTree,
+    setWindowSplitTree, setSplitReaderShare, setSplitSecondaryShare, setSplitBottomShare,
+    setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout, swapWindowInDirection,
+    breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
+    windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
+    splitFocusedWindow, openWindowControlMenu,
+  }, key, action, direction))
   const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => {
     const index = controlWindowIndex(key)
     if (index === undefined) return
