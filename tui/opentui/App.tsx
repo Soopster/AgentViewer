@@ -306,7 +306,7 @@ import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
-import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
+import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
@@ -4568,29 +4568,9 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const openTeammatesPanel = useStableEvent(() => {
-    if (!isPluginEnabled('coordination')) {
-      showNotice('info', 'Teammates are off · turn Coordination on in Plugins (⌃K palette)')
-      return
-    }
-    const session = selectedSession
-    if (!session) {
-      showNotice('info', 'Open a conversation before giving it teammates', 3500)
-      return
-    }
-    if (session.isPending) {
-      showNotice('info', 'Send a first message before giving this conversation teammates', 4000)
-      return
-    }
-    // The attention badge observes this conversation without opening the panel.
-    // Opening it here reuses that feed and preserves the reader's draft.
-    openInteractiveCoordinator({
-      sessionId: session.sessionId,
-      provider: session.provider ?? 'claude',
-      cwd: session.cwd,
-      title: session.customTitle ?? session.summary ?? '(untitled session)',
-    })
-  })
+  const openTeammatesPanel = useStableEvent(() => runOpenTeammatesPanel({
+    showNotice, selectedSession,
+  }))
 
   const selectCoordPlaybook = useStableEvent((name: string | null, available = coordPlaybooks) => {
     setCoordPlaybookName(name)

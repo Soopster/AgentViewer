@@ -22,6 +22,7 @@ import { planCoordinatorWorkspace } from '../../coordinatorWorkspace'
 import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
 import { type PaneFocus } from '../types'
 import { keepEmpty } from '../collections'
+import { openInteractiveCoordinator } from '../../interactiveCoordinatorStore'
 
 export type SubmitCoordinatedRunContext = {
   coordTextareaRef: React.RefObject<TextareaRenderable | null>
@@ -331,4 +332,36 @@ export function runWatchCoordinatorRun(ctx: WatchCoordinatorRunContext, snapshot
   setSplitFocusIndex(null)
   setFocusedPane('messages')
   showNotice('info', `Watching this run · lead + ${panes.length} teammate${panes.length === 1 ? '' : 's'} · ⌃B p switch · ⌃B a attention · ⌃B w save${plan.skipped.length ? ` · ${plan.skipped.length} unreadable participant(s) skipped` : ''}`, 7000)
+}
+
+export type OpenTeammatesPanelContext = {
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  selectedSession: Session | null
+}
+
+export function runOpenTeammatesPanel(ctx: OpenTeammatesPanelContext) {
+  const {
+    showNotice, selectedSession,
+  } = ctx
+  if (!isPluginEnabled('coordination')) {
+    showNotice('info', 'Teammates are off · turn Coordination on in Plugins (⌃K palette)')
+    return
+  }
+  const session = selectedSession
+  if (!session) {
+    showNotice('info', 'Open a conversation before giving it teammates', 3500)
+    return
+  }
+  if (session.isPending) {
+    showNotice('info', 'Send a first message before giving this conversation teammates', 4000)
+    return
+  }
+  // The attention badge observes this conversation without opening the panel.
+  // Opening it here reuses that feed and preserves the reader's draft.
+  openInteractiveCoordinator({
+    sessionId: session.sessionId,
+    provider: session.provider ?? 'claude',
+    cwd: session.cwd,
+    title: session.customTitle ?? session.summary ?? '(untitled session)',
+  })
 }
