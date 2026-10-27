@@ -348,7 +348,6 @@ import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
 import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
-import { ComposerDock } from './app/overlays/ComposerDock'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8800,13 +8799,7 @@ function OpenTuiWorkspace() {
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerHistoryPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
-      <ComposerDock
-        composerWindowOpen={composerWindowOpen}
-        composerHidden={composerHidden}
-        presentationHidesComposer={presentationHidesComposer}
-        renderComposerStashPanel={renderComposerStashPanel}
-        composerAreaWidth={composerAreaWidth}
-      />
+      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerStashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
