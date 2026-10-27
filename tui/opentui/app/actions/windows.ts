@@ -1700,3 +1700,51 @@ export function runSwapWindowInDirection(ctx: SwapWindowInDirectionContext, dire
   if (from === -1) focusReaderFromSplit()
   else focusSplitPane(from)
 }
+
+export type EndFloatGestureContext = {
+  floatGestureRef: React.RefObject<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean; } | null>
+  setFloatGesturing: React.Dispatch<React.SetStateAction<boolean>>
+  setFloatDockHint: React.Dispatch<React.SetStateAction<{ label: string; rect: { x: number; y: number; width: number; height: number; }; x: number; y: number; } | null>>
+  floatingKey: string | null
+  dropTargetAt: (point: { x: number; y: number; }) => { zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title: boolean; }
+  nestedDropPlan: (movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean; }) => { tree: WindowSplitTree; geometry: { layout: WindowLayout; rects: Map<number, SplitRect>; dividers: SplitDivider[]; }; key: string; } | null
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  applyNestedDrop: (movingKey: string, target: { pane: number | null; zone: WindowDropZone | null; insert: WindowDropZone | null; title?: boolean; }, session?: Session) => void
+  floatDockTarget: (point: { x: number; y: number; }) => { kind: 'tab'; pane: number; } | { kind: 'edge'; } | null
+  windowItems: WindowItem[]
+  tabWindowOnto: (key: string, anchor: string, session?: Session) => void
+  windowItemKey: (item: WindowItem) => string
+  dockFloatingWindow: () => void
+}
+
+export function runEndFloatGesture(ctx: EndFloatGestureContext, event?: { x: number; y: number }) {
+  const {
+    floatGestureRef, setFloatGesturing, setFloatDockHint, floatingKey, dropTargetAt,
+    nestedDropPlan, setFloatingWindow, applyNestedDrop, floatDockTarget, windowItems,
+    tabWindowOnto, windowItemKey, dockFloatingWindow,
+  } = ctx
+  const gesture = floatGestureRef.current
+  floatGestureRef.current = null
+  setFloatGesturing(false)
+  setFloatDockHint(null)
+  if (!gesture?.moved || gesture.mode !== 'move' || !event || !floatingKey) return
+  const target = dropTargetAt(event)
+  const edge = target.pane === null ? target.zone : target.insert
+  if (edge && edge !== 'center' && !target.title && nestedDropPlan(floatingKey, target)) {
+    setFloatingWindow(current => current ? { ...current, rect: gesture.rect } : current)
+    applyNestedDrop(floatingKey, target)
+    return
+  }
+  const dock = floatDockTarget(event)
+  if (dock?.kind === 'tab') {
+    const target = windowItems[dock.pane]
+    if (target) {
+      // Back where it started, so undo returns it to the place it was dragged from.
+      setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+      tabWindowOnto(floatingKey, windowItemKey(target))
+    }
+  } else if (dock?.kind === 'edge') {
+    setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
+    dockFloatingWindow()
+  }
+}

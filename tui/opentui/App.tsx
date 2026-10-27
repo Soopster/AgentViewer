@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes, runSwapWindowInDirection } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes, runSwapWindowInDirection, runEndFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -6897,32 +6897,11 @@ function OpenTuiWorkspace() {
     windowAreaHeight, setFloatingWindow,
   }, event)
   floatGestureImplRef.current = { start: (event) => startFloatGesture('move', event), move: (event) => moveFloatGesture(event), end: (event) => endFloatGesture(event) }
-  const endFloatGesture = (event?: { x: number; y: number }) => {
-    const gesture = floatGestureRef.current
-    floatGestureRef.current = null
-    setFloatGesturing(false)
-    setFloatDockHint(null)
-    if (!gesture?.moved || gesture.mode !== 'move' || !event || !floatingKey) return
-    const target = dropTargetAt(event)
-    const edge = target.pane === null ? target.zone : target.insert
-    if (edge && edge !== 'center' && !target.title && nestedDropPlan(floatingKey, target)) {
-      setFloatingWindow(current => current ? { ...current, rect: gesture.rect } : current)
-      applyNestedDrop(floatingKey, target)
-      return
-    }
-    const dock = floatDockTarget(event)
-    if (dock?.kind === 'tab') {
-      const target = windowItems[dock.pane]
-      if (target) {
-        // Back where it started, so undo returns it to the place it was dragged from.
-        setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
-        tabWindowOnto(floatingKey, windowItemKey(target))
-      }
-    } else if (dock?.kind === 'edge') {
-      setFloatingWindow((current) => current ? { ...current, rect: gesture.rect } : current)
-      dockFloatingWindow()
-    }
-  }
+  const endFloatGesture = (event?: { x: number; y: number }) => runEndFloatGesture({
+    floatGestureRef, setFloatGesturing, setFloatDockHint, floatingKey, dropTargetAt,
+    nestedDropPlan, setFloatingWindow, applyNestedDrop, floatDockTarget, windowItems,
+    tabWindowOnto, windowItemKey, dockFloatingWindow,
+  }, event)
   // Esc during a drag puts everything back as it was when the drag started.
   const cancelPointerGesture = () => runCancelPointerGesture({
     treeDividerDrag, setTreeDividerDrag, treeDividerActivePathRef, treeDividerCheckpointedRef,
