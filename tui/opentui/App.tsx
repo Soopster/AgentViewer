@@ -313,7 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
-import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect } from './app/effects/session'
+import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -6489,24 +6489,10 @@ function OpenTuiWorkspace() {
     }
   }, [bootstrapped, loadingSessions, provider, refreshSessions])
 
-  useEffect(() => {
-    if (!bootstrapped || !selectedSessionTarget || selectedSession?.isPending) return undefined
-    let active = true
-    const interval = setInterval(() => {
-      if (!active || providerSwitchRef.current) return
-      // Skip background polls during active typing/searching — the poll's
-      // startTransition can interleave with input handling and cause stutter.
-      // The next tick after the user stops typing picks up any new content
-      // (and a focused refresh on entering search-mode already fires).
-      if (composerActiveRef.current && composerDraftRef.current.length > 0) return
-      if (searchModeRef.current || sessionSearchModeRef.current) return
-      void refreshSelectedSessionDetail(selectedSessionTarget, false)
-    }, DETAIL_REFRESH_MS)
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
+  useEffect(() => runDetailRefreshIntervalEffect({
+    bootstrapped, selectedSessionTarget, selectedSession, providerSwitchRef, composerActiveRef,
+    composerDraftRef, searchModeRef, sessionSearchModeRef, refreshSelectedSessionDetail,
+  }), [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
   useEffect(() => runSessionPollIntervalEffect({
     bootstrapped, tabsEnabled, openTabSessions, providerSwitchRef, selectedSessionKeyRef,

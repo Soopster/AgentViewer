@@ -18,6 +18,7 @@ import { readTuiSessionReaderState } from '../../../../lib/tui/service'
 import { sameKeys } from '../collections'
 import { type Session } from '../../../../lib/types'
 import { CLAUDE_BACKGROUND_METADATA_REFRESH_MS } from '../timing'
+import { DETAIL_REFRESH_MS } from '../timing'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -309,6 +310,41 @@ export function runSessionPollIntervalEffect(ctx: SessionPollIntervalEffectConte
     // Context usage metadata is disabled for open tabs.
     // void refreshSessionMetadata(target, false)
   }, CLAUDE_BACKGROUND_METADATA_REFRESH_MS)
+  return () => {
+    active = false
+    clearInterval(interval)
+  }
+}
+
+export type DetailRefreshIntervalEffectContext = {
+  bootstrapped: boolean
+  selectedSessionTarget: Session | null
+  selectedSession: Session | null
+  providerSwitchRef: React.RefObject<boolean>
+  composerActiveRef: React.RefObject<boolean>
+  composerDraftRef: React.RefObject<string>
+  searchModeRef: React.RefObject<boolean>
+  sessionSearchModeRef: React.RefObject<boolean>
+  refreshSelectedSessionDetail: (session: Session, foreground?: boolean) => Promise<void>
+}
+
+export function runDetailRefreshIntervalEffect(ctx: DetailRefreshIntervalEffectContext) {
+  const {
+    bootstrapped, selectedSessionTarget, selectedSession, providerSwitchRef, composerActiveRef,
+    composerDraftRef, searchModeRef, sessionSearchModeRef, refreshSelectedSessionDetail,
+  } = ctx
+  if (!bootstrapped || !selectedSessionTarget || selectedSession?.isPending) return undefined
+  let active = true
+  const interval = setInterval(() => {
+    if (!active || providerSwitchRef.current) return
+    // Skip background polls during active typing/searching — the poll's
+    // startTransition can interleave with input handling and cause stutter.
+    // The next tick after the user stops typing picks up any new content
+    // (and a focused refresh on entering search-mode already fires).
+    if (composerActiveRef.current && composerDraftRef.current.length > 0) return
+    if (searchModeRef.current || sessionSearchModeRef.current) return
+    void refreshSelectedSessionDetail(selectedSessionTarget, false)
+  }, DETAIL_REFRESH_MS)
   return () => {
     active = false
     clearInterval(interval)
