@@ -323,7 +323,7 @@ import { runAttentionItems } from './app/derived/attention'
 import { runQuestionPickerPlan } from './app/derived/questionPicker'
 import { runFleetEntries } from './app/derived/fleet'
 import { runComposerKnobSegments } from './app/derived/composerStatus'
-import { runTranscriptCards } from './app/derived/transcriptCards'
+import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1937,46 +1937,9 @@ function OpenTuiWorkspace() {
   // sessions above SYNC_FORMAT_CARD_LIMIT, where the main-thread fallback is
   // skipped.
   const [workerCardCacheVersion, setWorkerCardCacheVersion] = useState(0)
-  const baseTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
-    const profileStart = CARD_PROFILE ? performance.now() : 0
-    if (!transcriptSession || !sessionDetail) return []
-    let cards: TuiTranscriptCard[]
-    let recomputed = 0
-    const attachedCards = attachedTranscriptCardsForVariant(sessionDetail, density, showToolCalls)
-    const cachedSync = attachedCards ?? getTranscriptCardsSync(
-      transcriptSession,
-      sessionDetail.threadedMessages,
-      density,
-      showToolCalls,
-    )
-    if (cachedSync) {
-      cards = cachedSync
-    } else if (sessionDetail.threadedMessages.length > SYNC_FORMAT_CARD_LIMIT) {
-      // Too large to format on the render thread (this path is a multi-second
-      // freeze on big sessions). The warm-cache effect below formats in the
-      // worker and bumps workerCardCacheVersion when the cards are ready.
-      cards = []
-    } else {
-      const filtered = showToolCalls
-        ? sessionDetail.threadedMessages
-        : stripToolCallBlocks(sessionDetail.threadedMessages)
-      const activeForms = buildTaskActiveForms(filtered)
-      const taskRegistry = buildTaskRegistry(filtered)
-      const durations = computeTurnDurationsMs(filtered)
-      cards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry, durations.get(msg.uuid)))
-      recomputed = cards.length
-    }
-    if (CARD_PROFILE) {
-      logCardRecompute({
-        scope: 'transcriptCards',
-        totalCards: cards.length,
-        recomputed,
-        liveCards: 0,
-        durationMs: performance.now() - profileStart,
-      })
-    }
-    return cards
-  }, [density, sessionDetail, transcriptSession, showToolCalls, workerCardCacheVersion])
+  const baseTranscriptCards = useMemo(() => runBaseTranscriptCards({
+    transcriptSession, sessionDetail, density, showToolCalls,
+  }), [density, sessionDetail, transcriptSession, showToolCalls, workerCardCacheVersion])
 
   // ── Task context for live cards — stable across streaming deltas ───────────
   // buildTaskActiveForms and buildTaskRegistry scan the full base transcript.

@@ -6,6 +6,11 @@ import { buildTaskRegistry } from '../../../../lib/taskRegistry'
 import { type TuiDensity } from '../../../theme'
 import { CARD_PROFILE } from '../perf'
 import { isLiveAssistantTextMessage } from '../liveStream'
+import { computeTurnDurationsMs } from '../../../../lib/threading'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { attachedTranscriptCardsForVariant, getTranscriptCardsSync } from '../../sessionDetailWorkerClient'
+import { type Session } from '../../../../lib/types'
+import { SYNC_FORMAT_CARD_LIMIT } from '../timing'
 
 export type TranscriptCardsContext = {
   liveTranscriptMessagesForSession: ThreadedMessage[]
@@ -78,4 +83,55 @@ export function runTranscriptCards(ctx: TranscriptCardsContext) {
     })
   }
   return sortedCards
+}
+
+export type BaseTranscriptCardsContext = {
+  transcriptSession: Session | null
+  sessionDetail: TuiSessionDetail | null
+  density: TuiDensity
+  showToolCalls: boolean
+}
+
+export function runBaseTranscriptCards(ctx: BaseTranscriptCardsContext) {
+  const {
+    transcriptSession, sessionDetail, density, showToolCalls,
+  } = ctx
+  const profileStart = CARD_PROFILE ? performance.now() : 0
+  if (!transcriptSession || !sessionDetail) return []
+  let cards: TuiTranscriptCard[]
+  let recomputed = 0
+  const attachedCards = attachedTranscriptCardsForVariant(sessionDetail, density, showToolCalls)
+  const cachedSync = attachedCards ?? getTranscriptCardsSync(
+    transcriptSession,
+    sessionDetail.threadedMessages,
+    density,
+    showToolCalls,
+  )
+  if (cachedSync) {
+    cards = cachedSync
+  } else if (sessionDetail.threadedMessages.length > SYNC_FORMAT_CARD_LIMIT) {
+    // Too large to format on the render thread (this path is a multi-second
+    // freeze on big sessions). The warm-cache effect below formats in the
+    // worker and bumps workerCardCacheVersion when the cards are ready.
+    cards = []
+  } else {
+    const filtered = showToolCalls
+      ? sessionDetail.threadedMessages
+      : stripToolCallBlocks(sessionDetail.threadedMessages)
+    const activeForms = buildTaskActiveForms(filtered)
+    const taskRegistry = buildTaskRegistry(filtered)
+    const durations = computeTurnDurationsMs(filtered)
+    cards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry, durations.get(msg.uuid)))
+    recomputed = cards.length
+  }
+  if (CARD_PROFILE) {
+    logCardRecompute({
+      scope: 'transcriptCards',
+      totalCards: cards.length,
+      recomputed,
+      liveCards: 0,
+      durationMs: performance.now() - profileStart,
+    })
+  }
+  return cards
 }
