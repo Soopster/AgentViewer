@@ -311,6 +311,7 @@ import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, ru
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
+import { runWindowSurfaceFocusEffect } from './app/effects/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9248,23 +9249,10 @@ function OpenTuiWorkspace() {
   }, [teammatesOpen, windowSurfaces])
 
   // A surface window just opened takes focus once it has a place in the layout.
-  useEffect(() => {
-    const pending = pendingSurfaceFocusRef.current
-    if (!pending) return
-    const index = windowItems.findIndex((item) => item.kind === 'surface' && item.surface === pending)
-    if (index < 0) {
-      if (!windowSurfaces.includes(pending)) return
-      pendingSurfaceFocusRef.current = null
-      setWindowSurfacePeek(pending)
-      setSplitFocusIndex(-1)
-      setSurfacePanelFocused(false)
-      showNotice('info', 'Hidden window · Esc or ⌃B m restores the layout')
-      return
-    }
-    pendingSurfaceFocusRef.current = null
-    setWindowZoom(null)
-    setSplitFocusIndex(index)
-  })
+  useEffect(() => runWindowSurfaceFocusEffect({
+    pendingSurfaceFocusRef, windowItems, windowSurfaces, setWindowSurfacePeek, setSplitFocusIndex,
+    setSurfacePanelFocused, showNotice, setWindowZoom,
+  }))
 
   // A zoom ends when the window it names goes away.
   useEffect(() => {
