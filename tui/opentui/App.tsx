@@ -270,6 +270,7 @@ import { ExitConfirmOverlay } from './app/overlays/ExitConfirmOverlay'
 import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
 import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
 import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
+import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -18710,41 +18711,7 @@ function OpenTuiWorkspace() {
         </box>
       ) : null}
 
-      {searchMode ? (
-        <box paddingX={1}>
-          <box
-            width={Math.max(width - 2, 20)}
-            height={4}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            flexDirection="column"
-          >
-            <box paddingX={1} height={1}>
-              <text fg={theme.dim}>
-                {fitText(
-                  `SEARCH  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}  enter jump  esc close`,
-                  width - 6,
-                )}
-              </text>
-            </box>
-            <box paddingX={1} height={1}>
-              <input
-                focused
-                value={searchQuery}
-                placeholder="Type to search transcript..."
-                maxLength={SEARCH_MAX_CHARS}
-                onInput={setSearchQuery}
-                onSubmit={() => {
-                  if (searchMatches.length > 0) jumpToTranscriptIndex(searchMatches[searchMatchIndex] ?? 0)
-                  setSearchMode(false)
-                }}
-              />
-            </box>
-          </box>
-        </box>
-      ) : null}
+      <TranscriptSearchBar searchMode={searchMode} width={width} theme={theme} searchMatches={searchMatches} searchMatchIndex={searchMatchIndex} searchQuery={searchQuery} setSearchQuery={setSearchQuery} jumpToTranscriptIndex={jumpToTranscriptIndex} setSearchMode={setSearchMode} />
 
       {sessionSearchMode ? (
         <box paddingX={1}>
