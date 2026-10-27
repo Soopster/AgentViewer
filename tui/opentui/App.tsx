@@ -281,6 +281,7 @@ import { FloatingWindowLayer } from './app/overlays/FloatingWindowLayer'
 import { ThemeMenuOverlay } from './app/overlays/ThemeMenuOverlay'
 import { CommandPaletteOverlay } from './app/overlays/CommandPaletteOverlay'
 import { ChordHelpOverlay } from './app/overlays/ChordHelpOverlay'
+import { TranscriptViewMenuOverlay } from './app/overlays/TranscriptViewMenuOverlay'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -18280,71 +18281,7 @@ function OpenTuiWorkspace() {
 
         <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} />
 
-        {transcriptViewMenuOpen ? (() => {
-          const menuWidth = Math.min(Math.max(width - 8, 28), 46)
-          const menuHeight = 11
-          const originView = transcriptViewMenuOriginRef.current
-          const viewOptions = TRANSCRIPT_VIEWS.map((view) => ({
-            name: TRANSCRIPT_VIEW_LABELS[view] + (view === originView ? ' ✓' : ''),
-            description: TRANSCRIPT_VIEW_DESCRIPTIONS[view],
-            value: view,
-          }))
-          return (
-            <box
-              position="absolute"
-              top={focusMode ? 1 : 3}
-              right={2}
-              width={menuWidth}
-              height={menuHeight}
-              border
-              borderStyle="single"
-              borderColor={theme.border2}
-              backgroundColor={theme.surface}
-              zIndex={20}
-              flexDirection="column"
-            >
-              <box paddingX={2} paddingBottom={1} flexDirection="row">
-                <text fg={theme.cyan} wrapMode="none">TRANSCRIPT VIEW</text>
-                <text fg={theme.dim} wrapMode="none">  v / esc close</text>
-              </box>
-              <box flexGrow={1} paddingX={1} paddingBottom={1}>
-                <select
-                  style={{ height: menuHeight - 5 }}
-                  focused
-                  options={viewOptions}
-                  selectedIndex={transcriptViewMenuIndex}
-                  selectedBackgroundColor={theme.surface3}
-                  selectedTextColor={theme.text}
-                  textColor={theme.muted}
-                  descriptionColor={theme.dim}
-                  selectedDescriptionColor={theme.cyan}
-                  backgroundColor={theme.surface}
-                  focusedBackgroundColor={theme.surface}
-                  showScrollIndicator={false}
-                  showDescription={false}
-                  itemSpacing={0}
-                  onChange={(index) => {
-                    const next = TRANSCRIPT_VIEWS[index]
-                    if (next) {
-                      setTranscriptViewMenuIndex(index)
-                      setTranscriptView(next)
-                    }
-                  }}
-                  onSelect={(_, option) => {
-                    const next = option?.value as TuiTranscriptView | undefined
-                    if (next) chooseTranscriptView(next)
-                  }}
-                />
-              </box>
-              <box id="transcript-view-lightweight" height={1} paddingX={2} flexDirection="row">
-                <text fg={theme.cyan} wrapMode="none">tab </text>
-                <text fg={lightweightWindows ? theme.text : theme.muted} wrapMode="none">
-                  {lightweightWindows ? '● lightweight windows' : '○ lightweight windows'}
-                </text>
-              </box>
-            </box>
-          )
-        })() : null}
+        <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} transcriptViewMenuOriginRef={transcriptViewMenuOriginRef} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} setTranscriptView={setTranscriptView} chooseTranscriptView={chooseTranscriptView} lightweightWindows={lightweightWindows} />
 
         <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} />
 
