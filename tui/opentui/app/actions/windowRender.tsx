@@ -331,7 +331,7 @@ return (
       paneIndex={splitIndex}
       paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + windowNumberOffset : splitIndex + windowNumberOffset}
       paneCount={visibleSplitPaneCount + (primaryLeaf ? 1 : 0) + (floatingKey ? 1 : 0)}
-      focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
+      focused={!hidden && effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
       selected={sessionKey(splitSession) === selectedSessionKey}
       onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
       onFollowChange={sessionKey(splitSession) === selectedSessionKey ? setFollowTail : undefined}
@@ -425,7 +425,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
     closeSurfaceWindow, renderSurfaceBody, composerActive,
   } = ctx
   if (hidden === undefined) hidden = false
-  const focused = splitFocusIndex === index
+  const focused = !hidden && splitFocusIndex === index
   const height = size.boxHeight ?? size.height
   return (
     <box
@@ -540,8 +540,8 @@ export function runRenderSurfaceLayer(ctx: RenderSurfaceLayerContext) {
       return renderSurfaceWindow(surface, -1, { ...area, boxHeight: area.height }, false, { x: 0, y: 0, zIndex: 5 })
     }
     if (key === floatingKey && floatingWindow) {
-      const rect = clampFloatingRect(floatingWindow.rect, area)
-      const shown = !fullscreenMode && !windowSurfacePeek
+      const rect = zoomedIndex === FLOATING_PANE_INDEX ? { x: 0, y: 0, ...area } : clampFloatingRect(floatingWindow.rect, area)
+      const shown = !windowSurfacePeek && (!zooming || zoomedIndex === FLOATING_PANE_INDEX)
       return renderSurfaceWindow(surface, FLOATING_PANE_INDEX, { width: rect.width, height: rect.height, boxHeight: rect.height }, !shown, { x: rect.x, y: rect.y, zIndex: 41 })
     }
     const own = frameOf(key)
@@ -549,7 +549,7 @@ export function runRenderSurfaceLayer(ctx: RenderSurfaceLayerContext) {
     const frameKey = own ? key : windowStackFor(key)?.find((member) => fittedWindowKeys.includes(member))
     const at = own ?? (frameKey ? frameOf(frameKey) : null)
     const rect = at?.rect ?? { x: 0, y: 0, width: Math.max(10, area.width), height: Math.max(3, area.height) }
-    const hidden = !own || Boolean(windowSurfacePeek) || fullscreenMode || (zooming && zoomedIndex !== own.index)
+    const hidden = !own || Boolean(windowSurfacePeek) || (zooming && zoomedIndex !== own.index)
     return renderSurfaceWindow(surface, own ? own.index : -2, { width: rect.width, height: rect.height, boxHeight: rect.height }, hidden, { x: rect.x, y: rect.y, zIndex: 5 })
   })
 }

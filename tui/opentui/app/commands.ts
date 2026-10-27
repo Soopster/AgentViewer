@@ -176,7 +176,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'rail-narrow', label: 'Narrow session rail', key: '[', category: 'View' },
   { id: 'rail-wide', label: 'Widen session rail', key: ']', category: 'View' },
   { id: 'focus', label: 'Toggle focus mode', key: 'z', category: 'View' },
-  { id: 'fullscreen', label: 'Toggle fullscreen transcript', key: '⇧Z', category: 'View' },
+  { id: 'fullscreen', label: 'Toggle fullscreen window', key: '⇧Z', category: 'View' },
   { id: 'tools', label: 'Toggle tool calls', key: '⇧X', category: 'View' },
   { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View' },
   { id: 'mode', label: 'Cycle provider mode', key: '', category: 'Session' },

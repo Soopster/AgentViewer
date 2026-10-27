@@ -149,7 +149,7 @@ export function handleGlobalChordKeys({ commandChordPending, windowControlsBlock
     // Shift+Z extends the existing z focus binding. This entry shortcut lives
     // outside the composer branch so a capital Z remains ordinary draft text.
     if (isShifted('Z')) {
-      handled(() => toggleFullscreenMode(true))
+      handled(() => toggleFullscreenMode())
       return true
     }
 
