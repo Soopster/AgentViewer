@@ -50,6 +50,8 @@ import { windowLayoutRects } from '../../windowLayout'
 import { computeWindowSplitTree, splitTreeFromRects, splitWindowLeaf } from '../../windowSplitTree'
 import { nextSurfaceId } from '../../popoverWindows'
 import { formatSessionTitle } from '../../../format'
+import { replacePrimaryWindow, reconcileWindowSplitTree } from '../../windowSplitTree'
+import { addToStack, replaceWindowKey, stackOf } from '../../windowTabs'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -886,4 +888,69 @@ export function runSplitFocusedWindow(ctx: SplitFocusedWindowContext, orientatio
   setFocusedPane('messages')
   setSplitFocusIndex(orderedWindowKeys.length)
   showNotice('info', `${orientation === 'columns' ? 'Split right' : 'Split below'} · ${candidate ? formatSessionTitle(candidate) : 'new shell window'}`)
+}
+
+export type TabWindowOntoContext = {
+  shownPopoverTab: string | null
+  checkpointWindowLayout: () => void
+  liveWindowStacks: WindowStack[]
+  laidOutWindowKeys: Set<string>
+  currentPaneTree: () => WindowSplitTree
+  closePopoverTab: (id: WindowSurfaceId, keep?: boolean) => void
+  setWindowZoom: React.Dispatch<React.SetStateAction<number | 'reader' | null>>
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+  orderedWindowKeys: string[]
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  setOverviewPendingTarget: React.Dispatch<React.SetStateAction<string | null>>
+  openTabByKey: Map<string, Session>
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  floatingKey: string | null
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  shownFirstWindowKeys: () => string[]
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  windowKeyTitle: (key: string) => string
+}
+
+export function runTabWindowOnto(ctx: TabWindowOntoContext, key: string, anchor: string, session?: Session) {
+  const {
+    shownPopoverTab, checkpointWindowLayout, liveWindowStacks, laidOutWindowKeys, currentPaneTree,
+    closePopoverTab, setWindowZoom, setWindowStacks, orderedWindowKeys, commitWindowKeys,
+    setOverviewPendingTarget, openTabByKey, setOpenTabSessions, floatingKey, setFloatingWindow,
+    shownFirstWindowKeys, showNotice, windowKeyTitle,
+  } = ctx
+  if (key === anchor) return
+  const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
+  if (primaryKey && key === primaryKey) {
+    checkpointWindowLayout()
+    const frame = stackOf(liveWindowStacks, anchor)?.find(member => laidOutWindowKeys.has(member)) ?? anchor
+    if (!laidOutWindowKeys.has(frame)) return
+    const base = removePrimaryWindow(currentPaneTree())
+    if (!base) return
+    if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
+    setWindowZoom(null)
+    setWindowStacks(addToStack(liveWindowStacks, anchor, key))
+    const keys = replaceWindowKey(orderedWindowKeys, frame, key)
+    commitWindowKeys(keys, reconcileWindowSplitTree(base, keys, false))
+    setOverviewPendingTarget(key)
+    return
+  }
+  if (primaryKey && anchor === primaryKey) {
+    checkpointWindowLayout()
+    if (session && !openTabByKey.has(key)) setOpenTabSessions(current => [...current, session])
+    const next = replacePrimaryWindow(currentPaneTree(), key)
+    if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
+    setWindowStacks(addToStack(liveWindowStacks, anchor, key))
+    if (floatingKey === key) setFloatingWindow(null)
+    commitWindowKeys(next.keys, next)
+    setOverviewPendingTarget(key)
+    return
+  }
+  const frame = stackOf(liveWindowStacks, anchor)?.find((member) => laidOutWindowKeys.has(member)) ?? anchor
+  if (!laidOutWindowKeys.has(frame)) return
+  checkpointWindowLayout()
+  if (session && !openTabByKey.has(key)) setOpenTabSessions((prev) => prev.some(tab => sessionKey(tab) === sessionKey(session)) ? prev : [...prev, session])
+  if (floatingKey === key) setFloatingWindow(null)
+  setWindowStacks(addToStack(liveWindowStacks, anchor, key))
+  commitWindowKeys(replaceWindowKey(shownFirstWindowKeys().filter((entry) => entry !== key), frame, key))
+  showNotice('info', `${fitText(windowKeyTitle(key), 40).trimEnd()} · a tab of ${fitText(windowKeyTitle(anchor), 30).trimEnd()}`)
 }

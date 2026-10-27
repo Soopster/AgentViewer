@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9398,43 +9398,12 @@ function OpenTuiWorkspace() {
     ? surfaceTitle(surfaceIdOfKey(key))
     : (() => { const session = openTabByKey.get(key) ?? sessions.find((entry) => sessionKey(entry) === key); return session ? formatSessionTitle(session) : key })())
   // `key` becomes a tab of `anchor`'s frame, and the frame shows it.
-  const tabWindowOnto = useStableEvent((key: string, anchor: string, session?: Session) => {
-    if (key === anchor) return
-    const primaryKey = shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : null
-    if (primaryKey && key === primaryKey) {
-      checkpointWindowLayout()
-      const frame = stackOf(liveWindowStacks, anchor)?.find(member => laidOutWindowKeys.has(member)) ?? anchor
-      if (!laidOutWindowKeys.has(frame)) return
-      const base = removePrimaryWindow(currentPaneTree())
-      if (!base) return
-      if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
-      setWindowZoom(null)
-      setWindowStacks(addToStack(liveWindowStacks, anchor, key))
-      const keys = replaceWindowKey(orderedWindowKeys, frame, key)
-      commitWindowKeys(keys, reconcileWindowSplitTree(base, keys, false))
-      setOverviewPendingTarget(key)
-      return
-    }
-    if (primaryKey && anchor === primaryKey) {
-      checkpointWindowLayout()
-      if (session && !openTabByKey.has(key)) setOpenTabSessions(current => [...current, session])
-      const next = replacePrimaryWindow(currentPaneTree(), key)
-      if (shownPopoverTab) closePopoverTab(shownPopoverTab, true)
-      setWindowStacks(addToStack(liveWindowStacks, anchor, key))
-      if (floatingKey === key) setFloatingWindow(null)
-      commitWindowKeys(next.keys, next)
-      setOverviewPendingTarget(key)
-      return
-    }
-    const frame = stackOf(liveWindowStacks, anchor)?.find((member) => laidOutWindowKeys.has(member)) ?? anchor
-    if (!laidOutWindowKeys.has(frame)) return
-    checkpointWindowLayout()
-    if (session && !openTabByKey.has(key)) setOpenTabSessions((prev) => prev.some(tab => sessionKey(tab) === sessionKey(session)) ? prev : [...prev, session])
-    if (floatingKey === key) setFloatingWindow(null)
-    setWindowStacks(addToStack(liveWindowStacks, anchor, key))
-    commitWindowKeys(replaceWindowKey(shownFirstWindowKeys().filter((entry) => entry !== key), frame, key))
-    showNotice('info', `${fitText(windowKeyTitle(key), 40).trimEnd()} · a tab of ${fitText(windowKeyTitle(anchor), 30).trimEnd()}`)
-  })
+  const tabWindowOnto = useStableEvent((key: string, anchor: string, session?: Session) => runTabWindowOnto({
+    shownPopoverTab, checkpointWindowLayout, liveWindowStacks, laidOutWindowKeys, currentPaneTree,
+    closePopoverTab, setWindowZoom, setWindowStacks, orderedWindowKeys, commitWindowKeys,
+    setOverviewPendingTarget, openTabByKey, setOpenTabSessions, floatingKey, setFloatingWindow,
+    shownFirstWindowKeys, showNotice, windowKeyTitle,
+  }, key, anchor, session))
   // Show tab `key` in its frame.
   const activateWindowTab = useStableEvent((key: string) => {
     const stack = windowStackFor(key)
