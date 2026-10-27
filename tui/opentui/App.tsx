@@ -301,6 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
+import { cancelComposerSend as cancelComposerSendAction } from './app/actions/composer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5828,144 +5829,20 @@ function OpenTuiWorkspace() {
     setClaudeComposerPermissionMode(target, next)
   })
 
-  const cancelComposerSend = useStableEvent(() => {
-    const target = composerTargetSession
-    // Turns are decoupled from the client connection (they survive disconnect),
-    // so aborting the local fetch alone leaves the agent running on the server —
-    // it would finish in the background and reappear on the next poll. Interrupt
-    // the server-side turn too, matching the native CLI's Esc/Ctrl+C behavior.
-    // A pending session included: its first turn registers under the id the
-    // TUI already holds, and an interrupt that lands before registration is
-    // held for the matching turn id — skipping it left the turn running.
-    const interruptTurnRequestId = activeComposerTurnRequestIdRef.current ?? undefined
-    if (target && (!target.isPending || interruptTurnRequestId)) {
-      void interruptTuiSessionTurn({
-        sessionId: target.sessionId,
-        provider: target.provider,
-        providerInstanceId: target.providerInstanceId,
-        turnRequestId: interruptTurnRequestId,
-      }).then((stillQueued) => {
-        if (stillQueued) {
-          const survivorUuids = new Set(stillQueued)
-          const restoreEntries = steeredComposerSendsRef.current
-            .filter((entry) => entry.state === 'queued' && !survivorUuids.has(entry.messageUuid))
-          const restoreTexts = restoreEntries.map((entry) => entry.text)
-          if (restoreTexts.length > 0) {
-            const restoredMessageUuids = new Set(restoreEntries.map((entry) => entry.messageUuid))
-            const restoredLiveUuids = new Set(restoreEntries.map((entry) => entry.liveMessageUuid))
-            steeredComposerSendsRef.current = steeredComposerSendsRef.current
-              .filter((entry) => !restoredMessageUuids.has(entry.messageUuid))
-            setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => !restoredLiveUuids.has(message.uuid)))
-            const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
-            const restored = [currentDraft.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
-            composerTextareaRef.current?.setText(restored)
-            setComposerDraft(restored)
-          }
-          if (stillQueued.length > 0) {
-            toast.warning(`Interrupted · ${stillQueued.length} queued message${stillQueued.length === 1 ? '' : 's'} will still run`)
-          } else if (restoreTexts.length > 0) {
-            toast.info(`Interrupted · restored ${restoreTexts.length} cancelled queued message${restoreTexts.length === 1 ? '' : 's'}`)
-          }
-        }
-      }).catch(() => { /* best effort */ })
-    }
-    // Cancel any pending transient auto-retry so it can't fire after an explicit stop.
-    if (composerRetryTimerRef.current) {
-      clearTimeout(composerRetryTimerRef.current)
-      composerRetryTimerRef.current = null
-    }
-    composerRetryCountRef.current = 0
-    const targetKey = target ? sessionKey(target) : null
-    // Confirmed interrupt: if the turn had started (a live baseline exists),
-    // keep what the agent produced visible and hand off to the awaitingPersistedTurn
-    // 'Syncing…' reconcile so the partial output settles smoothly instead of
-    // vanishing and reappearing on the next poll. The send's AbortError handler
-    // checks composerInterruptPendingRef to avoid undoing this. The awaiting
-    // timeout (AWAITING_PERSISTED_TURN_TIMEOUT_MS) is the escape hatch.
-    const reconcileInterrupt = Boolean(targetKey && liveTranscriptBaselineRef.current.has(targetKey))
-    composerInterruptPendingRef.current = reconcileInterrupt
-    if (composerAbortRef.current) {
-      composerAbortRef.current.abort()
-    }
-    composerAbortRef.current = null
-    // Reattached turns have no local stream — the server interrupt above is
-    // the whole cancel. Drop the flag and the poll's sidebar mark now; the
-    // registry poll reconciles if the interrupt turns out to be a no-op.
-    reattachedRunningKeyRef.current = null
-    reattachedRunningRef.current = false
-    setReattachedRunning(false)
-    if (targetKey) {
-      const reattachMark = reattachMarksRef.current.get(targetKey)
-      if (reattachMark) {
-        reattachMarksRef.current.delete(targetKey)
-        clearSessionRunning(reattachMark)
-      }
-    }
-    setInterruptPressActive(false)
-    if (interruptPressTimeoutRef.current) {
-      clearTimeout(interruptPressTimeoutRef.current)
-      interruptPressTimeoutRef.current = null
-    }
-    setPendingPermissions(keepEmpty)
-    setPermissionOptionIndex(0)
-    // The user interrupted to change course — auto-firing queued follow-ups
-    // would be a surprise-send. Pop their text back into the composer instead
-    // (after any text typed since), so they can edit and re-send.
-    const interruptQueue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
-    if (interruptQueue.length > 0) {
-      commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
-      const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
-      const restoredPayload = restoreComposerDraftPayload(
-        { text: currentDraft, attachments: composerMentionAttachmentsRef.current },
-        interruptQueue,
-      )
-      const restored = restoredPayload.text
-      const restoredParts = [
-        ...interruptQueue.flatMap((entry) => entry.promptParts),
-        ...composerPromptPartsRef.current,
-      ]
-      composerTextareaRef.current?.setText(restored)
-      setComposerDraft(restored)
-      composerMentionAttachmentsRef.current = restoredPayload.attachments
-      composerPromptPartsRef.current = restoredParts
-      setComposerMentionAttachments(restoredPayload.attachments)
-      setComposerPromptParts(restoredParts)
-      restoreComposerPromptPartExtmarks(restoredParts, restored)
-    }
-    if (reconcileInterrupt) {
-      // Keep committed partial cards (liveTranscriptMessages) + baseline for the
-      // reconcile, but drop the transient streaming previews right away.
-      setComposerSendState('idle')
-      setAwaitingPersistedTurn(true)
-      setLiveStatus(null)
-      setComposerLiveText('')
-      setComposerLiveReasoning('')
-      setComposerThinkingTokens(0)
-      pendingLiveReasoningRef.current = ''
-      return
-    }
-    // Nothing started yet — clear cleanly.
-    if (targetKey) {
-      liveTranscriptBaselineRef.current.delete(targetKey)
-      setLiveTranscriptMessages((prev) => keepFiltered(prev, (message) => liveMessageSessionKey(message) !== targetKey))
-    }
-    liveToolIndexesRef.current.clear()
-    liveToolInputJsonRef.current.clear()
-    if (liveTextFlushTimerRef.current != null) {
-      clearTimeout(liveTextFlushTimerRef.current)
-      liveTextFlushTimerRef.current = null
-    }
-    pendingLiveTextRef.current = ''
-    pendingLiveReasoningRef.current = ''
-    liveTextTargetSessionRef.current = null
-    setComposerSendState('idle')
-    setComposerLiveText('')
-    setComposerLiveReasoning('')
-    setComposerThinkingTokens(0)
-    setLiveStatus(null)
-    setLiveSubagentText({})
-    setLiveToolActivities(keepEmpty)
-  })
+  const cancelComposerSend = useStableEvent(() => cancelComposerSendAction({
+    composerTargetSession, activeComposerTurnRequestIdRef, steeredComposerSendsRef,
+    setLiveTranscriptMessages, composerTextareaRef, composerDraft, setComposerDraft,
+    composerRetryTimerRef, composerRetryCountRef, liveTranscriptBaselineRef,
+    composerInterruptPendingRef, composerAbortRef, reattachedRunningKeyRef, reattachedRunningRef,
+    setReattachedRunning, reattachMarksRef, clearSessionRunning, setInterruptPressActive,
+    interruptPressTimeoutRef, setPendingPermissions, setPermissionOptionIndex,
+    queuedComposerSendsRef, commitQueuedComposerSends, composerMentionAttachmentsRef,
+    composerPromptPartsRef, setComposerMentionAttachments, setComposerPromptParts,
+    restoreComposerPromptPartExtmarks, setComposerSendState, setAwaitingPersistedTurn,
+    setLiveStatus, setComposerLiveText, setComposerLiveReasoning, setComposerThinkingTokens,
+    pendingLiveReasoningRef, liveToolIndexesRef, liveToolInputJsonRef, liveTextFlushTimerRef,
+    pendingLiveTextRef, liveTextTargetSessionRef, setLiveSubagentText, setLiveToolActivities,
+  }))
 
   const backgroundComposerTasks = useStableEvent(async () => {
     const target = composerTargetSession
