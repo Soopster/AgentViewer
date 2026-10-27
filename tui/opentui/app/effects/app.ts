@@ -270,3 +270,15 @@ export function runWorktreeTaskSelectionEffect(ctx: WorktreeTaskSelectionEffectC
     })
   return () => { cancelled = true }
 }
+
+export type ExitConfirmOpenEffectContext = {
+  currentThemeRef: React.RefObject<TuiThemeMode>
+  themeMode: TuiThemeMode
+}
+
+export function runExitConfirmOpenEffect(ctx: ExitConfirmOpenEffectContext) {
+  const {
+    currentThemeRef, themeMode,
+  } = ctx
+  currentThemeRef.current = themeMode
+}
