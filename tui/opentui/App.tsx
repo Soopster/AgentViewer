@@ -383,6 +383,7 @@ import { useComposerHeightGroup } from './app/slices/composerHeight'
 import { useToggleSidebarSortGroup } from './app/slices/toggleSidebarSort'
 import { useTaskPanelMessagesGroup } from './app/slices/taskPanelMessages'
 import { useComposerProviderGroup } from './app/slices/composerProvider'
+import { useRecentlyWrittenKeysGroup } from './app/slices/recentlyWrittenKeys'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1427,44 +1428,14 @@ function OpenTuiWorkspace() {
     const timer = setTimeout(() => setRecentWriteClock((tick) => tick + 1), Math.max(nextExpiry - Date.now(), 0) + 50)
     return () => clearTimeout(timer)
   }, [recentlyWrittenSessions])
-  const recentlyWrittenKeys = recentlyWrittenSessions.keys
-
-  const sidebarSessionActivityRef = useRef(new Map<string, 'needs-input' | 'running' | 'waiting'>())
-  const sidebarSessionActivity = useMemo(() => runSidebarSessionActivity({
-    attentionItems, runningSessions, waitingSessions, viewerAttentionNotes,
-    sidebarSessionActivityRef,
-  }), [attentionItems, runningSessions, waitingSessions, viewerAttentionNotes])
-
-  // The session fleet a plugin view reads (the desk's alert book among it).
-  // Derived only while such a view is shown, full screen or in a window:
-  // nothing else reads it, and the attention items change on every registry poll.
-  const fleetViewShown = [...(pluginOverlay ? [pluginOverlay] : []), ...windowedPopoverKinds]
-    .some((id) => isPluginSurfaceId(id) && pluginSurfaceWants(id, 'session-fleet'))
-  const fleetAlerts = useMemo(() => (fleetViewShown ? attentionItems.map((item) => ({
-    key: item.key,
-    sessionKey: item.sessionKey,
-    provider: item.provider,
-    sessionTitle: item.sessionTitle,
-    title: item.title,
-    detail: item.detail,
-    needsInput: attentionItemNeedsInput(item),
-    createdAt: item.createdAt,
-  })) : []), [attentionItems, fleetViewShown])
-
-  // Fleet strip: one cell per live session (running or blocked on input) plus
-  // recent background completions — mission-control ambient awareness while
-  // reading any single transcript. Digits 1-9 jump to a cell; ⇧A toggles.
-  const fleetEntries = useMemo(() => runFleetEntries({
-    attentionItems, runningSessions, sessionsByKeyRef, waitingSessions, viewerAttentionNotes,
-    attentionDone,
-  }), [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
-  const fleetStripVisible = fleetStripEnabled && !presentationFocusMode && fleetEntries.length > 0
-  const fleetPageCount = Math.max(Math.ceil(fleetEntries.length / FLEET_PAGE_SIZE), 1)
-  const activeFleetPage = Math.min(fleetPage, fleetPageCount - 1)
-  const visibleFleetEntries = useMemo(
-    () => fleetEntries.slice(activeFleetPage * FLEET_PAGE_SIZE, (activeFleetPage + 1) * FLEET_PAGE_SIZE),
-    [activeFleetPage, fleetEntries],
-  )
+  const {
+    recentlyWrittenKeys, sidebarSessionActivity, fleetViewShown, fleetAlerts, fleetStripVisible,
+    fleetPageCount, activeFleetPage, visibleFleetEntries,
+  } = useRecentlyWrittenKeysGroup({
+    recentlyWrittenSessions, attentionItems, runningSessions, waitingSessions,
+    viewerAttentionNotes, pluginOverlay, windowedPopoverKinds, sessionsByKeyRef, attentionDone,
+    sessions, fleetStripEnabled, presentationFocusMode, fleetPage,
+  })
   useEffect(() => {
     if (fleetPage !== activeFleetPage) setFleetPage(activeFleetPage)
   }, [activeFleetPage, fleetPage])
