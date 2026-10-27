@@ -309,7 +309,7 @@ import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlActi
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
-import { runRenderSurfaceBodyInner } from './app/actions/windowRender'
+import { runRenderSurfaceBodyInner, runRenderSplitPane } from './app/actions/windowRender'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10758,84 +10758,19 @@ function OpenTuiWorkspace() {
   }
 
   // One split pane's frame, at the size its arrangement gives it.
-  const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => (
-    <box
-      key={`split:${sessionKey(splitSession)}`}
-      id={`split-pane:${splitIndex}`}
-      visible={!hidden}
-      width={size.width}
-      // Stacked panes own a fixed row slice so the reader flex-grows into
-      // exactly what is left; side-by-side panes fill the column height.
-      height={size.boxHeight}
-      flexShrink={0}
-      flexDirection="column"
-      overflow="hidden"
-    >
-      <RetainedWindow visible={!hidden} identity={`${splitIndex}:${sessionKey(splitSession) === selectedSessionKey}:${splitIndex === chromeWindowIndex}`}>
-      <SplitTranscriptPane
-        session={splitSession}
-        paneIndex={splitIndex}
-        paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + windowNumberOffset : splitIndex + windowNumberOffset}
-        paneCount={visibleSplitPaneCount + (primaryLeaf ? 1 : 0) + (floatingKey ? 1 : 0)}
-        focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
-        selected={sessionKey(splitSession) === selectedSessionKey}
-        onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
-        onFollowChange={sessionKey(splitSession) === selectedSessionKey ? setFollowTail : undefined}
-        chromeHost={splitIndex === chromeWindowIndex}
-        frameless={fullscreenMode}
-        searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
-        activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
-        registerHandle={registerSplitPaneHandle}
-        theme={theme}
-        densityState={densityState}
-        density={density}
-        showToolCalls={showToolCalls}
-        syntaxStyle={syntaxStyle}
-        shouldEnableSyntaxHighlighting={shouldEnableSyntaxHighlighting}
-        diffControls={transcriptDiffControls}
-        agentToolCursorByGroupKey={agentToolCursorByGroupKey}
-        onSelectAgentTool={selectAgentTool}
-        thinkingMode={thinkingMode}
-        diffLayout={diffLayout}
-        imessageStyle={imessageStyle}
-        transcriptWidth={transcriptWidth}
-        transcriptView={transcriptView}
-        width={size.width}
-        height={size.height}
-        liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
-        liveBaselineCount={liveTranscriptBaselineRef.current.get(sessionKey(splitSession))?.count}
-        running={splitPaneRunningKeys.has(sessionKey(splitSession))}
-        attentionBadge={badgeForWindow(sessionKey(splitSession))}
-        coordinatorLabel={watchedCoordinator?.agents.find(agent => agent.sessionId === splitSession.sessionId && (agent.provider ?? 'claude') === (splitSession.provider ?? 'claude'))?.name}
-        onActivity={reportWindowActivity}
-        // Streaming text belongs to whichever session the composer is
-        // sending to; show it in the pane when that's this pane.
-        liveText={
-          composerSendState === 'sending'
-          && composerLiveText
-          && composerActivitySessionKey === sessionKey(splitSession)
-          && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
-            ? composerLiveText
-            : null
-        }
-        onActivate={focusSplitPane}
-        onClosePane={splitPaneActions.close}
-        onPromotePane={splitPaneActions.promote}
-        onOpenLayout={splitPaneActions.openLayout}
-        onContextMenu={splitPaneActions.sessionMenu}
-        stickyHeaders={stickyHeaders}
-        lightweight={lightweightWindows}
-        onTranscriptPress={noteTranscriptLinkPress}
-        onTranscriptRelease={openTranscriptLinkAt}
-        onOpenAsyncQuestions={openCardAsyncQuestions}
-        floatGesture={floatGestureHandlers}
-        sessionDrag={sessionDragHandlers}
-        shouldYieldToForeground={splitPaneShouldYield}
-      />
-      </RetainedWindow>
-      {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
-    </box>
-  )
+  const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => runRenderSplitPane({
+    selectedSessionKey, chromeWindowIndex, visibleSplitPaneCount, windowNumberOffset, primaryLeaf,
+    floatingKey, effectiveFocus, splitFocusIndex, composerActive, reportSelectedWindowCursor,
+    setFollowTail, fullscreenMode, deferredSearchQuery, searchMatches, visibleTranscriptCards,
+    searchMatchIndex, registerSplitPaneHandle, theme, densityState, density, showToolCalls,
+    syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls, agentToolCursorByGroupKey,
+    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView,
+    splitPaneLiveMessages, liveTranscriptBaselineRef, splitPaneRunningKeys, badgeForWindow,
+    watchedCoordinator, reportWindowActivity, composerSendState, composerLiveText,
+    composerActivitySessionKey, focusSplitPane, splitPaneActions, stickyHeaders,
+    lightweightWindows, noteTranscriptLinkPress, openTranscriptLinkAt, openCardAsyncQuestions,
+    floatGestureHandlers, sessionDragHandlers, splitPaneShouldYield, renderWindowTabs,
+  }, splitSession, splitIndex, size, hidden)
 
   // A frame's tab strip, over its title: one tab per member, the shown one lit.
   // A tab is clicked to show it and dragged to move it; × closes it.

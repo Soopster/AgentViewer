@@ -26,6 +26,17 @@ import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, PinnedSessionDetail } from '../SplitTranscriptPane'
 import { pluginSurfaceWants } from '../pluginCommands'
 import { PromptLibraryPopover, DailySummaryPopover, PlaybookManagerPopover } from '../lazyOverlays'
+import { type Dispatch, type SetStateAction, type ReactNode } from 'react'
+import { type TuiTranscriptView } from '../../../theme'
+import { type MouseEvent } from '@opentui/core'
+import { type TuiDiffLayout, type TuiTranscriptWidth } from '../../../../lib/tui/service'
+import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
+import { RetainedWindow } from '../../windowActivity'
+import { type SendState } from '../../../../lib/types'
+import { type MenuPoint, type PaneFocus } from '../types'
+import { FLOATING_PANE_INDEX } from '../layoutConstants'
+import { isLiveAssistantTextMessage } from '../liveStream'
+import { SPLIT_PANE_EMPTY_LIVE, type SplitPaneHandle, type TranscriptDiffControls, SplitTranscriptPane } from '../SplitTranscriptPane'
 
 export type RenderSurfaceBodyInnerContext = {
   windowSurfaceMeta: Record<string, SurfaceMeta>
@@ -219,4 +230,153 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
         />
       )
   }
+}
+
+export type RenderSplitPaneContext = {
+  selectedSessionKey: string | null
+  chromeWindowIndex: number
+  visibleSplitPaneCount: number
+  windowNumberOffset: 1 | 2
+  primaryLeaf: boolean
+  floatingKey: string | null
+  effectiveFocus: PaneFocus
+  splitFocusIndex: number | null
+  composerActive: boolean
+  reportSelectedWindowCursor: (cardKey: string | null) => void
+  setFollowTail: React.Dispatch<React.SetStateAction<boolean>>
+  fullscreenMode: boolean
+  deferredSearchQuery: string
+  searchMatches: number[]
+  visibleTranscriptCards: TuiTranscriptCard[]
+  searchMatchIndex: number
+  registerSplitPaneHandle: (paneIndex: number, handle: SplitPaneHandle | null, expected?: SplitPaneHandle) => void
+  theme: TuiThemePalette
+  densityState: { cardGap: number; bodyIndent: number; bodyLines: number; headerRows: number; bodyPad: number; streamGap: number; streamUserGap: number; }
+  density: TuiDensity
+  showToolCalls: boolean
+  syntaxStyle: SyntaxStyle | null
+  shouldEnableSyntaxHighlighting: boolean
+  transcriptDiffControls: TranscriptDiffControls
+  agentToolCursorByGroupKey: Record<string, string>
+  selectAgentTool: (groupKey: string, toolKey: string) => void
+  thinkingMode: boolean
+  diffLayout: TuiDiffLayout
+  imessageStyle: boolean
+  transcriptWidth: TuiTranscriptWidth
+  transcriptView: TuiTranscriptView
+  splitPaneLiveMessages: Map<string, ThreadedMessage[]>
+  liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
+  splitPaneRunningKeys: Set<string>
+  badgeForWindow: (key: string, compact?: boolean) => string | null
+  watchedCoordinator: ProtocolRunSnapshot | null
+  reportWindowActivity: (key: string, version: string, errorVersion: string | null) => void
+  composerSendState: SendState
+  composerLiveText: string
+  composerActivitySessionKey: string | null
+  focusSplitPane: (paneIndex: number) => void
+  splitPaneActions: { close: (paneIndex: number) => void; promote: (session: Session) => void; openLayout: () => void; fullscreen: () => void; sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) => void; }
+  stickyHeaders: boolean
+  lightweightWindows: boolean
+  noteTranscriptLinkPress: (event: MouseEvent) => void
+  openTranscriptLinkAt: (event: MouseEvent) => boolean
+  openCardAsyncQuestions: (session: Session, card: TuiTranscriptCard) => void
+  floatGestureHandlers: { start: (event: { x: number; y: number; }) => void; move: (event: { x: number; y: number; }) => void; end: (event: { x: number; y: number; }) => void; }
+  sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }
+  splitPaneShouldYield: () => boolean
+  renderWindowTabs: (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => React.ReactNode
+}
+
+export function runRenderSplitPane(ctx: RenderSplitPaneContext, splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden?: boolean) {
+  const {
+    selectedSessionKey, chromeWindowIndex, visibleSplitPaneCount, windowNumberOffset, primaryLeaf,
+    floatingKey, effectiveFocus, splitFocusIndex, composerActive, reportSelectedWindowCursor,
+    setFollowTail, fullscreenMode, deferredSearchQuery, searchMatches, visibleTranscriptCards,
+    searchMatchIndex, registerSplitPaneHandle, theme, densityState, density, showToolCalls,
+    syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls, agentToolCursorByGroupKey,
+    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView,
+    splitPaneLiveMessages, liveTranscriptBaselineRef, splitPaneRunningKeys, badgeForWindow,
+    watchedCoordinator, reportWindowActivity, composerSendState, composerLiveText,
+    composerActivitySessionKey, focusSplitPane, splitPaneActions, stickyHeaders,
+    lightweightWindows, noteTranscriptLinkPress, openTranscriptLinkAt, openCardAsyncQuestions,
+    floatGestureHandlers, sessionDragHandlers, splitPaneShouldYield, renderWindowTabs,
+  } = ctx
+  if (hidden === undefined) hidden = false
+return (
+  <box
+    key={`split:${sessionKey(splitSession)}`}
+    id={`split-pane:${splitIndex}`}
+    visible={!hidden}
+    width={size.width}
+    // Stacked panes own a fixed row slice so the reader flex-grows into
+    // exactly what is left; side-by-side panes fill the column height.
+    height={size.boxHeight}
+    flexShrink={0}
+    flexDirection="column"
+    overflow="hidden"
+  >
+    <RetainedWindow visible={!hidden} identity={`${splitIndex}:${sessionKey(splitSession) === selectedSessionKey}:${splitIndex === chromeWindowIndex}`}>
+    <SplitTranscriptPane
+      session={splitSession}
+      paneIndex={splitIndex}
+      paneNumber={splitIndex === FLOATING_PANE_INDEX ? visibleSplitPaneCount + windowNumberOffset : splitIndex + windowNumberOffset}
+      paneCount={visibleSplitPaneCount + (primaryLeaf ? 1 : 0) + (floatingKey ? 1 : 0)}
+      focused={effectiveFocus === 'messages' && splitFocusIndex === splitIndex && !composerActive}
+      selected={sessionKey(splitSession) === selectedSessionKey}
+      onCursorChange={sessionKey(splitSession) === selectedSessionKey ? reportSelectedWindowCursor : undefined}
+      onFollowChange={sessionKey(splitSession) === selectedSessionKey ? setFollowTail : undefined}
+      chromeHost={splitIndex === chromeWindowIndex}
+      frameless={fullscreenMode}
+      searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
+      activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
+      registerHandle={registerSplitPaneHandle}
+      theme={theme}
+      densityState={densityState}
+      density={density}
+      showToolCalls={showToolCalls}
+      syntaxStyle={syntaxStyle}
+      shouldEnableSyntaxHighlighting={shouldEnableSyntaxHighlighting}
+      diffControls={transcriptDiffControls}
+      agentToolCursorByGroupKey={agentToolCursorByGroupKey}
+      onSelectAgentTool={selectAgentTool}
+      thinkingMode={thinkingMode}
+      diffLayout={diffLayout}
+      imessageStyle={imessageStyle}
+      transcriptWidth={transcriptWidth}
+      transcriptView={transcriptView}
+      width={size.width}
+      height={size.height}
+      liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
+      liveBaselineCount={liveTranscriptBaselineRef.current.get(sessionKey(splitSession))?.count}
+      running={splitPaneRunningKeys.has(sessionKey(splitSession))}
+      attentionBadge={badgeForWindow(sessionKey(splitSession))}
+      coordinatorLabel={watchedCoordinator?.agents.find(agent => agent.sessionId === splitSession.sessionId && (agent.provider ?? 'claude') === (splitSession.provider ?? 'claude'))?.name}
+      onActivity={reportWindowActivity}
+      // Streaming text belongs to whichever session the composer is
+      // sending to; show it in the pane when that's this pane.
+      liveText={
+        composerSendState === 'sending'
+        && composerLiveText
+        && composerActivitySessionKey === sessionKey(splitSession)
+        && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
+          ? composerLiveText
+          : null
+      }
+      onActivate={focusSplitPane}
+      onClosePane={splitPaneActions.close}
+      onPromotePane={splitPaneActions.promote}
+      onOpenLayout={splitPaneActions.openLayout}
+      onContextMenu={splitPaneActions.sessionMenu}
+      stickyHeaders={stickyHeaders}
+      lightweight={lightweightWindows}
+      onTranscriptPress={noteTranscriptLinkPress}
+      onTranscriptRelease={openTranscriptLinkAt}
+      onOpenAsyncQuestions={openCardAsyncQuestions}
+      floatGesture={floatGestureHandlers}
+      sessionDrag={sessionDragHandlers}
+      shouldYieldToForeground={splitPaneShouldYield}
+    />
+    </RetainedWindow>
+    {renderWindowTabs(sessionKey(splitSession), splitIndex, size.width, 0, 1, 10)}
+  </box>
+)
 }
