@@ -312,7 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
-import { runSurfacePlacementEffect } from './app/effects/app'
+import { runSurfacePlacementEffect, runThemeFollowEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect } from './app/effects/composer'
 export { readRootRenderCount } from './app/perf'
@@ -6211,122 +6211,16 @@ function OpenTuiWorkspace() {
     commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
   })
 
-  useEffect(() => {
-    let cancelled = false
-
-    void (async () => {
-      try {
-        const [
-          configuredTheme,
-          configuredProvider,
-          configuredRailVisible,
-          configuredFocusMode,
-          configuredDensity,
-          configuredDiffLayout,
-          configuredTranscriptView,
-          configuredTranscriptWidth,
-          configuredTabsEnabled,
-          configuredTabOrientation,
-          configuredSidebarSort,
-          configuredHideScratch,
-          configuredSidebarWidth,
-          configuredShowToolCalls,
-          configuredVelocityScroll,
-          configuredSplitPanes,
-          configuredSplitOrientation,
-          configuredSplitReaderShare,
-          configuredStickyHeaders,
-          configuredThemeFollow,
-          configuredLightweightWindows,
-        ] = await Promise.all([
-          readTuiTheme(),
-          readTuiProvider(),
-          readTuiRailVisible(),
-          readTuiFocusMode(),
-          readTuiDensity(),
-          readTuiDiffLayout(),
-          readTuiTranscriptView(),
-          readTuiTranscriptWidth(),
-          readTuiTabsEnabled(),
-          readTuiTabOrientation(),
-          readTuiSidebarSort(),
-          readTuiHideScratchSessions(),
-          readTuiSidebarWidth(),
-          readTuiShowToolCalls(),
-          readTuiVelocityScroll(),
-          readTuiSplitPanes(),
-          readTuiSplitOrientation(),
-          readTuiSplitReaderShare(),
-          readTuiStickyHeaders(),
-          readTuiThemeFollow(),
-          readTuiLightweightWindows(),
-        ])
-        if (cancelled) return
-        // Attached to a daemon that may be older than this client: say so once,
-        // rather than letting each feature fail with its own HTTP error.
-        void readTuiDaemonWarning().then((warning) => {
-          if (!cancelled && warning) showNotice('error', warning, 10000)
-        }).catch(() => {})
-        themeSlotsRef.current = {
-          light: configuredThemeFollow.light ?? 'light',
-          dark: configuredThemeFollow.dark ?? 'dark',
-        }
-        themeFollowsTerminalRef.current = configuredThemeFollow.follow
-        setThemeFollowsTerminal(configuredThemeFollow.follow)
-        // Until the terminal has answered, the stored theme is the last one it
-        // was seen in, which beats a guess.
-        const bootTheme = (configuredThemeFollow.follow && renderer.themeMode
-          ? themeSlotsRef.current[renderer.themeMode]
-          : null) ?? configuredTheme
-        setThemeMode(bootTheme)
-        setActiveTheme(bootTheme)
-        // Restore the instance the list was narrowed to, if it is still offered.
-        const instanceState = await readTuiProviderInstances().catch(() => ({ selected: null, choices: [] as TuiProviderInstanceChoice[] }))
-        if (cancelled) return
-        const configuredInstanceId = instanceState.choices.some((choice) => choice.provider === configuredProvider && choice.providerInstanceId === instanceState.selected)
-          ? instanceState.selected
-          : null
-        const bootProvider = workspaceContext.runtime.restoredKeys.has('provider') ? provider : configuredProvider
-        const bootInstance = workspaceContext.runtime.restoredKeys.has('providerInstanceId') ? providerInstanceId : configuredInstanceId
-        providerInstanceIdRef.current = bootInstance
-        setProviderInstanceId(bootInstance)
-        setProviderInstances(instanceState.choices)
-        setProvider(bootProvider)
-        setRailVisible(configuredRailVisible)
-        setFocusMode(configuredFocusMode)
-        setStickyHeaders(configuredStickyHeaders)
-        setLightweightWindows(configuredLightweightWindows)
-        setDensity(configuredDensity)
-        setDiffLayout(configuredDiffLayout)
-        setTranscriptView(configuredTranscriptView)
-        setTranscriptWidth(configuredTranscriptWidth)
-        setTabsEnabled(configuredTabsEnabled)
-        setTabOrientation(configuredTabOrientation)
-        setSidebarSort(configuredSidebarSort)
-        setHideScratch(configuredHideScratch)
-        setSidebarWidthPreference(configuredSidebarWidth)
-        setShowToolCalls(configuredShowToolCalls)
-        setVelocityScrollEnabled(configuredVelocityScroll)
-        if (workspaceContext.runtime.values.get('legacyInitialWorkspace') === true && !workspaceContext.runtime.restoredKeys.has('splitPaneCount')) {
-          setSplitPaneCount(configuredSplitPanes)
-          setSplitOrientation(configuredSplitOrientation)
-          setSplitReaderShare(configuredSplitReaderShare)
-        }
-        if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
-        await refreshSessions(bootProvider, true, true)
-      } catch (err) {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to initialize OpenTUI')
-        setLoadingSessions(false)
-      } finally {
-        if (!cancelled) setBootstrapped(true)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [refreshSessions])
+  useEffect(() => runThemeFollowEffect({
+    showNotice, themeSlotsRef, themeFollowsTerminalRef, setThemeFollowsTerminal, renderer,
+    setThemeMode, workspaceContext, provider, providerInstanceId, providerInstanceIdRef,
+    setProviderInstanceId, setProviderInstances, setProvider, setRailVisible, setFocusMode,
+    setStickyHeaders, setLightweightWindows, setDensity, setDiffLayout, setTranscriptView,
+    setTranscriptWidth, setTabsEnabled, setTabOrientation, setSidebarSort, setHideScratch,
+    setSidebarWidthPreference, setShowToolCalls, setVelocityScrollEnabled, setSplitPaneCount,
+    setSplitOrientation, setSplitReaderShare, setFocusedPane, refreshSessions, setError,
+    setLoadingSessions, setBootstrapped,
+  }), [refreshSessions])
 
   useEffect(() => runSessionDetailLoadEffect({
     bootstrapped, selectedSessionTarget, selectedSession, setSessionDetail, setLoadingDetail,
