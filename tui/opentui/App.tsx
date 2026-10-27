@@ -363,6 +363,7 @@ import { useDragSplitDividerGroup } from './app/slices/dragSplitDivider'
 import { useDropTargetAtGroup } from './app/slices/dropTargetAt'
 import { useRegisterTeammatesKeysGroup } from './app/slices/registerTeammatesKeys'
 import { usePluginSessionForGroup } from './app/slices/pluginSessionFor'
+import { useCopySelectedMessageGroup } from './app/slices/copySelectedMessage'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5562,181 +5563,34 @@ function OpenTuiWorkspace() {
     const text = Buffer.from(event.bytes).toString('utf8')
     void pasteTextToComposer(text)
   })
-
-  const copySelectedMessage = useStableEvent(async (cardOverride?: TuiTranscriptCard) => runCopySelectedMessage({
+  const {
+    copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
+    openBookmarksOverlay, openHandoffBrief, openPromptLibrary, toggleComposerBridgeRoute,
+    toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
+    captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
+  } = useCopySelectedMessageGroup({
     terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
-  }, cardOverride))
-
-  const replySelectedMessage = useStableEvent((cardOverride?: TuiTranscriptCard) => runReplySelectedMessage({
-    readCursorIndex, visibleTranscriptCards, showNotice, composerTextareaRef, composerDraft,
-    applyComposerSnapshot, composerMentionAttachments, composerPromptParts, setComposerActive,
-  }, cardOverride))
-
-  // Toggle a bookmark on the card under the transcript cursor.
-  const toggleBookmarkForCursor = useStableEvent(async () => runToggleBookmarkForCursor({
-    selectedSessionTarget, showNotice, readCursorIndex, visibleTranscriptCards, bookmarkKeysRef,
-    setBookmarkKeys, readerTitle,
-  }))
-
-  // Jump to the next/previous bookmarked card in the active session.
-  const jumpToBookmark = useStableEvent((direction: 1 | -1) => {
-    if (visibleTranscriptCards.length === 0) return
-    const marks = bookmarkKeysRef.current
-    if (marks.size === 0) { showNotice('info', 'No bookmarks in this session'); return }
-    const cursorIndex = readCursorIndex()
-    const start = cursorIndex >= 0 ? cursorIndex : 0
-    const count = visibleTranscriptCards.length
-    for (let step = 1; step <= count; step += 1) {
-      const idx = (((start + direction * step) % count) + count) % count
-      const card = visibleTranscriptCards[idx]
-      if (card && marks.has(card.key)) {
-        jumpToTranscriptIndex(idx)
-        return
-      }
-    }
-  })
-
-  const openBookmarksOverlay = useStableEvent(async () => {
-    setBookmarksOverlayOpen(true)
-    setBookmarksOverlayIndex(0)
-    try {
-      const all = await readTuiAllBookmarks()
-      setBookmarksOverlay(all)
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to load bookmarks')
-    }
-  })
-
-  const openHandoffBrief = useStableEvent(() => {
-    if (!selectedSessionTarget) {
-      showNotice('error', 'No session selected')
-      return
-    }
-    setHandoffBriefOpen(true)
-  })
-
-  const openPromptLibrary = useStableEvent(() => {
-    if (!selectedSessionTarget) {
-      showNotice('error', 'No session selected')
-      return
-    }
-    rememberComposerCursor()
-    setComposerActive(true)
-    setPromptLibraryOpen(true)
-  })
-
-  const toggleComposerBridgeRoute = useStableEvent(() => {
-    if (!canUseChannelBridge) {
-      showNotice('error', 'Select a Claude session to route the composer through the channel bridge')
-      return
-    }
-    setRouteComposerToBridge((on) => {
-      const next = !on
-      showNotice('info', next ? 'Composer now routes to the live CLI bridge' : 'Composer back to the active provider')
-      return next
-    })
-  })
-
-  const toggleComposerIdeRoute = useStableEvent(() => {
-    if (!canUseIdeBridge) {
-      showNotice('error', 'Select a Claude session to route the composer through the IDE bridge')
-      return
-    }
-    setRouteComposerToIde((on) => {
-      const next = !on
-      showNotice('info', next ? 'Composer now pushes @mentions to the IDE session' : 'Composer back to the active provider')
-      return next
-    })
-  })
-
-  const insertComposerPromptText = useStableEvent((text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    const renderable = composerTextareaRef.current
-    const current = renderable?.plainText ?? composerDraft
-    const cursor = renderable?.cursorOffset ?? current.length
-    const before = current.slice(0, cursor)
-    const insertion = before.length > 0 && !before.endsWith('\n') ? `\n${trimmed}` : trimmed
-    insertComposerTextAtCursor(insertion)
-    setComposerActive(true)
-  })
-
-  // Navigate to a bookmark from the global overlay — switching session (and
-  // provider) when needed, then landing on the message once it has loaded.
-  const openBookmarkRecord = useStableEvent((record: MessageBookmark) => {
-    setBookmarksOverlayOpen(false)
-    const targetSession = { sessionId: record.sessionId, provider: record.provider } as Session
-    const targetKey = sessionKey(targetSession)
-    if (targetKey === selectedSessionKeyRef.current) {
-      const idx = transcriptIndexByKey.get(record.uuid)
-      if (idx !== undefined && idx >= 0) jumpToTranscriptIndex(idx)
-      else pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
-      setFocusedPane('messages')
-      return
-    }
-    pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
-    selectTabSession(targetSession)
-    setFocusedPane('messages')
-  })
-
-  const copyCliCommand = useStableEvent(async () => {
-    const session = selectedSession
-    if (!session) { showNotice('error', 'No session selected'); return }
-    const cwd = sessionDetail?.info?.cwd ?? session.cwd
-    const cmd = getContinueInCliCommand(session.provider ?? 'claude', session.sessionId, cwd)
-    if (!cmd) { showNotice('error', `No CLI resume command for ${session.provider}`); return }
-    try {
-      await writeClipboard(cmd, renderer)
-      showNotice('info', `Copied: ${cmd}`)
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to copy')
-    }
-  })
-
-  // Checkpoint user operations rather than renders: polling, focus changes,
-  // startup hydration and terminal resizes must never fill the undo stack.
-  const captureWindowLayout = useStableEvent(() => ({
-    layout: {
-      arrangement: splitArrangement, orientation: splitOrientation,
-      readerLast: splitReaderLast, readerShare: splitReaderShare,
-      secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights,
-      splitTree: reconciledSplitTree,
-      count: splitPaneCount, panes: [...splitPinnedKeys], surfaces: [...windowSurfaces], order: [...windowOrder],
-      popoverTabs: [...popoverTabs], activePopoverTab, stacks: windowStacks.map((stack) => [...stack]), floating: floatingWindow, surfaceMeta: { ...windowSurfaceMeta },
-      primaryOpen: false, reader: selectedSessionKey, zoom: windowZoom, fullscreen: fullscreenMode, presentation: windowPresentation,
-      coordinatorRunId: coordinatorWorkspaceRunId,
-    },
-    reader: selectedSession,
-    workspace: coordinatorWorkspace,
-    workspaceRunId: coordinatorWorkspaceRunId,
-    tabs: openTabSessions,
-    focus: splitFocusIndex,
-    panel: surfacePanel,
-    panelOpen: surfacePanelOpen,
-  }))
-  const [windowHistory] = useWorkspaceState('windowHistory', () => new WindowHistory<ReturnType<typeof captureWindowLayout>>(
-    (snapshot) => JSON.stringify(snapshot.layout),
-  ), false)
-  const checkpointWindowLayout = useStableEvent(() => {
-    if (windowResizeGroupRef.current) {
-      if (windowResizeCheckpointRef.current) return
-      windowResizeCheckpointRef.current = true
-    } else windowResizeCheckpointRef.current = false
-    windowHistory.checkpoint(captureWindowLayout())
-  })
-  const restoreWindowSnapshot = useStableEvent((previous: ReturnType<typeof captureWindowLayout>) => {
-    runRestoreWindowSnapshot({
-    captureWindowLayout, setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, windowSurfaces,
-    liveWindowStacks, floatingKey, surfacePanel, workspaceContext, setWindowSurfacePeek,
-    setOpenTabSessions, selectedSessionKey, setWorkspaceHasSession, setWorkspaceReaderSession,
-    setSelectedSessionKey, setSplitPinnedKeys, setSplitPaneCount, setWindowSplitTree,
-    setSplitArrangement, setSplitOrientation, setSplitReaderLast, setSplitReaderShare,
-    setSplitSecondaryShare, setSplitBottomShare, setSplitWeights, setWindowSurfaces,
-    setWindowOrder, setPopoverTabs, setActivePopoverTab, setWindowStacks, setFloatingWindow,
-    setWindowSurfaceMeta, setWindowZoom, setFullscreenMode, setSplitFocusIndex, setSurfacePanel,
-    setSurfacePanelOpen, setSurfacePanelFocused, setError,
-  }, previous)
-    setWindowPresentation(previous.layout.presentation ?? null)
+    composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
+    composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
+    setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
+    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen, rememberComposerCursor,
+    setPromptLibraryOpen, canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
+    setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
+    pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
+    splitArrangement, splitOrientation, splitReaderLast, splitReaderShare, splitSecondaryShare,
+    splitBottomShare, splitWeights, reconciledSplitTree, splitPaneCount, splitPinnedKeys,
+    windowSurfaces, windowOrder, popoverTabs, activePopoverTab, windowStacks, floatingWindow,
+    windowSurfaceMeta, selectedSessionKey, windowZoom, fullscreenMode, windowPresentation,
+    coordinatorWorkspaceRunId, coordinatorWorkspace, openTabSessions, splitFocusIndex,
+    surfacePanel, surfacePanelOpen, windowResizeGroupRef, windowResizeCheckpointRef,
+    setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, liveWindowStacks, floatingKey,
+    workspaceContext, setWindowSurfacePeek, setOpenTabSessions, setWorkspaceHasSession,
+    setWorkspaceReaderSession, setSelectedSessionKey, setSplitPinnedKeys, setSplitPaneCount,
+    setWindowSplitTree, setSplitArrangement, setSplitOrientation, setSplitReaderLast,
+    setSplitReaderShare, setSplitSecondaryShare, setSplitBottomShare, setSplitWeights,
+    setWindowSurfaces, setWindowOrder, setPopoverTabs, setActivePopoverTab, setWindowStacks,
+    setFloatingWindow, setWindowSurfaceMeta, setWindowZoom, setFullscreenMode, setSplitFocusIndex,
+    setSurfacePanel, setSurfacePanelOpen, setSurfacePanelFocused, setError, setWindowPresentation,
   })
   const undoWindowLayout = useStableEvent(() => {
     const previous = windowHistory.undo(captureWindowLayout())
