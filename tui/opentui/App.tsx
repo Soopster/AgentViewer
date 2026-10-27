@@ -309,7 +309,7 @@ import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlActi
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
-import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow } from './app/actions/windowRender'
+import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer } from './app/actions/windowRender'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10663,45 +10663,12 @@ function OpenTuiWorkspace() {
     return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
   }, [renderer, visibleSplitPaneCount])
 
-  const renderSurfaceLayer = () => {
-    const area = { width: readerAreaWidth, height: windowAreaHeight }
-    const rects = treeGeometry ? [treeGeometry.rects.get(-1)!, ...Array.from({ length: visibleSplitPaneCount }, (_, index) => treeGeometry!.rects.get(index)!)] : windowLayoutRects(fittedWindows, { ...area, orientation: splitOrientation, readerLast: splitReaderLast })
-    const frameOf = (key: string): { index: number; rect: { x: number; y: number; width: number; height: number } } | null => {
-      const index = fittedWindowKeys.indexOf(key)
-      if (index < 0) return null
-      if (zoomedIndex === index) return { index, rect: { x: 0, y: 0, ...area } }
-      const parent = rectOf('window-area')
-      const slot = rectOf(`split-pane:${index}`)
-      if (parent && slot && slot.width > 0 && slot.height > 0) {
-        return { index, rect: { x: slot.x - parent.x, y: slot.y - parent.y, width: slot.width, height: slot.height } }
-      }
-      const rect = rects[index + 1]
-      return rect ? { index, rect } : null
-    }
-    const owned = new Set<WindowSurfaceId>([
-      ...windowSurfaces,
-      ...liveWindowStacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey),
-      ...(floatingKey && isSurfaceWindowKey(floatingKey) ? [surfaceIdOfKey(floatingKey)] : []),
-    ])
-    return [...owned].sort().map((surface) => {
-      const key = surfaceWindowKey(surface)
-      if (windowSurfacePeek === surface) {
-        return renderSurfaceWindow(surface, -1, { ...area, boxHeight: area.height }, false, { x: 0, y: 0, zIndex: 5 })
-      }
-      if (key === floatingKey && floatingWindow) {
-        const rect = clampFloatingRect(floatingWindow.rect, area)
-        const shown = !fullscreenMode && !windowSurfacePeek
-        return renderSurfaceWindow(surface, FLOATING_PANE_INDEX, { width: rect.width, height: rect.height, boxHeight: rect.height }, !shown, { x: rect.x, y: rect.y, zIndex: 41 })
-      }
-      const own = frameOf(key)
-      // A background tab sits hidden at its frame, so showing it is a visibility change.
-      const frameKey = own ? key : windowStackFor(key)?.find((member) => fittedWindowKeys.includes(member))
-      const at = own ?? (frameKey ? frameOf(frameKey) : null)
-      const rect = at?.rect ?? { x: 0, y: 0, width: Math.max(10, area.width), height: Math.max(3, area.height) }
-      const hidden = !own || Boolean(windowSurfacePeek) || fullscreenMode || (zooming && zoomedIndex !== own.index)
-      return renderSurfaceWindow(surface, own ? own.index : -2, { width: rect.width, height: rect.height, boxHeight: rect.height }, hidden, { x: rect.x, y: rect.y, zIndex: 5 })
-    })
-  }
+  const renderSurfaceLayer = () => runRenderSurfaceLayer({
+    readerAreaWidth, windowAreaHeight, treeGeometry, visibleSplitPaneCount, fittedWindows,
+    splitOrientation, splitReaderLast, fittedWindowKeys, zoomedIndex, rectOf, windowSurfaces,
+    liveWindowStacks, floatingKey, windowSurfacePeek, renderSurfaceWindow, floatingWindow,
+    fullscreenMode, windowStackFor, zooming,
+  })
 
   // One split pane's frame, at the size its arrangement gives it.
   const renderSplitPane = (splitSession: Session, splitIndex: number, size: { width: number; height: number; boxHeight: number | undefined }, hidden = false) => runRenderSplitPane({
