@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5716,61 +5716,11 @@ function OpenTuiWorkspace() {
   // backtrack do. Codex and OpenCode rewind in place; the Claude SDK has no
   // in-place conversation rewind, so Claude continues in a fork taken just
   // before the prompt. Files are left as they are — ⇧U's checkpoints restore code.
-  const rewindConversationToPrompt = useStableEvent(async (chosen: RewindCandidate): Promise<boolean> => {
-    const target = composerTargetSession
-    const raw = sessionDetail?.rawMessages ?? []
-    if (!target) return false
-    const restorePrompt = () => setTimeout(() => {
-      composerTextareaRef.current?.setText(chosen.text)
-      setComposerDraft(chosen.text)
-      setComposerActive(true)
-    }, 0)
-    try {
-      if (target.provider === 'codex' || target.provider === 'opencode') {
-        const turnId = raw.find((message) => message.uuid === chosen.uuid)?.turnId
-        if (target.provider === 'codex' && !turnId) throw new Error('Could not find that prompt\'s turn')
-        const body = target.provider === 'codex' ? { beforeTurnId: turnId } : { userMessageId: chosen.uuid }
-        await rewindTuiSession(target, body)
-        // The cached detail predates the revert and the sidebar's lastModified
-        // has not caught up, so the read would otherwise be skipped as unchanged.
-        sessionDetailMtimeRef.current.delete(sessionKey(target))
-        loader.invalidate(target)
-        await refreshSelectedSessionDetail(target, true)
-        restorePrompt()
-        showNotice('info', 'Rewound — the prompt is back in the composer; files are unchanged', 6000)
-        return true
-      }
-      if (target.provider === 'claude' || target.provider === 'pi') {
-        const point = forkPointBefore(raw, chosen.uuid)
-        if (point === undefined) throw new Error('Could not find that prompt in the transcript')
-        if (point === null) {
-          await startFreshSession(target.provider, target.cwd ?? process.cwd())
-        } else {
-          const forked = await forkTuiSession(target, point)
-          const fork: Session = {
-            ...target,
-            sessionId: forked.sessionId,
-            createdAt: Date.now(),
-            lastModified: Date.now(),
-            summary: `Rewind of ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
-            customTitle: undefined,
-            isPending: false,
-          }
-          // Opening the fork restores its own draft, so the prompt goes there.
-          writeWorkspaceDraft(sessionKey(fork), chosen.text)
-          await openCreatedSession(fork)
-        }
-        if (point === null) restorePrompt()
-        showNotice('info', 'Rewound in a fork — the original is unchanged; files are unchanged', 6000)
-        return true
-      }
-      showNotice('info', `${formatProviderLabel(target.provider ?? 'claude')} sessions cannot be rewound`)
-      return false
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Rewind failed')
-      return false
-    }
-  })
+  const rewindConversationToPrompt = useStableEvent(async (chosen: RewindCandidate) => runRewindConversationToPrompt({
+    composerTargetSession, sessionDetail, composerTextareaRef, setComposerDraft, setComposerActive,
+    sessionDetailMtimeRef, loader, refreshSelectedSessionDetail, showNotice, startFreshSession,
+    writeWorkspaceDraft, openCreatedSession,
+  }, chosen))
 
   // Rewind the conversation, and with `restoreFiles` the working tree too: the
   // checkpoint taken as that prompt's turn began is the file state to return to.

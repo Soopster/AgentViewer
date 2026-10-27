@@ -32,6 +32,11 @@ import { type RunningSessionRef } from '../../../../lib/types'
 import { resolve } from 'node:path'
 import { type QueuedComposerSend } from '../types'
 import { ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS } from '../timing'
+import { type TranscriptSessionLoader } from '../../transcriptSessionLoader'
+import { formatProviderLabel } from '../../../format'
+import { forkTuiSession, rewindTuiSession } from '../../../../lib/tui/service'
+import { type AgentProvider } from '../../../../lib/types'
+import { forkPointBefore, type RewindCandidate } from '../../rewindTargets'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -390,4 +395,80 @@ export function runConfirmExit(ctx: ConfirmExitContext) {
     renderer.destroy()
     process.exit(0)
   })()
+}
+
+export type RewindConversationToPromptContext = {
+  composerTargetSession: Session | null
+  sessionDetail: TuiSessionDetail | null
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+  sessionDetailMtimeRef: React.RefObject<Map<string, number>>
+  loader: TranscriptSessionLoader
+  refreshSelectedSessionDetail: (session: Session, foreground?: boolean) => Promise<void>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  startFreshSession: (targetProvider: AgentProvider, cwd: string) => Promise<void>
+  writeWorkspaceDraft: (key: string, text: string) => void
+  openCreatedSession: (draft: Session) => Promise<void>
+}
+
+export async function runRewindConversationToPrompt(ctx: RewindConversationToPromptContext, chosen: RewindCandidate) {
+  const {
+    composerTargetSession, sessionDetail, composerTextareaRef, setComposerDraft, setComposerActive,
+    sessionDetailMtimeRef, loader, refreshSelectedSessionDetail, showNotice, startFreshSession,
+    writeWorkspaceDraft, openCreatedSession,
+  } = ctx
+  const target = composerTargetSession
+  const raw = sessionDetail?.rawMessages ?? []
+  if (!target) return false
+  const restorePrompt = () => setTimeout(() => {
+    composerTextareaRef.current?.setText(chosen.text)
+    setComposerDraft(chosen.text)
+    setComposerActive(true)
+  }, 0)
+  try {
+    if (target.provider === 'codex' || target.provider === 'opencode') {
+      const turnId = raw.find((message) => message.uuid === chosen.uuid)?.turnId
+      if (target.provider === 'codex' && !turnId) throw new Error('Could not find that prompt\'s turn')
+      const body = target.provider === 'codex' ? { beforeTurnId: turnId } : { userMessageId: chosen.uuid }
+      await rewindTuiSession(target, body)
+      // The cached detail predates the revert and the sidebar's lastModified
+      // has not caught up, so the read would otherwise be skipped as unchanged.
+      sessionDetailMtimeRef.current.delete(sessionKey(target))
+      loader.invalidate(target)
+      await refreshSelectedSessionDetail(target, true)
+      restorePrompt()
+      showNotice('info', 'Rewound — the prompt is back in the composer; files are unchanged', 6000)
+      return true
+    }
+    if (target.provider === 'claude' || target.provider === 'pi') {
+      const point = forkPointBefore(raw, chosen.uuid)
+      if (point === undefined) throw new Error('Could not find that prompt in the transcript')
+      if (point === null) {
+        await startFreshSession(target.provider, target.cwd ?? process.cwd())
+      } else {
+        const forked = await forkTuiSession(target, point)
+        const fork: Session = {
+          ...target,
+          sessionId: forked.sessionId,
+          createdAt: Date.now(),
+          lastModified: Date.now(),
+          summary: `Rewind of ${target.customTitle?.trim() || target.summary?.trim() || 'session'}`,
+          customTitle: undefined,
+          isPending: false,
+        }
+        // Opening the fork restores its own draft, so the prompt goes there.
+        writeWorkspaceDraft(sessionKey(fork), chosen.text)
+        await openCreatedSession(fork)
+      }
+      if (point === null) restorePrompt()
+      showNotice('info', 'Rewound in a fork — the original is unchanged; files are unchanged', 6000)
+      return true
+    }
+    showNotice('info', `${formatProviderLabel(target.provider ?? 'claude')} sessions cannot be rewound`)
+    return false
+  } catch (err) {
+    showNotice('error', err instanceof Error ? err.message : 'Rewind failed')
+    return false
+  }
 }
