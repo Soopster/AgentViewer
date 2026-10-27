@@ -307,6 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
+import { runSubmitTuiQuestion } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5371,69 +5372,13 @@ function OpenTuiWorkspace() {
 
   // Submit the AskUserQuestion answers back into the running turn (allows the
   // tool with the user's selections merged into its input).
-  const submitTuiQuestion = useStableEvent(async (permission: PendingPermission) => {
-    const target = composerTargetSession
-    if (!target || permissionActionLoading) return
-    const questions = permission.questions ?? []
-    const answers: PendingQuestionAnswers = {}
-    for (let i = 0; i < questions.length; i += 1) {
-      const question = questions[i]!
-      const selected = questionSelections[i] ?? []
-      const freeform = questionFreeformAnswers[i]?.trim()
-      const values = question.multiSelect && freeform
-        ? [...selected, freeform]
-        : freeform
-        ? [freeform]
-        : selected
-      if (values.length === 0) {
-        if (question.required === false) continue
-        // Jump focus to the first unanswered question instead of submitting.
-        setQuestionFocusIndex(i)
-        setQuestionOptionIndex(0)
-        return
-      }
-      answers[question.id ?? question.question] = values
-    }
-    if (permission.asyncQuestion) {
-      if (permission.sessionId !== target.sessionId || permission.provider !== target.provider || permission.providerInstanceId !== target.providerInstanceId) {
-        setAsyncQuestionPrompt(null)
-        showNotice('info', 'Open the original session to answer these questions.')
-        return
-      }
-      const answer = formatAsyncQuestionAnswers(questions, answers)
-      const existing = composerTextareaRef.current?.plainText ?? composerDraft
-      const next = `${existing}${existing ? '\n\n' : ''}${answer}\n`
-      composerTextareaRef.current?.setText(next)
-      setComposerDraft(next)
-      setAsyncQuestionPrompt(null)
-      setComposerActive(true)
-      setFocusedPane('messages')
-      return
-    }
-    setPermissionActionLoading(permission.id)
-    try {
-      await runTuiSessionAction(
-        { ...target, sessionId: permission.sessionId ?? target.sessionId },
-        { action: 'respondQuestion', permissionId: permission.id, answers, provider: target.provider },
-      )
-      setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, answers))
-      setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
-      setQuestionSelections({})
-      setQuestionFreeformAnswers({})
-      setQuestionFreeformEditing(false)
-      setQuestionFocusIndex(0)
-      setQuestionOptionIndex(0)
-    } catch (err) {
-      if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))
-        showNotice('info', PENDING_REQUEST_GONE_NOTICE, 6000)
-      } else {
-        showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
-      }
-    } finally {
-      setPermissionActionLoading(null)
-    }
-  })
+  const submitTuiQuestion = useStableEvent(async (permission: PendingPermission) => runSubmitTuiQuestion({
+    composerTargetSession, permissionActionLoading, questionSelections, questionFreeformAnswers,
+    setQuestionFocusIndex, setQuestionOptionIndex, setAsyncQuestionPrompt, showNotice,
+    composerTextareaRef, composerDraft, setComposerDraft, setComposerActive, setFocusedPane,
+    setPermissionActionLoading, setLiveTranscriptMessages, setPendingPermissions,
+    setQuestionSelections, setQuestionFreeformAnswers, setQuestionFreeformEditing,
+  }, permission))
 
   // Desktop-notify that a background turn is blocked on a prompt the user
   // can't see (mirrors the slow-send OSC notification; BMP-sanitized).
