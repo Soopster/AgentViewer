@@ -357,6 +357,7 @@ import { useRenderSurfaceLayerGroup } from './app/slices/renderSurfaceLayer'
 import { useSubmitComposerFromDockGroup } from './app/slices/submitComposerFromDock'
 import { useComposerDockStatsForGroup } from './app/slices/composerDockStatsFor'
 import { useStatusLabelGroup } from './app/slices/statusLabel'
+import { useControlWindowIndexGroup } from './app/slices/controlWindowIndex'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7339,85 +7340,29 @@ function OpenTuiWorkspace() {
     const timer = setTimeout(() => setWindowControlMode(null), 3000)
     return () => clearTimeout(timer)
   }, [windowControlMode])
-
-  const controlWindowIndex = (key: string): number | null | undefined => {
-    if (shownPopoverTab && (key === 'reader' || key === surfaceWindowKey(shownPopoverTab))) return null
-    if (floatingKey === key) return FLOATING_PANE_INDEX
-    const index = windowItems.findIndex(item => windowItemKey(item) === key)
-    return index < 0 ? undefined : index
-  }
-  const focusedControlKey = () => splitFocusIndex === null ? (shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : selectedSessionKey ?? 'empty')
-    : focusedWindowItem ? windowItemKey(focusedWindowItem) : 'reader'
-  const readControlWindows = useStableEvent((): ControlWindow[] => {
-    const windows: ControlWindow[] = []
-    const add = (key: string, number: number, title: string, id: string) => {
-      const node = renderer.root.findDescendantById(id)
-      if (!node) return
-      for (let parent: typeof node | null = node; parent; parent = parent.parent) {
-        if (!parent.visible) return
-      }
-      const rect = rectOf(id)
-      if (!rect) return
-      const x = Math.max(0, rect.x), y = Math.max(0, rect.y)
-      const clippedWidth = Math.min(width, rect.x + rect.width) - x
-      const clippedHeight = Math.min(height, rect.y + rect.height) - y
-      if (clippedWidth < 3 || clippedHeight < 2) return
-      windows.push({ key, number, title, focused: focusedControlKey() === key,
-        rect: { x, y, width: clippedWidth, height: clippedHeight } })
-    }
-    if (shownPopoverTab) add(surfaceWindowKey(shownPopoverTab), popoverHostSlot >= 0 ? popoverHostSlot + 1 : 1, windowSurfaceTitle(shownPopoverTab), 'popover-tab-frame')
-    windowItems.slice(0, visibleSplitPaneCount).forEach((item, index) => index !== popoverHostSlot && add(windowItemKey(item), index + windowNumberOffset, windowKeyTitle(windowItemKey(item)), `split-pane:${index}`))
-    if (floatingItem && (!windowPresentation || windowZoom === FLOATING_PANE_INDEX) && !windowSurfacePeek) add(windowItemKey(floatingItem), visibleSplitPaneCount + windowNumberOffset, windowKeyTitle(windowItemKey(floatingItem)), 'floating-window')
-    return windows
+  const {
+    controlWindowIndex, focusedControlKey, readControlWindows, focusControlWindow,
+    pickControlWindow, enterWindowControls, runWindowControlAction, openWindowControlMenu,
+  } = useControlWindowIndexGroup({
+    shownPopoverTab, floatingKey, windowItems, windowItemKey, splitFocusIndex, selectedSessionKey,
+    focusedWindowItem, renderer, rectOf, width, height, popoverHostSlot, windowSurfaceTitle,
+    visibleSplitPaneCount, windowNumberOffset, windowKeyTitle, floatingItem, windowPresentation,
+    windowZoom, windowSurfacePeek, setSurfacePanelFocused, setFocusedPane, focusReaderFromSplit,
+    focusSplitPane, endWindowResizeGroup, windowControlMode, leaveWindowControls,
+    pendingPermissions, windowControlsBlocked, contextMenu, commandPaletteOpen, setContextMenu,
+    setControlMenuTarget, setChordHelp, setSplitChordPending, setCommandChordPending,
+    setWindowControlMode, windowResizeGroupRef, closePopoverTab, tabFocusedWindow, floatWindowKey,
+    openPopoverTabMoveMenu, openMoveWorkspaceMenu, workspaceId, toggleFullscreenMode,
+    toggleWindowZoom, resizeFocusedWindow, resizeSecondaryDivider, checkpointWindowLayout,
+    reconciledSplitTree, setWindowSplitTree, setSplitReaderShare, setSplitSecondaryShare,
+    setSplitBottomShare, setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout,
+    swapWindowInDirection, breakOutWindowTab, toggleFloatingFocused, windowStackFor,
+    closeWindowTab, closeFloatingWindow, closeSurfaceWindow, closeSplitPane, setWindowPickerOpen,
+    splitFocusedWindow, selectedWindowIndex, selectedSession, treeGeometry, fittedWindows,
+    showNotice, popoverTabToWindow, popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta,
+    returningPopoverRef, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
+    openSurfaceWindow,
   })
-  const focusControlWindow = useStableEvent((key: string) => {
-    const index = controlWindowIndex(key)
-    if (index === undefined) return false
-    setSurfacePanelFocused(false)
-    setFocusedPane('messages')
-    if (index === null) focusReaderFromSplit()
-    else focusSplitPane(index)
-    return true
-  })
-  const pickControlWindow = useStableEvent((key: string) => {
-    endWindowResizeGroup()
-    if (!readControlWindows().some(window => window.key === key)) return
-    focusControlWindow(key)
-    if (windowControlMode === 'identify') leaveWindowControls()
-  })
-  const enterWindowControls = useStableEvent((mode: 'identify' | 'manage') => {
-    if (pendingPermissions.length || (windowControlsBlocked && !contextMenu && !commandPaletteOpen)) return
-    setContextMenu(null)
-    setControlMenuTarget(null)
-    setChordHelp(null)
-    setSplitChordPending(false)
-    setCommandChordPending(false)
-    endWindowResizeGroup()
-    const visible = readControlWindows()
-    if (!visible.some(window => window.focused) && visible[0]) focusControlWindow(visible[0].key)
-    setWindowControlMode(mode)
-  })
-  const runWindowControlAction = useStableEvent((key: string, action: WindowControlAction, direction?: WindowDirection) => runRunWindowControlAction({
-    controlWindowIndex, setContextMenu, windowControlMode, endWindowResizeGroup,
-    windowResizeGroupRef, shownPopoverTab, closePopoverTab, tabFocusedWindow, floatWindowKey,
-    openPopoverTabMoveMenu, focusControlWindow, openMoveWorkspaceMenu, workspaceId,
-    enterWindowControls, visibleSplitPaneCount, toggleFullscreenMode, toggleWindowZoom,
-    resizeFocusedWindow, resizeSecondaryDivider, checkpointWindowLayout, reconciledSplitTree,
-    setWindowSplitTree, setSplitReaderShare, setSplitSecondaryShare, setSplitBottomShare,
-    setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout, swapWindowInDirection,
-    breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
-    windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
-    splitFocusedWindow, openWindowControlMenu,
-  }, key, action, direction))
-  const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => runOpenWindowControlMenu({
-    controlWindowIndex, leaveWindowControls, setControlMenuTarget, rectOf, floatingItem,
-    windowItems, selectedWindowIndex, windowStackFor, windowZoom, shownPopoverTab, selectedSession,
-    treeGeometry, fittedWindows, splitArrangement, closePopoverTab, openWindowControlMenu,
-    runWindowControlAction, focusControlWindow, renderer, showNotice, popoverTabToWindow,
-    popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
-    closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
-    openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
-  }, key, point, section))
   useEffect(() => {
     if (!contextMenu) { if (controlMenuTarget) setControlMenuTarget(null); return }
     if (controlMenuTarget && controlWindowIndex(controlMenuTarget) === undefined) { setContextMenu(null); setControlMenuTarget(null) }
