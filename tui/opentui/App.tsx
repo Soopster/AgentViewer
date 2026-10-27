@@ -312,7 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
-import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect } from './app/effects/app'
+import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
@@ -5001,28 +5001,9 @@ function OpenTuiWorkspace() {
     currentThemeRef, themeMode,
   }), [themeMode])
 
-  useEffect(() => {
-    const onInterrupt = () => {
-      if (exitConfirmOpenRef.current) {
-        confirmExit()
-        return
-      }
-      setExitConfirmOpen(true)
-    }
-    const onTerminate = () => {
-      confirmExit()
-    }
-    process.on('exit', persistTheme)
-    process.on('SIGINT', onInterrupt)
-    process.on('SIGTERM', onTerminate)
-    process.on('SIGHUP', onTerminate)
-    return () => {
-      process.off('exit', persistTheme)
-      process.off('SIGINT', onInterrupt)
-      process.off('SIGTERM', onTerminate)
-      process.off('SIGHUP', onTerminate)
-    }
-  }, [confirmExit, persistTheme])
+  useEffect(() => runExitDelayEffect({
+    exitConfirmOpenRef, confirmExit, setExitConfirmOpen, persistTheme,
+  }), [confirmExit, persistTheme])
 
   const paletteDisplayRows = useMemo((): PaletteRow[] => {
     if (commandPaletteQuery) {

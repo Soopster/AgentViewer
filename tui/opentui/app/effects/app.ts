@@ -282,3 +282,36 @@ export function runExitConfirmOpenEffect(ctx: ExitConfirmOpenEffectContext) {
   } = ctx
   currentThemeRef.current = themeMode
 }
+
+export type ExitDelayEffectContext = {
+  exitConfirmOpenRef: React.RefObject<boolean>
+  confirmExit: () => void
+  setExitConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>
+  persistTheme: () => void
+}
+
+export function runExitDelayEffect(ctx: ExitDelayEffectContext) {
+  const {
+    exitConfirmOpenRef, confirmExit, setExitConfirmOpen, persistTheme,
+  } = ctx
+  const onInterrupt = () => {
+    if (exitConfirmOpenRef.current) {
+      confirmExit()
+      return
+    }
+    setExitConfirmOpen(true)
+  }
+  const onTerminate = () => {
+    confirmExit()
+  }
+  process.on('exit', persistTheme)
+  process.on('SIGINT', onInterrupt)
+  process.on('SIGTERM', onTerminate)
+  process.on('SIGHUP', onTerminate)
+  return () => {
+    process.off('exit', persistTheme)
+    process.off('SIGINT', onInterrupt)
+    process.off('SIGTERM', onTerminate)
+    process.off('SIGHUP', onTerminate)
+  }
+}
