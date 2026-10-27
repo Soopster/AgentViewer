@@ -351,6 +351,7 @@ import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
+import { runProjectedWindowGeometry } from './app/derived/windowGeometry'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6759,95 +6760,14 @@ function OpenTuiWorkspace() {
 
   // Preview the same operation plan and geometry that applying it consumes.
   // This is read-only: hovering and dragging never rewrite the current layout.
-  const projectedWindowGeometry = (() => {
-    if ((!windowPickerOpen || !windowLayoutPreview) && !sessionDrag) return null
-    let previewSplitTree: WindowSplitTree | null = null
-    let previewPrimary = primaryLeaf
-    let plan = { arrangement: splitArrangement, orientation: splitOrientation, readerLast: splitReaderLast, count: splitPaneCount }
-    let readerShare = splitReaderShare
-    let secondaryShare = splitSecondaryShare
-    let bottomShare = splitBottomShare
-    let weights: WindowWeights = splitWeights
-    let surfaces = windowSurfaces.length
-    let missing = 0
-    let previewFloating = floatingKey && floatingWindow ? floatingWindow.rect : null
-    if (sessionDrag) {
-      if (!sessionDrag.session || sessionDrag.title || sessionKey(sessionDrag.session) === selectedSessionKey) return null
-      if (sessionDrag.pane !== null && windowItems[sessionDrag.pane]?.kind === 'surface') return null
-      const dropPin = sessionDrag.pane !== null ? pinIndexOfWindow(sessionDrag.pane) : -1
-      const drop: WindowSessionDrop | null = sessionDrag.pane !== null && dropPin >= 0
-        ? sessionDrag.insert ? { kind: 'insert', index: dropPin, edge: sessionDrag.insert } : { kind: 'replace', index: dropPin }
-        : sessionDrag.zone && sessionDrag.zone !== 'center' ? { kind: 'edge', zone: sessionDrag.zone } : null
-      if (drop) {
-        const next = planWindowSessionDrop({ ...plan, pins: splitPinnedKeys }, sessionKey(sessionDrag.session), drop)
-        if (!next) return null
-        plan = next
-      } else if (sessionDrag.zone !== 'center') return null
-    } else if (windowLayoutPreview?.startsWith('saved:')) {
-      const saved = savedWindowLayouts.find((entry) => entry.id === windowLayoutPreview.slice(6))
-      if (!saved) return null
-      const known = new Set([...sessions, ...openTabSessions].map(sessionKey))
-      const savedFloating = saved.floating
-      previewFloating = savedFloating && (isSurfaceWindowKey(savedFloating.key) ? surfaceRestorable(surfaceIdOfKey(savedFloating.key)) : known.has(savedFloating.key)) ? savedFloating.rect : null
-      previewPrimary = Boolean(saved.reader && known.has(saved.reader) && (saved.primaryOpen ?? saved.splitTree?.primary !== false)) || Boolean(saved.activePopoverTab && saved.popoverTabs?.includes(saved.activePopoverTab) && surfaceRestorable(saved.activePopoverTab))
-      if (validWindowSplitTree(saved.splitTree)) {
-        const restoredTree = previewPrimary ? saved.splitTree : removePrimaryWindow(saved.splitTree)
-        previewSplitTree = restoredTree ? reconcileWindowSplitTree(restoredTree, restoredTree.keys.filter(key => isSurfaceWindowKey(key) ? surfaceRestorable(surfaceIdOfKey(key)) : known.has(key)), previewPrimary) : null
-      } else if (!previewPrimary) {
-        const keys = orderWindows(saved.order ?? [], saved.panes.filter(key => known.has(key)), saved.surfaces.filter(surfaceRestorable))
-        if (keys.length) previewSplitTree = { primary: false, keys,
-          root: keys.map((_, slot) => ({ slot })).reduce<import('./windowSplitTree').WindowSplitNode>((root, node, index) => index === 0 ? node : ({ axis: saved.orientation === 'columns' ? 'x' : 'y', ratio: index / (index + 1), first: root, second: node }), { slot: 0 }) }
-      }
-      const available = saved.panes.filter((key) => known.has(key)).length
-      missing = saved.panes.length - available + (saved.reader && !known.has(saved.reader) ? 1 : 0)
-      if (savedFloating && !isSurfaceWindowKey(savedFloating.key) && !known.has(savedFloating.key)) missing++
-      plan = { ...saved, count: available }
-      readerShare = saved.readerShare
-      secondaryShare = saved.secondaryShare
-      bottomShare = saved.bottomShare ?? SPLIT_SHARE_EVEN
-      weights = saved.weights ?? {}
-      surfaces = saved.surfaces.filter(surfaceRestorable).length
-    } else if (windowLayoutPreview?.startsWith('action:')) {
-      const action = windowLayoutPreview.slice(7) as WindowLayoutAction
-      if (action === 'fullscreen' || action === 'fill') {
-        const area = { width: readerAreaWidth, height: windowAreaHeight }
-        if (splitFocusIndex === FLOATING_PANE_INDEX && previewFloating) {
-          const rects = [clampFloatingRect(previewFloating, area)]
-          return { rects, overflowRows: 0, lines: windowPreviewLines(rects, area), detail: 'Floating window · dock it to use a tiled layout' }
-        }
-        const rects = [{ x: 0, y: 0, ...area }, ...(previewFloating ? [clampFloatingRect(previewFloating, area)] : [])]
-        return { rects, overflowRows: 0, lines: windowPreviewLines(rects, area), detail: `Focused pane fills the workspace${previewFloating ? ' · 1 floating' : ' · other panes preserved'}` }
-      }
-      previewSplitTree = planPaneArrangement(action)
-      if (!previewSplitTree) return null
-      plan.count = previewSplitTree.keys.filter(key => !isSurfaceWindowKey(key)).length
-      surfaces = previewSplitTree.keys.length - plan.count
-    }
-
-    const input = {
-      ...plan, width: readerAreaWidth, height: windowBudgetHeight,
-      requestedCount: plan.count + surfaces, availableCount: plan.count + surfaces,
-      maxPanes: plan.arrangement === 'split' ? SPLIT_PANE_MAX : SPLIT_PANE_ARRANGED_MAX,
-      readerShare, secondaryShare, bottomShare, weights,
-      minPaneWidth: SPLIT_PANE_MIN_WIDTH, minPaneRows: SPLIT_PANE_MIN_ROWS,
-      minReaderWidth: MIN_READER_WIDTH, minReaderRows: MIN_READER_ROWS,
-    }
-    let previewGeometry = previewSplitTree ? computeWindowSplitTree(previewSplitTree, input.width, input.height, splitTreeLimits) : null
-    const previewOverflow = previewGeometry && previewGeometry.layout.visibleCount < previewSplitTree!.keys.length ? 1 : 0
-    if (previewGeometry && previewOverflow) previewGeometry = computeWindowSplitTree(previewSplitTree!, input.width, Math.max(1, input.height - 1), splitTreeLimits)
-    const result = previewGeometry ? { layout: previewGeometry.layout, overflowRows: previewOverflow } : computeResponsiveWindowLayout(input)
-    const area = { width: input.width, height: Math.max(1, input.height - result.overflowRows) }
-    const rects = previewGeometry ? [...(previewGeometry.rects.has(-1) ? [previewGeometry.rects.get(-1)!] : []), ...Array.from({ length: previewGeometry.layout.visibleCount }, (_, index) => previewGeometry!.rects.get(index)!)] : windowLayoutRects(result.layout, { ...input, ...area })
-    if (!previewGeometry && !previewPrimary) rects.shift()
-    const tiledCount = rects.length
-    if (previewFloating) rects.push(clampFloatingRect(previewFloating, area))
-    const hidden = input.availableCount - result.layout.visibleCount
-    return {
-      rects, overflowRows: result.overflowRows,
-      lines: windowPreviewLines(rects, area),
-      detail: `${area.width}×${area.height} · ${tiledCount} visible${previewFloating ? ' · 1 floating' : ''}${hidden ? ` · ${hidden} hidden` : ''}${missing ? ` · ${missing} missing` : ''}`,
-    }
-  })()
+  const projectedWindowGeometry = runProjectedWindowGeometry({
+    windowPickerOpen, windowLayoutPreview, sessionDrag, primaryLeaf, splitArrangement,
+    splitOrientation, splitReaderLast, splitPaneCount, splitReaderShare, splitSecondaryShare,
+    splitBottomShare, splitWeights, windowSurfaces, floatingKey, floatingWindow,
+    selectedSessionKey, windowItems, pinIndexOfWindow, splitPinnedKeys, savedWindowLayouts,
+    sessions, openTabSessions, surfaceRestorable, readerAreaWidth, windowAreaHeight,
+    splitFocusIndex, planPaneArrangement, windowBudgetHeight, splitTreeLimits,
+  })
 
   splitPaneActionsRef.current = {
     close: (paneIndex) => closeSplitPane(paneIndex),
