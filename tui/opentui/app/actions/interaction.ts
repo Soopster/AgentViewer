@@ -42,6 +42,7 @@ import { createTuiSession } from '../../../../lib/tui/service'
 import { buildContextHandoffPrompt } from '../../../../lib/contextHandoff'
 import { buildHandoffBriefMarkdown } from '../../../../lib/handoffBrief'
 import { recordContextTransfer } from '../../../../lib/contextTransfers'
+import { toggleTuiSessionBookmark } from '../../../../lib/tui/service'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -533,5 +534,63 @@ export async function runHandoffToProvider(ctx: HandoffToProviderContext, target
     showNotice('error', err instanceof Error ? err.message : 'Handoff failed')
   } finally {
     setNewSessionBusy(false)
+  }
+}
+
+export type ToggleBookmarkForCursorContext = {
+  selectedSessionTarget: Session | null
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  readCursorIndex: () => number
+  visibleTranscriptCards: TuiTranscriptCard[]
+  bookmarkKeysRef: React.RefObject<Set<string>>
+  setBookmarkKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  readerTitle: string
+}
+
+export async function runToggleBookmarkForCursor(ctx: ToggleBookmarkForCursorContext) {
+  const {
+    selectedSessionTarget, showNotice, readCursorIndex, visibleTranscriptCards, bookmarkKeysRef,
+    setBookmarkKeys, readerTitle,
+  } = ctx
+  const target = selectedSessionTarget
+  if (!target) { showNotice('error', 'No session selected'); return }
+  const cursorIndex = readCursorIndex()
+  const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+  if (!card) { showNotice('error', 'No message selected'); return }
+  if (card.key.startsWith('live-')) { showNotice('error', 'Cannot bookmark a streaming message'); return }
+  const uuid = card.key
+  const next = !bookmarkKeysRef.current.has(uuid)
+  setBookmarkKeys((prev) => {
+    const updated = new Set(prev)
+    if (next) updated.add(uuid)
+    else updated.delete(uuid)
+    return updated
+  })
+  try {
+    const meta = next
+      ? {
+          role: card.role,
+          label: card.role === 'user' ? 'user' : 'assistant',
+          preview: (card.compactSummary || card.searchText || '').replace(/\s+/g, ' ').trim().slice(0, 200) || undefined,
+          sessionTitle: readerTitle || undefined,
+          messageTimestamp: card.timestamp,
+        }
+      : undefined
+    const ids = await toggleTuiSessionBookmark(
+      { sessionId: target.sessionId, provider: target.provider } as Session,
+      uuid,
+      next,
+      meta,
+    )
+    setBookmarkKeys(new Set(ids))
+    showNotice('info', next ? 'Bookmarked message' : 'Removed bookmark')
+  } catch (err) {
+    setBookmarkKeys((prev) => {
+      const updated = new Set(prev)
+      if (next) updated.delete(uuid)
+      else updated.add(uuid)
+      return updated
+    })
+    showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
   }
 }

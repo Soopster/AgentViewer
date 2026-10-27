@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7951,49 +7951,10 @@ function OpenTuiWorkspace() {
   })
 
   // Toggle a bookmark on the card under the transcript cursor.
-  const toggleBookmarkForCursor = useStableEvent(async () => {
-    const target = selectedSessionTarget
-    if (!target) { showNotice('error', 'No session selected'); return }
-    const cursorIndex = readCursorIndex()
-    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
-    if (!card) { showNotice('error', 'No message selected'); return }
-    if (card.key.startsWith('live-')) { showNotice('error', 'Cannot bookmark a streaming message'); return }
-    const uuid = card.key
-    const next = !bookmarkKeysRef.current.has(uuid)
-    setBookmarkKeys((prev) => {
-      const updated = new Set(prev)
-      if (next) updated.add(uuid)
-      else updated.delete(uuid)
-      return updated
-    })
-    try {
-      const meta = next
-        ? {
-            role: card.role,
-            label: card.role === 'user' ? 'user' : 'assistant',
-            preview: (card.compactSummary || card.searchText || '').replace(/\s+/g, ' ').trim().slice(0, 200) || undefined,
-            sessionTitle: readerTitle || undefined,
-            messageTimestamp: card.timestamp,
-          }
-        : undefined
-      const ids = await toggleTuiSessionBookmark(
-        { sessionId: target.sessionId, provider: target.provider } as Session,
-        uuid,
-        next,
-        meta,
-      )
-      setBookmarkKeys(new Set(ids))
-      showNotice('info', next ? 'Bookmarked message' : 'Removed bookmark')
-    } catch (err) {
-      setBookmarkKeys((prev) => {
-        const updated = new Set(prev)
-        if (next) updated.delete(uuid)
-        else updated.add(uuid)
-        return updated
-      })
-      showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
-    }
-  })
+  const toggleBookmarkForCursor = useStableEvent(async () => runToggleBookmarkForCursor({
+    selectedSessionTarget, showNotice, readCursorIndex, visibleTranscriptCards, bookmarkKeysRef,
+    setBookmarkKeys, readerTitle,
+  }))
 
   // Jump to the next/previous bookmarked card in the active session.
   const jumpToBookmark = useStableEvent((direction: 1 | -1) => {
