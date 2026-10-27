@@ -348,6 +348,7 @@ import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
 import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
+import { ComposerDock } from './app/overlays/ComposerDock'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8803,101 +8804,55 @@ function OpenTuiWorkspace() {
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !embeddedComposer ? (
-        <box
-          id="composer-dock"
-          marginLeft={composerAreaOffset}
-          width={composerAreaWidth}
-          paddingX={1}
-          // The textarea paints theme.surface over its own cells; a dock in any
-          // other shade showed as a padding stripe down each side and, with no
-          // border in fullscreen, a band that did not match the draft.
-          backgroundColor={composerDockBackground}
-          border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
-          borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
-          borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
-          title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage
-            ? fitText(composerTargetMessage, composerDockTitleWidth)
-            : isChatLikeView ? undefined : composerDockBorderTitle}
-          titleColor={composerTargetMessage ? theme.cyan : composerDockEmphasized ? composerAccentColor : theme.dim}
-          titleAlignment="left"
-          height={composerDockHeight}
-          flexDirection="column"
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            if (surfacePanelFocused) setSurfacePanelFocused(false)
-            if (!composerActive) setComposerActive(true)
-            composerTextareaRef.current?.focus()
-          }}
-        >
-          {composerTurnStatusInBorder ? (
-            <box
-              id="composer-dock-turn-status"
-              position="absolute"
-              top={-1}
-              left={1}
-              width={composerDockTextareaWidth}
-              height={1}
-              flexDirection="row"
-              backgroundColor={composerDockBackground}
-              overflow="hidden"
-            >
-              <box flexGrow={1} minWidth={0} overflow="hidden">
-                <ComposerWaitingStatus
-                  startedAt={composerSendStartedAt}
-                  seed={composerWaitingStatusSeed}
-                  suffix={composerWaitingSuffix}
-                  theme={theme}
-                  width={Math.max(1, composerDockTextareaWidth - (composerTargetMessage ? Math.min(36, Math.floor(composerDockTextareaWidth / 4)) + 3 : 0))}
-                  message={composerWaitingOnUser}
-                />
-              </box>
-              {composerTargetMessage ? (
-                <text fg={theme.cyan} wrapMode="none" width={Math.min(36, Math.floor(composerDockTextareaWidth / 4)) + 3}>
-                  {` · ${fitText(composerTargetMessage, Math.min(36, Math.floor(composerDockTextareaWidth / 4)))}`}
-                </text>
-              ) : null}
-            </box>
-          ) : null}
-          {renderComposerTextarea(submitComposerFromDock, {
-            height: composerDockTextareaHeight,
-            width: composerDockTextareaWidth,
-            background: composerDockBackground,
-          })}
-          {/* Stats and key hints sit *in* the bottom border rather than on a
-              row above it — the same trick the top border's title uses, worth
-              a whole row of draft back. Fullscreen has no border to sit in, so
-              there it stays an ordinary flow row. */}
-          <box
-            id="composer-dock-status"
-            {...(fullscreenMode
-              // Out through the dock's padding, so the band meets both edges.
-              ? { height: 1, backgroundColor: theme.surface3, marginLeft: -1, marginRight: -1, paddingX: 1 }
-              : { position: 'absolute' as const, bottom: -1, left: 1, width: composerDockTextareaWidth, height: 1 })}
-            flexDirection="row"
-            alignItems="center"
-          >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
-              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
-                {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
-                  ? fitText(composerSlashHint, composerDockFooterStatsWidth)
-                  : <DraftLengthSpans draft={composerDraftState} build={dockFooterStatsFor} width={composerDockFooterStatsWidth} padFg={theme.dim} hover={composerStatusHover?.site === 'dock' ? { index: composerStatusHover.index, bg: theme.surface3 } : null} />}
-              </text>
-            </box>
-            {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
-            <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
-              <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
-                {dockShowsStatusBar
-                  ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)
-                  : composerDockSendingHintSegments
-                  ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
-                  : fitHintText(composerDockFooterHint, composerDockFooterHintWidth)}
-              </text>
-            </box>
-          </box>
-        </box>
-      ) : null}
+      <ComposerDock
+        composerWindowOpen={composerWindowOpen}
+        composerHidden={composerHidden}
+        presentationHidesComposer={presentationHidesComposer}
+        embeddedComposer={embeddedComposer}
+        composerAreaOffset={composerAreaOffset}
+        composerAreaWidth={composerAreaWidth}
+        composerDockBackground={composerDockBackground}
+        fullscreenMode={fullscreenMode}
+        composerDockRouted={composerDockRouted}
+        isChatLikeView={isChatLikeView}
+        composerDockEmphasized={composerDockEmphasized}
+        composerAccentColor={composerAccentColor}
+        theme={theme}
+        composerTurnStatusInBorder={composerTurnStatusInBorder}
+        composerTargetMessage={composerTargetMessage}
+        composerDockTitleWidth={composerDockTitleWidth}
+        composerDockBorderTitle={composerDockBorderTitle}
+        composerDockHeight={composerDockHeight}
+        surfacePanelFocused={surfacePanelFocused}
+        setSurfacePanelFocused={setSurfacePanelFocused}
+        composerActive={composerActive}
+        setComposerActive={setComposerActive}
+        composerTextareaRef={composerTextareaRef}
+        composerDockTextareaWidth={composerDockTextareaWidth}
+        composerSendStartedAt={composerSendStartedAt}
+        composerWaitingStatusSeed={composerWaitingStatusSeed}
+        composerWaitingSuffix={composerWaitingSuffix}
+        composerWaitingOnUser={composerWaitingOnUser}
+        renderComposerTextarea={renderComposerTextarea}
+        submitComposerFromDock={submitComposerFromDock}
+        composerDockTextareaHeight={composerDockTextareaHeight}
+        composerDockFooterStatsWidth={composerDockFooterStatsWidth}
+        voiceStatus={voiceStatus}
+        composerSlashHint={composerSlashHint}
+        clickComposerStatus={clickComposerStatus}
+        dockFooterStatsFor={dockFooterStatsFor}
+        composerDraftState={composerDraftState}
+        hoverComposerStatus={hoverComposerStatus}
+        setComposerStatusHover={setComposerStatusHover}
+        composerStatusHover={composerStatusHover}
+        dockShowsStatusBar={dockShowsStatusBar}
+        selectedSession={selectedSession}
+        composerDockFooterHintWidth={composerDockFooterHintWidth}
+        visibleComposerSending={visibleComposerSending}
+        footerSegments={footerSegments}
+        composerDockSendingHintSegments={composerDockSendingHintSegments}
+        composerDockFooterHint={composerDockFooterHint}
+      />
 
       {!searchMode && !fullscreenMode && !statusBarInDock ? (
         <box backgroundColor={theme.surface2} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
