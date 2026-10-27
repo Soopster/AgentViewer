@@ -1,4 +1,5 @@
 import type { WindowSurfaceId } from './SplitTranscriptPane'
+import type { listTuiRunningSessions } from '../../../lib/tui/service'
 import type { SelectOption } from '@opentui/core'
 import type { ClaudeCommandLifecycleState } from '../../../lib/claudeCommandLifecycle'
 import type { SendAttachment, Session, SubagentSummary, ReasoningEffortLevel, SessionModelInfo } from '../../../lib/types'
@@ -109,3 +110,4 @@ export type PaletteRow = { kind: 'header'; label: string}  |
 export type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bodyPad: number; streamGap: number; streamUserGap: number} 
 export type MenuPoint = { x: number; y: number }
 export type WindowItem = { kind: 'session'; session: Session } | { kind: 'surface'; surface: WindowSurfaceId }
+export type RunningRegistryEntry = Awaited<ReturnType<typeof listTuiRunningSessions>>[number]
