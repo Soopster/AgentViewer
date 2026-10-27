@@ -19,6 +19,22 @@ import { TASK_PANEL_RESIZE_STEP, SIDEBAR_RESIZE_STEP } from '../layoutConstants'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 import { cycleDensityValue } from '../viewHelpers'
+import { type MutableRefObject } from 'react'
+import { type TranscriptSessionLoader } from '../../transcriptSessionLoader'
+import { type CliRenderer, type TextareaRenderable } from '@opentui/core'
+import { upsertThreadedMessage } from '../../liveTranscriptState'
+import { formatTranscriptExpandedText } from '../../../format'
+import { type ThreadedMessage } from '../../../../lib/threading'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type AgentProvider, type ContextUsage, type SendAttachment, type SendState } from '../../../../lib/types'
+import { rewindCandidates, type RewindCandidate } from '../../rewindTargets'
+import { type SlashCommandSuggestion } from '../../../../lib/slashCommands'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { type ComposerPromptPart } from '../types'
+import { writeClipboard } from '../clipboard'
+import { tuiCommandEquivalent } from '../commands'
 
 export type ExecuteCommandPaletteContext = {
   focusedWindowItem: WindowItem | null
@@ -774,4 +790,265 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       requestExit()
       break
   }
+}
+
+export type RunTuiLocalCommandContext = {
+  startFreshSession: (targetProvider: AgentProvider, cwd: string) => Promise<void>
+  setCodexCollaborationMode: (target: Session, mode: 'plan' | 'default') => void
+  sendComposerMessage: (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => Promise<void>
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
+  executeCommandPalette: (id: string) => void
+  editComposerInExternalEditor: () => void
+  sessionDetailMtimeRef: React.RefObject<Map<string, number>>
+  loader: TranscriptSessionLoader
+  refreshSelectedSessionDetail: (session: Session, foreground?: boolean) => Promise<void>
+  forkIntoNewSession: (target: Session, sendInFork?: string) => Promise<void>
+  composerSendState: SendState
+  reattachedRunningRef: React.MutableRefObject<boolean>
+  sessionDetail: TuiSessionDetail | null
+  setComposerRewindIndex: React.Dispatch<React.SetStateAction<number>>
+  setComposerRewindItems: React.Dispatch<React.SetStateAction<RewindCandidate[] | null>>
+  handoffToProvider: (target: Session, providerName: string) => Promise<void>
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+  runPluginCommandId: (id: string, session?: Session | null) => void
+  openDiagnostics: (session?: Session | null) => void
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+  setSessionSearchMode: React.Dispatch<React.SetStateAction<boolean>>
+  setExitConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>
+  renderer: CliRenderer
+  openModelPicker: () => Promise<void>
+  switchComposerModel: (target: Session, requested: string) => Promise<void>
+  composerCurrentModel: string | null
+  contextUsage: ContextUsage | null
+  composerPermissionMode: 'plan' | 'default' | 'auto' | 'acceptEdits' | 'bypassPermissions'
+  tuiAddedDirsByKeyRef: React.RefObject<Record<string, string[]>>
+  setTuiAddedDirsByKey: React.Dispatch<React.SetStateAction<Record<string, string[]>>>
+  composerLiveSlashCommands: SlashCommandSuggestion[]
+  setLocalCommandOutputs: React.Dispatch<React.SetStateAction<ThreadedMessage[]>>
+  openEditorAt: (path: string | null, line: number | null) => void
+}
+
+export function runRunTuiLocalCommand(ctx: RunTuiLocalCommandContext, target: Session, text: string) {
+  const {
+    startFreshSession, setCodexCollaborationMode, sendComposerMessage, showNotice,
+    setComposerActive, executeCommandPalette, editComposerInExternalEditor, sessionDetailMtimeRef,
+    loader, refreshSelectedSessionDetail, forkIntoNewSession, composerSendState,
+    reattachedRunningRef, sessionDetail, setComposerRewindIndex, setComposerRewindItems,
+    handoffToProvider, composerTextareaRef, setComposerDraft, runPluginCommandId, openDiagnostics,
+    setFocusedPane, setSessionSearchMode, setExitConfirmOpen, renderer, openModelPicker,
+    switchComposerModel, composerCurrentModel, contextUsage, composerPermissionMode,
+    tuiAddedDirsByKeyRef, setTuiAddedDirsByKey, composerLiveSlashCommands, setLocalCommandOutputs,
+    openEditorAt,
+  } = ctx
+  const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text.trim())
+  if (!match) return false
+  const command = match[1]!.toLowerCase()
+  const targetProvider = target.provider ?? 'claude'
+  if (command === 'clear' || command === 'new') {
+    void startFreshSession(targetProvider, target.cwd ?? process.cwd())
+    return true
+  }
+  // Views every native CLI has, mapped onto the TUI surface that shows them.
+  if (command === 'plan' && targetProvider === 'codex') {
+    setCodexCollaborationMode(target, 'plan')
+    const goal = match[2]!.trim()
+    if (goal) setTimeout(() => { void sendComposerMessage(goal) }, 0)
+    else showNotice('info', 'Codex is in Plan mode — ⇧Tab returns to Default', 4000)
+    return true
+  }
+  // Native terminal-UI commands answered by the TUI surface that does the
+  // same job, or by why there is none — never "cannot run".
+  const equivalent = tuiCommandEquivalent(targetProvider, command)
+  if (equivalent) {
+    if ('palette' in equivalent) {
+      setComposerActive(false)
+      executeCommandPalette(equivalent.palette)
+    } else {
+      showNotice('info', equivalent.notice, 8000)
+    }
+    return true
+  }
+  if (targetProvider === 'opencode' && command === 'editor') {
+    // After the caller has cleared "/editor" from the composer.
+    setTimeout(editComposerInExternalEditor, 0)
+    return true
+  }
+  if (targetProvider === 'opencode' && command === 'redo') {
+    // Restores what /undo (a revert) took back; nothing to redo is a no-op.
+    void runTuiSessionAction(target, { action: 'unrevert' })
+      .then(async () => {
+        sessionDetailMtimeRef.current.delete(sessionKey(target))
+        loader.invalidate(target)
+        await refreshSelectedSessionDetail(target, true)
+        showNotice('info', 'Restored the reverted messages', 4000)
+      })
+      .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Redo failed'))
+    return true
+  }
+  if (command === 'side' && targetProvider === 'codex') {
+    void forkIntoNewSession(target, match[2]!.trim() || undefined)
+    return true
+  }
+  if (command === 'rewind' || (command === 'undo' && targetProvider === 'opencode') || (command === 'tree' && targetProvider === 'pi')) {
+    if (composerSendState === 'sending' || reattachedRunningRef.current) {
+      showNotice('info', 'Wait for the turn to finish (or ⌃C it) before rewinding')
+      return true
+    }
+    const detail = sessionDetail && sessionDetail.info?.sessionId === target.sessionId ? sessionDetail : null
+    const items = rewindCandidates(detail?.rawMessages ?? [])
+    if (items.length === 0) {
+      showNotice('info', 'No earlier prompt to rewind to')
+      return true
+    }
+    setComposerRewindIndex(0)
+    setComposerRewindItems(items)
+    return true
+  }
+  if (command === 'handoff') {
+    void handoffToProvider(target, match[2]!)
+    return true
+  }
+  if (command === 'fork') {
+    void forkIntoNewSession(target)
+    return true
+  }
+  if (command === 'mention') {
+    // Codex's /mention starts a file mention; here that is the @ picker.
+    setTimeout(() => {
+      composerTextareaRef.current?.setText('@')
+      setComposerDraft('@')
+    }, 0)
+    return true
+  }
+  if (command === 'diff') {
+    setComposerActive(false)
+    runPluginCommandId('git')
+    return true
+  }
+  if (command === 'mcp') {
+    setComposerActive(false)
+    openDiagnostics(target)
+    return true
+  }
+  if (command === 'resume') {
+    setComposerActive(false)
+    setFocusedPane('sessions')
+    setSessionSearchMode(true)
+    return true
+  }
+  if (command === 'exit' || command === 'quit') {
+    setComposerActive(false)
+    setExitConfirmOpen(true)
+    return true
+  }
+  if (command === 'copy') {
+    const lastReply = [...(sessionDetail?.threadedMessages ?? [])].reverse()
+      .find((message) => message.role === 'assistant' && message.blocks.some((block) => block.type === 'text' && block.text.trim()))
+    const text = lastReply?.blocks.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n\n').trim()
+    if (!text) {
+      showNotice('info', 'No reply to copy yet', 3500)
+      return true
+    }
+    void writeClipboard(text, renderer)
+      .then(() => showNotice('info', 'Copied the last reply', 3000))
+      .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Copy failed'))
+    return true
+  }
+  if (command === 'export') {
+    const persisted = sessionDetail?.threadedMessages ?? []
+    if (persisted.length === 0) {
+      showNotice('info', 'Nothing to export yet', 3500)
+      return true
+    }
+    const file = match[2]!.trim() || `conversation-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`
+    const destination = resolve(target.cwd ?? process.cwd(), file)
+    try {
+      writeFileSync(destination, formatTranscriptExpandedText(persisted), 'utf8')
+      showNotice('info', `Exported the conversation to ${destination}`, 8000)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Export failed')
+    }
+    return true
+  }
+  if (command === 'model') {
+    // The composer sends its own model with every turn, so a switch made
+    // inside the provider (the SDK's own /model) was undone by the next send.
+    const requested = match[2]!.trim()
+    if (!requested) {
+      setComposerActive(false)
+      void openModelPicker()
+    } else {
+      void switchComposerModel(target, requested)
+    }
+    return true
+  }
+  if (targetProvider !== 'claude') return false
+  if (command === 'status') {
+    // The same resolution the composer footer shows.
+    const model = composerCurrentModel ?? 'auto'
+    const usage = contextUsage ? ` · Context: ${Math.round(contextUsage.totalTokens / 1000)}k${contextUsage.maxTokens ? `/${Math.round(contextUsage.maxTokens / 1000)}k` : ''}` : ''
+    showNotice('info', `Model: ${model} · Mode: ${composerPermissionMode} · Directory: ${target.cwd ?? process.cwd()} · Session: ${target.sessionId}${usage}`, 12_000)
+    return true
+  }
+  if (command === 'add-dir') {
+    const requested = match[2]!.trim()
+    const key = sessionKey(target)
+    const current = tuiAddedDirsByKeyRef.current[key] ?? []
+    if (!requested) {
+      showNotice('info', current.length ? `Added directories: ${current.join(', ')}` : 'Usage: /add-dir <path>', 8000)
+      return true
+    }
+    const directory = resolve(target.cwd ?? process.cwd(), requested.replace(/^~(?=$|\/)/, homedir()))
+    let isDirectory = false
+    try { isDirectory = statSync(directory).isDirectory() } catch { /* reported below */ }
+    if (!isDirectory) {
+      showNotice('error', `Not a directory: ${directory}`)
+      return true
+    }
+    if (!current.includes(directory)) {
+      setTuiAddedDirsByKey((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), directory] }))
+    }
+    showNotice('info', `Added ${directory} — Claude can work there from the next message`, 6000)
+    return true
+  }
+  if (command === 'skills') {
+    // Anything Claude Code does not ship itself: skills, and user, project,
+    // plugin and MCP commands — what the CLI's /skills lists.
+    const skills = composerLiveSlashCommands.filter((entry) => !entry.builtin)
+    const stdout = skills.length === 0
+      ? 'No skills are available in this session.'
+      : ['Skills:', ...skills.map((entry) => `  ${entry.command}${entry.description ? ` — ${entry.description}` : ''}`)].join('\n')
+    setLocalCommandOutputs((prev) => upsertThreadedMessage(prev, {
+      role: 'user',
+      uuid: `live-local-skills:${Date.now()}`,
+      sessionId: target.sessionId,
+      provider: target.provider,
+      timestamp: new Date().toISOString(),
+      blocks: [{ type: 'local_command_stdout', stdout }],
+    }))
+    return true
+  }
+  if (command === 'hooks' || command === 'permissions') {
+    // Diagnostics (⇧D) lists both, read from the session itself.
+    setComposerActive(false)
+    openDiagnostics(target)
+    return true
+  }
+  // /bashes: background shells are SDK background tasks, listed with the todos.
+  if (command === 'todos' || command === 'bashes') {
+    runPluginCommandId('tasks-full')
+    return true
+  }
+  if (command === 'memory') {
+    const memoryPath = join(target.cwd ?? process.cwd(), 'CLAUDE.md')
+    if (!existsSync(memoryPath)) {
+      showNotice('info', 'This project has no CLAUDE.md yet — /init creates one', 6000)
+      return true
+    }
+    openEditorAt(memoryPath, null)
+    return true
+  }
+  return false
 }
