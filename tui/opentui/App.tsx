@@ -378,6 +378,7 @@ import { usePopoverTakesWindowGroup } from './app/slices/popoverTakesWindow'
 import { useComposerKeysTargetTurnGroup } from './app/slices/composerKeysTargetTurn'
 import { useComposerMentionVisibleCountGroup } from './app/slices/composerMentionVisibleCount'
 import { useComposerWaitingStatusSeedGroup } from './app/slices/composerWaitingStatusSeed'
+import { useModelPickerFocusedDescriptionGroup } from './app/slices/modelPickerFocusedDescription'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2144,28 +2145,16 @@ function OpenTuiWorkspace() {
     : modelPickerFocus === 'effort'
       ? 'EFFORT'
       : modelPickerPermissionLabel
-  const modelPickerFocusedDescription = modelPickerFocusedOption?.description
-    || String(modelPickerFocusedOption?.value ?? '')
-  const composerContextUsage = useMemo(() => {
-    if (!composerTargetSession) return null
-    const targetKey = sessionKey(composerTargetSession)
-    const usage = selectedSessionKey === targetKey
-      ? contextUsage
-      : sessionContextUsageCacheRef.current.get(targetKey) ?? null
-    return usage ?? null
-  }, [composerTargetSession, contextUsage, selectedSessionKey])
-  const [composerPlanLimits, setComposerPlanLimits] = useState<ClaudePlanLimits | null>(null)
-  // One-line chip summarising the active model, explicit effort, and any
-  // provider-specific send knobs.
-  const composerKnobSegments = useMemo(() => runComposerKnobSegments({
-    composerTargetSession, composerPermissionMode, theme, composerCurrentModel,
-    composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits,
-    tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
-    composerCopilotPermissionMode, composerCopilotContextTier, composerEnableWorkflow,
-  }), [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
-  const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
-  const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
-  const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)
+  const {
+    modelPickerFocusedDescription, setComposerPlanLimits, composerKnobSegments,
+    composerWorkingDirectory, composerGitBranch, composerGitSummary, setComposerGitSummary,
+  } = useModelPickerFocusedDescriptionGroup({
+    modelPickerFocusedOption, composerTargetSession, selectedSessionKey, contextUsage,
+    sessionContextUsageCacheRef, composerPermissionMode, theme, composerCurrentModel,
+    composerAccentColor, composerModelLookupSettled, tuiEffort, tuiOpenCodeAgent,
+    composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
+    composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
+  })
   useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
