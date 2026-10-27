@@ -9,6 +9,10 @@ import { basename, join } from 'node:path'
 import { type TuiMentionResult } from '../types'
 import { type QueuedComposerSend } from '../types'
 import { type RewindCandidate } from '../../rewindTargets'
+import React, { type RefObject } from 'react'
+import { type SyntaxStyle, type TextareaRenderable } from '@opentui/core'
+import { COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from '../layoutConstants'
+import { composerKeyBindings } from '../composerInput'
 
 export type RenderComposerSlashPanelContext = {
   composerActive: boolean
@@ -339,4 +343,52 @@ export function runRenderComposerRewindPanel(ctx: RenderComposerRewindPanelConte
       })}
     </box>
   )
+}
+
+export type RenderComposerTextareaContext = {
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  composerActive: boolean
+  windowControlMode: 'identify' | 'manage' | null
+  composerPlaceholder: string
+  composerDraft: string
+  composerSyntaxStyle: SyntaxStyle
+  composerShellDraft: boolean
+  theme: TuiThemePalette
+  handleComposerContentChange: () => void
+  composerChatTextareaStyle: { backgroundColor: string; focusedBackgroundColor: string; flexGrow: number; textColor: string; focusedTextColor: string; placeholderColor: string; }
+  composerBaseTextareaStyle: { backgroundColor: string; textColor: string; focusedBackgroundColor: string; focusedTextColor: string; placeholderColor: string; }
+  composerDockTextareaStyle: { backgroundColor: string; focusedBackgroundColor: string; flexGrow: number; textColor: string; focusedTextColor: string; placeholderColor: string; }
+}
+
+export function runRenderComposerTextarea(ctx: RenderComposerTextareaContext, onSubmit: () => void, options?: { height?: number; width?: number; variant?: 'chat'; background?: string }) {
+  const {
+    composerTextareaRef, composerActive, windowControlMode, composerPlaceholder, composerDraft,
+    composerSyntaxStyle, composerShellDraft, theme, handleComposerContentChange,
+    composerChatTextareaStyle, composerBaseTextareaStyle, composerDockTextareaStyle,
+  } = ctx
+return (
+  <textarea
+    id="composer-textarea"
+    ref={composerTextareaRef}
+    focused={composerActive && !windowControlMode}
+    width={options?.width}
+    height={options?.height}
+    wrapMode="word"
+    placeholder={composerPlaceholder}
+    initialValue={composerDraft}
+    keyBindings={composerKeyBindings}
+    syntaxStyle={composerSyntaxStyle}
+    // The default cursor is white whatever the theme, which is no cursor at
+    // all on a light one.
+    cursorColor={composerShellDraft ? theme.amber : theme.text}
+    cursorStyle={composerShellDraft ? COMPOSER_SHELL_CURSOR : COMPOSER_PROMPT_CURSOR}
+    onContentChange={handleComposerContentChange}
+    onSubmit={onSubmit}
+    style={options?.variant === 'chat'
+      ? composerChatTextareaStyle
+      : options?.background
+      ? { ...composerBaseTextareaStyle, backgroundColor: options.background, focusedBackgroundColor: options.background }
+      : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
+  />
+)
 }

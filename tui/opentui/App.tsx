@@ -310,7 +310,7 @@ import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoo
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
-import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
+import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel, runRenderComposerTextarea } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect, runMetricsGaugeEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect, runProviderSubagentSummariesEffect } from './app/effects/session'
@@ -8132,34 +8132,11 @@ function OpenTuiWorkspace() {
   }
   // Same test the send path applies (`bangShell`).
   const composerShellDraft = composerDraft.startsWith('!')
-  const renderComposerTextarea = (
-    onSubmit: () => void,
-    options?: { height?: number; width?: number; variant?: 'chat'; background?: string },
-  ) => (
-    <textarea
-      id="composer-textarea"
-      ref={composerTextareaRef}
-      focused={composerActive && !windowControlMode}
-      width={options?.width}
-      height={options?.height}
-      wrapMode="word"
-      placeholder={composerPlaceholder}
-      initialValue={composerDraft}
-      keyBindings={composerKeyBindings}
-      syntaxStyle={composerSyntaxStyle}
-      // The default cursor is white whatever the theme, which is no cursor at
-      // all on a light one.
-      cursorColor={composerShellDraft ? theme.amber : theme.text}
-      cursorStyle={composerShellDraft ? COMPOSER_SHELL_CURSOR : COMPOSER_PROMPT_CURSOR}
-      onContentChange={handleComposerContentChange}
-      onSubmit={onSubmit}
-      style={options?.variant === 'chat'
-        ? composerChatTextareaStyle
-        : options?.background
-        ? { ...composerBaseTextareaStyle, backgroundColor: options.background, focusedBackgroundColor: options.background }
-        : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
-    />
-  )
+  const renderComposerTextarea = (onSubmit: () => void, options?: { height?: number; width?: number; variant?: 'chat'; background?: string }) => runRenderComposerTextarea({
+    composerTextareaRef, composerActive, windowControlMode, composerPlaceholder, composerDraft,
+    composerSyntaxStyle, composerShellDraft, theme, handleComposerContentChange,
+    composerChatTextareaStyle, composerBaseTextareaStyle, composerDockTextareaStyle,
+  }, onSubmit, options)
   const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => runRenderComposerMentionPanel({
     composerActive, composerMention, composerMentionVisibleCount, composerMentionResults,
     composerMentionIndex, theme, composerAccentColor, composerConfig, composerProvider,
