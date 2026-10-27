@@ -358,6 +358,7 @@ import { useSubmitComposerFromDockGroup } from './app/slices/submitComposerFromD
 import { useComposerDockStatsForGroup } from './app/slices/composerDockStatsFor'
 import { useStatusLabelGroup } from './app/slices/statusLabel'
 import { useControlWindowIndexGroup } from './app/slices/controlWindowIndex'
+import { useOpenMoveWorkspaceMenuGroup } from './app/slices/openMoveWorkspaceMenu'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7242,85 +7243,28 @@ function OpenTuiWorkspace() {
     if (!overviewPendingTarget) return
     if (overviewTargets.has(overviewPendingTarget)) { pickWindowTarget(overviewPendingTarget); setOverviewPendingTarget(null) }
   }, [overviewPendingTarget, overviewSignature, workspaceId])
-
-  const openMoveWorkspaceMenu = useStableEvent((sourceId: string, target: string, singleTab = false, point = { x: Math.floor(width / 3), y: 3 }) => {
-    leaveWindowControls()
-    setWindowSwitcherOpen(false)
-    const controller = workspaceContext.controller
-    const items = controller.getSnapshot().spaces.flatMap(space => space.workspaces.filter(workspace => workspace.id !== sourceId).map(workspace => ({
-      label: `${space.name} / ${workspace.name}`,
-      run: () => {
-        try {
-          const result = moveWorkspaceWindow(controller, sourceId, workspace.id, target, singleTab)
-          for (const id of result.resourceIds) { reassignShell(id, sourceId, workspace.id); reassignProcess(id, sourceId, workspace.id) }
-          controller.activate(space.id, workspace.id)
-          showNotice('info', `Moved to ${space.name} / ${workspace.name}`)
-        } catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
-      },
-    })))
-    if (!items.length) { showNotice('info', 'Create another workspace first using the spaces menu'); return }
-    setContextMenu({ ...point, title: 'Move to workspace…', items })
-  })
-
-  const splitFocusedWindow = useStableEvent((orientation: SplitPaneOrientation, target: number | null = splitFocusIndex) => runSplitFocusedWindow({
-    splitFocusIndex, showNotice, orderedWindowKeys, windowZoom, fullscreenMode,
-    visibleSplitPaneCount, rectOf, splitCandidateSessions, parkedWindowKeysRef, windowSurfaces,
-    popoverTabs, fittedWindows, readerAreaWidth, windowAreaHeight, splitOrientation,
-    splitReaderLast, reconciledSplitTree, primaryLeaf, popoverHostSlot, splitTreeLimits,
-    checkpointWindowLayout, setWindowSplitTree, setWindowOrder, splitPinnedSessions,
-    splitPaneCount, setSplitPinnedKeys, setSplitPaneCount, setWindowSurfaces,
-    pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane, setSplitFocusIndex,
-  }, orientation, target))
-  const resizeTreeWindow = useStableEvent((slot: number, direction: 1 | -1) => {
-    if (!reconciledSplitTree || !treeGeometry) return
-    const path = splitPath(reconciledSplitTree.root, slot)
-    if (!path) { showNotice('info', 'That window has no split divider'); return }
-    const parent = path.slice(0, -1)
-    const divider = treeGeometry.dividers.find(divider => divider.path === parent)
-    if (!divider) return
-    const extent = divider.axis === 'x' ? divider.rect.width : divider.rect.height
-    const change = direction * (divider.axis === 'x' ? 4 : 2) * (path.endsWith('0') ? 1 : -1)
-    const first = Math.max(divider.minFirst, Math.min(extent - divider.minSecond, divider.firstExtent + change))
-    if (first === divider.firstExtent) { showNotice('info', 'The neighbouring window is at its minimum size'); return }
-    checkpointWindowLayout()
-    setWindowSplitTree({ ...reconciledSplitTree, root: updateSplitRatio(reconciledSplitTree.root, parent, first / extent) })
-  })
-  const dragTreeDivider = useStableEvent((path: string, point: { x: number; y: number }) => {
-    if (treeDividerActivePathRef.current !== path || !reconciledSplitTree || !treeGeometry) return
-    const divider = treeGeometry.dividers.find(divider => divider.path === path)
-    const area = rectOf('window-area')
-    if (!divider || !area) return
-    const extent = divider.axis === 'x' ? divider.rect.width : divider.rect.height
-    const offset = divider.axis === 'x' ? point.x - area.x - divider.rect.x + 1 : point.y - area.y - divider.rect.y + 1
-    const first = Math.max(divider.minFirst, Math.min(extent - divider.minSecond, offset))
-    if (first === divider.firstExtent) return
-    if (!treeDividerCheckpointedRef.current) { checkpointWindowLayout(); treeDividerCheckpointedRef.current = true }
-    setWindowSplitTree({ ...reconciledSplitTree, root: updateSplitRatio(reconciledSplitTree.root, path, first / extent) })
-  })
-
-  // Window controls are transient keyboard owners, never persisted workspace state.
-  const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
-  const blockingWindowPopover = Object.entries({
-    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen,
-    playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
-    handoff: handoffBriefOpen,
-    'file-history': Boolean(fileHistoryPath && gitRepoCwd),
-    teammates: teammatesModalOpen,
-  }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))
-  const windowControlsBlocked = Boolean(
-    pendingPermissions.length || blockingWindowPopover || contextMenu || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen
-    || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen || coordModalOpen || remoteCoordinatorTarget
-    || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
-    || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
-    || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
-  )
-  const endWindowResizeGroup = () => {
-    windowResizeGroupRef.current = false
-    windowResizeCheckpointRef.current = false
-  }
-  const leaveWindowControls = useStableEvent(() => {
-    setWindowControlMode(null)
-    endWindowResizeGroup()
+  const {
+    openMoveWorkspaceMenu, splitFocusedWindow, resizeTreeWindow, dragTreeDivider,
+    controlMenuTarget, setControlMenuTarget, windowControlsBlocked, endWindowResizeGroup,
+    leaveWindowControls,
+  } = useOpenMoveWorkspaceMenuGroup({
+    width, setWindowSwitcherOpen, workspaceContext, showNotice, setContextMenu, splitFocusIndex,
+    orderedWindowKeys, windowZoom, fullscreenMode, visibleSplitPaneCount, rectOf,
+    splitCandidateSessions, parkedWindowKeysRef, windowSurfaces, popoverTabs, fittedWindows,
+    readerAreaWidth, windowAreaHeight, splitOrientation, splitReaderLast, reconciledSplitTree,
+    primaryLeaf, popoverHostSlot, splitTreeLimits, checkpointWindowLayout, setWindowSplitTree,
+    setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
+    setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
+    setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
+    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen, promptLibraryOpen,
+    handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
+    pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
+    spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, coordModalOpen,
+    remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
+    modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
+    composerHistoryOpen, composerStashOpen, searchMode, sessionSearchMode,
+    folderPickerForNewSession, pluginManagerOpen, transcriptDiffDraft, chordHelp,
+    windowResizeGroupRef, windowResizeCheckpointRef, setWindowControlMode,
   })
   useEffect(() => {
     if (windowControlsBlocked) {
