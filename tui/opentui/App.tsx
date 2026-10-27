@@ -312,7 +312,7 @@ import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect } from './app/effects/windows'
-import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect } from './app/effects/app'
+import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
 import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
@@ -5390,27 +5390,9 @@ function OpenTuiWorkspace() {
   // Resolve whether the selected session lives in an agent worktree — drives
   // the composer badge and the merge/discard affordances.
   const selectedSessionCwdForWorktree = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? null
-  useEffect(() => {
-    if (!selectedSessionCwdForWorktree || !selectedSessionCwdForWorktree.includes(WORKTREE_TASK_CWD_SEGMENT)) {
-      setSelectedWorktreeTask(null)
-      return
-    }
-    if (selectedWorktreeTaskCacheRef.current.has(selectedSessionCwdForWorktree)) {
-      setSelectedWorktreeTask(selectedWorktreeTaskCacheRef.current.get(selectedSessionCwdForWorktree) ?? null)
-      return
-    }
-    let cancelled = false
-    void findTuiWorktreeTask(selectedSessionCwdForWorktree)
-      .then((task) => {
-        selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, task)
-        if (!cancelled) setSelectedWorktreeTask(task)
-      })
-      .catch(() => {
-        selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, null)
-        if (!cancelled) setSelectedWorktreeTask(null)
-      })
-    return () => { cancelled = true }
-  }, [selectedSessionCwdForWorktree])
+  useEffect(() => runWorktreeTaskSelectionEffect({
+    selectedSessionCwdForWorktree, setSelectedWorktreeTask, selectedWorktreeTaskCacheRef,
+  }), [selectedSessionCwdForWorktree])
 
   // Name → isolated worktree + branch + fresh session cwd'd into it, composer
   // focused for the first prompt. The task then runs without touching the main

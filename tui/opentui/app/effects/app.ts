@@ -14,6 +14,8 @@ import { type SplitPaneOrientation } from '../../splitPaneState'
 import { type PaneFocus, type NoticeTone } from '../types'
 import { coordinatorAlertDelivery } from '../../../../lib/coordinatorSignals'
 import { subscribeInteractiveCoordinatorNotifications, getInteractiveCoordinatorNotifications } from '../../interactiveCoordinatorStore'
+import { findTuiWorktreeTask, type WorktreeTask } from '../../../../lib/tui/service'
+import { WORKTREE_TASK_CWD_SEGMENT } from '../layoutConstants'
 
 export type SurfacePlacementEffectContext = {
   workspaceContext: WorkspaceContextValue
@@ -236,4 +238,35 @@ export function runRendererListenersEffect(ctx: RendererListenersEffectContext) 
     renderer.off('focus', onFocus)
     renderer.off('blur', onBlur)
   }
+}
+
+export type WorktreeTaskSelectionEffectContext = {
+  selectedSessionCwdForWorktree: string | null
+  setSelectedWorktreeTask: React.Dispatch<React.SetStateAction<WorktreeTask | null>>
+  selectedWorktreeTaskCacheRef: React.RefObject<Map<string, WorktreeTask | null>>
+}
+
+export function runWorktreeTaskSelectionEffect(ctx: WorktreeTaskSelectionEffectContext) {
+  const {
+    selectedSessionCwdForWorktree, setSelectedWorktreeTask, selectedWorktreeTaskCacheRef,
+  } = ctx
+  if (!selectedSessionCwdForWorktree || !selectedSessionCwdForWorktree.includes(WORKTREE_TASK_CWD_SEGMENT)) {
+    setSelectedWorktreeTask(null)
+    return
+  }
+  if (selectedWorktreeTaskCacheRef.current.has(selectedSessionCwdForWorktree)) {
+    setSelectedWorktreeTask(selectedWorktreeTaskCacheRef.current.get(selectedSessionCwdForWorktree) ?? null)
+    return
+  }
+  let cancelled = false
+  void findTuiWorktreeTask(selectedSessionCwdForWorktree)
+    .then((task) => {
+      selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, task)
+      if (!cancelled) setSelectedWorktreeTask(task)
+    })
+    .catch(() => {
+      selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, null)
+      if (!cancelled) setSelectedWorktreeTask(null)
+    })
+  return () => { cancelled = true }
 }
