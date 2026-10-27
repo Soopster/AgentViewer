@@ -536,3 +536,42 @@ export function runRestoreComposerPromptPartExtmarks(ctx: RestoreComposerPromptP
     cursor = end
   }
 }
+
+export type InsertComposerPasteMarkerContext = {
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  ensureComposerPastePartTypeId: (renderable: TextareaRenderable) => number
+  setComposerDraft: (action: React.SetStateAction<string>) => void
+  composerDraftStorageKeyRef: React.RefObject<string | null>
+  writeWorkspaceDraft: (key: string, text: string) => void
+  setComposerHistoryOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setComposerHistoryIndex: React.Dispatch<React.SetStateAction<number>>
+}
+
+export function runInsertComposerPasteMarker(ctx: InsertComposerPasteMarkerContext, marker: string, partId: string) {
+  const {
+    composerTextareaRef, ensureComposerPastePartTypeId, setComposerDraft,
+    composerDraftStorageKeyRef, writeWorkspaceDraft, setComposerHistoryOpen,
+    setComposerHistoryIndex,
+  } = ctx
+  const renderable = composerTextareaRef.current
+  if (!renderable || !marker || !partId) return
+  const textToInsert = `${marker} `
+  const start = renderable.cursorOffset
+  renderable.insertText(textToInsert)
+  const end = start + marker.length
+  const typeId = ensureComposerPastePartTypeId(renderable)
+  const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
+  renderable.extmarks.create({
+    start,
+    end,
+    virtual: true,
+    styleId,
+    typeId,
+    data: { partId },
+  })
+  const next = renderable.plainText
+  setComposerDraft(next)
+  if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, next)
+  setComposerHistoryOpen(false)
+  setComposerHistoryIndex(0)
+}

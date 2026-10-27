@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
@@ -5671,29 +5671,11 @@ function OpenTuiWorkspace() {
     showToggleOutcome('Composer', next ? 'hidden' : 'shown')
   })
 
-  const insertComposerPasteMarker = useStableEvent((marker: string, partId: string) => {
-    const renderable = composerTextareaRef.current
-    if (!renderable || !marker || !partId) return
-    const textToInsert = `${marker} `
-    const start = renderable.cursorOffset
-    renderable.insertText(textToInsert)
-    const end = start + marker.length
-    const typeId = ensureComposerPastePartTypeId(renderable)
-    const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
-    renderable.extmarks.create({
-      start,
-      end,
-      virtual: true,
-      styleId,
-      typeId,
-      data: { partId },
-    })
-    const next = renderable.plainText
-    setComposerDraft(next)
-    if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, next)
-    setComposerHistoryOpen(false)
-    setComposerHistoryIndex(0)
-  })
+  const insertComposerPasteMarker = useStableEvent((marker: string, partId: string) => runInsertComposerPasteMarker({
+    composerTextareaRef, ensureComposerPastePartTypeId, setComposerDraft,
+    composerDraftStorageKeyRef, writeWorkspaceDraft, setComposerHistoryOpen,
+    setComposerHistoryIndex,
+  }, marker, partId))
 
   const attachComposerAttachment = useStableEvent((attachment: SendAttachment, marker: string, noticeText: string) => {
     const id = attachment.id || `paste-${Date.now()}-${composerPromptParts.length}`
