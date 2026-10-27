@@ -310,7 +310,7 @@ import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoo
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
-import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel } from './app/actions/composerPanels'
+import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel } from './app/actions/composerPanels'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -10107,48 +10107,10 @@ function OpenTuiWorkspace() {
         : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
     />
   )
-  const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => {
-    if (!composerActive || !composerMention || composerMentionVisibleCount <= 0) return null
-    const basenameWidth = Math.max(Math.min(28, Math.floor(rowWidth * 0.4)), 8)
-    const pathWidth = Math.max(rowWidth - basenameWidth - 4, 4)
-    const total = composerMentionResults.length
-    const start = Math.max(0, Math.min(composerMentionIndex - Math.floor((composerMentionVisibleCount - 1) / 2), total - composerMentionVisibleCount))
-    const end = Math.min(total, start + composerMentionVisibleCount)
-    const hasMoreBelow = end < total
-    const hasMoreAbove = start > 0
-    return (
-      <box
-        width={panelWidth}
-        height={composerMentionVisibleCount + 3}
-        paddingX={1}
-        backgroundColor={theme.surface2}
-        border
-        borderStyle="single"
-        borderColor={theme.border2}
-        flexDirection="column"
-      >
-        <text fg={composerAccentColor} wrapMode="none">
-          {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ↑↓ select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
-        </text>
-        {composerMentionResults.slice(start, end).map((entry, offset) => {
-          const index = start + offset
-          const active = index === composerMentionIndex
-          const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
-          const detail = entry.kind === 'agent'
-            ? [entry.mode, entry.description].filter(Boolean).join(' · ')
-            : entry.path
-          return (
-            <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
-              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
-              <text fg={theme.dim} wrapMode="none">  </text>
-              <text fg={theme.dim} wrapMode="none">{fitText(detail, pathWidth)}</text>
-            </box>
-          )
-        })}
-      </box>
-    )
-  }
+  const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => runRenderComposerMentionPanel({
+    composerActive, composerMention, composerMentionVisibleCount, composerMentionResults,
+    composerMentionIndex, theme, composerAccentColor, composerConfig, composerProvider,
+  }, panelWidth, rowWidth)
   const renderComposerSlashPanel = (panelWidth: number, rowWidth: number) => runRenderComposerSlashPanel({
     composerActive, composerSlashOpen, composerSlashVisibleCount, composerMention,
     composerSlashCommands, composerSlashIndex, theme, composerAccentColor, composerConfig,

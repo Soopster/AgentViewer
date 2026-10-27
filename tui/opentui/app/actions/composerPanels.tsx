@@ -5,6 +5,8 @@ import { fitText } from '../../textLayout'
 import { type SlashCommandSuggestion } from '../../../../lib/slashCommands'
 import { type ComposerDraftSnapshot } from '../types'
 import { composerSnapshotText, attachmentCountLabel, compactComposerEntryText, composerEntryLineCount } from '../composerInput'
+import { basename, join } from 'node:path'
+import { type TuiMentionResult } from '../types'
 
 export type RenderComposerSlashPanelContext = {
   composerActive: boolean
@@ -178,6 +180,65 @@ export function runRenderComposerStashPanel(ctx: RenderComposerStashPanelContext
             <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
             <text fg={theme.dim} wrapMode="none">  </text>
             <text fg={theme.dim} wrapMode="none">{fitText(meta, metaWidth)}</text>
+          </box>
+        )
+      })}
+    </box>
+  )
+}
+
+export type RenderComposerMentionPanelContext = {
+  composerActive: boolean
+  composerMention: { start: number; query: string; } | null
+  composerMentionVisibleCount: number
+  composerMentionResults: TuiMentionResult[]
+  composerMentionIndex: number
+  theme: TuiThemePalette
+  composerAccentColor: string
+  composerConfig: ProviderComposerConfig
+  composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
+}
+
+export function runRenderComposerMentionPanel(ctx: RenderComposerMentionPanelContext, panelWidth: number, rowWidth: number) {
+  const {
+    composerActive, composerMention, composerMentionVisibleCount, composerMentionResults,
+    composerMentionIndex, theme, composerAccentColor, composerConfig, composerProvider,
+  } = ctx
+  if (!composerActive || !composerMention || composerMentionVisibleCount <= 0) return null
+  const basenameWidth = Math.max(Math.min(28, Math.floor(rowWidth * 0.4)), 8)
+  const pathWidth = Math.max(rowWidth - basenameWidth - 4, 4)
+  const total = composerMentionResults.length
+  const start = Math.max(0, Math.min(composerMentionIndex - Math.floor((composerMentionVisibleCount - 1) / 2), total - composerMentionVisibleCount))
+  const end = Math.min(total, start + composerMentionVisibleCount)
+  const hasMoreBelow = end < total
+  const hasMoreAbove = start > 0
+  return (
+    <box
+      width={panelWidth}
+      height={composerMentionVisibleCount + 3}
+      paddingX={1}
+      backgroundColor={theme.surface2}
+      border
+      borderStyle="single"
+      borderColor={theme.border2}
+      flexDirection="column"
+    >
+      <text fg={composerAccentColor} wrapMode="none">
+        {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ↑↓ select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+      </text>
+      {composerMentionResults.slice(start, end).map((entry, offset) => {
+        const index = start + offset
+        const active = index === composerMentionIndex
+        const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+        const detail = entry.kind === 'agent'
+          ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+          : entry.path
+        return (
+          <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
+            <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+            <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
+            <text fg={theme.dim} wrapMode="none">  </text>
+            <text fg={theme.dim} wrapMode="none">{fitText(detail, pathWidth)}</text>
           </box>
         )
       })}
