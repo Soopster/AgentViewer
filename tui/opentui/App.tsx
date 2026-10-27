@@ -346,6 +346,7 @@ import { useWindowPanesState } from './app/state/windowPanesState'
 import { useProviderThemeState } from './app/state/providerThemeState'
 import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
 import { GridSecondDivider } from './app/overlays/GridSecondDivider'
+import { ComposerWindow } from './app/overlays/ComposerWindow'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -9133,91 +9134,41 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {composerWindowOpen && !presentationHidesComposer ? (
-        <box
-          position="absolute"
-          top={composerWindowTop}
-          left={composerWindowLeft}
-          width={composerWindowWidth}
-          height={composerWindowHeight}
-          border
-          borderStyle="heavy"
-          borderColor={composerAccentColor}
-          backgroundColor={theme.surface2}
-          zIndex={60}
-          flexDirection="column"
-          title={composerWindowBorderTitle}
-          titleColor={composerAccentColor}
-          titleAlignment="left"
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            composerTextareaRef.current?.focus()
-          }}
-        >
-          <box
-            height={composerWindowHeaderHeight}
-            paddingX={1}
-            border={['bottom']}
-            borderStyle="single"
-            borderColor={theme.border}
-            backgroundColor={theme.surface2}
-            flexDirection="row"
-            alignItems="center"
-          >
-            <text fg={theme.dim} wrapMode="none">
-              {renderInlineTextSegments(composerWindowMetaSegments, composerWindowContentWidth, theme.dim)}
-            </text>
-          </box>
-
-          <box
-            height={composerWindowEditorHeight}
-            paddingX={1}
-            paddingY={1}
-            flexDirection="column"
-            overflow="hidden"
-            backgroundColor={theme.surface}
-          >
-            {renderComposerTextarea(submitComposerFromWindow, {
-              height: Math.max(composerWindowEditorHeight - 2, 2),
-              width: composerWindowTextareaWidth,
-            })}
-          </box>
-
-          {renderComposerMentionPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {!composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
-          {renderComposerHistoryPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {renderComposerStashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {renderComposerRewindPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {!composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
-
-          <box
-            height={composerWindowFooterHeight}
-            paddingX={1}
-            border={['top']}
-            borderStyle="single"
-            borderColor={theme.border}
-            backgroundColor={theme.surface2}
-            flexDirection="row"
-            alignItems="center"
-          >
-            <box width={composerWindowFooterStatsWidth} overflow="hidden">
-              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                {composerSlashHint
-                  ? fitText(composerSlashHint, composerWindowFooterStatsWidth)
-                  : <DraftLengthSpans draft={composerDraftState} build={composerWindowDraftFor} width={composerWindowFooterStatsWidth} padFg={theme.dim} />}
-              </text>
-            </box>
-            <box flexGrow={1} />
-            <box width={composerWindowFooterHintWidth} overflow="hidden">
-              <text fg={theme.dim} wrapMode="none">
-                {composerWindowSendingHintSegments
-                  ? renderInlineTextSegments(composerWindowSendingHintSegments, composerWindowFooterHintWidth, theme.dim)
-                  : fitHintText(composerWindowFooterHint, composerWindowFooterHintWidth)}
-              </text>
-            </box>
-          </box>
-        </box>
-      ) : null}
+      <ComposerWindow
+        composerWindowOpen={composerWindowOpen}
+        presentationHidesComposer={presentationHidesComposer}
+        composerWindowTop={composerWindowTop}
+        composerWindowLeft={composerWindowLeft}
+        composerWindowWidth={composerWindowWidth}
+        composerWindowHeight={composerWindowHeight}
+        composerAccentColor={composerAccentColor}
+        theme={theme}
+        composerWindowBorderTitle={composerWindowBorderTitle}
+        composerTextareaRef={composerTextareaRef}
+        composerWindowHeaderHeight={composerWindowHeaderHeight}
+        composerWindowMetaSegments={composerWindowMetaSegments}
+        composerWindowContentWidth={composerWindowContentWidth}
+        composerWindowEditorHeight={composerWindowEditorHeight}
+        renderComposerTextarea={renderComposerTextarea}
+        submitComposerFromWindow={submitComposerFromWindow}
+        composerWindowTextareaWidth={composerWindowTextareaWidth}
+        renderComposerMentionPanel={renderComposerMentionPanel}
+        composerHistoryOpen={composerHistoryOpen}
+        composerStashOpen={composerStashOpen}
+        renderComposerSlashPanel={renderComposerSlashPanel}
+        renderComposerHistoryPanel={renderComposerHistoryPanel}
+        renderComposerStashPanel={renderComposerStashPanel}
+        renderComposerRewindPanel={renderComposerRewindPanel}
+        renderComposerQueuePanel={renderComposerQueuePanel}
+        composerWindowFooterHeight={composerWindowFooterHeight}
+        composerWindowFooterStatsWidth={composerWindowFooterStatsWidth}
+        composerSlashHint={composerSlashHint}
+        composerDraftState={composerDraftState}
+        composerWindowDraftFor={composerWindowDraftFor}
+        composerWindowFooterHintWidth={composerWindowFooterHintWidth}
+        composerWindowSendingHintSegments={composerWindowSendingHintSegments}
+        composerWindowFooterHint={composerWindowFooterHint}
+      />
 
 
       <GridSecondDivider
