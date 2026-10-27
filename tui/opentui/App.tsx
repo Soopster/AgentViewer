@@ -350,7 +350,7 @@ import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
-import { runReaderHeaderChrome } from './app/derived/readerChrome'
+import { runReaderHeaderChrome, runEmbeddedComposerChrome } from './app/derived/readerChrome'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7904,80 +7904,15 @@ function OpenTuiWorkspace() {
   // — a full-width highlighted bar in the same style as a user message row,
   // inside the same border as the transcript, so it reads as the next line of
   // the conversation rather than a docked control.
-  const embeddedComposerChrome: WindowChrome | null = !composerWindowOpen && !composerHidden && !presentationHidesComposer && embeddedComposer ? {
-    rows: composerDockHeight,
-    render: (chromeWidth: number) => (
-        // Chat and Agents: the composer is the reader box's own trailing child —
-        // a full-width highlighted bar in the same style as a user message
-        // row, inside the same border as the transcript, so it reads as
-        // the next line of the conversation rather than a docked control.
-        <box
-          id="composer-dock"
-          width="100%"
-          height={composerDockHeight}
-          flexDirection="column"
-          paddingX={1}
-          backgroundColor={theme.surface2}
-          border={['top', 'left', 'right']}
-          borderStyle="single"
-          borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
-        >
-          <box
-            flexGrow={1}
-            overflow="hidden"
-            paddingX={1}
-            paddingBottom={1}
-            // Matches the textarea so the well covers the prompt glyph and
-            // the padding either side of it, not just the text.
-            backgroundColor={chatComposerFocused ? theme.bg : theme.surface2}
-            flexDirection="row"
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              if (!composerActive) setComposerActive(true)
-              composerTextareaRef.current?.focus()
-            }}
-          >
-            <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
-              {chatComposerFocused ? '❯ ' : '› '}
-            </text>
-            <box flexGrow={1}>
-              {renderComposerTextarea(submitComposerFromDock, {
-                height: composerDockTextareaHeight,
-                width: Math.max(chromeWidth - 8, 1),
-                variant: 'chat',
-              })}
-            </box>
-          </box>
-          <box
-            id="chat-composer-status"
-            position="absolute"
-            bottom={-1}
-            left={1}
-            width={chatComposerStatusWidth}
-            height={1}
-            overflow="hidden"
-            flexDirection="row"
-            alignItems="center"
-          >
-            <box width={chatComposerStatsWidth} overflow="hidden" backgroundColor={theme.surface2} onMouseDown={event => { if (!composerSlashHint) clickComposerStatus(event, composerDockStatsFor(composerDraftState.read().length), chatComposerStatsWidth) }} onMouseMove={event => { if (!composerSlashHint) hoverComposerStatus('chat', event, composerDockStatsFor(composerDraftState.read().length), chatComposerStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
-              <text id="chat-composer-focus-state" fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
-                {composerSlashHint
-                  ? fitText(composerSlashHint, chatComposerStatsWidth)
-                  : <DraftLengthSpans draft={composerDraftState} build={composerDockStatsFor} width={chatComposerStatsWidth} padFg={theme.dim} hover={composerStatusHover?.site === 'chat' ? { index: composerStatusHover.index, bg: theme.surface3 } : null} />}
-              </text>
-            </box>
-            <box flexGrow={1} />
-            <box width={chatComposerHintWidth} overflow="hidden" backgroundColor={theme.surface2}>
-              <text fg={chatComposerFocused && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
-                {chatComposerFocused && composerDockSendingHintSegments
-                  ? renderInlineTextSegments(composerDockSendingHintSegments, chatComposerHintWidth, theme.dim)
-                  : chatComposerHintFitted}
-              </text>
-            </box>
-          </box>
-        </box>
-    ),
-  } : null
+  const embeddedComposerChrome: WindowChrome | null = runEmbeddedComposerChrome({
+    composerWindowOpen, composerHidden, presentationHidesComposer, embeddedComposer,
+    composerDockHeight, theme, chatComposerFocused, composerActive, setComposerActive,
+    composerTextareaRef, renderComposerTextarea, submitComposerFromDock,
+    composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth, composerSlashHint,
+    clickComposerStatus, composerDockStatsFor, composerDraftState, hoverComposerStatus,
+    setComposerStatusHover, composerAccentColor, composerStatusHover, chatComposerHintWidth,
+    visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted,
+  })
   // The reader's chrome above and below the transcript, as rows the window
   // holding the transcript gives up (counted from the conditions that draw it).
   const contextRowShown = !presentationFocusMode && !isStreamView && (Boolean(contextUsage)
