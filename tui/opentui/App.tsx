@@ -313,6 +313,7 @@ import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, 
 import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderComposerStashPanel, runRenderComposerMentionPanel, runRenderComposerQueuePanel, runRenderComposerRewindPanel } from './app/actions/composerPanels'
 import { runWindowSurfaceFocusEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect } from './app/effects/app'
+import { runOptionsEffect } from './app/effects/session'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6949,32 +6950,9 @@ function OpenTuiWorkspace() {
   // React owns the `options` prop, so a root render repaints the plain names;
   // the next tick puts the frame back. Applying one immediately is what keeps
   // that invisible.
-  useEffect(() => {
-    const instance = tabSelectRef.current
-    if (!instance) return undefined
-    if (runningTabKeys.size === 0) {
-      // Nothing is running: hand back exactly what React rendered, or the last
-      // frame drawn stays frozen on a tab that has finished.
-      instance.setOptions(tabOptions)
-      return undefined
-    }
-    let frame = 0
-    const paint = () => {
-      const target = tabSelectRef.current
-      if (!target) return
-      target.setOptions(tabOptions.map((option) => (
-        option.value != null && runningTabKeys.has(option.value as string)
-          ? { ...option, name: tabStripActivity(option.name, tabWidth, TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length]) }
-          : option
-      )))
-    }
-    paint()
-    const id = setInterval(() => {
-      frame += 1
-      paint()
-    }, TAB_SPINNER_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth])
+  useEffect(() => runOptionsEffect({
+    tabSelectRef, runningTabKeys, tabOptions, tabWidth,
+  }), [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
