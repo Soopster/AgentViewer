@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7884,41 +7884,9 @@ function OpenTuiWorkspace() {
     void pasteTextToComposer(text)
   })
 
-  const copySelectedMessage = useStableEvent(async (cardOverride?: TuiTranscriptCard) => {
-    const terminalSelection = terminalSelectionRef.current
-    if (
-      terminalSelection
-      && Date.now() - terminalSelection.capturedAt <= TERMINAL_SELECTION_COPY_WINDOW_MS
-      && terminalSelection.text.trim()
-    ) {
-      try {
-        await writeClipboard(terminalSelection.text, renderer)
-        terminalSelectionRef.current = null
-        showNotice('info', 'Copied terminal selection to clipboard')
-      } catch (err) {
-        showNotice('error', err instanceof Error ? err.message : 'Failed to copy selection')
-      }
-      return
-    }
-
-    const cursorIndex = readCursorIndex()
-    const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
-    if (!card) {
-      showNotice('error', 'No message selected')
-      return
-    }
-    const text = cardClipboardText(card)
-    if (!text) {
-      showNotice('error', 'Selected message has no copyable text')
-      return
-    }
-    try {
-      await writeClipboard(text, renderer)
-      showNotice('info', 'Copied selected message to clipboard')
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
-    }
-  })
+  const copySelectedMessage = useStableEvent(async (cardOverride?: TuiTranscriptCard) => runCopySelectedMessage({
+    terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
+  }, cardOverride))
 
   const replySelectedMessage = useStableEvent((cardOverride?: TuiTranscriptCard) => {
     const cursorIndex = readCursorIndex()

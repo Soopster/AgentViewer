@@ -43,6 +43,8 @@ import { buildContextHandoffPrompt } from '../../../../lib/contextHandoff'
 import { buildHandoffBriefMarkdown } from '../../../../lib/handoffBrief'
 import { recordContextTransfer } from '../../../../lib/contextTransfers'
 import { toggleTuiSessionBookmark } from '../../../../lib/tui/service'
+import { TERMINAL_SELECTION_COPY_WINDOW_MS } from '../layoutConstants'
+import { cardClipboardText, writeClipboard } from '../clipboard'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -592,5 +594,52 @@ export async function runToggleBookmarkForCursor(ctx: ToggleBookmarkForCursorCon
       return updated
     })
     showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
+  }
+}
+
+export type CopySelectedMessageContext = {
+  terminalSelectionRef: React.RefObject<{ text: string; capturedAt: number; } | null>
+  renderer: CliRenderer
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  readCursorIndex: () => number
+  visibleTranscriptCards: TuiTranscriptCard[]
+}
+
+export async function runCopySelectedMessage(ctx: CopySelectedMessageContext, cardOverride?: TuiTranscriptCard) {
+  const {
+    terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
+  } = ctx
+  const terminalSelection = terminalSelectionRef.current
+  if (
+    terminalSelection
+    && Date.now() - terminalSelection.capturedAt <= TERMINAL_SELECTION_COPY_WINDOW_MS
+    && terminalSelection.text.trim()
+  ) {
+    try {
+      await writeClipboard(terminalSelection.text, renderer)
+      terminalSelectionRef.current = null
+      showNotice('info', 'Copied terminal selection to clipboard')
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to copy selection')
+    }
+    return
+  }
+
+  const cursorIndex = readCursorIndex()
+  const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
+  if (!card) {
+    showNotice('error', 'No message selected')
+    return
+  }
+  const text = cardClipboardText(card)
+  if (!text) {
+    showNotice('error', 'Selected message has no copyable text')
+    return
+  }
+  try {
+    await writeClipboard(text, renderer)
+    showNotice('info', 'Copied selected message to clipboard')
+  } catch (err) {
+    showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
   }
 }
