@@ -27,6 +27,15 @@ import { type TuiDensity } from '../../../theme'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { sessionTranscriptUpdatedAt } from '../../sessionRefreshPolicy'
 import { DETAIL_OPEN_DELAY_MS, DETAIL_OPEN_CACHED_DELAY_MS } from '../timing'
+import { type WaitingSession } from '../../../../lib/sessionRuntime'
+import { type ViewerAttentionNote } from '../../../../lib/viewerAttention'
+import { readTuiRuntimeActivity } from '../../../../lib/tui/service'
+import { type AgentProvider, type RunningSessionRef } from '../../../../lib/types'
+import { extractPendingPermissions, type PendingPermission } from '../../../../lib/permissions'
+import { join } from 'node:path'
+import { type RunningRegistryEntry } from '../types'
+import { REATTACH_POLL_MS } from '../timing'
+import { sameJson } from '../perf'
 
 export type OptionsEffectContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
@@ -466,4 +475,113 @@ export function runSessionDetailLoadEffect(ctx: SessionDetailLoadEffectContext) 
     void refreshSelectedSessionDetail(target, true)
   }, opensFromCache ? DETAIL_OPEN_CACHED_DELAY_MS : DETAIL_OPEN_DELAY_MS)
   return () => clearTimeout(timer)
+}
+
+export type RunningRegistryEffectContext = {
+  registryPollInFlightRef: React.RefObject<boolean>
+  setRunningRegistryReady: React.Dispatch<React.SetStateAction<boolean>>
+  setWaitingSessions: React.Dispatch<React.SetStateAction<WaitingSession[]>>
+  setViewerAttentionNotes: React.Dispatch<React.SetStateAction<ViewerAttentionNote[]>>
+  runningRegistryByKeyRef: React.RefObject<Map<string, { sessionId: string; provider: AgentProvider; providerInstanceId?: string; pendingPrompts: Record<string, unknown>[]; pendingPermissions: Record<string, unknown>[]; }>>
+  composerAbortRef: React.MutableRefObject<AbortController | null>
+  ownedTurnKeyRef: React.MutableRefObject<string | null>
+  ownsComposerStream: (key: string) => boolean
+  reattachMarksRef: React.RefObject<Map<string, RunningSessionRef>>
+  markSessionRunning: (ref: RunningSessionRef) => void
+  clearSessionRunning: (ref: RunningSessionRef) => void
+  selectedSessionKeyRef: React.RefObject<string | null>
+  recordAttentionTurnDone: (ref: RunningSessionRef) => void
+  setBackgroundPrompts: React.Dispatch<React.SetStateAction<PendingPermission[]>>
+  attentionNotifiedRef: React.RefObject<Set<string>>
+  notifyAttention: (title: string, sessionId: string, sessionProvider: AgentProvider) => void
+  reconcileSelectedRunningRegistry: (runningByKey: Map<string, RunningRegistryEntry>, ownedKey: string | null) => void
+}
+
+export function runRunningRegistryEffect(ctx: RunningRegistryEffectContext) {
+  const {
+    registryPollInFlightRef, setRunningRegistryReady, setWaitingSessions, setViewerAttentionNotes,
+    runningRegistryByKeyRef, composerAbortRef, ownedTurnKeyRef, ownsComposerStream,
+    reattachMarksRef, markSessionRunning, clearSessionRunning, selectedSessionKeyRef,
+    recordAttentionTurnDone, setBackgroundPrompts, attentionNotifiedRef, notifyAttention,
+    reconcileSelectedRunningRegistry,
+  } = ctx
+  const poll = async () => {
+    if (registryPollInFlightRef.current) return
+    registryPollInFlightRef.current = true
+    let activity: Awaited<ReturnType<typeof readTuiRuntimeActivity>>
+    try {
+      activity = await readTuiRuntimeActivity()
+    } catch {
+      return // registry probe is best-effort
+    } finally {
+      registryPollInFlightRef.current = false
+    }
+    const entries = activity.running
+    setRunningRegistryReady(true)
+    // Every poll reads fresh arrays, and storing one re-renders the whole
+    // root — every ~1.5s for as long as the app is open, whether or not
+    // anything changed. They are small; keep the previous array when equal.
+    setWaitingSessions((prev) => (sameJson(prev, activity.waiting) ? prev : activity.waiting))
+    setViewerAttentionNotes((prev) => (sameJson(prev, activity.attention) ? prev : activity.attention))
+    const runningByKey = new Map(entries.map((entry) => [
+      sessionKey(entry),
+      entry,
+    ]))
+    runningRegistryByKeyRef.current = runningByKey
+    const ownedKey = composerAbortRef.current ? ownedTurnKeyRef.current : null
+    const waitingKeys = new Set(activity.waiting.map((entry) => sessionKey(entry)))
+
+    // Sidebar liveness for turns nobody owns (started before a session
+    // switch, or surviving a dead stream).
+    for (const [key, entry] of runningByKey) {
+      if (ownsComposerStream(key) || reattachMarksRef.current.has(key)) continue
+      const ref: RunningSessionRef = { sessionId: entry.sessionId, provider: entry.provider, providerInstanceId: entry.providerInstanceId }
+      reattachMarksRef.current.set(key, ref)
+      markSessionRunning(ref)
+    }
+    for (const [key, ref] of reattachMarksRef.current) {
+      if (runningByKey.has(key)) continue
+      reattachMarksRef.current.delete(key)
+      clearSessionRunning(ref)
+      // An unowned turn just finished — surface it in the attention inbox
+      // unless the user is already looking at that session.
+      if (key !== selectedSessionKeyRef.current && !waitingKeys.has(key)) recordAttentionTurnDone(ref)
+    }
+
+    const selectedKey = selectedSessionKeyRef.current
+
+    // Prompts blocking running turns on OTHER sessions feed the attention
+    // inbox (the selected session's prompts reconcile into
+    // pendingPermissions below). Notify once per prompt — these are exactly
+    // the "an agent is waiting on you and you can't see it" moments.
+    const background: PendingPermission[] = []
+    for (const [key, entry] of runningByKey) {
+      if (ownsComposerStream(key) || key === selectedKey) continue
+      const permissionPayloads = entry.pendingPermissions.length > 0
+        ? entry.pendingPermissions
+        : entry.pendingPrompts.map((data) => ({
+            type: 'claude_permission',
+            event: { type: 'permission.requested', data },
+          }))
+      background.push(...extractPendingPermissions(permissionPayloads, entry))
+    }
+    setBackgroundPrompts((prev) => {
+      const nextIds = background.map((p) => p.id).join('|')
+      return nextIds === prev.map((p) => p.id).join('|') ? prev : background
+    })
+    const liveIds = new Set(background.map((p) => p.id))
+    for (const id of attentionNotifiedRef.current) {
+      if (!liveIds.has(id)) attentionNotifiedRef.current.delete(id)
+    }
+    for (const prompt of background) {
+      if (attentionNotifiedRef.current.has(prompt.id)) continue
+      attentionNotifiedRef.current.add(prompt.id)
+      notifyAttention(prompt.title, prompt.sessionId ?? '', prompt.provider ?? 'claude')
+    }
+
+    reconcileSelectedRunningRegistry(runningByKey, ownedKey)
+  }
+  void poll()
+  const timer = setInterval(() => { void poll() }, REATTACH_POLL_MS)
+  return () => clearInterval(timer)
 }
