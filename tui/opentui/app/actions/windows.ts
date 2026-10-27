@@ -34,6 +34,10 @@ import { isPopoverWindowKind } from '../../popoverWindows'
 import { fitText } from '../../textLayout'
 import { MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS } from '../layoutConstants'
 import { writeClipboard } from '../clipboard'
+import { type SurfacePanelState } from '../../surfacePanelState'
+import { type WorkspaceContextValue } from '../../workspaceContext'
+import { copySurfaceViewState, surfaceViewNamespace } from '../../windowViewState'
+import { writeTuiSplitOrientation } from '../../../../lib/tui/service'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -478,4 +482,109 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
   }
   if (section) items.push({ label: 'Back…', run: wrap(() => openWindowControlMenu(key, anchor)) })
   setContextMenu({ ...anchor, title: section ? `Window ${section}` : popoverTab ? fitText(windowSurfaceTitle(popoverTab), 34).trimEnd() : fitText(windowKeyTitle(key === 'reader' ? selectedSessionKey ?? key : key), 34).trimEnd(), items })
+}
+
+export type RestoreWindowSnapshotContext = {
+  captureWindowLayout: () => { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: SurfacePanelState; panelOpen: boolean; }
+  setCoordinatorWorkspace: React.Dispatch<React.SetStateAction<ProtocolRunSnapshot | null>>
+  setCoordinatorWorkspaceRunId: React.Dispatch<React.SetStateAction<string | null>>
+  windowSurfaces: string[]
+  liveWindowStacks: WindowStack[]
+  floatingKey: string | null
+  surfacePanel: SurfacePanelState
+  workspaceContext: WorkspaceContextValue
+  setWindowSurfacePeek: React.Dispatch<React.SetStateAction<string | null>>
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  selectedSessionKey: string | null
+  setWorkspaceHasSession: React.Dispatch<React.SetStateAction<boolean>>
+  setWorkspaceReaderSession: (session: Session | null) => void
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+  setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  setSplitArrangement: React.Dispatch<React.SetStateAction<WindowArrangement>>
+  setSplitOrientation: React.Dispatch<React.SetStateAction<SplitPaneOrientation>>
+  setSplitReaderLast: React.Dispatch<React.SetStateAction<boolean>>
+  setSplitReaderShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitSecondaryShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitBottomShare: React.Dispatch<React.SetStateAction<number>>
+  setSplitWeights: React.Dispatch<React.SetStateAction<Partial<Record<WindowGroupKey, number[]>>>>
+  setWindowSurfaces: React.Dispatch<React.SetStateAction<string[]>>
+  setWindowOrder: React.Dispatch<React.SetStateAction<string[]>>
+  setPopoverTabs: React.Dispatch<React.SetStateAction<string[]>>
+  setActivePopoverTab: React.Dispatch<React.SetStateAction<string | null>>
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  setWindowSurfaceMeta: React.Dispatch<React.SetStateAction<Record<string, SurfaceMeta>>>
+  setWindowZoom: React.Dispatch<React.SetStateAction<number | 'reader' | null>>
+  setFullscreenMode: React.Dispatch<React.SetStateAction<boolean>>
+  setSplitFocusIndex: React.Dispatch<React.SetStateAction<number | null>>
+  setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
+  setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
+  setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export function runRestoreWindowSnapshot(ctx: RestoreWindowSnapshotContext, previous: { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: import("/Users/lukeryan/Documents/src/agentViewer/tui/opentui/surfacePanelState").SurfacePanelState; panelOpen: boolean; }) {
+  const {
+    captureWindowLayout, setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, windowSurfaces,
+    liveWindowStacks, floatingKey, surfacePanel, workspaceContext, setWindowSurfacePeek,
+    setOpenTabSessions, selectedSessionKey, setWorkspaceHasSession, setWorkspaceReaderSession,
+    setSelectedSessionKey, setSplitPinnedKeys, setSplitPaneCount, setWindowSplitTree,
+    setSplitArrangement, setSplitOrientation, setSplitReaderLast, setSplitReaderShare,
+    setSplitSecondaryShare, setSplitBottomShare, setSplitWeights, setWindowSurfaces,
+    setWindowOrder, setPopoverTabs, setActivePopoverTab, setWindowStacks, setFloatingWindow,
+    setWindowSurfaceMeta, setWindowZoom, setFullscreenMode, setSplitFocusIndex, setSurfacePanel,
+    setSurfacePanelOpen, setSurfacePanelFocused, setError,
+  } = ctx
+  const layout = previous.layout
+  setCoordinatorWorkspace(previous.workspace)
+  setCoordinatorWorkspaceRunId(previous.workspaceRunId)
+  // Layout undo moves views back, carrying edits made after the relocation.
+  const currentViews = new Set([...windowSurfaces, ...liveWindowStacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey), ...(floatingKey && isSurfaceWindowKey(floatingKey) ? [surfaceIdOfKey(floatingKey)] : [])])
+  const previousViews = new Set([...layout.surfaces, ...layout.stacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey), ...(layout.floating && isSurfaceWindowKey(layout.floating.key) ? [surfaceIdOfKey(layout.floating.key)] : [])])
+  for (const panel of previous.panel.surfaces) if (!surfacePanel.surfaces.some(entry => entry.id === panel.id)) {
+    const source = [...currentViews].find(id => surfaceKindOf(id) === panel.kind && !previousViews.has(id))
+    if (source) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(panel.kind, source), surfaceViewNamespace(panel.kind, undefined, panel.id))
+  }
+  for (const id of previousViews) if (!currentViews.has(id)) {
+    const panel = surfacePanel.surfaces.find(entry => entry.kind === surfaceKindOf(id) && !previous.panel.surfaces.some(previousPanel => previousPanel.id === entry.id))
+    if (panel) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(panel.kind, undefined, panel.id), surfaceViewNamespace(panel.kind, id))
+  }
+  setWindowSurfacePeek(null)
+  setOpenTabSessions((current) => {
+    const keys = new Set(current.map(sessionKey))
+    return [...current, ...previous.tabs.filter((tab) => !keys.has(sessionKey(tab)))]
+  })
+  // Set the reader before restoring pins; its normal swap plan must not
+  // overwrite the saved order. The reconciler will see valid pins next render.
+  if (previous.reader && layout.reader !== selectedSessionKey) { setWorkspaceHasSession(true); setWorkspaceReaderSession(previous.reader); setSelectedSessionKey(layout.reader) }
+  setSplitPinnedKeys(layout.panes)
+  setSplitPaneCount(layout.count)
+  setWindowSplitTree(layout.splitTree ?? null)
+  setSplitArrangement(layout.arrangement)
+  setSplitOrientation(layout.orientation)
+  setSplitReaderLast(layout.readerLast)
+  setSplitReaderShare(layout.readerShare)
+  setSplitSecondaryShare(layout.secondaryShare)
+  setSplitBottomShare(layout.bottomShare)
+  setSplitWeights(layout.weights ?? {})
+  setWindowSurfaces(layout.surfaces)
+  setWindowOrder(layout.order ?? [])
+  setPopoverTabs(layout.popoverTabs ?? []); setActivePopoverTab(layout.activePopoverTab ?? null)
+  setWindowStacks(layout.stacks ?? [])
+  setFloatingWindow(layout.floating ?? null)
+  setWindowSurfaceMeta(layout.surfaceMeta ?? {})
+  setWindowZoom(layout.zoom)
+  setFullscreenMode(layout.fullscreen)
+  setSplitFocusIndex(previous.focus)
+  setSurfacePanel(previous.panel)
+  setSurfacePanelOpen(previous.panelOpen)
+  setSurfacePanelFocused(false)
+  void Promise.all([
+    writeTuiSplitPanes(layout.count),
+    writeTuiSplitOrientation(layout.orientation),
+    writeTuiSplitReaderShare(layout.readerShare),
+    writeTuiWindowArrangement({ arrangement: layout.arrangement, readerLast: layout.readerLast, secondaryShare: layout.secondaryShare, bottomShare: layout.bottomShare, weights: layout.weights ?? {} }),
+  ]).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store restored layout'))
 }

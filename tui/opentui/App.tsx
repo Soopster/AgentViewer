@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot } from './app/actions/windows'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8647,58 +8647,17 @@ function OpenTuiWorkspace() {
     } else windowResizeCheckpointRef.current = false
     windowHistory.checkpoint(captureWindowLayout())
   })
-  const restoreWindowSnapshot = useStableEvent((previous: ReturnType<typeof captureWindowLayout>) => {
-    const layout = previous.layout
-    setCoordinatorWorkspace(previous.workspace)
-    setCoordinatorWorkspaceRunId(previous.workspaceRunId)
-    // Layout undo moves views back, carrying edits made after the relocation.
-    const currentViews = new Set([...windowSurfaces, ...liveWindowStacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey), ...(floatingKey && isSurfaceWindowKey(floatingKey) ? [surfaceIdOfKey(floatingKey)] : [])])
-    const previousViews = new Set([...layout.surfaces, ...layout.stacks.flat().filter(isSurfaceWindowKey).map(surfaceIdOfKey), ...(layout.floating && isSurfaceWindowKey(layout.floating.key) ? [surfaceIdOfKey(layout.floating.key)] : [])])
-    for (const panel of previous.panel.surfaces) if (!surfacePanel.surfaces.some(entry => entry.id === panel.id)) {
-      const source = [...currentViews].find(id => surfaceKindOf(id) === panel.kind && !previousViews.has(id))
-      if (source) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(panel.kind, source), surfaceViewNamespace(panel.kind, undefined, panel.id))
-    }
-    for (const id of previousViews) if (!currentViews.has(id)) {
-      const panel = surfacePanel.surfaces.find(entry => entry.kind === surfaceKindOf(id) && !previous.panel.surfaces.some(previousPanel => previousPanel.id === entry.id))
-      if (panel) copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(panel.kind, undefined, panel.id), surfaceViewNamespace(panel.kind, id))
-    }
-    setWindowSurfacePeek(null)
-    setOpenTabSessions((current) => {
-      const keys = new Set(current.map(sessionKey))
-      return [...current, ...previous.tabs.filter((tab) => !keys.has(sessionKey(tab)))]
-    })
-    // Set the reader before restoring pins; its normal swap plan must not
-    // overwrite the saved order. The reconciler will see valid pins next render.
-    if (previous.reader && layout.reader !== selectedSessionKey) { setWorkspaceHasSession(true); setWorkspaceReaderSession(previous.reader); setSelectedSessionKey(layout.reader) }
-    setSplitPinnedKeys(layout.panes)
-    setSplitPaneCount(layout.count)
-    setWindowSplitTree(layout.splitTree ?? null)
-    setSplitArrangement(layout.arrangement)
-    setSplitOrientation(layout.orientation)
-    setSplitReaderLast(layout.readerLast)
-    setSplitReaderShare(layout.readerShare)
-    setSplitSecondaryShare(layout.secondaryShare)
-    setSplitBottomShare(layout.bottomShare)
-    setSplitWeights(layout.weights ?? {})
-    setWindowSurfaces(layout.surfaces)
-    setWindowOrder(layout.order ?? [])
-    setPopoverTabs(layout.popoverTabs ?? []); setActivePopoverTab(layout.activePopoverTab ?? null)
-    setWindowStacks(layout.stacks ?? [])
-    setFloatingWindow(layout.floating ?? null)
-    setWindowSurfaceMeta(layout.surfaceMeta ?? {})
-    setWindowZoom(layout.zoom)
-    setFullscreenMode(layout.fullscreen)
-    setSplitFocusIndex(previous.focus)
-    setSurfacePanel(previous.panel)
-    setSurfacePanelOpen(previous.panelOpen)
-    setSurfacePanelFocused(false)
-    void Promise.all([
-      writeTuiSplitPanes(layout.count),
-      writeTuiSplitOrientation(layout.orientation),
-      writeTuiSplitReaderShare(layout.readerShare),
-      writeTuiWindowArrangement({ arrangement: layout.arrangement, readerLast: layout.readerLast, secondaryShare: layout.secondaryShare, bottomShare: layout.bottomShare, weights: layout.weights ?? {} }),
-    ]).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store restored layout'))
-  })
+  const restoreWindowSnapshot = useStableEvent((previous: ReturnType<typeof captureWindowLayout>) => runRestoreWindowSnapshot({
+    captureWindowLayout, setCoordinatorWorkspace, setCoordinatorWorkspaceRunId, windowSurfaces,
+    liveWindowStacks, floatingKey, surfacePanel, workspaceContext, setWindowSurfacePeek,
+    setOpenTabSessions, selectedSessionKey, setWorkspaceHasSession, setWorkspaceReaderSession,
+    setSelectedSessionKey, setSplitPinnedKeys, setSplitPaneCount, setWindowSplitTree,
+    setSplitArrangement, setSplitOrientation, setSplitReaderLast, setSplitReaderShare,
+    setSplitSecondaryShare, setSplitBottomShare, setSplitWeights, setWindowSurfaces,
+    setWindowOrder, setPopoverTabs, setActivePopoverTab, setWindowStacks, setFloatingWindow,
+    setWindowSurfaceMeta, setWindowZoom, setFullscreenMode, setSplitFocusIndex, setSurfacePanel,
+    setSurfacePanelOpen, setSurfacePanelFocused, setError,
+  }, previous))
   const undoWindowLayout = useStableEvent(() => {
     const previous = windowHistory.undo(captureWindowLayout())
     if (!previous) { showNotice('info', 'No window changes to undo'); return }
