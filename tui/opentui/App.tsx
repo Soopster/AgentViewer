@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6144,53 +6144,11 @@ function OpenTuiWorkspace() {
     renameDraftRef.current = renameDraft
   }, [renameDraft])
 
-  const commitRename = useStableEvent(async () => {
-    if (!renameSessionKey || !selectedSession) return
-    const trimmed = renameDraftRef.current.trim()
-    setRenameSessionKey(null)
-    setRenameDraft('')
-    renameDraftRef.current = ''
-    if (!trimmed) return
-    setSessions((prev) => prev.map((session) => (
-      sessionKey(session) === renameSessionKey
-        ? { ...session, customTitle: trimmed, summary: trimmed }
-        : session
-    )))
-    setOpenTabSessions((prev) => prev.map((session) => (
-      sessionKey(session) === renameSessionKey
-        ? { ...session, customTitle: trimmed, summary: trimmed }
-        : session
-    )))
-    setSessionDetail((prev) => (
-      prev && selectedSession && sessionKey(selectedSession) === renameSessionKey && prev.info
-        ? {
-            ...prev,
-            info: {
-              ...prev.info,
-              customTitle: trimmed,
-              summary: trimmed,
-            },
-          }
-        : prev
-    ))
-    const cachedDetail = sessionDetailCacheRef.current.get(renameSessionKey)
-    if (cachedDetail?.info) {
-      touchMapEntry(sessionDetailCacheRef.current, renameSessionKey, {
-        ...cachedDetail,
-        info: {
-          ...cachedDetail.info,
-          customTitle: trimmed,
-          summary: trimmed,
-        },
-      })
-    }
-    try {
-      await patchTuiSession(selectedSession, { title: trimmed })
-      void refreshSessions(provider, true, false)
-    } catch {
-      // rename failed silently — session list will show original title on next poll
-    }
-  })
+  const commitRename = useStableEvent(async () => runCommitRename({
+    renameSessionKey, selectedSession, renameDraftRef, setRenameSessionKey, setRenameDraft,
+    setSessions, setOpenTabSessions, setSessionDetail, sessionDetailCacheRef, refreshSessions,
+    provider,
+  }))
 
   // Build the sidebar row elements once per relevant-state change instead of
   // on every App render. The per-row formatting (fitText/timeAgo/joinMeta/

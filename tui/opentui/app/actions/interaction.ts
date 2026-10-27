@@ -19,6 +19,11 @@ import { type TuiPermissionMode } from '../types'
 import { type TuiTranscriptCard } from '../../../format'
 import { type TuiTranscriptView } from '../../../theme'
 import { agentToolCardsFor, agentToolCardIsExpanded } from '../transcriptRows'
+import { TranscriptDetailCache } from '../../transcriptDetailCache'
+import { patchTuiSession, type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type ProviderSelection } from '../../../../lib/types'
+import { sessionKey } from '../sessionList'
+import { touchMapEntry } from '../collections'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -242,4 +247,71 @@ export function runToggleExpansion(ctx: ToggleExpansionContext, scope?: 'selecte
     else next.delete(targetCard.key)
     return next
   })
+}
+
+export type CommitRenameContext = {
+  renameSessionKey: string | null
+  selectedSession: Session | null
+  renameDraftRef: React.RefObject<string>
+  setRenameSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  setRenameDraft: React.Dispatch<React.SetStateAction<string>>
+  setSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setSessionDetail: React.Dispatch<React.SetStateAction<TuiSessionDetail | null>>
+  sessionDetailCacheRef: React.RefObject<TranscriptDetailCache>
+  refreshSessions: (nextProvider: ProviderSelection, preserveSelection?: boolean, foreground?: boolean) => Promise<void>
+  provider: ProviderSelection
+}
+
+export async function runCommitRename(ctx: CommitRenameContext) {
+  const {
+    renameSessionKey, selectedSession, renameDraftRef, setRenameSessionKey, setRenameDraft,
+    setSessions, setOpenTabSessions, setSessionDetail, sessionDetailCacheRef, refreshSessions,
+    provider,
+  } = ctx
+  if (!renameSessionKey || !selectedSession) return
+  const trimmed = renameDraftRef.current.trim()
+  setRenameSessionKey(null)
+  setRenameDraft('')
+  renameDraftRef.current = ''
+  if (!trimmed) return
+  setSessions((prev) => prev.map((session) => (
+    sessionKey(session) === renameSessionKey
+      ? { ...session, customTitle: trimmed, summary: trimmed }
+      : session
+  )))
+  setOpenTabSessions((prev) => prev.map((session) => (
+    sessionKey(session) === renameSessionKey
+      ? { ...session, customTitle: trimmed, summary: trimmed }
+      : session
+  )))
+  setSessionDetail((prev) => (
+    prev && selectedSession && sessionKey(selectedSession) === renameSessionKey && prev.info
+      ? {
+          ...prev,
+          info: {
+            ...prev.info,
+            customTitle: trimmed,
+            summary: trimmed,
+          },
+        }
+      : prev
+  ))
+  const cachedDetail = sessionDetailCacheRef.current.get(renameSessionKey)
+  if (cachedDetail?.info) {
+    touchMapEntry(sessionDetailCacheRef.current, renameSessionKey, {
+      ...cachedDetail,
+      info: {
+        ...cachedDetail.info,
+        customTitle: trimmed,
+        summary: trimmed,
+      },
+    })
+  }
+  try {
+    await patchTuiSession(selectedSession, { title: trimmed })
+    void refreshSessions(provider, true, false)
+  } catch {
+    // rename failed silently — session list will show original title on next poll
+  }
 }
