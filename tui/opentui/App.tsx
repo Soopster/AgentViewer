@@ -350,7 +350,7 @@ import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
-import { runReaderHeaderChrome, runEmbeddedComposerChrome } from './app/derived/readerChrome'
+import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome } from './app/derived/readerChrome'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -7926,67 +7926,13 @@ function OpenTuiWorkspace() {
     pendingNewCount, searchQuery, searchMatches, searchMatchIndex,
   })
   const idleTickerShown = followTail && visibleTranscriptCards.length > 0 && !turnRunningForComposer && !embeddedComposer && !isStreamView
-  const readerFooterChrome: WindowChrome = {
-    rows: chatTurnStatusRows + (idleTickerShown ? 2 : 0) + (embeddedComposerChrome?.rows ?? 0),
-    render: (chromeWidth: number) => (
-      <>
-      {chatTurnStatusRows > 0 ? (
-        <box
-          id="chat-turn-status"
-          height={1}
-          flexShrink={0}
-          paddingLeft={densityState.bodyIndent + 1}
-          flexDirection="row"
-        >
-          <text fg={theme.cyan} wrapMode="none">{'● '}</text>
-          <box flexGrow={1}>
-            {visibleComposerSending ? (
-              <ComposerWaitingStatus
-                startedAt={composerSendStartedAt}
-                seed={composerWaitingStatusSeed}
-                suffix={composerWaitingSuffix}
-                theme={theme}
-                width={Math.max(chromeWidth - densityState.bodyIndent - 6, 16)}
-                message={composerWaitingOnUser}
-              />
-            ) : (
-              <Spinner
-                label={fitText(
-                  visibleAwaitingPersistedTurn
-                    ? 'Syncing transcript…'
-                    : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
-                  Math.max(chromeWidth - densityState.bodyIndent - 6, 16),
-                )}
-                fg={theme.cyan}
-                labelFg={theme.dim}
-              />
-            )}
-          </box>
-        </box>
-      ) : null}
-
-      {/* The idle ticker means "nothing is happening — still watching". A
-          running turn has its own pinned status row next to the composer
-          (elapsed, tokens, interrupt hint), so showing both put a spinner
-          reading "waiting patiently" directly above one reading "Shaping
-          the next move… 2s". Exactly one spinner is on screen at a time,
-          and which one tells you whether a turn is live.
-
-          Chat and Agents omit the idle ticker. Their single activity row
-          appears immediately above the composer only while a turn runs.
-          Stream and Scrollback omit it too: they are the bare transcript,
-          and two rows saying nothing is happening are two rows of it. */}
-      {followTail && visibleTranscriptCards.length > 0
-        && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
-        <box paddingX={2} paddingBottom={1}>
-          <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
-        </box>
-      ) : null}
-
-      {embeddedComposerChrome?.render(chromeWidth)}
-      </>
-    ),
-  }
+  const readerFooterChrome: WindowChrome = runReaderFooterChrome({
+    chatTurnStatusRows, idleTickerShown, embeddedComposerChrome, densityState, theme,
+    visibleComposerSending, composerSendStartedAt, composerWaitingStatusSeed,
+    composerWaitingSuffix, composerWaitingOnUser, visibleAwaitingPersistedTurn, followTail,
+    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, isStreamView,
+    selectedSessionKey,
+  })
   // A window drawing the selected transcript as a pane takes it from here.
   useTranscriptWindowChromeHost(readerHeaderChrome, readerFooterChrome)
 

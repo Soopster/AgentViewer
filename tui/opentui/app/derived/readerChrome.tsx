@@ -15,6 +15,9 @@ import { type RefObject, type ReactNode } from 'react'
 import { type QuietWorkspaceState } from '../../workspaceContext'
 import { type TextareaRenderable } from '@opentui/core'
 import { DraftLengthSpans } from '../inlineText'
+import { type TuiTranscriptCard } from '../../../format'
+import { type WindowChrome } from '../../windowChrome'
+import { Spinner, ComposerWaitingStatus, IdleTicker } from '../chrome'
 
 export type ReaderHeaderChromeContext = {
   presentationFocusMode: boolean
@@ -282,4 +285,95 @@ return !composerWindowOpen && !composerHidden && !presentationHidesComposer && e
       </box>
   ),
 } : null
+}
+
+export type ReaderFooterChromeContext = {
+  chatTurnStatusRows: 1 | 0
+  idleTickerShown: boolean
+  embeddedComposerChrome: WindowChrome | null
+  densityState: { cardGap: number; bodyIndent: number; bodyLines: number; headerRows: number; bodyPad: number; streamGap: number; streamUserGap: number; }
+  theme: TuiThemePalette
+  visibleComposerSending: boolean
+  composerSendStartedAt: number | null
+  composerWaitingStatusSeed: string
+  composerWaitingSuffix: string | null
+  composerWaitingOnUser: 'Waiting for your answer' | 'Waiting for your approval' | null
+  visibleAwaitingPersistedTurn: boolean
+  followTail: boolean
+  visibleTranscriptCards: TuiTranscriptCard[]
+  turnRunningForComposer: boolean
+  embeddedComposer: boolean
+  isStreamView: boolean
+  selectedSessionKey: string | null
+}
+
+export function runReaderFooterChrome(ctx: ReaderFooterChromeContext) {
+  const {
+    chatTurnStatusRows, idleTickerShown, embeddedComposerChrome, densityState, theme,
+    visibleComposerSending, composerSendStartedAt, composerWaitingStatusSeed,
+    composerWaitingSuffix, composerWaitingOnUser, visibleAwaitingPersistedTurn, followTail,
+    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, isStreamView,
+    selectedSessionKey,
+  } = ctx
+return {
+  rows: chatTurnStatusRows + (idleTickerShown ? 2 : 0) + (embeddedComposerChrome?.rows ?? 0),
+  render: (chromeWidth: number) => (
+    <>
+    {chatTurnStatusRows > 0 ? (
+      <box
+        id="chat-turn-status"
+        height={1}
+        flexShrink={0}
+        paddingLeft={densityState.bodyIndent + 1}
+        flexDirection="row"
+      >
+        <text fg={theme.cyan} wrapMode="none">{'● '}</text>
+        <box flexGrow={1}>
+          {visibleComposerSending ? (
+            <ComposerWaitingStatus
+              startedAt={composerSendStartedAt}
+              seed={composerWaitingStatusSeed}
+              suffix={composerWaitingSuffix}
+              theme={theme}
+              width={Math.max(chromeWidth - densityState.bodyIndent - 6, 16)}
+              message={composerWaitingOnUser}
+            />
+          ) : (
+            <Spinner
+              label={fitText(
+                visibleAwaitingPersistedTurn
+                  ? 'Syncing transcript…'
+                  : 'Turn running · reattached — output syncs as it persists · ⌃C interrupt',
+                Math.max(chromeWidth - densityState.bodyIndent - 6, 16),
+              )}
+              fg={theme.cyan}
+              labelFg={theme.dim}
+            />
+          )}
+        </box>
+      </box>
+    ) : null}
+
+    {/* The idle ticker means "nothing is happening — still watching". A
+        running turn has its own pinned status row next to the composer
+        (elapsed, tokens, interrupt hint), so showing both put a spinner
+        reading "waiting patiently" directly above one reading "Shaping
+        the next move… 2s". Exactly one spinner is on screen at a time,
+        and which one tells you whether a turn is live.
+
+        Chat and Agents omit the idle ticker. Their single activity row
+        appears immediately above the composer only while a turn runs.
+        Stream and Scrollback omit it too: they are the bare transcript,
+        and two rows saying nothing is happening are two rows of it. */}
+    {followTail && visibleTranscriptCards.length > 0
+      && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
+      <box paddingX={2} paddingBottom={1}>
+        <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
+      </box>
+    ) : null}
+
+    {embeddedComposerChrome?.render(chromeWidth)}
+    </>
+  ),
+}
 }
