@@ -504,3 +504,35 @@ export function runReuseLastPrompt(ctx: ReuseLastPromptContext) {
   composerTextareaRef.current?.setText(lastUserText)
   setComposerDraft(lastUserText)
 }
+
+export type RestoreComposerPromptPartExtmarksContext = {
+  composerTextareaRef: React.RefObject<TextareaRenderable | null>
+  ensureComposerPastePartTypeId: (renderable: TextareaRenderable) => number
+}
+
+export function runRestoreComposerPromptPartExtmarks(ctx: RestoreComposerPromptPartExtmarksContext, parts: ComposerPromptPart[], text: string) {
+  const {
+    composerTextareaRef, ensureComposerPastePartTypeId,
+  } = ctx
+  const renderable = composerTextareaRef.current
+  if (!renderable) return
+  renderable.extmarks.clear()
+  if (parts.length === 0) return
+  const typeId = ensureComposerPastePartTypeId(renderable)
+  const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
+  let cursor = 0
+  for (const part of parts) {
+    const start = text.indexOf(part.marker, cursor)
+    if (start === -1) continue
+    const end = start + part.marker.length
+    renderable.extmarks.create({
+      start,
+      end,
+      virtual: true,
+      styleId,
+      typeId,
+      data: { partId: part.id },
+    })
+    cursor = end
+  }
+}

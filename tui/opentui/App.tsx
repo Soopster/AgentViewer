@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
@@ -2703,29 +2703,9 @@ function OpenTuiWorkspace() {
     return typeId
   })
 
-  const restoreComposerPromptPartExtmarks = useStableEvent((parts: ComposerPromptPart[], text: string) => {
-    const renderable = composerTextareaRef.current
-    if (!renderable) return
-    renderable.extmarks.clear()
-    if (parts.length === 0) return
-    const typeId = ensureComposerPastePartTypeId(renderable)
-    const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
-    let cursor = 0
-    for (const part of parts) {
-      const start = text.indexOf(part.marker, cursor)
-      if (start === -1) continue
-      const end = start + part.marker.length
-      renderable.extmarks.create({
-        start,
-        end,
-        virtual: true,
-        styleId,
-        typeId,
-        data: { partId: part.id },
-      })
-      cursor = end
-    }
-  })
+  const restoreComposerPromptPartExtmarks = useStableEvent((parts: ComposerPromptPart[], text: string) => runRestoreComposerPromptPartExtmarks({
+    composerTextareaRef, ensureComposerPastePartTypeId,
+  }, parts, text))
 
   const makeComposerSnapshot = useStableEvent((): ComposerDraftSnapshot => ({
     text: composerTextareaRef.current?.plainText ?? composerDraft,
