@@ -46,6 +46,10 @@ import { toggleTuiSessionBookmark } from '../../../../lib/tui/service'
 import { TERMINAL_SELECTION_COPY_WINDOW_MS } from '../layoutConstants'
 import { cardClipboardText, writeClipboard } from '../clipboard'
 import { createTuiWorktreeTask } from '../../../../lib/tui/service'
+import { arrangePaneTree, reconcileWindowSplitTree, type WindowSplitTree } from '../../windowSplitTree'
+import { type FloatingRect, type WindowStack } from '../../windowTabs'
+import { type WindowItem } from '../types'
+import { FLOATING_PANE_INDEX } from '../layoutConstants'
 
 export type SubmitTuiQuestionContext = {
   composerTargetSession: Session | null
@@ -705,4 +709,73 @@ export async function runSubmitWorktreeTask(ctx: SubmitWorktreeTaskContext) {
     worktreeSubmitInFlightRef.current = false
     setWorktreeBusy(false)
   }
+}
+
+export type SelectSidebarSessionContext = {
+  setSidebarSubagentCursor: React.Dispatch<React.SetStateAction<string | null>>
+  windowItems: WindowItem[]
+  focusSplitPane: (paneIndex: number) => void
+  floatingItem: WindowItem | null
+  splitFocusIndex: number | null
+  checkpointWindowLayout: () => void
+  setWorkspaceLaunched: React.Dispatch<React.SetStateAction<boolean>>
+  setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  focusedWindowItem: WindowItem | null
+  windowItemKey: (item: WindowItem) => string
+  orderedWindowKeys: string[]
+  floatingWindow: { key: string; rect: FloatingRect; slot: number; } | null
+  setFloatingWindow: React.Dispatch<React.SetStateAction<{ key: string; rect: FloatingRect; slot: number; } | null>>
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
+  reconciledSplitTree: WindowSplitTree | null
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+  liveWindowStacks: WindowStack[]
+  setComposerPaneTargetKey: React.Dispatch<React.SetStateAction<string | null>>
+  setOverviewPendingTarget: React.Dispatch<React.SetStateAction<string | null>>
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+  setActivePopoverTab: React.Dispatch<React.SetStateAction<string | null>>
+  setWorkspaceHasSession: React.Dispatch<React.SetStateAction<boolean>>
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+}
+
+export function runSelectSidebarSession(ctx: SelectSidebarSessionContext, session: Session) {
+  const {
+    setSidebarSubagentCursor, windowItems, focusSplitPane, floatingItem, splitFocusIndex,
+    checkpointWindowLayout, setWorkspaceLaunched, setOpenTabSessions, focusedWindowItem,
+    windowItemKey, orderedWindowKeys, floatingWindow, setFloatingWindow, commitWindowKeys,
+    setWindowSplitTree, reconciledSplitTree, setWindowStacks, liveWindowStacks,
+    setComposerPaneTargetKey, setOverviewPendingTarget, setFocusedPane, setActivePopoverTab,
+    setWorkspaceHasSession, setSelectedSessionKey, setError,
+  } = ctx
+  setSidebarSubagentCursor(null)
+  const existing = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === sessionKey(session))
+  if (existing >= 0) { focusSplitPane(existing); return }
+  if (floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === sessionKey(session)) { focusSplitPane(FLOATING_PANE_INDEX); return }
+  const key = sessionKey(session)
+  // A focused window takes the selection; otherwise selecting it is enough,
+  // and the selected session is put in a window.
+  if (splitFocusIndex !== null) {
+    checkpointWindowLayout()
+    setWorkspaceLaunched(true)
+    setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, session])
+    const old = focusedWindowItem?.kind === 'session' ? windowItemKey(focusedWindowItem) : null
+    const nextKeys = old && splitFocusIndex !== FLOATING_PANE_INDEX ? orderedWindowKeys.map(entry => entry === old ? key : entry) : [...orderedWindowKeys, key]
+    if (old && splitFocusIndex === FLOATING_PANE_INDEX && floatingWindow) setFloatingWindow({ ...floatingWindow, key })
+    else {
+      commitWindowKeys(nextKeys)
+      setWindowSplitTree(reconciledSplitTree ? reconcileWindowSplitTree(reconciledSplitTree, nextKeys, false) : arrangePaneTree(nextKeys, false, 'columns'))
+    }
+    if (old) setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === old ? key : entry)))
+    setComposerPaneTargetKey(key)
+    setOverviewPendingTarget(key)
+    setFocusedPane('messages')
+    return
+  }
+  setActivePopoverTab(null)
+  setComposerPaneTargetKey(key)
+  setWorkspaceHasSession(true); setWorkspaceLaunched(true)
+  setSelectedSessionKey(key)
+  setError(null)
+  setFocusedPane('sessions')
 }

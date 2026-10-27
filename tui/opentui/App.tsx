@@ -307,7 +307,7 @@ import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } 
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
-import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask } from './app/actions/interaction'
+import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession } from './app/actions/interaction'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -2457,38 +2457,14 @@ function OpenTuiWorkspace() {
   })
 
 
-  const selectSidebarSession = useStableEvent((session: Session) => {
-    setSidebarSubagentCursor(null)
-    const existing = windowItems.findIndex(item => item.kind === 'session' && sessionKey(item.session) === sessionKey(session))
-    if (existing >= 0) { focusSplitPane(existing); return }
-    if (floatingItem?.kind === 'session' && sessionKey(floatingItem.session) === sessionKey(session)) { focusSplitPane(FLOATING_PANE_INDEX); return }
-    const key = sessionKey(session)
-    // A focused window takes the selection; otherwise selecting it is enough,
-    // and the selected session is put in a window.
-    if (splitFocusIndex !== null) {
-      checkpointWindowLayout()
-      setWorkspaceLaunched(true)
-      setOpenTabSessions(current => current.some(tab => sessionKey(tab) === key) ? current : [...current, session])
-      const old = focusedWindowItem?.kind === 'session' ? windowItemKey(focusedWindowItem) : null
-      const nextKeys = old && splitFocusIndex !== FLOATING_PANE_INDEX ? orderedWindowKeys.map(entry => entry === old ? key : entry) : [...orderedWindowKeys, key]
-      if (old && splitFocusIndex === FLOATING_PANE_INDEX && floatingWindow) setFloatingWindow({ ...floatingWindow, key })
-      else {
-        commitWindowKeys(nextKeys)
-        setWindowSplitTree(reconciledSplitTree ? reconcileWindowSplitTree(reconciledSplitTree, nextKeys, false) : arrangePaneTree(nextKeys, false, 'columns'))
-      }
-      if (old) setWindowStacks(liveWindowStacks.map(stack => stack.map(entry => entry === old ? key : entry)))
-      setComposerPaneTargetKey(key)
-      setOverviewPendingTarget(key)
-      setFocusedPane('messages')
-      return
-    }
-    setActivePopoverTab(null)
-    setComposerPaneTargetKey(key)
-    setWorkspaceHasSession(true); setWorkspaceLaunched(true)
-    setSelectedSessionKey(key)
-    setError(null)
-    setFocusedPane('sessions')
-  })
+  const selectSidebarSession = useStableEvent((session: Session) => runSelectSidebarSession({
+    setSidebarSubagentCursor, windowItems, focusSplitPane, floatingItem, splitFocusIndex,
+    checkpointWindowLayout, setWorkspaceLaunched, setOpenTabSessions, focusedWindowItem,
+    windowItemKey, orderedWindowKeys, floatingWindow, setFloatingWindow, commitWindowKeys,
+    setWindowSplitTree, reconciledSplitTree, setWindowStacks, liveWindowStacks,
+    setComposerPaneTargetKey, setOverviewPendingTarget, setFocusedPane, setActivePopoverTab,
+    setWorkspaceHasSession, setSelectedSessionKey, setError,
+  }, session))
 
   const toggleHideScratch = useCallback(() => {
     setHideScratch((current) => {
