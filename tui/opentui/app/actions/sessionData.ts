@@ -37,6 +37,7 @@ import { formatProviderLabel } from '../../../format'
 import { createTuiSession, type TuiProviderInstanceChoice } from '../../../../lib/tui/service'
 import { type AgentProvider } from '../../../../lib/types'
 import { type NoticeTone } from '../types'
+import { writeTuiProvider } from '../../../../lib/tui/service'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -748,5 +749,77 @@ export async function runStartFreshSession(ctx: StartFreshSessionContext, target
     } finally {
       setNewSessionBusy(false)
     }
+  }
+}
+
+export type ChooseProviderContext = {
+  provider: ProviderSelection
+  providerInstanceIdRef: React.RefObject<string | null>
+  closeProviderMenu: () => void
+  setComposerPaneTargetKey: React.Dispatch<React.SetStateAction<string | null>>
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  providerSwitchRef: React.RefObject<boolean>
+  setProviderInstanceId: React.Dispatch<React.SetStateAction<string | null>>
+  setProvider: React.Dispatch<React.SetStateAction<ProviderSelection>>
+  setSessionDetail: React.Dispatch<React.SetStateAction<TuiSessionDetail | null>>
+  setTranscriptCursorKey: (action: string | null | ((previous: string | null) => string | null)) => void
+  setExpandedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setCollapsedCardKeys: React.Dispatch<React.SetStateAction<Set<string>>>
+  setFollowTail: React.Dispatch<React.SetStateAction<boolean>>
+  setPendingNewCount: React.Dispatch<React.SetStateAction<number>>
+  setUnreadBoundaryKey: React.Dispatch<React.SetStateAction<string | null>>
+  setResumeMarkerKey: React.Dispatch<React.SetStateAction<string | null>>
+  setSearchMode: React.Dispatch<React.SetStateAction<boolean>>
+  setSearchQuery: React.Dispatch<React.SetStateAction<string>>
+  setSearchMatchIndex: React.Dispatch<React.SetStateAction<number>>
+  setRestoredReaderState: React.Dispatch<React.SetStateAction<{ sessionKey: string | null; loaded: boolean; state: TuiSessionReaderState | null; }>>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  refreshSessions: (nextProvider: ProviderSelection, preserveSelection?: boolean, foreground?: boolean) => Promise<void>
+}
+
+export async function runChooseProvider(ctx: ChooseProviderContext, nextProvider: ProviderSelection, targetSession?: Session | null, nextInstanceId?: string | null) {
+  const {
+    provider, providerInstanceIdRef, closeProviderMenu, setComposerPaneTargetKey,
+    setSelectedSessionKey, providerSwitchRef, setProviderInstanceId, setProvider, setSessionDetail,
+    setTranscriptCursorKey, setExpandedCardKeys, setCollapsedCardKeys, setFollowTail,
+    setPendingNewCount, setUnreadBoundaryKey, setResumeMarkerKey, setSearchMode, setSearchQuery,
+    setSearchMatchIndex, setRestoredReaderState, setError, refreshSessions,
+  } = ctx
+  if (targetSession === undefined) targetSession = null
+  if (nextInstanceId === undefined) nextInstanceId = null
+  if (nextProvider === provider && nextInstanceId === providerInstanceIdRef.current) {
+    closeProviderMenu()
+    if (targetSession) { setComposerPaneTargetKey(sessionKey(targetSession)); setSelectedSessionKey(sessionKey(targetSession)) }
+    return
+  }
+
+  closeProviderMenu()
+  providerSwitchRef.current = true
+  providerInstanceIdRef.current = nextInstanceId
+  setProviderInstanceId(nextInstanceId)
+  setProvider(nextProvider)
+  setSessionDetail(null)
+  setComposerPaneTargetKey(targetSession ? sessionKey(targetSession) : null)
+  setSelectedSessionKey(targetSession ? sessionKey(targetSession) : null)
+  setTranscriptCursorKey(null)
+  setExpandedCardKeys(new Set())
+  setCollapsedCardKeys(new Set())
+  setFollowTail(true)
+  setPendingNewCount(0)
+  setUnreadBoundaryKey(null)
+  setResumeMarkerKey(null)
+  setSearchMode(false)
+  setSearchQuery('')
+  setSearchMatchIndex(0)
+  setRestoredReaderState({ sessionKey: null, loaded: false, state: null })
+  setError(null)
+
+  try {
+    await writeTuiProvider(nextProvider, nextInstanceId ?? undefined)
+    await refreshSessions(nextProvider, targetSession !== null, true)
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Failed to switch provider')
+  } finally {
+    providerSwitchRef.current = false
   }
 }

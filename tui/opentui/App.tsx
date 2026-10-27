@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider } from './app/actions/sessionData'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -5214,47 +5214,13 @@ function OpenTuiWorkspace() {
     mainContentHeight - commandPaletteTopOffset - 8,
   ))
 
-  const chooseProvider = useStableEvent(async (
-    nextProvider: ProviderSelection,
-    targetSession: Session | null = null,
-    nextInstanceId: string | null = null,
-  ) => {
-    if (nextProvider === provider && nextInstanceId === providerInstanceIdRef.current) {
-      closeProviderMenu()
-      if (targetSession) { setComposerPaneTargetKey(sessionKey(targetSession)); setSelectedSessionKey(sessionKey(targetSession)) }
-      return
-    }
-
-    closeProviderMenu()
-    providerSwitchRef.current = true
-    providerInstanceIdRef.current = nextInstanceId
-    setProviderInstanceId(nextInstanceId)
-    setProvider(nextProvider)
-    setSessionDetail(null)
-    setComposerPaneTargetKey(targetSession ? sessionKey(targetSession) : null)
-    setSelectedSessionKey(targetSession ? sessionKey(targetSession) : null)
-    setTranscriptCursorKey(null)
-    setExpandedCardKeys(new Set())
-    setCollapsedCardKeys(new Set())
-    setFollowTail(true)
-    setPendingNewCount(0)
-    setUnreadBoundaryKey(null)
-    setResumeMarkerKey(null)
-    setSearchMode(false)
-    setSearchQuery('')
-    setSearchMatchIndex(0)
-    setRestoredReaderState({ sessionKey: null, loaded: false, state: null })
-    setError(null)
-
-    try {
-      await writeTuiProvider(nextProvider, nextInstanceId ?? undefined)
-      await refreshSessions(nextProvider, targetSession !== null, true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to switch provider')
-    } finally {
-      providerSwitchRef.current = false
-    }
-  })
+  const chooseProvider = useStableEvent(async (nextProvider: ProviderSelection, targetSession: Session | null = null, nextInstanceId: string | null = null) => runChooseProvider({
+    provider, providerInstanceIdRef, closeProviderMenu, setComposerPaneTargetKey,
+    setSelectedSessionKey, providerSwitchRef, setProviderInstanceId, setProvider, setSessionDetail,
+    setTranscriptCursorKey, setExpandedCardKeys, setCollapsedCardKeys, setFollowTail,
+    setPendingNewCount, setUnreadBoundaryKey, setResumeMarkerKey, setSearchMode, setSearchQuery,
+    setSearchMatchIndex, setRestoredReaderState, setError, refreshSessions,
+  }, nextProvider, targetSession, nextInstanceId))
 
   // Select a session that is already an open tab. If the tab belongs to a
   // different provider than the one currently active, transparently switch
