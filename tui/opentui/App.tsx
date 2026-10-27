@@ -347,6 +347,7 @@ import { useProviderThemeState } from './app/state/providerThemeState'
 import { WindowGroupDividers } from './app/overlays/WindowGroupDividers'
 import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
+import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8952,38 +8953,31 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {pluginOverlay ? (
-        <PluginSurfaceHost
-          surfaceId={pluginOverlay}
-          placement="overlay"
-          session={pluginSessionFor(pluginOverlay)}
-          sessionKey={pluginSessionFor(pluginOverlay) ? sessionKey(pluginSessionFor(pluginOverlay)!) : null}
-          selected={pluginSelectedDetail}
-          live={pluginLiveTranscript}
-          request={pluginOpenRequests[pluginOverlay]?.count}
-          density={density}
-          showToolCalls={showToolCalls}
-          shouldYield={splitPaneShouldYield}
-          cwd={gitRepoCwd}
-          repositorySessionId={gitSessionId}
-          provided={pluginServicesFor(pluginOverlay)}
-          syntaxStyle={handoffBriefSyntaxStyle}
-          path={editorInitialPath}
-          line={editorInitialLine}
-          turn={pluginOverlay === 'checkpoints' ? checkpointFocusPrompt : null}
-          runCommand={runCommandForPlugin}
-          theme={theme}
-          accent={composerAccentColor}
-          width={width}
-          height={height}
-          focused
-          // The control center is a modal: the root's modal scrim dims behind it.
-          scrim={pluginOverlay !== 'coordination'}
-          onClose={closePluginOverlay}
-          onDetach={() => offerPopoverPlacement(pluginOverlay)}
-          onKeyHandlerReady={registerPluginOverlayKeys}
-        />
-      ) : null}
+      <PluginOverlayHost
+        pluginOverlay={pluginOverlay}
+        pluginSessionFor={pluginSessionFor}
+        pluginSelectedDetail={pluginSelectedDetail}
+        pluginLiveTranscript={pluginLiveTranscript}
+        pluginOpenRequests={pluginOpenRequests}
+        density={density}
+        showToolCalls={showToolCalls}
+        splitPaneShouldYield={splitPaneShouldYield}
+        gitRepoCwd={gitRepoCwd}
+        gitSessionId={gitSessionId}
+        pluginServicesFor={pluginServicesFor}
+        handoffBriefSyntaxStyle={handoffBriefSyntaxStyle}
+        editorInitialPath={editorInitialPath}
+        editorInitialLine={editorInitialLine}
+        checkpointFocusPrompt={checkpointFocusPrompt}
+        runCommandForPlugin={runCommandForPlugin}
+        theme={theme}
+        composerAccentColor={composerAccentColor}
+        width={width}
+        height={height}
+        closePluginOverlay={closePluginOverlay}
+        offerPopoverPlacement={offerPopoverPlacement}
+        registerPluginOverlayKeys={registerPluginOverlayKeys}
+      />
 
       {attentionOpen ? (
         <box
