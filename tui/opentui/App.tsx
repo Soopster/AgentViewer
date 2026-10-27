@@ -272,6 +272,7 @@ import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
 import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
+import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -19622,31 +19623,7 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {surfacePanelResizing ? (
-        // Takes the whole drag once it leaves the one-cell border: transparent,
-        // but hit-testable, so the first motion event captures this layer.
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          zIndex={1000}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0)}
-          onMouseDrag={(event: { x: number; y: number }) => {
-            const last = surfacePanelResizeFromRef.current
-            if (last === null) return
-            const position = surfacePanelAtBottom ? event.y : event.x
-            if (position === last) return
-            surfacePanelResizeFromRef.current = position
-            resizeSurfacePanelBy(last - position)
-          }}
-          onMouseUp={() => {
-            surfacePanelResizeFromRef.current = null
-            setSurfacePanelResizing(false)
-          }}
-        />
-      ) : null}
+      <SurfacePanelResizeLayer surfacePanelResizing={surfacePanelResizing} width={width} height={height} surfacePanelResizeFromRef={surfacePanelResizeFromRef} surfacePanelAtBottom={surfacePanelAtBottom} resizeSurfacePanelBy={resizeSurfacePanelBy} setSurfacePanelResizing={setSurfacePanelResizing} />
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
