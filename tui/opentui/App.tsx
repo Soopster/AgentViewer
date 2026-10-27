@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -6924,31 +6924,11 @@ function OpenTuiWorkspace() {
     dropWindowSurfaceState(key)
   })
   // ⌃B ! — the tab leaves its frame and becomes a window of its own beside it.
-  const breakOutWindowTab = useStableEvent((key: string) => {
-    const stack = windowStackFor(key)
-    if (!stack) { showNotice('info', 'This window is not one of several tabs'); return }
-    const frame = stack.find((member) => laidOutWindowKeys.has(member))!
-    const anchor = frame === key ? stackSuccessor(stack, key)! : frame
-    const base = { ...currentPaneTree() }
-    if (frame === key) base.keys = base.keys.map(entry => entry === key ? anchor : entry)
-    const geometry = computeWindowSplitTree(base, readerAreaWidth, windowAreaHeight, splitTreeLimits)
-    const anchorRect = geometry.rects.get(base.keys.indexOf(anchor))
-    for (const edge of ['right', 'bottom'] as const) {
-      const enough = anchorRect && (edge === 'right' ? anchorRect.width >= 2 * SPLIT_PANE_MIN_WIDTH : anchorRect.height >= 2 * SPLIT_PANE_MIN_ROWS)
-      if (!enough) continue
-      const next = placeWindowSplit(base, key, anchor, edge)
-      if (!next || computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits).layout.visibleCount !== next.keys.length) continue
-      checkpointWindowLayout()
-      setWindowStacks(removeFromStack(liveWindowStacks, key))
-      setWindowZoom(null)
-      commitWindowKeys(next.keys, next)
-      setOverviewPendingTarget(key)
-      return
-    }
-    // A tab must never detach into responsive overflow or squeeze its neighbours.
-    floatWindowKey(key)
-    showNotice('info', 'Detached into a floating window · no room beside this pane')
-  })
+  const breakOutWindowTab = useStableEvent((key: string) => runBreakOutWindowTab({
+    windowStackFor, showNotice, laidOutWindowKeys, currentPaneTree, readerAreaWidth,
+    windowAreaHeight, splitTreeLimits, checkpointWindowLayout, setWindowStacks, liveWindowStacks,
+    setWindowZoom, commitWindowKeys, setOverviewPendingTarget, floatWindowKey,
+  }, key))
   // ⌃B t — the focused window becomes a tab of the window before it.
   const tabFocusedWindow = useStableEvent((target: number | null = splitFocusIndex) => {
     if (target === null && shownPopoverTab && windowItems[0]) {

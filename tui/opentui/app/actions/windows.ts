@@ -65,6 +65,7 @@ import { clampFloatingRect } from '../../windowTabs'
 import { findPopoverWindow, pinFor, POPOVER_WINDOWS, type PopoverWindowKind } from '../../popoverWindows'
 import { focusAfterWindowClose } from '../../windowControls'
 import { removeSplitPaneKey } from '../../splitPaneState'
+import { removeFromStack } from '../../windowTabs'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1568,4 +1569,52 @@ export function runCloseSplitPane(ctx: CloseSplitPaneContext, paneIndex?: number
     if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
   }
   applySplitPaneCount(nextCount)
+}
+
+export type BreakOutWindowTabContext = {
+  windowStackFor: (key: string) => WindowStack | null
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  laidOutWindowKeys: Set<string>
+  currentPaneTree: () => WindowSplitTree
+  readerAreaWidth: number
+  windowAreaHeight: number
+  splitTreeLimits: { paneWidth: number; paneRows: number; readerWidth: number; readerRows: number; }
+  checkpointWindowLayout: () => void
+  setWindowStacks: React.Dispatch<React.SetStateAction<WindowStack[]>>
+  liveWindowStacks: WindowStack[]
+  setWindowZoom: React.Dispatch<React.SetStateAction<number | 'reader' | null>>
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  setOverviewPendingTarget: React.Dispatch<React.SetStateAction<string | null>>
+  floatWindowKey: (key: string, session?: Session) => void
+}
+
+export function runBreakOutWindowTab(ctx: BreakOutWindowTabContext, key: string) {
+  const {
+    windowStackFor, showNotice, laidOutWindowKeys, currentPaneTree, readerAreaWidth,
+    windowAreaHeight, splitTreeLimits, checkpointWindowLayout, setWindowStacks, liveWindowStacks,
+    setWindowZoom, commitWindowKeys, setOverviewPendingTarget, floatWindowKey,
+  } = ctx
+  const stack = windowStackFor(key)
+  if (!stack) { showNotice('info', 'This window is not one of several tabs'); return }
+  const frame = stack.find((member) => laidOutWindowKeys.has(member))!
+  const anchor = frame === key ? stackSuccessor(stack, key)! : frame
+  const base = { ...currentPaneTree() }
+  if (frame === key) base.keys = base.keys.map(entry => entry === key ? anchor : entry)
+  const geometry = computeWindowSplitTree(base, readerAreaWidth, windowAreaHeight, splitTreeLimits)
+  const anchorRect = geometry.rects.get(base.keys.indexOf(anchor))
+  for (const edge of ['right', 'bottom'] as const) {
+    const enough = anchorRect && (edge === 'right' ? anchorRect.width >= 2 * SPLIT_PANE_MIN_WIDTH : anchorRect.height >= 2 * SPLIT_PANE_MIN_ROWS)
+    if (!enough) continue
+    const next = placeWindowSplit(base, key, anchor, edge)
+    if (!next || computeWindowSplitTree(next, readerAreaWidth, windowAreaHeight, splitTreeLimits).layout.visibleCount !== next.keys.length) continue
+    checkpointWindowLayout()
+    setWindowStacks(removeFromStack(liveWindowStacks, key))
+    setWindowZoom(null)
+    commitWindowKeys(next.keys, next)
+    setOverviewPendingTarget(key)
+    return
+  }
+  // A tab must never detach into responsive overflow or squeeze its neighbours.
+  floatWindowKey(key)
+  showNotice('info', 'Detached into a floating window · no room beside this pane')
 }
