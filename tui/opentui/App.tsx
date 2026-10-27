@@ -292,6 +292,7 @@ import { pluginSurfaceWants, TUI_KEYED_PLUGIN_COMMANDS } from './app/pluginComma
 import { PluginManagerPopover, PromptLibraryPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover, PlaybookManagerPopover } from './app/lazyOverlays'
 import { handleLetterShortcutKeys } from './app/keys/letterShortcuts'
 import { handleReaderKeys } from './app/keys/readerKeys'
+import { handleWindowAndTabKeys } from './app/keys/windowTabKeys'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -15722,89 +15723,7 @@ function OpenTuiWorkspace() {
       })
       return
     }
-
-    // In the transcript, [ and ] jump between bookmarks. In the sidebar they
-    // resize the rail (handled by the showRail blocks just below).
-    if (effectiveFocus === 'messages' && sequence === ']') {
-      handled(() => jumpToBookmark(1))
-      return
-    }
-
-    if (effectiveFocus === 'messages' && sequence === '[') {
-      handled(() => jumpToBookmark(-1))
-      return
-    }
-
-    if (showRail && sequence === '[') {
-      handled(() => {
-        resizeSidebar(-SIDEBAR_RESIZE_STEP)
-      })
-      return
-    }
-
-    if (showRail && sequence === ']') {
-      handled(() => {
-        resizeSidebar(SIDEBAR_RESIZE_STEP)
-      })
-      return
-    }
-
-    // ⇧← / ⇧→ step through this space's workspaces; plain ← / → step through tabs.
-    if (key.shift && !key.ctrl && !key.meta && (key.name === 'left' || key.name === 'right')) {
-      const controller = workspaceContext.controller
-      const state = controller.getSnapshot()
-      const space = state.spaces.find(candidate => candidate.id === state.activeSpaceId)
-      if (space && space.workspaces.length > 1) {
-        handled(() => {
-          const index = Math.max(0, space.workspaces.findIndex(workspace => workspace.id === space.activeWorkspaceId))
-          const next = space.workspaces[Math.min(space.workspaces.length - 1, Math.max(0, index + (key.name === 'left' ? -1 : 1)))]!
-          if (next.id !== space.activeWorkspaceId) controller.activate(space.id, next.id)
-        })
-        return
-      }
-    }
-
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && selectedSession
-      && (key.name === 'left' || key.name === 'right') && (childrenByParentId.get(sessionKey(selectedSession))?.length ?? 0) > 0) {
-      handled(() => {
-        const parent = sessionKey(selectedSession)
-        setCollapsedSubagentParents(previous => key.name === 'left' ? previous.includes(parent) ? previous : [...previous, parent] : previous.filter(value => value !== parent))
-      })
-      return
-    }
-    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'return') {
-      handled(() => {
-        const entry = sidebarEntries[selectedSidebarEntryIndex]
-        if (entry?.type === 'subagent' && entry.entry.kind === 'summary') {
-          setSubagentTranscriptSelection({ parent: entry.parentSession, agent: entry.entry.summary })
-          setPluginOverlay('subagents')
-          return
-        }
-        promotePreviewToTab()
-        setFocusedPane('messages')
-      })
-      return
-    }
-
-    if (key.name === 'left' && showTabs) {
-      handled(() => selectStripIndex(Math.max(activeStripIndex - 1, 0)))
-      return
-    }
-
-    if (key.name === 'right' && showTabs) {
-      handled(() => selectStripIndex(Math.min(activeStripIndex + 1, tabStripLength - 1)))
-      return
-    }
-
-    if (effectiveFocus === 'messages' && key.name === 'w' && showTabs && shownPopoverTab) {
-      const id = shownPopoverTab
-      handled(() => closePopoverTab(id))
-      return
-    }
-    if (effectiveFocus === 'messages' && key.name === 'w' && !key.ctrl && !key.shift && !key.meta && selectedSession) {
-      handled(() => closeWindowSessionTab(selectedSession))
-      return
-    }
+    if (handleWindowAndTabKeys({ effectiveFocus, sequence, handled, jumpToBookmark, showRail, resizeSidebar, key, workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab })) return
     if (handleReaderKeys({ effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep, jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl, moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView, jumpToUnreadBoundary, selectedInteractiveTranscriptCard, selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor, replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys, transcriptDiffRowCursorByCardKey, setTranscriptDiffSelectionAnchorByCardKey, setTranscriptDiffRowCursorForCard, committedSessionKey, transcriptDiffSelectionAnchorByCardKey, transcriptDiffNotes, toggleTranscriptDiffCardSet, setTranscriptDiffPlainCardKeys, clearTranscriptDiffSelectionForCard, setTranscriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys, showNotice, openTranscriptDiffNote, deleteTranscriptDiffNote, sendTranscriptDiffNoteToComposer, selectedAgentToolCard, selectedAgentToolExpanded, resolvedExpandedKeys, sequence, setSearchMode, setSessionSearchMode, copySelectedMessage, setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch, jumpToMatchingCard })) return
     if (handleLetterShortcutKeys({ sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode, setFocusMode, density, setDensity, isShifted, transcriptWidth, setTranscriptWidth, openTranscriptViewMenu, refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail })) return
   })
