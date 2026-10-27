@@ -321,6 +321,7 @@ import { runPersistBridgeMessagesEffect, runLoadBridgeMessagesEffect, runBridgeS
 import { runFooterSegments } from './app/derived/footer'
 import { runAttentionItems } from './app/derived/attention'
 import { runQuestionPickerPlan } from './app/derived/questionPicker'
+import { runFleetEntries } from './app/derived/fleet'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -1769,77 +1770,10 @@ function OpenTuiWorkspace() {
   // Fleet strip: one cell per live session (running or blocked on input) plus
   // recent background completions — mission-control ambient awareness while
   // reading any single transcript. Digits 1-9 jump to a cell; ⇧A toggles.
-  const fleetEntries = useMemo<Array<{
-    key: string
-    sessionId: string
-    provider: AgentProvider
-    title: string
-    status: 'needs-input' | 'running' | 'waiting' | 'done'
-  }>>(() => {
-    const needsInputKeys = new Set(
-      attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
-    )
-    const entries: Array<{
-      key: string
-      sessionId: string
-      provider: AgentProvider
-      title: string
-      status: 'needs-input' | 'running' | 'waiting' | 'done'
-    }> = runningSessions.map((ref) => {
-      const key = sessionKey({ sessionId: ref.sessionId, provider: ref.provider })
-      const session = sessionsByKeyRef.current.get(key)
-      return {
-        key,
-        sessionId: ref.sessionId,
-        provider: ref.provider,
-        title: session ? formatSessionTitle(session) : ref.sessionId.slice(-8),
-        status: needsInputKeys.has(key) ? 'needs-input' as const : 'running' as const,
-      }
-    })
-    const liveKeys = new Set(entries.map((entry) => entry.key))
-    for (const waiting of waitingSessions) {
-      const key = sessionKey(waiting)
-      if (liveKeys.has(key)) continue
-      const session = sessionsByKeyRef.current.get(key)
-      entries.push({
-        key,
-        sessionId: waiting.sessionId,
-        provider: waiting.provider,
-        title: session ? formatSessionTitle(session) : waiting.sessionId.slice(-8),
-        status: needsInputKeys.has(key) ? 'needs-input' : 'waiting',
-      })
-      liveKeys.add(key)
-    }
-    for (const note of viewerAttentionNotes) {
-      const key = sessionKey(note)
-      if (liveKeys.has(key)) continue
-      const session = sessionsByKeyRef.current.get(key)
-      entries.push({
-        key,
-        sessionId: note.sessionId,
-        provider: note.provider,
-        title: session ? formatSessionTitle(session) : note.sessionId.slice(-8),
-        status: 'needs-input',
-      })
-      liveKeys.add(key)
-    }
-    for (const done of attentionDone) {
-      if (liveKeys.has(done.sessionKey)) continue
-      entries.push({
-        key: done.sessionKey,
-        sessionId: done.sessionId,
-        provider: done.provider,
-        title: done.title,
-        status: 'done' as const,
-      })
-    }
-    // Blocked cells first — they are why the strip exists.
-    return entries.sort((a, b) => {
-      const rank = (status: string) => (status === 'needs-input' ? 0 : status === 'running' ? 1 : status === 'waiting' ? 2 : 3)
-      return rank(a.status) - rank(b.status)
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
+  const fleetEntries = useMemo(() => runFleetEntries({
+    attentionItems, runningSessions, sessionsByKeyRef, waitingSessions, viewerAttentionNotes,
+    attentionDone,
+  }), [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
   const fleetStripVisible = fleetStripEnabled && !presentationFocusMode && fleetEntries.length > 0
   const fleetPageCount = Math.max(Math.ceil(fleetEntries.length / FLEET_PAGE_SIZE), 1)
   const activeFleetPage = Math.min(fleetPage, fleetPageCount - 1)
