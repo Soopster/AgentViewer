@@ -355,3 +355,36 @@ export function runComposerPrewarmEffect(ctx: ComposerPrewarmEffectContext) {
   return () => { cancelled = true }
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }
+
+export type ComposerAffordancesClearEffectContext = {
+  transcriptSession: Session | null
+  committedSessionKey: string | null
+  clearComposerAffordances: () => void
+  composerAffordancesCacheRef: React.RefObject<Map<string, { commands: SlashCommandSuggestion[]; options: Awaited<ReturnType<typeof readViewSessionComposerOptions>>; ts: number; }>>
+  applyComposerAffordances: (target: Session, commands: SlashCommandSuggestion[], composerOptions: Awaited<ReturnType<typeof readViewSessionComposerOptions>>) => void
+  composerActiveRef: React.RefObject<boolean>
+  fetchComposerAffordances: (target: Session, key: string) => Promise<void>
+}
+
+export function runComposerAffordancesClearEffect(ctx: ComposerAffordancesClearEffectContext) {
+  const {
+    transcriptSession, committedSessionKey, clearComposerAffordances, composerAffordancesCacheRef,
+    applyComposerAffordances, composerActiveRef, fetchComposerAffordances,
+  } = ctx
+  const target = transcriptSession
+  if (!target || !committedSessionKey) {
+    clearComposerAffordances()
+    return
+  }
+  const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
+  if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) {
+    applyComposerAffordances(target, cached.commands, cached.options)
+    return
+  }
+  // Don't let the previous session's commands/agents linger while (or
+  // whether) this session's fetch runs.
+  clearComposerAffordances()
+  if ((target.provider ?? 'claude') === 'claude' && !composerActiveRef.current) return
+  void fetchComposerAffordances(target, committedSessionKey)
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}

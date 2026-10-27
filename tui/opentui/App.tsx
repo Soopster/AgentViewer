@@ -314,7 +314,7 @@ import { runRenderComposerSlashPanel, runRenderComposerHistoryPanel, runRenderCo
 import { runWindowSurfaceFocusEffect, runOpenTabsOrderEffect, runSplitPinnedFillEffect, runWindowAttentionEffect } from './app/effects/windows'
 import { runSurfacePlacementEffect, runThemeFollowEffect, runRendererListenersEffect, runWorktreeTaskSelectionEffect, runExitConfirmOpenEffect, runExitDelayEffect } from './app/effects/app'
 import { runOptionsEffect, runTranscriptScrollSyncEffect, runExpansionResetEffect, runTranscriptCursorEffect, runSessionPollIntervalEffect, runDetailRefreshIntervalEffect, runOverlaySettleEffect, runSessionDetailLoadEffect, runRunningRegistryEffect } from './app/effects/session'
-import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect } from './app/effects/composer'
+import { runComposerPreferredTargetEffect, runDraftRestoreEffect, runQueuedSendDrainEffect, runComposerDraftPersistEffect, runPlanLimitsEffect, runComposerMentionSearchEffect, runComposerPrewarmEffect, runComposerAffordancesClearEffect } from './app/effects/composer'
 import { runCoordWatchEffect } from './app/effects/coordination'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3149,24 +3149,10 @@ function OpenTuiWorkspace() {
       composerAffordancesInFlightRef.current.delete(key)
     }
   }, [applyComposerAffordances, clearComposerAffordances])
-  useEffect(() => {
-    const target = transcriptSession
-    if (!target || !committedSessionKey) {
-      clearComposerAffordances()
-      return
-    }
-    const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
-    if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) {
-      applyComposerAffordances(target, cached.commands, cached.options)
-      return
-    }
-    // Don't let the previous session's commands/agents linger while (or
-    // whether) this session's fetch runs.
-    clearComposerAffordances()
-    if ((target.provider ?? 'claude') === 'claude' && !composerActiveRef.current) return
-    void fetchComposerAffordances(target, committedSessionKey)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [committedSessionKey, fetchComposerAffordances])
+  useEffect(() => runComposerAffordancesClearEffect({
+    transcriptSession, committedSessionKey, clearComposerAffordances, composerAffordancesCacheRef,
+    applyComposerAffordances, composerActiveRef, fetchComposerAffordances,
+  }), [committedSessionKey, fetchComposerAffordances])
   // Composer engagement: warm the send path while the user types, then fetch
   // the deferred Claude affordances. Prewarm spawns the pool Query the send
   // will attach to (removing the ~1-3s CLI boot from first-token latency) or
