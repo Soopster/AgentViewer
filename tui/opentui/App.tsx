@@ -305,7 +305,7 @@ import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToCompo
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession } from './app/actions/sessionData'
-import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow } from './app/actions/windows'
+import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane } from './app/actions/windows'
 import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
@@ -6275,31 +6275,12 @@ function OpenTuiWorkspace() {
   // Existing branches retain their orientation, allowing mixed layouts.
   const addSplitPane = useStableEvent((orientation: SplitPaneOrientation) => splitFocusedWindow(orientation))
 
-  const closeSplitPane = useStableEvent((paneIndex?: number) => {
-    const closeIndex = paneIndex ?? splitFocusIndex ?? null
-    if (closeIndex === FLOATING_PANE_INDEX) { closeFloatingWindow(); return }
-    checkpointWindowLayout()
-    if (splitPaneCount === 0) {
-      showNotice('info', 'No split panes open')
-      return
-    }
-    // A tab closes into its frame's next tab, not the whole frame.
-    const closing = closeIndex === null ? null : windowItems[closeIndex]
-    if (closing && windowStackFor(windowItemKey(closing))) { closeWindowTab(windowItemKey(closing)); return }
-    const nextCount = splitPaneCount - 1
-    // Window indices count surfaces too; the pins count sessions only.
-    const closePin = closeIndex === null ? Math.max(splitPaneCount - 1, 0) : pinIndexOfWindow(closeIndex)
-    if (closePin < 0) return
-    const closingKey = splitPinnedKeys[closePin]
-    if (closingKey) rememberClosedWindow(closingKey)
-    setSplitPinnedKeys((current) => removeSplitPaneKey(current, closePin))
-    if (splitFocusIndex !== null) {
-      const nextFocus = focusAfterWindowClose(splitFocusIndex, closeIndex ?? windowItems.length - 1, windowItems.length)
-      setSplitFocusIndex(nextFocus)
-      if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
-    }
-    applySplitPaneCount(nextCount)
-  })
+  const closeSplitPane = useStableEvent((paneIndex?: number) => runCloseSplitPane({
+    splitFocusIndex, closeFloatingWindow, checkpointWindowLayout, splitPaneCount, showNotice,
+    windowItems, windowStackFor, windowItemKey, closeWindowTab, pinIndexOfWindow, splitPinnedKeys,
+    rememberClosedWindow, setSplitPinnedKeys, setSplitFocusIndex, lastFocusedSplitPaneRef,
+    applySplitPaneCount,
+  }, paneIndex))
 
   // ── Window layouts ─────────────────────────────────────────────────────────
   const setWindowArrangement = useStableEvent((arrangement: WindowArrangement, readerLast: boolean) => {

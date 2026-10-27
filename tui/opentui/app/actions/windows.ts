@@ -63,6 +63,8 @@ import { placePaneSlot, movePaneToEdge, placeWindowSplit } from '../../windowSpl
 import { stackSuccessor } from '../../windowTabs'
 import { clampFloatingRect } from '../../windowTabs'
 import { findPopoverWindow, pinFor, POPOVER_WINDOWS, type PopoverWindowKind } from '../../popoverWindows'
+import { focusAfterWindowClose } from '../../windowControls'
+import { removeSplitPaneKey } from '../../splitPaneState'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
@@ -1515,4 +1517,55 @@ export function runResizeFocusedWindow(ctx: ResizeFocusedWindowContext, directio
   const weights = { ...splitWeights, [group.key]: extents }
   setSplitWeights(weights)
   void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights }).catch(() => {})
+}
+
+export type CloseSplitPaneContext = {
+  splitFocusIndex: number | null
+  closeFloatingWindow: (remember?: boolean) => void
+  checkpointWindowLayout: () => void
+  splitPaneCount: number
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  windowItems: WindowItem[]
+  windowStackFor: (key: string) => WindowStack | null
+  windowItemKey: (item: WindowItem) => string
+  closeWindowTab: (key: string, remember?: boolean) => void
+  pinIndexOfWindow: (index: number) => number
+  splitPinnedKeys: string[]
+  rememberClosedWindow: (key: string) => void
+  setSplitPinnedKeys: React.Dispatch<React.SetStateAction<string[]>>
+  setSplitFocusIndex: React.Dispatch<React.SetStateAction<number | null>>
+  lastFocusedSplitPaneRef: React.RefObject<number>
+  applySplitPaneCount: (next: number, label?: string, orientation?: SplitPaneOrientation) => void
+}
+
+export function runCloseSplitPane(ctx: CloseSplitPaneContext, paneIndex?: number) {
+  const {
+    splitFocusIndex, closeFloatingWindow, checkpointWindowLayout, splitPaneCount, showNotice,
+    windowItems, windowStackFor, windowItemKey, closeWindowTab, pinIndexOfWindow, splitPinnedKeys,
+    rememberClosedWindow, setSplitPinnedKeys, setSplitFocusIndex, lastFocusedSplitPaneRef,
+    applySplitPaneCount,
+  } = ctx
+  const closeIndex = paneIndex ?? splitFocusIndex ?? null
+  if (closeIndex === FLOATING_PANE_INDEX) { closeFloatingWindow(); return }
+  checkpointWindowLayout()
+  if (splitPaneCount === 0) {
+    showNotice('info', 'No split panes open')
+    return
+  }
+  // A tab closes into its frame's next tab, not the whole frame.
+  const closing = closeIndex === null ? null : windowItems[closeIndex]
+  if (closing && windowStackFor(windowItemKey(closing))) { closeWindowTab(windowItemKey(closing)); return }
+  const nextCount = splitPaneCount - 1
+  // Window indices count surfaces too; the pins count sessions only.
+  const closePin = closeIndex === null ? Math.max(splitPaneCount - 1, 0) : pinIndexOfWindow(closeIndex)
+  if (closePin < 0) return
+  const closingKey = splitPinnedKeys[closePin]
+  if (closingKey) rememberClosedWindow(closingKey)
+  setSplitPinnedKeys((current) => removeSplitPaneKey(current, closePin))
+  if (splitFocusIndex !== null) {
+    const nextFocus = focusAfterWindowClose(splitFocusIndex, closeIndex ?? windowItems.length - 1, windowItems.length)
+    setSplitFocusIndex(nextFocus)
+    if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
+  }
+  applySplitPaneCount(nextCount)
 }
