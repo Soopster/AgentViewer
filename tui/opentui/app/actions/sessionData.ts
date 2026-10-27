@@ -25,6 +25,9 @@ import { type ProviderSelection } from '../../../../lib/types'
 import { type PendingInboxEdit } from '../types'
 import { withPendingInboxEdits, sessionsShallowEqual } from '../sessionList'
 import { keepEmpty } from '../collections'
+import { extractPendingPermissions, type PendingPermission } from '../../../../lib/permissions'
+import { join } from 'node:path'
+import { type RunningRegistryEntry } from '../types'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -570,6 +573,57 @@ export async function runRefreshSessions(ctx: RefreshSessionsContext, nextProvid
     if (requestId === sessionRequestRef.current) {
       setLoadingSessions(false)
       setRefreshingSessions(false)
+    }
+  }
+}
+
+export type ReconcileSelectedRunningRegistryContext = {
+  selectedSessionKeyRef: React.RefObject<string | null>
+  ownsComposerStream: (key: string) => boolean
+  awaitingPersistedTurnRef: React.MutableRefObject<boolean>
+  reattachedRunningKeyRef: React.MutableRefObject<string | null>
+  setReattachedRunning: React.Dispatch<React.SetStateAction<boolean>>
+  setPendingPermissions: React.Dispatch<React.SetStateAction<PendingPermission[]>>
+  sessionsByKeyRef: React.RefObject<Map<string, Session>>
+}
+
+export function runReconcileSelectedRunningRegistry(ctx: ReconcileSelectedRunningRegistryContext, runningByKey: Map<string, RunningRegistryEntry>, ownedKey: string | null) {
+  const {
+    selectedSessionKeyRef, ownsComposerStream, awaitingPersistedTurnRef, reattachedRunningKeyRef,
+    setReattachedRunning, setPendingPermissions, sessionsByKeyRef,
+  } = ctx
+  const selectedKey = selectedSessionKeyRef.current
+  const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
+  const reattached = Boolean(selectedEntry) && !ownsComposerStream(selectedKey!) && !awaitingPersistedTurnRef.current
+  reattachedRunningKeyRef.current = reattached && selectedKey ? selectedKey : null
+  setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
+
+  if (!selectedKey || ownsComposerStream(selectedKey)) return
+  if (selectedEntry) {
+    // While idle for this session, the registry is authoritative for every
+    // provider's still-answerable approvals/questions, not only Claude's.
+    const permissionPayloads = selectedEntry.pendingPermissions.length > 0
+      ? selectedEntry.pendingPermissions
+      : selectedEntry.pendingPrompts.map((data) => ({
+          type: 'claude_permission',
+          event: { type: 'permission.requested', data },
+        }))
+    const prompts = extractPendingPermissions(permissionPayloads, selectedEntry)
+    setPendingPermissions((prev) => {
+      const others = prev.filter((p) => !(p.provider === selectedEntry.provider && p.sessionId === selectedEntry.sessionId))
+      const next = [...others, ...prompts]
+      return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
+    })
+  } else if (!selectedEntry) {
+    // No turn running for the selected session — drop any reattached prompt
+    // left behind by a turn that ended or timed out unanswered.
+    const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
+    if (selectedSessionForKey) {
+      setPendingPermissions((prev) => {
+        const selectedProvider = selectedSessionForKey.provider ?? 'claude'
+        const next = prev.filter((p) => !(p.provider === selectedProvider && p.sessionId === selectedSessionForKey.sessionId))
+        return next.length === prev.length ? prev : next
+      })
     }
   }
 }

@@ -304,7 +304,7 @@ import { openModelPicker as openModelPickerAction } from './app/actions/modelPic
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
-import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions } from './app/actions/sessionData'
+import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry } from './app/actions/sessionData'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6907,45 +6907,10 @@ function OpenTuiWorkspace() {
   // death; answering still resolves them server-side by id).
   const registryPollInFlightRef = useRef(false)
   const runningRegistryByKeyRef = useRef(new Map<string, RunningRegistryEntry>())
-  const reconcileSelectedRunningRegistry = useCallback((
-    runningByKey: Map<string, RunningRegistryEntry>,
-    ownedKey: string | null,
-  ) => {
-    const selectedKey = selectedSessionKeyRef.current
-    const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
-    const reattached = Boolean(selectedEntry) && !ownsComposerStream(selectedKey!) && !awaitingPersistedTurnRef.current
-    reattachedRunningKeyRef.current = reattached && selectedKey ? selectedKey : null
-    setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
-
-    if (!selectedKey || ownsComposerStream(selectedKey)) return
-    if (selectedEntry) {
-      // While idle for this session, the registry is authoritative for every
-      // provider's still-answerable approvals/questions, not only Claude's.
-      const permissionPayloads = selectedEntry.pendingPermissions.length > 0
-        ? selectedEntry.pendingPermissions
-        : selectedEntry.pendingPrompts.map((data) => ({
-            type: 'claude_permission',
-            event: { type: 'permission.requested', data },
-          }))
-      const prompts = extractPendingPermissions(permissionPayloads, selectedEntry)
-      setPendingPermissions((prev) => {
-        const others = prev.filter((p) => !(p.provider === selectedEntry.provider && p.sessionId === selectedEntry.sessionId))
-        const next = [...others, ...prompts]
-        return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
-      })
-    } else if (!selectedEntry) {
-      // No turn running for the selected session — drop any reattached prompt
-      // left behind by a turn that ended or timed out unanswered.
-      const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
-      if (selectedSessionForKey) {
-        setPendingPermissions((prev) => {
-          const selectedProvider = selectedSessionForKey.provider ?? 'claude'
-          const next = prev.filter((p) => !(p.provider === selectedProvider && p.sessionId === selectedSessionForKey.sessionId))
-          return next.length === prev.length ? prev : next
-        })
-      }
-    }
-  }, [])
+  const reconcileSelectedRunningRegistry = useCallback((runningByKey: Map<string, RunningRegistryEntry>, ownedKey: string | null) => runReconcileSelectedRunningRegistry({
+    selectedSessionKeyRef, ownsComposerStream, awaitingPersistedTurnRef, reattachedRunningKeyRef,
+    setReattachedRunning, setPendingPermissions, sessionsByKeyRef,
+  }, runningByKey, ownedKey), [])
   useEffect(() => {
     const poll = async () => {
       if (registryPollInFlightRef.current) return
