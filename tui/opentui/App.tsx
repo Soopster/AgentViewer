@@ -301,7 +301,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
@@ -3441,37 +3441,9 @@ function OpenTuiWorkspace() {
     return ranges
   })
 
-  const prepareComposerSubmission = useStableEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]): ComposerSubmission => {
-    // The ordinary typing path has no pasted prompt parts or attachments. Do
-    // not walk extmarks, build maps, or sort ranges until the composer actually
-    // contains one of those richer inputs.
-    if (attachments.length === 0 && parts.length === 0) {
-      return {
-        visibleText,
-        messageText: visibleText.trim(),
-        attachments: [],
-        promptParts: [],
-      }
-    }
-    const promptPartRanges = activeComposerPromptPartRanges(visibleText, parts)
-    let messageText = visibleText
-    for (const part of [...promptPartRanges].sort((a, b) => b.start - a.start)) {
-      if (part.kind !== 'text') continue
-      messageText = `${messageText.slice(0, part.start)}${part.text}${messageText.slice(part.end)}`
-    }
-    const promptPartAttachments = promptPartRanges
-      .filter((part): part is ComposerPromptPartRange & { kind: 'attachment' } => part.kind === 'attachment')
-      .map((part) => ({ ...part.attachment, text: part.marker }))
-    const promptAttachmentIds = new Set(promptPartAttachments.map((attachment) => attachment.id).filter(Boolean))
-    const mentionAttachments = activeMentionAttachments(visibleText, attachments)
-      .filter((attachment) => !attachment.id || !promptAttachmentIds.has(attachment.id))
-    return {
-      visibleText,
-      messageText: messageText.trim(),
-      attachments: [...mentionAttachments, ...promptPartAttachments],
-      promptParts: promptPartRanges.map(({ start: _start, end: _end, ...part }) => part),
-    }
-  })
+  const prepareComposerSubmission = useStableEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]) => runPrepareComposerSubmission({
+    activeComposerPromptPartRanges,
+  }, visibleText, attachments, parts))
 
   const insertMentionAtCursor = useStableEvent((entry: TuiMentionResult) => runInsertMentionAtCursor({
     composerTextareaRef, composerMention, composerMentionCwd, setComposerDraft,

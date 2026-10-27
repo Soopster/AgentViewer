@@ -24,6 +24,8 @@ import { imageAttachmentCount } from '../composerInput'
 import { normalizePastedFilePath, pastedFileMimeTypeForPath } from '../clipboard'
 import { frecencyKey, recordFrecencyUse } from '../../../../lib/tuiFrecency'
 import { type TuiMentionResult } from '../types'
+import { type ComposerPromptPartRange } from '../types'
+import { activeMentionAttachments } from '../composerInput'
 
 export type CancelComposerSendContext = {
   composerTargetSession: Session | null
@@ -346,4 +348,43 @@ export function runInsertMentionAtCursor(ctx: InsertMentionAtCursorContext, entr
   })
   setComposerMention(null)
   setComposerMentionResults(keepEmpty)
+}
+
+export type PrepareComposerSubmissionContext = {
+  activeComposerPromptPartRanges: (text: string, parts: ComposerPromptPart[]) => ComposerPromptPartRange[]
+}
+
+export function runPrepareComposerSubmission(ctx: PrepareComposerSubmissionContext, visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]) {
+  const {
+    activeComposerPromptPartRanges,
+  } = ctx
+  // The ordinary typing path has no pasted prompt parts or attachments. Do
+  // not walk extmarks, build maps, or sort ranges until the composer actually
+  // contains one of those richer inputs.
+  if (attachments.length === 0 && parts.length === 0) {
+    return {
+      visibleText,
+      messageText: visibleText.trim(),
+      attachments: [],
+      promptParts: [],
+    }
+  }
+  const promptPartRanges = activeComposerPromptPartRanges(visibleText, parts)
+  let messageText = visibleText
+  for (const part of [...promptPartRanges].sort((a, b) => b.start - a.start)) {
+    if (part.kind !== 'text') continue
+    messageText = `${messageText.slice(0, part.start)}${part.text}${messageText.slice(part.end)}`
+  }
+  const promptPartAttachments = promptPartRanges
+    .filter((part): part is ComposerPromptPartRange & { kind: 'attachment' } => part.kind === 'attachment')
+    .map((part) => ({ ...part.attachment, text: part.marker }))
+  const promptAttachmentIds = new Set(promptPartAttachments.map((attachment) => attachment.id).filter(Boolean))
+  const mentionAttachments = activeMentionAttachments(visibleText, attachments)
+    .filter((attachment) => !attachment.id || !promptAttachmentIds.has(attachment.id))
+  return {
+    visibleText,
+    messageText: messageText.trim(),
+    attachments: [...mentionAttachments, ...promptPartAttachments],
+    promptParts: promptPartRanges.map(({ start: _start, end: _end, ...part }) => part),
+  }
 }
