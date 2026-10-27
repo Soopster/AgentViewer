@@ -20,6 +20,11 @@ import { keepFiltered, touchMapEntry, pruneSessionCaches } from '../collections'
 import { readTuiSessionMetadataAsync } from '../../metadataWorkerClient'
 import { resolve } from 'node:path'
 import { CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS } from '../timing'
+import { readTuiSessionsAsync } from '../../sessionDetailWorkerClient'
+import { type ProviderSelection } from '../../../../lib/types'
+import { type PendingInboxEdit } from '../types'
+import { withPendingInboxEdits, sessionsShallowEqual } from '../sessionList'
+import { keepEmpty } from '../collections'
 
 export type RefreshSelectedSessionDetailContext = {
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
@@ -476,4 +481,95 @@ export function runRefreshSessionMetadata(ctx: RefreshSessionMetadataContext, se
     .finally(() => {
       sessionMetadataInFlightRef.current.delete(cacheKey)
     })
+}
+
+export type RefreshSessionsContext = {
+  sessionRequestRef: React.RefObject<number>
+  setLoadingSessions: React.Dispatch<React.SetStateAction<boolean>>
+  setRefreshingSessions: React.Dispatch<React.SetStateAction<boolean>>
+  providerSwitchRef: React.RefObject<boolean>
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+  providerInstanceIdRef: React.RefObject<string | null>
+  pendingInboxEditsRef: React.RefObject<Map<string, PendingInboxEdit>>
+  selectedSessionKeyRef: React.RefObject<string | null>
+  sessionsRef: React.RefObject<Session[]>
+  setSessions: React.Dispatch<React.SetStateAction<Session[]>>
+  setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
+  openTabSessionsRef: React.RefObject<Session[]>
+}
+
+export async function runRefreshSessions(ctx: RefreshSessionsContext, nextProvider: ProviderSelection, preserveSelection?: boolean | undefined, foreground?: boolean) {
+  const {
+    sessionRequestRef, setLoadingSessions, setRefreshingSessions, providerSwitchRef, setError,
+    providerInstanceIdRef, pendingInboxEditsRef, selectedSessionKeyRef, sessionsRef, setSessions,
+    setSelectedSessionKey, openTabSessionsRef,
+  } = ctx
+  if (preserveSelection === undefined) preserveSelection = true
+  if (foreground === undefined) foreground = true
+  const requestId = ++sessionRequestRef.current
+  let refreshingIndicatorTimer: ReturnType<typeof setTimeout> | null = null
+  if (foreground) {
+    setLoadingSessions(true)
+    setRefreshingSessions(false)
+  } else {
+    // Most background refreshes are cache-hot and resolve within a frame.
+    // Rendering the status label on and immediately off made that harmless
+    // five-second poll contend with input and split-pane commits. Preserve
+    // feedback for a genuinely slow refresh without making the fast path a
+    // guaranteed pair of root renders.
+    refreshingIndicatorTimer = setTimeout(() => {
+      if (requestId === sessionRequestRef.current) setRefreshingSessions(true)
+    }, 150)
+  }
+  if (!providerSwitchRef.current) setError(null)
+
+  try {
+    const nextSessions = withPendingInboxEdits(
+      await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined),
+      pendingInboxEditsRef.current,
+    )
+    if (requestId !== sessionRequestRef.current) return
+    // Avoid scheduling a transition at all when a background poll returns
+    // the same list and the current selection is still valid. React will
+    // usually bail out from the state setters below, but the transition
+    // itself still walks the root and can collide with a held sidebar key.
+    const currentSelectedKey = selectedSessionKeyRef.current
+    const selectionStillValid = currentSelectedKey === null
+      ? nextSessions.length === 0
+      : nextSessions.some((session) => sessionKey(session) === currentSelectedKey)
+    if (!foreground && sessionsShallowEqual(sessionsRef.current, nextSessions) && selectionStillValid) return
+    startTransition(() => {
+      setSessions((prev) => sessionsShallowEqual(prev, nextSessions) ? prev : nextSessions)
+      setSelectedSessionKey((current) => {
+        // Draft sessions (pending provider sessions after N, or any session that's
+        // been opened as a tab but not yet materialised server-side) live
+        // in openTabSessions, not `sessions`. If we clobber a draft
+        // selection here, pressing N silently lands the user on the first
+        // server session instead of the new welcome tab.
+        const isDraftTab = (key: string | null) => Boolean(
+          key && openTabSessionsRef.current.some((tab) => sessionKey(tab) === key)
+        )
+        if (nextSessions.length === 0) {
+          return isDraftTab(current) ? current : null
+        }
+        if (preserveSelection && current) {
+          const matched = nextSessions.find((session) => sessionKey(session) === current)
+          if (matched) return sessionKey(matched)
+          if (isDraftTab(current)) return current
+        }
+        return sessionKey(nextSessions[0])
+      })
+    })
+  } catch (err) {
+    if (requestId !== sessionRequestRef.current) return
+    setError(err instanceof Error ? err.message : 'Failed to load sessions')
+    setSessions(keepEmpty)
+    setSelectedSessionKey(null)
+  } finally {
+    if (refreshingIndicatorTimer) clearTimeout(refreshingIndicatorTimer)
+    if (requestId === sessionRequestRef.current) {
+      setLoadingSessions(false)
+      setRefreshingSessions(false)
+    }
+  }
 }
