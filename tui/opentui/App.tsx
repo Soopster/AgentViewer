@@ -349,7 +349,6 @@ import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
-import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -8676,18 +8675,7 @@ function OpenTuiWorkspace() {
 
       <TranscriptSearchBar searchMode={searchMode} width={width} theme={theme} searchMatches={searchMatches} searchMatchIndex={searchMatchIndex} searchQuery={searchQuery} setSearchQuery={setSearchQuery} jumpToTranscriptIndex={jumpToTranscriptIndex} setSearchMode={setSearchMode} />
 
-      <ComposerStatusStack
-        sessionSearchMode={sessionSearchMode}
-        width={width}
-        theme={theme}
-        filteredSessionsForSidebar={filteredSessionsForSidebar}
-        sessions={sessions}
-        sessionSearchQuery={sessionSearchQuery}
-        setSessionSearchQuery={setSessionSearchQuery}
-        sidebarEntries={sidebarEntries}
-        setSelectedSessionKey={setSelectedSessionKey}
-        setSessionSearchMode={setSessionSearchMode}
-      />
+      <SessionSearchBar sessionSearchMode={sessionSearchMode} width={width} theme={theme} filteredSessionsForSidebar={filteredSessionsForSidebar} sessions={sessions} sessionSearchQuery={sessionSearchQuery} setSessionSearchQuery={setSessionSearchQuery} sidebarEntries={sidebarEntries} setSelectedSessionKey={setSelectedSessionKey} setSessionSearchMode={setSessionSearchMode} />
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
 
