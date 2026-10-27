@@ -324,7 +324,7 @@ import { runQuestionPickerPlan } from './app/derived/questionPicker'
 import { runFleetEntries } from './app/derived/fleet'
 import { runComposerKnobSegments } from './app/derived/composerStatus'
 import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
-import { runPluginServices } from './app/derived/pluginServices'
+import { runPluginServices, runFleetPluginServices } from './app/derived/pluginServices'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -6885,31 +6885,11 @@ function OpenTuiWorkspace() {
   // handed a bag holding it; the rest keep the stable one above.
   const fleetDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
     && sessionKey(transcriptSession) === sessionKey(selectedSession))
-  const fleetPluginServices = useMemo((): TuiProvidedPluginServices => (fleetViewShown ? {
-    ...pluginServices,
-    'session-fleet': {
-      sessions,
-      activity: sidebarSessionActivity,
-      alerts: fleetAlerts,
-      selected: selectedSession,
-      // The selected session's transcript counts only once the detail on screen is that session's.
-      selectedCards: fleetDetailOwned ? transcriptCards : null,
-      selectedContext: fleetDetailOwned ? sessionDetail?.contextUsage ?? null : null,
-      selectedModel: fleetDetailOwned ? sessionDetail?.info?.currentModel ?? null : null,
-      selectedMessageCount: fleetDetailOwned ? sessionDetail?.rawMessages.length ?? null : null,
-      select: (session: Session) => selectTabSession(session),
-      open: (session: Session) => {
-        selectTabSession(session)
-        setFocusedPane('messages')
-      },
-      openAlert: (alertKey: string) => {
-        const item = attentionItems.find((candidate) => candidate.key === alertKey)
-        if (!item) return false
-        openAttentionSession(item)
-        return true
-      },
-    },
-  } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems])
+  const fleetPluginServices = useMemo(() => runFleetPluginServices({
+    fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession,
+    fleetDetailOwned, transcriptCards, sessionDetail, selectTabSession, setFocusedPane,
+    attentionItems, openAttentionSession,
+  }), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems])
   const pluginServicesFor = (surfaceId: PluginSurfaceId): TuiProvidedPluginServices => (
     pluginSurfaceWants(surfaceId, 'session-fleet') ? fleetPluginServices : pluginServices
   )

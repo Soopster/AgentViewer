@@ -12,6 +12,12 @@ import { type Session, type SubagentSummary } from '../../../../lib/types'
 import { type NoticeTone } from '../types'
 import { isLightThemeMode } from '../themes'
 import { writeClipboard, readClipboardText } from '../clipboard'
+import { type SessionDiagnosticSection } from '../../../../lib/types'
+import { type TuiTranscriptCard } from '../../../format'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type AttentionItem } from '../../AttentionInboxPopover'
+import { type PaneFocus } from '../types'
+import { sessionKey } from '../sessionList'
 
 export type PluginServicesContext = {
   subagentTranscriptSelection: { parent: Session; agent: SubagentSummary; } | null
@@ -119,4 +125,53 @@ return ({
 // The callbacks are the root's stable events and setters.
 // eslint-disable-next-line react-hooks/exhaustive-deps
 })
+}
+
+export type FleetPluginServicesContext = {
+  fleetViewShown: boolean
+  pluginServices: { 'ide-bridge'?: { routed: boolean; toggleRoute: () => void; accentColor: string; sendComment: (text: string) => void; } | undefined; 'channel-bridge'?: { routed: boolean; toggleRoute: () => void; accentColor: string; } | undefined; 'scroll-preferences': { velocity: boolean; toggleVelocity: () => void; }; coordination: { initialRunId: string | null; openAgentSession: (agent: ProtocolAgent) => void; watchAgentSessions: (agents: ProtocolAgent[]) => void; watchRun: (snapshot: ProtocolRunSnapshot) => void; newRun: () => void; copyJoinCommand: (runId: string) => void; }; themes: { mode: TuiThemeMode; light: boolean; choose: (mode: TuiThemeMode) => void; }; 'task-control': { stop?: ((taskId: string) => void) | undefined; jumpTo: (uuid: string) => void; }; 'session-diagnostics': { read: (session: Session) => Promise<SessionDiagnosticSection[]>; run: (session: Session, action: string, extra: Record<string, unknown>) => Promise<Record<string, unknown>>; hasControls: (session: Session) => boolean; }; 'file-history'?: { open: (path: string, where?: 'overlay' | 'window') => void; } | undefined; composer: { appendDiffNote: (prompt: string, notice?: string) => void; askAboutSelection: (request: SelectionAskInput) => void; insertText: (text: string, notice?: string) => void; appendPrompt: (prompt: string, notice: string) => void; }; clipboard: { write: (text: string) => Promise<void>; read: () => Promise<string>; }; 'open-file': { open: (path: string, line?: number | null) => void; }; notices: { show: (kind: 'info' | 'error', text: string, durationMs?: number) => void; }; 'browser-location': { recent: string[]; opened: (url: string) => void; }; 'subagent-transcript'?: { label: string; agentId: string; load: (signal: AbortSignal) => Promise<TuiTranscriptCard[]>; } | undefined; }
+  sessions: Session[]
+  sidebarSessionActivity: Map<string, 'needs-input' | 'running' | 'waiting'>
+  fleetAlerts: { key: string; sessionKey: string; provider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'; sessionTitle: string; title: string; detail: string | undefined; needsInput: boolean; createdAt: number; }[]
+  selectedSession: Session | null
+  fleetDetailOwned: boolean
+  transcriptCards: TuiTranscriptCard[]
+  sessionDetail: TuiSessionDetail | null
+  selectTabSession: (session: Session) => void
+  setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
+  attentionItems: AttentionItem[]
+  openAttentionSession: (item: AttentionItem) => void
+}
+
+export function runFleetPluginServices(ctx: FleetPluginServicesContext) {
+  const {
+    fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession,
+    fleetDetailOwned, transcriptCards, sessionDetail, selectTabSession, setFocusedPane,
+    attentionItems, openAttentionSession,
+  } = ctx
+return (fleetViewShown ? {
+  ...pluginServices,
+  'session-fleet': {
+    sessions,
+    activity: sidebarSessionActivity,
+    alerts: fleetAlerts,
+    selected: selectedSession,
+    // The selected session's transcript counts only once the detail on screen is that session's.
+    selectedCards: fleetDetailOwned ? transcriptCards : null,
+    selectedContext: fleetDetailOwned ? sessionDetail?.contextUsage ?? null : null,
+    selectedModel: fleetDetailOwned ? sessionDetail?.info?.currentModel ?? null : null,
+    selectedMessageCount: fleetDetailOwned ? sessionDetail?.rawMessages.length ?? null : null,
+    select: (session: Session) => selectTabSession(session),
+    open: (session: Session) => {
+      selectTabSession(session)
+      setFocusedPane('messages')
+    },
+    openAlert: (alertKey: string) => {
+      const item = attentionItems.find((candidate) => candidate.key === alertKey)
+      if (!item) return false
+      openAttentionSession(item)
+      return true
+    },
+  },
+} : pluginServices)
 }
