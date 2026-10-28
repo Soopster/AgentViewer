@@ -126,7 +126,7 @@ import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
-import { runHandleKeyDown } from './message-view/actions/composer'
+import { runHandleKeyDown, runCancelSend } from './message-view/actions/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1719,116 +1719,16 @@ function MessageViewInner({
     }
   }, [projectView, session?.provider, session?.sessionId])
 
-  const cancelSend = useCallback(() => {
-    if (session) {
-      fetch(`/api/sessions/${session.sessionId}/interrupt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: session.provider,
-          providerInstanceId: session.providerInstanceId,
-          turnRequestId: activeTurnRequestIdRef.current ?? undefined,
-          cancelQueued: true,
-        }),
-      }).then(async (res) => {
-        // interrupt_receipt_v1: uuids of queued async messages that survive
-        // the interrupt and WILL still run. Warn instead of letting the next
-        // turn look like a ghost send.
-        const json = await readOptionalJsonResponse<{ stillQueued?: unknown } | null>(res, null)
-        const stillQueuedUuids = Array.isArray(json?.stillQueued)
-          ? json.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
-          : null
-        if (stillQueuedUuids) {
-          const stillQueued = new Set(stillQueuedUuids)
-          // A queued lifecycle frame says the message had not started. If its
-          // uuid is absent from the interrupt receipt, the interrupt removed it
-          // and its draft is safe to restore. Receipt members remain queued in
-          // Claude and must not also be copied into the composer.
-          const restoreEntries = steeredUserTextsRef.current
-            .filter((entry) => entry.state === 'queued' && entry.messageUuid && !stillQueued.has(entry.messageUuid))
-          const restoreTexts = restoreEntries.map((entry) => entry.text)
-          if (restoreTexts.length > 0) {
-            const restoredUuids = new Set(restoreEntries.map((entry) => entry.messageUuid))
-            const nextSteeredEntries = steeredUserTextsRef.current
-              .filter((entry) => !restoredUuids.has(entry.messageUuid))
-            steeredUserTextsRef.current = nextSteeredEntries
-            setSteeredUserTexts(nextSteeredEntries)
-            const restored = [inputTextRef.current.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
-            inputTextRef.current = restored
-            if (textareaRef.current) textareaRef.current.value = restored
-            setInputText(restored)
-            window.requestAnimationFrame(resizeComposer)
-          }
-          if (stillQueuedUuids.length > 0) {
-            setSessionActionNotice(`Interrupted · ${stillQueuedUuids.length} queued message${stillQueuedUuids.length === 1 ? '' : 's'} will still run`)
-          } else if (restoreTexts.length > 0) {
-            setSessionActionNotice(`Interrupted · restored ${restoreTexts.length} cancelled queued message${restoreTexts.length === 1 ? '' : 's'} to the composer`)
-          }
-        }
-      }).catch(() => {})
-    }
-    // Cancel any pending transient auto-retry so it can't fire after the user
-    // explicitly stopped the turn.
-    if (transientRetryTimerRef.current) {
-      clearTimeout(transientRetryTimerRef.current)
-      transientRetryTimerRef.current = null
-    }
-    transientRetryCountRef.current = 0
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
-    activeTurnRequestIdRef.current = null
-    sendInFlightRef.current = false
-    setSendError(null)
-    setSendState('idle')
-    // The user interrupted to change course — auto-firing queued follow-ups
-    // would be a surprise-send. Pop their text back into the composer instead
-    // so they can edit and re-send.
-    const interruptQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
-    if (interruptQueue.length > 0) {
-      commitQueuedSends(clearComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey))
-      const restored = restoreComposerDraftPayload(
-        { text: inputTextRef.current, attachments: [] },
-        interruptQueue,
-      ).text
-      inputTextRef.current = restored
-      if (textareaRef.current) textareaRef.current.value = restored
-      setInputText(restored)
-      setAttachments((current) => restoreComposerDraftPayload(
-        { text: '', attachments: current },
-        interruptQueue,
-      ).attachments)
-      window.requestAnimationFrame(resizeComposer)
-    }
-    if (pendingMessageBaselineRef.current) {
-      // The turn had started: keep whatever the agent produced visible and
-      // transition into the 'Interrupting…' / syncing state so the interrupted
-      // turn's partial output reconciles smoothly instead of vanishing and then
-      // reappearing on the next poll. The awaitingPersistedTurn timeout is the
-      // escape hatch if the interrupt is a no-op and nothing ever persists.
-      setInterrupting(true)
-      awaitingPersistedTurnRef.current = true
-      setAwaitingPersistedTurn(true)
-    } else {
-      // Nothing started yet — restore the draft and clear cleanly, as if unsent.
-      // (Also the reattach path: we don't own a stream, so stop just fires the
-      // server interrupt and drops back to idle; the /running poll reconciles.)
-      setReattachedRunning(false)
-      if (optimisticUserText) setInputText((prev) => prev || optimisticUserText)
-      setInterrupting(false)
-      awaitingPersistedTurnRef.current = false
-      setAwaitingPersistedTurn(false)
-      setOptimisticUserText(null)
-      setSteeredUserTexts([])
-      clearLiveAssistantText()
-      setLiveToolActivities([])
-      setLiveThreadedMessages([])
-      clearLiveSubagentText()
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
-      liveToolInputJsonRef.current.clear()
-    }
-    textareaRef.current?.focus()
-  }, [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, transientRetryCountRef, transientRetryTimerRef, pendingMessageBaselineRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setAttachments, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
+  const cancelSend = useCallback(() => runCancelSend({
+    session, activeTurnRequestIdRef, steeredUserTextsRef, setSteeredUserTexts, inputTextRef,
+    textareaRef, setInputText, resizeComposer, setSessionActionNotice, transientRetryTimerRef,
+    transientRetryCountRef, abortControllerRef, sendInFlightRef, setSendError, setSendState,
+    queuedSendsRef, composerQueueTargetKey, commitQueuedSends, setAttachments,
+    pendingMessageBaselineRef, setInterrupting, awaitingPersistedTurnRef, setAwaitingPersistedTurn,
+    setReattachedRunning, optimisticUserText, setOptimisticUserText, clearLiveAssistantText,
+    setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText, liveToolIndexesRef,
+    liveToolInputJsonRef,
+  }), [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, transientRetryCountRef, transientRetryTimerRef, pendingMessageBaselineRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setAttachments, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
 
   const backgroundClaudeTasks = useCallback(async () => {
     if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
