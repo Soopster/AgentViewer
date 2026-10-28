@@ -122,6 +122,7 @@ import { normalizeSelectValue, gitSummariesMatch, detectMentionAtCursor, LiveSpi
 import { getWebComposerQueueStore, composerDraftStorageKey, readComposerDraft, writeComposerDraft, permissionDenialReason, attachmentImagePreviewSrc, attachmentDisplayName } from './message-view/composerStorage'
 import { claudeDiagnosticActionNotice, WEB_TOOLBAR_PLUGIN_COMMANDS, DiffReviewMode, CLAUDE_DIAGNOSTIC_ACTIONS, compactNativeSelectClassName, PierrePatchDiffView, PromptLibrary, ChannelBridgePanel, IdeBridgePanel, PluginSurfaceHost } from './message-view/lazyPanels'
 import { ComposerShell } from './message-view/ComposerShell'
+import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -6389,39 +6390,11 @@ function MessageViewInner({
       </div>
 
       {/* ── Message input (single session only) ──────── */}
-      {!isProject && composerCollapsed && (
-        <div
-          style={{
-            padding: '4px 16px',
-            borderTop: '1px solid var(--border)',
-            background: 'var(--surface)',
-            flexShrink: 0,
-            display: 'flex',
-            justifyContent: 'flex-end',
-          }}
-        >
-          <button
-            type="button"
-            className="av-hover-control"
-            onClick={() => setComposerCollapsed(false)}
-            title="Expand composer"
-            style={{
-              background: 'transparent',
-              border: '1px solid var(--border)',
-              cursor: 'pointer',
-              color: 'var(--text-3)',
-              padding: '2px 8px',
-              borderRadius: 6,
-              lineHeight: 1,
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              letterSpacing: '0.08em',
-            }}
-          >
-            ▲ COMPOSER
-          </button>
-        </div>
-      )}
+      <CollapsedComposerBar
+        isProject={isProject}
+        composerCollapsed={composerCollapsed}
+        setComposerCollapsed={setComposerCollapsed}
+      />
       <ComposerShell
         isProject={isProject}
         composerCollapsed={composerCollapsed}
