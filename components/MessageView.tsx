@@ -126,7 +126,7 @@ import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
-import { runHandleKeyDown, runCancelSend, runIngestFileAttachments } from './message-view/actions/composer'
+import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer } from './message-view/actions/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -944,48 +944,9 @@ function MessageViewInner({
     }
   }, [composerWorkingDirectory])
 
-  const prewarmComposer = useCallback(() => {
-    const sessionId = session?.sessionId
-    const provider = session?.provider
-    const cwd = session?.cwd
-    const isPending = session?.isPending === true
-    if (!sessionId) return
-    // Pending Codex/Copilot sessions do not have a resumable provider identity
-    // yet. Pi and Claude can warm against their reserved ids; ACP sessions are
-    // themselves pool-owned and are also created lazily against that id.
-    if (
-      isPending
-      && provider !== 'pi'
-      && provider !== 'claude'
-      && provider !== 'claude-acp'
-      && provider !== 'codex-acp'
-      && provider !== 'acp'
-    ) return
-    const effort = selectedEffort === 'auto' ? undefined : selectedEffort
-    const key = [
-      provider ?? 'claude',
-      sessionId,
-      cwd ?? '',
-      selectedModel,
-      effort ?? '',
-    ].join('\0')
-    if (composerPrewarmInFlightRef.current.has(key)) return
-    composerPrewarmInFlightRef.current.add(key)
-    const finishLoading = beginProviderLoading(provider)
-    void fetch(`/api/sessions/${sessionId}/composer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider,
-        cwd: cwd ?? undefined,
-        model: selectedModel || undefined,
-        effort,
-        isPending,
-      }),
-    })
-      .catch(() => { /* best-effort: send pays the usual cold cost */ })
-      .finally(() => { composerPrewarmInFlightRef.current.delete(key); finishLoading() })
-  }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
+  const prewarmComposer = useCallback(() => runPrewarmComposer({
+    session, selectedEffort, selectedModel, composerPrewarmInFlightRef,
+  }), [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
 
   useEffect(() => {
     // Resuming an existing provider session can advance its activity timestamp

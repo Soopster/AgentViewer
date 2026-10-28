@@ -15,6 +15,8 @@ import { type ThreadedMessage } from '@/lib/threading'
 import { clearComposerQueueTarget, restoreComposerDraftPayload, selectComposerQueueTarget } from '@/lib/composerAttachments'
 import { type QueuedWebSend, type PendingMessageBaseline, type SteeredSendEntry, type LiveToolActivity } from '../types'
 import { createContextAttachment } from '@/lib/composerContext'
+import { beginProviderLoading } from '@/lib/providerLoading'
+import { type ReasoningEffortLevel } from '@/lib/types'
 
 export type HandleKeyDownContext = {
   isComposingRef: RefObject<boolean>
@@ -412,4 +414,57 @@ export async function runIngestFileAttachments(ctx: IngestFileAttachmentsContext
   if (next.length === 0) return
   if (owner !== activeComposerDraftKeyRef.current) return
   insertContextAttachments(next.map(a => ({ ...a, id: crypto.randomUUID(), contextKind: a.type === 'blob' || a.type === 'image' ? 'image' : 'file' })))
+}
+
+export type PrewarmComposerContext = {
+  session: Session | null
+  selectedEffort: ReasoningEffortLevel | 'auto'
+  selectedModel: string
+  composerPrewarmInFlightRef: RefObject<Set<string>>
+}
+
+export function runPrewarmComposer(ctx: PrewarmComposerContext) {
+  const {
+    session, selectedEffort, selectedModel, composerPrewarmInFlightRef,
+  } = ctx
+  const sessionId = session?.sessionId
+  const provider = session?.provider
+  const cwd = session?.cwd
+  const isPending = session?.isPending === true
+  if (!sessionId) return
+  // Pending Codex/Copilot sessions do not have a resumable provider identity
+  // yet. Pi and Claude can warm against their reserved ids; ACP sessions are
+  // themselves pool-owned and are also created lazily against that id.
+  if (
+    isPending
+    && provider !== 'pi'
+    && provider !== 'claude'
+    && provider !== 'claude-acp'
+    && provider !== 'codex-acp'
+    && provider !== 'acp'
+  ) return
+  const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+  const key = [
+    provider ?? 'claude',
+    sessionId,
+    cwd ?? '',
+    selectedModel,
+    effort ?? '',
+  ].join('\0')
+  if (composerPrewarmInFlightRef.current.has(key)) return
+  composerPrewarmInFlightRef.current.add(key)
+  const finishLoading = beginProviderLoading(provider)
+  void fetch(`/api/sessions/${sessionId}/composer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider,
+      cwd: cwd ?? undefined,
+      model: selectedModel || undefined,
+      effort,
+      isPending,
+    }),
+  })
+    .catch(() => { /* best-effort: send pays the usual cold cost */ })
+    .finally(() => { composerPrewarmInFlightRef.current.delete(key); finishLoading() })
 }
