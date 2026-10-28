@@ -131,6 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
+import { runMentionSearchEffect } from './message-view/effects/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1873,58 +1874,10 @@ function MessageViewInner({
     return () => controller.abort()
   }, [commandSessionId, commandSessionProvider])
 
-  useEffect(() => {
-    if (!mentionQuery) {
-      mentionAbortRef.current?.abort()
-      mentionAbortRef.current = null
-      setMentionResults([])
-      return
-    }
-    const agentMatches: MentionResult[] = activeProvider === 'opencode'
-      ? composerMentionAgentOptions
-          .filter((agent) => {
-            const query = mentionQuery.query.toLowerCase()
-            if (!query) return true
-            return agent.value.toLowerCase().includes(query)
-              || agent.label.toLowerCase().includes(query)
-              || (agent.description?.toLowerCase().includes(query) ?? false)
-          })
-          .slice(0, 8)
-          .map((agent) => ({
-            kind: 'agent' as const,
-            name: agent.value,
-            description: agent.description,
-            mode: agent.mode,
-          }))
-      : []
-    const cwd = session?.cwd
-    if (!cwd) {
-      setMentionResults(agentMatches)
-      setMentionActiveIndex(0)
-      return
-    }
-    const controller = new AbortController()
-    mentionAbortRef.current?.abort()
-    mentionAbortRef.current = controller
-    const url = `/api/files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(mentionQuery.query)}`
-    const handle = window.setTimeout(async () => {
-      try {
-        const res = await fetch(url, { signal: controller.signal })
-        if (!res.ok) return
-        const data = await res.json() as { files?: Array<{ path: string; basename: string }> }
-        if (controller.signal.aborted) return
-        const fileMatches: MentionResult[] = (data.files ?? []).map((file) => ({ kind: 'file', ...file }))
-        setMentionResults([...agentMatches, ...fileMatches])
-        setMentionActiveIndex(0)
-      } catch (err) {
-        if ((err as { name?: string }).name === 'AbortError') return
-      }
-    }, 80)
-    return () => {
-      window.clearTimeout(handle)
-      controller.abort()
-    }
-  }, [activeProvider, composerMentionAgentOptions, mentionQuery, session?.cwd])
+  useEffect(() => runMentionSearchEffect({
+    mentionQuery, mentionAbortRef, setMentionResults, activeProvider, composerMentionAgentOptions,
+    session, setMentionActiveIndex,
+  }), [activeProvider, composerMentionAgentOptions, mentionQuery, session?.cwd])
 
   useLayoutEffect(() => {
     const node = mentionItemRefs.current[mentionActiveIndex]
