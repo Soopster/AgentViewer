@@ -114,10 +114,10 @@ import type { ComposerDraft, QueuedWebSend, PendingMessageBaseline, TimelineRow,
 import { SPINNER_FRAMES, COMPOSER_DRAFT_STORAGE_PREFIX, SEND_ATTACHMENT_TYPES, COMPOSER_QUEUE_LOCAL_INLINE_LIMIT, writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, TIMELINE_BOTTOM_GUTTER_PX, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
 import { assistantDisplayName, extractSseFrames, extractLiveToolStart, upsertThreadedMessage, updateLiveToolThreadInput, extractCompletedToolKey, completeLiveToolThread, extractLiveToolStopIndex, extractStreamingAssistantText, shouldReplaceLiveAssistantText, extractStreamingReasoningText, extractTextContent } from './message-view/liveStream'
 import { withProviderQuery, isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline, buildPendingMessageBaseline, retargetPendingMessageBaseline, threadedMessageKey, threadedMessageEqual } from './message-view/threadedCompare'
-import { observeTimelineRowResize, readResizeObserverHeight, estimateTimelineRowHeight, timelineEstimateBucket, calibratedTimelineRowHeight } from './message-view/heightEstimate'
+import { estimateTimelineRowHeight, timelineEstimateBucket, calibratedTimelineRowHeight } from './message-view/heightEstimate'
 import { timelineRowMatchesTranscriptFilters, timelineRowSearchText, groupAgentsToolRows, decorateStreamTurnLandmarks, resolveTimelineTargetMessageId, rowContainsMessage } from './message-view/timelineRows'
-import { TimelineMessageRow } from './message-view/TimelineMessageRow'
 import { OpenCodeTodosBanner } from './message-view/OpenCodeTodosBanner'
+import { VirtualTimelineRow } from './message-view/VirtualTimelineRow'
 
 const PluginSurfaceHost = dynamic(() => import('./shell/PluginSurfaceHost'), { ssr: false })
 // Feature plugins that put a button on the session toolbar.
@@ -466,119 +466,6 @@ function getWebComposerQueueStore() {
   )
   return webComposerQueueStore
 }
-
-const VirtualTimelineRow = memo(function VirtualTimelineRow({
-  row,
-  top,
-  isLast,
-  highlighted,
-  forking,
-  resumeTarget,
-  bookmarked,
-  streamMode,
-  placeholder,
-  placeholderHeight,
-  onMeasure,
-  onLastRowRef,
-  onForkFromMessage,
-  onToggleResume,
-  onToggleBookmark,
-  onReusePrompt,
-  onQuoteMessage,
-  onReplyMessage,
-  onEditFromMessage,
-}: {
-  row: TimelineRow
-  top: number
-  isLast: boolean
-  highlighted: boolean
-  forking: boolean
-  resumeTarget: boolean
-  bookmarked: boolean
-  streamMode: boolean
-  // Fast-scroll placeholder: render a cheap skeleton at the layout height
-  // instead of the full message card, and skip measurement so the skeleton
-  // can't poison the measured-height cache. placeholderHeight is 0 (stable)
-  // when placeholder is false.
-  placeholder: boolean
-  placeholderHeight: number
-  onMeasure: (key: string, height: number) => void
-  onLastRowRef: (node: HTMLDivElement | null) => void
-  onForkFromMessage: (messageId: string) => void
-  onToggleResume: (messageId: string) => void
-  onToggleBookmark: (messageId: string) => void
-  onReusePrompt: (text: string) => void
-  onQuoteMessage: (text: string) => void
-  onReplyMessage: (text: string) => void
-  onEditFromMessage: (messageId: string, text: string) => void
-}) {
-  const rowRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (placeholder) return
-    const node = rowRef.current
-    if (!node) return
-
-    onMeasure(row.key, node.getBoundingClientRect().height)
-
-    return observeTimelineRowResize(node, (entry) => {
-      onMeasure(row.key, readResizeObserverHeight(entry, node))
-    })
-  }, [onMeasure, placeholder, row.key])
-
-  useEffect(() => {
-    if (!isLast) return
-    onLastRowRef(rowRef.current)
-    return () => onLastRowRef(null)
-  }, [isLast, onLastRowRef, row.key])
-
-  return (
-    <div
-      className="timeline-row"
-      ref={rowRef}
-      data-message-id={row.message.uuid}
-      data-timeline-key={row.key}
-      style={{
-        position: 'absolute',
-        top: 0,
-        transform: `translateY(${top}px)`,
-        left: 0,
-        right: 0,
-      }}
-    >
-      {placeholder ? (
-        // Explicit height matches the layout's height for this row exactly, so
-        // swapping placeholder ↔ full card never shifts surrounding rows.
-        <div style={{ height: placeholderHeight, padding: '6px 0', boxSizing: 'border-box' }}>
-          <div
-            style={{
-              height: '100%',
-              borderRadius: 8,
-              border: '1px solid rgba(128,128,128,0.10)',
-              background: 'rgba(128,128,128,0.05)',
-            }}
-          />
-        </div>
-      ) : (
-        <TimelineMessageRow
-          row={row}
-          highlighted={highlighted}
-          forking={forking}
-          resumeTarget={resumeTarget}
-          bookmarked={bookmarked}
-          streamMode={streamMode}
-          onForkFromMessage={onForkFromMessage}
-          onToggleResume={onToggleResume}
-          onToggleBookmark={onToggleBookmark}
-          onReusePrompt={onReusePrompt}
-          onQuoteMessage={onQuoteMessage}
-          onReplyMessage={onReplyMessage}
-          onEditFromMessage={onEditFromMessage}
-        />
-      )}
-    </div>
-  )
-})
 
 // Interactive answer surface for a Claude AskUserQuestion prompt. Collects a
 // selection per question (single or multi) and submits the answers map back to
