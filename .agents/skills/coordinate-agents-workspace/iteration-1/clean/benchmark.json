@@ -1,0 +1,313 @@
+{
+  "metadata": {
+    "skill_name": "coordinate-agents",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-08-14T23:46:56Z",
+    "evals_run": [
+      0,
+      1,
+      2
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "old_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Calls coord_query_context before coord_create_run",
+          "passed": true,
+          "evidence": "Both open with a coord_query_context call before coord_create_run."
+        },
+        {
+          "text": "Seeds 2 teammate lanes + 1 dependent lead task before workers join",
+          "passed": true,
+          "evidence": "Both create exactly 3 tasks (2 teammate, 1 lead with depends_on) before any worker joins."
+        },
+        {
+          "text": "Explicitly refuses an umbrella lead task",
+          "passed": true,
+          "evidence": "Both state the lead does not claim/absorb the teammates' work."
+        },
+        {
+          "text": "Calls coord_status to verify seeding before/after workers join",
+          "passed": true,
+          "evidence": "Both call coord_status twice: once to verify seeding, once to verify real claims."
+        },
+        {
+          "text": "No hallucinated tool names/args",
+          "passed": true,
+          "evidence": "All tool names and args match the skill's documented surface."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "old_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "coord_join_run with run_id/name/provider/cwd",
+          "passed": true,
+          "evidence": "Both call coord_join_run with the supplied run_id, the given name, provider, and checkout path."
+        },
+        {
+          "text": "coord_status + coord_read_inbox before claiming",
+          "passed": true,
+          "evidence": "Both read status and drain inbox immediately after joining, before coord_claim_task."
+        },
+        {
+          "text": "coord_claim_task for atomic claim",
+          "passed": true,
+          "evidence": "Both explicitly call coord_claim_task on one unblocked task."
+        },
+        {
+          "text": "coord_progress(status=working) after claim",
+          "passed": true,
+          "evidence": "Both call coord_progress with status=working before/while starting the task."
+        },
+        {
+          "text": "Reply-required inbox handled before new work",
+          "passed": true,
+          "evidence": "Both state reply-required mail must be answered before claiming/starting new work."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "old_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Correctly identifies judgment-review as an intentional gate, not a bug, no bypass",
+          "passed": true,
+          "evidence": "Both explain it as the documented post-mechanical judgment-review gate and explicitly say not to bypass it."
+        },
+        {
+          "text": "Correctly explains coord_wait task-handle absence as client-capability-gated, not a Copilot bug",
+          "passed": true,
+          "evidence": "Both attribute it to the io.modelcontextprotocol/tasks client declaration, unrelated to provider."
+        },
+        {
+          "text": "Recommends coord_publish_finding for genuine client discrepancies",
+          "passed": true,
+          "evidence": "Both mention coord_publish_finding as the right channel if something is a genuine client gap."
+        },
+        {
+          "text": "Grounded in the skill's actual documented content, no invention",
+          "passed": true,
+          "evidence": "Both responses quote/paraphrase specific skill language rather than guessing."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Calls coord_query_context before coord_create_run",
+          "passed": true,
+          "evidence": "Both open with a coord_query_context call before coord_create_run."
+        },
+        {
+          "text": "Seeds 2 teammate lanes + 1 dependent lead task before workers join",
+          "passed": true,
+          "evidence": "Both create exactly 3 tasks (2 teammate, 1 lead with depends_on) before any worker joins."
+        },
+        {
+          "text": "Explicitly refuses an umbrella lead task",
+          "passed": true,
+          "evidence": "Both state the lead does not claim/absorb the teammates' work."
+        },
+        {
+          "text": "Calls coord_status to verify seeding before/after workers join",
+          "passed": true,
+          "evidence": "Both call coord_status twice: once to verify seeding, once to verify real claims."
+        },
+        {
+          "text": "No hallucinated tool names/args",
+          "passed": true,
+          "evidence": "All tool names and args match the skill's documented surface."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "coord_join_run with run_id/name/provider/cwd",
+          "passed": true,
+          "evidence": "Both call coord_join_run with the supplied run_id, the given name, provider, and checkout path."
+        },
+        {
+          "text": "coord_status + coord_read_inbox before claiming",
+          "passed": true,
+          "evidence": "Both read status and drain inbox immediately after joining, before coord_claim_task."
+        },
+        {
+          "text": "coord_claim_task for atomic claim",
+          "passed": true,
+          "evidence": "Both explicitly call coord_claim_task on one unblocked task."
+        },
+        {
+          "text": "coord_progress(status=working) after claim",
+          "passed": true,
+          "evidence": "Both call coord_progress with status=working before/while starting the task."
+        },
+        {
+          "text": "Reply-required inbox handled before new work",
+          "passed": true,
+          "evidence": "Both state reply-required mail must be answered before claiming/starting new work."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 0.0,
+        "tokens": 0,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Correctly identifies judgment-review as an intentional gate, not a bug, no bypass",
+          "passed": true,
+          "evidence": "Both explain it as the documented post-mechanical judgment-review gate and explicitly say not to bypass it."
+        },
+        {
+          "text": "Correctly explains coord_wait task-handle absence as client-capability-gated, not a Copilot bug",
+          "passed": true,
+          "evidence": "Both attribute it to the io.modelcontextprotocol/tasks client declaration, unrelated to provider."
+        },
+        {
+          "text": "Recommends coord_publish_finding for genuine client discrepancies",
+          "passed": true,
+          "evidence": "Both mention coord_publish_finding as the right channel if something is a genuine client gap."
+        },
+        {
+          "text": "Grounded in the skill's actual documented content, no invention",
+          "passed": true,
+          "evidence": "Both responses quote/paraphrase specific skill language rather than guessing."
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "old_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tokens": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0,
+        "max": 0
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "+0.0",
+      "tokens": "+0"
+    }
+  },
+  "notes": []
+}

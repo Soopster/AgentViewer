@@ -1,0 +1,2742 @@
+# CLAUDE.md
+
+> _"Ship with care, read before you write, and leave the codebase better than you found it. Every small, well-made change compounds."_
+>
+> _"Simplicity is the soul of efficiency — the best code is the code you didn't have to write."_
+>
+> _"Slow is smooth, and smooth is fast. Understand the problem before you reach for the keyboard."_
+>
+> _"Name things so the next reader needs no comment; the clearest code explains itself."_
+>
+> _"Delete more than you add. Dead code is a debt the next reader pays in confusion."_
+>
+> _"Make it work, make it right, make it fast — and never skip the middle step."_
+>
+> _"Leave a trail the next reader can follow; today's obvious choice is tomorrow's mystery."_
+>
+> _"Match the code around you; consistency is a kindness that outlives cleverness."_
+>
+> _"Test the seams, not the center; bugs hide where two certainties meet."_
+>
+> _"Fix the cause, not the symptom; a patched crack still runs to the foundation."_
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+npm install                    # install dependencies (uses both npm and bun.lock; bun is required for the OpenTUI runtime)
+npm run dev                    # Next.js dev server (http://localhost:3000)
+npm run build                  # production Next.js build
+npm run start                  # serve production build
+npm run tui                    # primary OpenTUI terminal app (requires Bun on PATH)
+npm run tui:dev                # OpenTUI with --watch
+npm run tui:check              # type-check OpenTUI surface (tsc --noEmit via tsconfig.opentui.json)
+npm run tui:navperf            # session-navigation latency against your real local sessions
+npm run tui:inputperf          # per-keystroke render cost for each navigation surface
+npm run tui:ink                # legacy Ink TUI
+```
+
+Three lockfiles coexist: `package-lock.json` (npm, primary), `bun.lock` (Bun, used by `npm run tui`), and `pnpm-lock.yaml` (pnpm, optional). `pnpm-workspace.yaml` only declares pnpm `allowBuilds` policy — this is **not** a workspace/monorepo. Keep all three lockfiles in sync when bumping dependencies.
+
+There is no test runner and no lint script. Type-checking is the verification step:
+
+- Web/Next.js: `npx tsc --noEmit` (uses `tsconfig.json`)
+- OpenTUI: `npm run tui:check` (uses `tsconfig.opentui.json` with `jsxImportSource: "@opentui/react"`)
+- Legacy Ink TUI: `tsconfig.tui.json` covers `tui/**` + `lib/**`
+
+`bin/agent-viewer.mjs` is the published `npx agent-viewer` entrypoint — it dispatches to OpenTUI (default), `web` (Next.js), or `--legacy` (Ink). Adding flags or modes belongs here. `--attach <url|port>` connects the OpenTUI app to a running `agent-viewer web` daemon (version handshake: `GET /api/version` + `lib/daemonProtocol.ts`; the client reports a mismatch and never restarts the daemon) instead of running the backend in-process (env `AGENT_VIEWER_ATTACH`, transport in `lib/tui/remote.ts`): turns run server-side, survive TUI restarts, and share the running-turn registry with the web UI. Git-based features (worktree tasks, checkpoints) stay local — attach assumes the daemon shares the machine/mounts. `agent-viewer pair` mints a pairing code against a running daemon and prints a terminal QR (the headless path to adding a phone); `--host <address>` sets the web bind address explicitly instead of inferring it from whether remote access happens to be enabled.
+
+## Architecture
+
+### Multi-provider session backend
+
+The app is a unified UI over five separate agent runtimes: **Claude** (`@anthropic-ai/claude-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk` for 1.x, `@opencode/client` for 2.x — see below), **GitHub Copilot** (`@github/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
+
+Each provider follows the same pattern in `lib/`:
+
+- `<provider>Client.ts` — SDK wiring, server-singleton client, session listing/resume
+- `<provider>Mapper.ts` — translates provider-native events into the shared `SessionMessage` shape
+- `<provider>Tags.ts` / `<provider>Metadata.ts` — local-only tag/title overrides for providers that can't mutate their own metadata (stored under `.agent-viewer-data/`)
+
+`lib/sessionBackend.ts` is the unified facade: it reads the active provider from `lib/providerState.ts` and routes to that provider's implementation. `lib/provider.ts` declares per-provider `SessionCapabilities` (which controls reflect in the UI: fork, rewind, rollback, delete, share, summarize, etc.).
+
+**Read path — `lib/adapters/`.** Every read/metadata op (list, session info, title/tag, delete, transcript, subagents, models, composer options, slash commands, diagnostics) goes through a `SessionAdapter` (`lib/adapters/types.ts`), one file per provider, resolved by `lib/adapters/registry.ts`. `sessionBackend.ts` keeps the shared work — instance decoration, inbox ordering, search-index sync and removal, message windowing — and adapters return only the provider's own data.
+
+Two rules make this safe to extend:
+
+- **An op a provider cannot do is an omitted method, never a stub.** How an omission behaves is documented per method in `types.ts`: some ops have a genuine empty answer (a provider with no subagents has none), others raise, because an empty transcript and an unreadable one must not look alike.
+- **`registry.ts` asserts capabilities and adapters agree** at module load, so a `SessionCapabilities` flag cannot drift away from the method backing it. Add new pairs to `CAPABILITY_METHODS` as ops move behind the interface.
+
+Adapters must stay stateless — they are resolved per *provider instance* (`lib/providerRequest.ts`), so two Claude instances with different `CLAUDE_CONFIG_DIR`s cannot share state. Warm resources belong in the existing per-instance pools. Keep each adapter file under ~800 lines; split by concern before it grows past that.
+
+**Send path — `ProviderRuntime` per extension.** Turn streaming, creation, prewarm, actions, fork, rewind/rollback and close live in `lib/extensions/providers/<id>/runtime.ts` (ACP transports share `transports/acpRuntime.ts`; shared turn plumbing is `runtimeCore.ts`). `lib/sessionBackend.ts` is a ~160-line host facade: it resolves the provider once, starts the checkpoint, checks permission tokens, and dispatches to `getProviderRuntime(provider)`. It has no `provider === '…'` branches — do not add any. `npm run providers:extensions:smoke` asserts each runtime loads only its own SDK in a cold isolate and that the facade loads none.
+
+Supporting modules split out of `sessionBackend.ts` so both paths can share them without an import cycle through the registry: `lib/mappedMessagesCache.ts` (LRU transcript cache), `lib/liveTranscripts.ts` (Copilot/Pi in-flight turn buffers), `lib/codexThreads.ts` (thread read/resume/error classification), `lib/opencodeSessions.ts`, `lib/claudeSessionReads.ts`, `lib/claudeModels.ts`, `lib/withTimeout.ts`, and the composer vocabularies in `lib/adapters/shared.ts` / `lib/copilotComposer.ts` / `lib/piComposer.ts`.
+
+`lib/types.ts` defines the canonical wire format. Every provider must produce `SessionMessage { type, uuid, session_id, message: ApiMessage|SystemMessagePayload, parent_tool_use_id, timestamp?, origin?, provider? }`. `lib/threading.ts` `buildThreadedMessages()` then groups tool_use/tool_result pairs and parses XML tags into the renderer-ready blocks consumed by `MessageItem.tsx` and the TUI formatters.
+
+#### OpenCode 1 and OpenCode 2 are one provider over two APIs (load-bearing)
+
+OpenCode 2 ships as a different npm package (`@opencode/cli`, with `@opencode/client` for the
+SDK) serving a different HTTP API: routes moved under `/api`, `POST /session` became `POST
+/api/session`, a session's directory moved to `location.directory`, an assistant message's parts
+became an inline `content[]`, and the event stream turned from cumulative part snapshots into
+lifecycle edges plus deltas. Both majors install side by side and either may be what `opencode`
+resolves to, so **the version is asked of the server, never assumed** — `openCodeApiGeneration`
+in `lib/opencodeClient.ts` reads `GET /api/info`. `/session` cannot be the probe: on a 2.x server
+that path serves the *web app*, so it answers 200 with HTML and a status-code check alone would
+call every 2.x server a 1.x one.
+
+**A 2.x server is adapted at the transport boundary, not at each call site.** `lib/opencode2Client.ts`
+presents the OpenCode 1 client surface this app already calls (~30 operations across the adapter,
+the harness and the send path) backed by `@opencode/client`; `lib/opencode2Mapping.ts` holds the
+shape translation and `lib/opencode2Events.ts` turns the v2 stream into v1 events. Everything
+above keeps one vocabulary, which is what lets the web renderers, the TUI, `lib/permissions.ts`
+and the SSE pumps stay untouched — they all key on v1 event and part shapes.
+
+- **Part ids are derived, and both paths must derive them identically.** v2 content blocks carry
+  no ids, so a text/reasoning block is keyed by its `ordinal` and a tool block by its call id. If
+  the live translator and the history read disagree, a streaming card and the persisted card it
+  settles into are two different cards.
+- **Renamed tools are normalized or they render as raw JSON.** v2's `shell` is v1's `bash`, its
+  `subagent` is `task`, and `read`/`write`/`edit` renamed `filePath` to `path` — the cards select
+  on the v1 names. Sessions migrated from a 1.x install keep the *old* names, so both spellings
+  appear on one server and the mapping must be additive rather than a rename of everything.
+- **A failed turn emits its error before its idle.** The send stream stops at whichever arrives
+  first, so the other order drops the reason and shows a turn that ended for no stated cause.
+- **Sharing is the one op v2 dropped**, so the capability is gated per session (on the server's
+  own `version`, via `capabilitiesFor` in `lib/opencodeMapper.ts`) rather than per provider — a
+  user on 1.x keeps the button.
+- **A subagent asks from its own session, and both halves of answering it must know that.** A
+  `task` subagent runs in a child session, so its permission asks and questions carry the
+  child's `sessionID` while the turn the user watches streams the parent's. `lib/opencodeHarness.ts`
+  learns parentage from `session.created`/`session.updated` (and looks it up only for sessions
+  that are asking something) and delivers **request events only** to every ancestor's subscribers
+  and snapshot — a child's messages are its own transcript. The reply is sent on the asking
+  session: under the chat's id OpenCode answers `PermissionNotFoundError` and the turn stays
+  waiting. Before this, the ask reached no surface and the turn hung "working" with nothing to
+  answer (verified live on 2.0.8; herdr tracks OpenCode's session family the same way, #4357).
+  `opencodeSubagentRequestsSmoke.ts` pins it hermetically, `npm run opencode:subagent:live`
+  end to end.
+- **A user `!command` has no execution edge in v2.** It runs outside any execution and queues
+  its output for the model's next turn, so no idle arrived and the send stream hung until its
+  30s watchdog. `session.shell.ended` is the turn's idle — unless an execution is running, since
+  a shell started inside one is the agent's own. Pinned in `opencode2CompatSmoke.ts`.
+- **Todos have no v2 endpoint**: the `todowrite` tool call is the only record, read live off the
+  event and cold off the transcript.
+- **A 2.x server needs the 2.x coordinator plugin.** A 1.x plugin is a file exporting a hook
+  factory; a 2.x plugin is a *directory* whose entrypoint default-exports `{ id, setup }`, and
+  each major refuses the other's shape. `lib/opencodePlugin/agentViewerCoordinator2/` is the 2.x
+  build — its tools declare plain JSON Schema, so unlike the 1.x file it imports no plugin SDK.
+  The choice is made from `opencode --version` because the config is an environment variable on
+  the spawn, decided before the server exists to ask.
+
+`npm run opencode:harness:smoke` ends with `scripts/opencode2CompatSmoke.ts`, which pins the tool
+normalization, the id agreement, the delta channels, the failure ordering and the form/question
+round trip against fixtures recorded from a real 2.0.8 server. Seven mutations were verified to
+fail it; every one of those defects renders as plausible output rather than an error.
+
+#### Codex sub-agents ask under their own thread (load-bearing)
+
+Codex's `multi_agent` (on by default in codex-cli 0.157) runs each `spawn_agent` sub-agent in its
+own thread, and its approval requests carry **that** thread's id. The send path claims approvals
+per thread, so a sub-agent's ask went unclaimed, `CodexAppServerClient` answered it "method not
+supported", and Codex refused the command without the user ever being asked — verified live.
+The client now learns parentage from every record of a spawn (a `subAgentActivity` item on the
+parent's thread is what 0.157 actually sends; the child's `thread/started` source and a
+`collabAgentToolCall`'s receivers are also read) and a turn claims approvals from any thread
+`threadDescendsFrom` its own. The OpenCode harness has the same rule for child sessions (see
+above). `scripts/codexThreadParentsSmoke.ts` pins the parentage records;
+`npm run codex:subagent:live` drives a real sub-agent through an approval end to end.
+
+#### Codex reads must not hold threads loaded (load-bearing)
+
+Codex reports a thread's model only from `thread/resume`, and a resume **loads** the thread: the
+app-server starts every configured MCP server for it (~160MB of child processes per thread on
+codex-cli 0.157) and keeps them until the thread is unsubscribed — measured: never, otherwise. The
+read path used to resume in `readSessionInfo`, which runs for every read and every neighbour
+prefetch, so each Codex session browsed stayed loaded for the app-server's lifetime (1.3GB of
+descendants after browsing eight sessions). `lib/codexThreads.ts` now separates *knowing* a model
+from *holding* a thread:
+
+- **`readSessionInfo` never resumes**; it reports `knownCodexThreadModel` (null until learned).
+- **`readCodexThreadModel`** (models, diagnostics) resumes once, remembers the model, and
+  unsubscribes unless a turn or prewarm holds the thread; the app-server unloads it ~60s later.
+- **Prewarm holds one idle thread** (`CODEX_IDLE_PREWARM_LIMIT`). Selecting another session
+  releases the previous one; a thread a turn has used is *claimed* and never released by prewarm.
+- **A resume makes that app-server the thread's writer.** In the TUI each isolate runs its own
+  app-server, so a resume from the transcript worker made the main isolate's prewarm and turns
+  fail with `already has an active writer`. So the worker never resumes (`disallowCodexModelResume`):
+  it answers Codex metadata from learned models and reports an unknown one as `null`, and only then
+  does the main isolate read — and resume (`readTuiSessionMetadataAsync`). Browsing sessions whose
+  models are known starts no app-server on the main isolate at all (~170MB).
+- **Resume with `excludeTurns: true`.** Callers read only the model; the full response carried the
+  transcript — 230KB and ~224ms per resume against 3KB and ~17ms — serially ahead of `turn/start`.
+- **A learned model is persisted and keyed on the thread's last turn** (`codexThreadActivityAt`,
+  `.agent-viewer-data/codex-thread-models.json`). Even a released resume boots the thread's MCP
+  servers for a minute — ~1.1s of child CPU per selection — so a thread already seen must not be
+  resumed again to show a model it has not changed. **Not `updatedAt`: codex-cli 0.157's
+  `thread/resume` bumps it**, so a key on it made every learning resume invalidate its own answer.
+  `recencyAt` equals the last turn's start and survives resume. Re-browsing: 22 processes / 1.35GB
+  → 10 / 0.74GB. (`lastModified` still maps from `updatedAt`, because the TUI's cached-open fast
+  path needs it to move when a turn *finishes*, which `recencyAt` does not — but a resume's own
+  bump is subtracted: `resumeCodexThread` records the `updatedAt` it left in
+  `.agent-viewer-data/codex-resume-touches.json` (`lib/codexResumeTouch.ts`), and a listing that
+  still sees exactly that value reports `recencyAt`. A file, because the TUI resumes in the main
+  isolate and lists in the worker. Before this, opening a Codex session made it read as active a
+  minute ago. `codexResumeTouchSmoke.ts`; verified live against codex-cli.)
+
+`npm run codex:resume:live` asks the app-server itself (`thread/unsubscribe` answers `unsubscribed`
+only for a subscribed thread); four mutations were verified to fail it.
+
+#### ACP-transport providers (`claude-acp`, `codex-acp`, `acp`)
+
+Sibling provider ids that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol (`session/new → session/prompt → session/update`) as an alternate transport for the same two SDKs — not a `transport` flag on `'claude'`/`'codex'`, and not something OpenCode/Copilot/Pi get (no upstream ACP agent exists for them). `lib/acpAgentSpawn.ts` resolves the subprocess command (env override `CLAUDE_AGENT_ACP_PATH`/`CODEX_ACP_PATH`, else bare command on `PATH`) — the coordinator's `bin/agent-viewer-acp-client.mjs` hand-duplicates this table rather than importing it, since it runs under vanilla `node` with no TS loader. `lib/acpClientPool.ts` is the singleton subprocess/session pool (modeled on `lib/claudePool.ts`): buffers push-based `session/update` notifications into a monotonically indexed array so `lib/sessionBackend.ts`'s poll+offset message model can slice it, queues `session/request_permission`/`elicitation/create` for a real UI round-trip, and reaps idle/stalled subprocesses. `lib/acpMapper.ts` maps buffered ACP updates to `SessionMessage`. `lib/permissions.ts` bridges the pool's pending-request queue into the same `PendingPermission` UI every other provider uses.
+
+**`acp` is the third ACP id: whatever agent the user configured a command for** (Gemini CLI, Goose,
+…). It is the same adapter, pool and mapper as the two built-in transports — nothing in them knows
+which agent it is talking to — with the command resolved in `lib/acpAgentSpawn.ts` instead of from a
+table. The default instance reads `AGENT_VIEWER_ACP_COMMAND`; further agents are provider instances
+(`.agent-viewer-data/provider-instances.json`, `provider: "acp"` with the command as `executable`),
+which is why `acp` joins Claude and Codex as a provider that may have more than one instance.
+
+- **Caches and pooled subprocesses are keyed by `acpAgentKey`, not by agent kind.** Two instances
+  share the kind `custom`; keyed by kind, one agent's session list is served as the other's and
+  every session in it opens empty. The capability probes run under the calling instance's context.
+- **An unconfigured agent is answered without a spawn.** The sidebar polls every 5s, and the `all`
+  view fans out to every instance — `acp` included, unlike the two built-in transports, whose
+  sessions the native adapters already list. A turn against it fails with what to set.
+- **A managed `acp` teammate gets its `coord_*` tools from an MCP server it spawns itself**
+  (`lib/coordinatorAcpMcp.ts`). An ACP agent is a separate process that takes tools only as MCP
+  servers named in `session/new`; the full bridge needs the web API, which a TUI-hosted run does not
+  have, so this is a dependency-free stdio server, materialized beside a 0600 binding, that calls the
+  local Coordinator bridge's `/participant`. The credential is in that file, never in the agent's
+  argv, environment or prompt. **Servers cannot be added to a live session**, so a chat that became
+  a lead after it started keeps what it had and is given the shell fallback client instead, as Codex
+  and OpenCode are.
+- **An agent is free to ignore the MCP server, so a teammate is also given the shell client.**
+  GitHub Copilot's ACP mode never starts a stdio server it is handed (verified: the server was not
+  spawned at all), and its teammate ended every turn saying it had no `coord_*` tools. Each `acp`
+  teammate dispatch therefore also names the session client (`lib/coordinatorSessionClient.ts`),
+  which reaches the same bridge as the same participant.
+- **Its approvals go to the human, except the session client's own calls.** A managed teammate's
+  permission requests queue for the UI like any ACP session's. The one exception is a shell command
+  that is *exactly* one call of that session's client (`isCoordinatorClientInvocation`: the
+  host-supplied prefix, one `coord_*` name, at most one single-quoted argument — nothing can follow
+  or be substituted), which the pool answers `allow_once` through a per-session rule
+  (`setAcpPermissionRule`). The Coordinator authorizes each such call as that participant anyway.
+  **It matches the command, never the title**: the title is the agent's own prose ("Check
+  coordinator run status"). MCP-tool asks are not pre-allowed — no agent tried here asks for them,
+  so there is no real request shape to match.
+- **A session is read and prompted through the agent that listed it** — the rule for every
+  provider instance, see *Provider instances in the TUI* below. Naming `acp` and no agent lists
+  every configured agent's sessions, each row under its agent's name.
+- **In the merged view a session the native adapter also lists is shown once** (`dropAcpDuplicates`):
+  `opencode acp` and `copilot --acp` list the very sessions the OpenCode and Copilot adapters do.
+- **A model is the agent's `model` config option, and it is the only place a model list exists.**
+  `session/new` returns `configOptions`; the pool keeps them current (`config_option_update`, and
+  the reply to `session/set_config_option`) and the adapter's `readModels` reads the one whose
+  category is `model`, flattening grouped options. The composer's model is applied before each
+  prompt and is a no-op when unchanged. **A model the agent did not offer is refused before it is
+  sent** — an agent may accept an unknown value and fail the prompt instead. A session exists only
+  once a turn has started, so a chat not yet live is offered the agent's last list with no current
+  model. This was found against a real agent: OpenCode's ACP mode starts on a model the account
+  could not use, and with no way to choose another every turn failed.
+- **A teammate is staffed from a provider instance, and named after it.** The interactive state
+  carries `staffing` (`readCoordinatorStaffing`): one choice per instance, which is what the TUI's
+  `p` cycles and the web select lists, so a configured agent is chosen as "Gemini" rather than as
+  `acp`. An `acp` instance with no command is not offered. `coordinatorInstanceLabel` names a
+  teammate after its instance in both rosters and returns null for a default instance, whose
+  provider name already says it.
+- Not done: a pooled session reaped after 15 idle minutes starts a fresh ACP session, as it does
+  for the built-in transports.
+
+`acpProviderSmoke.ts` runs a hand-written agent through a turn, a model change, two instances,
+per-instance listing and routing, a teammate staffed from a named instance that reads the board as
+itself, and one that ignores its MCP server and asks before each shell call; 24 mutations were
+verified to fail it. `npm run acp:live` does the same against a real agent (`ACP_LIVE_COMMAND`,
+`ACP_LIVE_MODEL`) and passes against `opencode acp` 2.0.8, `claude-agent-acp` and `copilot --acp`,
+with no approval reaching a person in any of the three. It leaves its sessions in the agent's store.
+
+#### Provider instances in the TUI (load-bearing)
+
+A provider may have further instances (`.agent-viewer-data/provider-instances.json`): a second
+Claude or Codex account, each configured ACP agent. The TUI's provider menu (`p`) lists each under
+its provider. **The bare provider row means all of its instances** (`everyInstance` on the listing;
+rows are then labelled by instance), an instance row only that one, and a new chat goes to the
+instance the list is narrowed to, else the selected session's. The choice is saved in
+`provider.json` beside the provider, which is also what an attached daemon's routes fall back to.
+
+- **A session is read and prompted through the instance that listed it** (`lib/sessionInstances.ts`).
+  Most TUI calls name a provider and a session id, never an instance, so they reached the default
+  instance, which has no such session, and the chat opened empty. The pairing is recorded at
+  listing and creation — in a file, because the transcript worker is another isolate that never ran
+  the listing — and from any session row that carries its instance (`noteTuiSessionInstance`),
+  which covers a session no listing has seen yet. The read path consults it in
+  `lib/sessionReads.ts`; the send path takes no instance from its callers, so `lib/tui/service.ts`
+  scopes it (`asSessionInstance`). **An instance the caller named is never overridden**, and the key
+  carries the provider, since an id is only unique within one provider's stores.
+- **Claude's store reads run under the instance's environment, not just its listing.** The SDK
+  finds the store from `process.env.CLAUDE_CONFIG_DIR` at call time. Only `listSessions` used to
+  swap it in, so a second account's sessions were listed and then read from the first account's
+  store: every one opened empty, on the web too.
+- **Swapping `process.env` is process-wide, so reads for two accounts must not overlap**
+  (`withProviderProcessEnvironment`). A default-instance read starting while another instance's
+  read held the swap looked in the wrong store and found nothing — 16 of 60 interleaved reads,
+  measured, and the merged listing raced itself the same way. Unswapped reads run freely among
+  themselves, queue only while a swap is waiting or running, and a swap waits for the ones under
+  way. The call is re-entrant: a wrapped read calling another would otherwise queue behind itself.
+  Only callers that go through it are protected; an SDK store call added outside it is not.
+
+`providerInstanceReadsSmoke.ts` runs two hand-written Claude stores through listing, narrowing,
+routing and 80 interleaved reads (six mutations verified to fail it); `acpProviderSmoke.ts` covers
+the picker's choices, the saved selection and a row's own instance on the send path (four more).
+Not done: a turn on a second Claude account was not run (it needs a second login); the Codex
+adapter's reads were not checked against a second `CODEX_HOME`; and under `--attach` a session
+from an instance other than the saved one is read through the saved one.
+
+**ACP session persistence is advertised per agent, and the advertisement is a claim rather than a guarantee** (`lib/acpCapabilities.ts`). The protocol gates `session/list`, `session/load`, `session/resume`, `session/delete` and `session/fork` on the agent advertising them in its `initialize` response — which the pool used to discard, so this was long assumed to be "ACP cannot". Measured: claude-agent-acp 0.70.0 advertises `loadSession` plus session `list`/`resume`/`fork`/`delete`/`close`; codex-acp 1.6.2 the same minus `fork`. A capability is read by PRESENCE (`{}` means yes, absent or `null` means no) except `loadSession`, which is a plain boolean — `scripts/acpCapabilitySmoke.ts` pins both rules, since reading either wrong fails silently in one direction or the other.
+
+**Listing is gated on history actually being replayable, not on the advertisement.** codex-acp advertises `loadSession: true` and then fails every `session/load` with `Internal error … thread <id> already has an active writer` — verified across six of its newest threads, on fresh connections that had issued no other request, so the lock is not connection-scoped and no client action releases it. Gating on the advertisement alone would have put 250 codex sessions in the sidebar of which every one opens empty, which is strictly worse than the transient behaviour it replaced. `verifyAcpHistoryReadable` therefore loads the newest listed session once per agent and lists nothing if that fails; the check needs its own connection, because `session/list` itself takes the writer. It is self-correcting in both directions. The remaining ops (delete, fork, resume, model listing) are still absent by design rather than faked.
+
+Reads spawn a short-lived agent — listing is agent-scoped, so it cannot ride the session pool — which is why the answers are cached, single-flighted, and served stale while a refresh runs. Without that the 5s sidebar poll would spawn an agent every five seconds. A live pooled session always wins over a replay: `session/load` returns what the agent has persisted, which lags the turn currently streaming. `createAcpStream` (the send-message path) polls the pool's buffer every ~200ms and emits delta frames until the turn's `stop` update arrives — coarser than native providers' token-level streaming, an accepted v1 trade-off matching `lib/acpAgent.ts`'s own precedent.
+
+`lib/acpClientPool.ts`'s `cleanupChild` kills the full descendant tree on close/reap, not just the direct subprocess: both agents spawn their real worker in its own session that escapes a plain process-group signal — `claude-agent-acp` execs the actual `claude` CLI as a separate-session child, and `codex-acp`'s app-server spawns its sandboxed exec helper the same way, sometimes moments *after* the initial signal (its own reaction to `session/cancel`/shutdown). A `detached: true` spawn + one `process.kill(-pid, sig)` alone verifiably leaves these orphaned. The fix walks the live tree via `pgrep -P` (`collectDescendantPids`, recursive) and re-polls + re-kills every ~500ms across a 3s SIGTERM window before a final SIGKILL sweep, instead of a single snapshot-then-kill. Verified E2E for both providers with the pool's own process kept alive throughout the check (no pipe-close masking a real leak).
+
+#### Claude warm-pool reuse rules (load-bearing)
+
+`lib/claudePool.ts` keeps one warm `query()` subprocess per session. What forces a respawn is deliberate:
+
+- **Live-applied, no respawn:** `model` (`setModel`), `permissionMode` (`setPermissionMode`), and `effort` between two *named levels* (`applyFlagSettings({ effortLevel })` — the only path that accepts the session-scoped `'max'`). A failed live apply sets `pendingRecycleReason` instead of recycling immediately, so it can't kill a live turn.
+- **Still respawns:** `cwd`, `taskBudget`, `resumeSessionAt`/`forkSession`, and any effort transition touching `off`/`minimal` — those map to a `thinking` config, and thinking has no live control method. Dropping that distinction would leave a warm entry thinking after the user turned it off.
+- **A change of Coordinator binding respawns too** (`claudeCoordinatorBindingCurrent`). The run-bound `agent-viewer` MCP server and `strictMcpConfig` are spawn-time options, so a session warmed before it became a lead kept the user's own MCP config — whose agent-viewer bridge has no identity — and every `coord_*` call answered "Join, create, or resume" for the rest of the chat. The registry keeps one record per identity (`registerCoordinatorMcpServer` is a no-op for the same run/agent/token), because every lead delivery re-registers and a fresh object per turn would respawn per turn. Pinned in `scripts/coordClaudeBindingSmoke.ts`.
+- **`worker_shutting_down`** marks the entry doomed (`pendingRecycleReason`) so `acquire`/`peek` never hand it out for a new turn. An in-turn doomed entry is still reused — recycling it there kills the live turn out from under its SSE stream.
+- **The system prompt is recorded for the conversation** (`snapshot: true` on both send paths). That is what keeps the API prompt-cache prefix stable across turns and resumes, and stops a prompt that shifted between launches from discarding extended thinking's earlier reasoning. Its cost is deliberate: a live `setModel` no longer re-renders the prompt, so a mid-session model switch inherits the recorded one until compaction or a new session. **Both paths must pass it** — a cold first turn that records a prompt the pooled turns decline to reuse is worse than neither doing it.
+- **A re-run of an interrupted turn is marked, or it reads as a duplicate.** When
+  a worker restart interrupts a turn the CLI re-runs it automatically, and SDK
+  0.3.270 stamps `resume_reason` on the re-run's first reply frame. Without it the
+  transcript shows one prompt apparently answered twice with nothing to say why,
+  and the reattach path cannot tell which attempt it is watching. It is a
+  **wrapper-level sibling** — never inside `message.content`, so it is not
+  replayed to the model — and rides `SessionMessage.resumeReason` through
+  threading to a badge on the web card and the TUI card's header meta. Both mapper
+  paths must carry it (the live stream delivers it flat, history nests the payload
+  under `.message`), or a reload loses the explanation while keeping the
+  duplicate-looking turn. `claudeSdkSurfaceSmoke.ts` pins each link of that chain
+  independently.
+- **A permission ask carries presentation constraints, and they are not the same thing as the
+  decision.** `canUseTool`'s options include `suppressAlwaysAllowRule` (the always-allow rule this ask
+  would write grants more than the ask's own action, so the affordance must not be offered at all) and
+  `defaultToNo` (approve must not be one stray keystroke away). Both ride the
+  `permission.requested` frame — a reattaching surface re-derives its card from that frame alone, so
+  withholding them server-side would put the button back. `extractClaudePermission` folds
+  `suppressAlwaysAllowRule` into `canApproveAlways` (it **outranks** having suggestions to offer, which
+  is what the old code derived the flag from) and exposes `defaultToNo` as `defaultToDeny`;
+  `defaultPermissionOptionIndex` opens the TUI card on Reject and the web card leads with it. Neither
+  removes an option — withholding the decision the user wants is worse than making them confirm it.
+  Getting either wrong is invisible in a screenshot, so `scripts/claudeSdkSurfaceSmoke.ts` pins both
+  (two mutations verified to fail it).
+- **An MCP ask says which server it came from, and trust keys on `source`, never the name**
+  (SDK 0.3.274 `mcpServer`). `sdk` is a server this host registered in-process; anything else —
+  including a source value we do not recognise — is configuration, and a configured server can pick
+  any name, `agent-viewer` included. The name is untrusted text, so `readMcpServerProvenance` escapes
+  it with `revealRuleText` before `permissionMcpServerLabel` puts it on either card. The same `source`
+  labels the ⇧D MCP rows. Pinned in `claudeSdkSurfaceSmoke.ts` and `permissionMcpSmoke.tsx`.
+- **Read-only queries declare `permissionPrompts: 'none'`** (`lib/sdkControlQuery.ts`, `lib/claudeModels.ts`). They run no tools and install no `canUseTool`, so a prompt there could only park the control queue on a question with no surface to answer it; rules, hooks and the permission mode still decide, and anything that would prompt is denied with a message saying why.
+- **The model list is cached, and listing starts no MCP servers** (`lib/claudeModels.ts`). It belongs
+  to the install, yet it was read on every session opened; each read spawned a Claude CLI that booted
+  every configured MCP server, and the warm slot re-spawned one after every use — so an idle CLI tree
+  (~1.6GB here) was always alive and browsing Claude sessions spawned another per selection. The list
+  is now cached per instance (`CLAUDE_MODELS_CACHE_TTL_MS`, served stale while refreshing, empty
+  answers never cached), the listing CLI runs with `strictMcpConfig` and no servers (the list is
+  identical), and the warm slot is consumed once, never refilled. Plugin hooks still run on that
+  start — skipping them would mean skipping settings, which can change the list.
+  `npm run claude:models:live` counts processes; three mutations were verified to fail it.
+- **Spawning resumes, and resuming rewrites the transcript** — identical bytes, new mtime, which is what `listSessions` reports as `lastModified`. Since the pool is prewarmed when a session is *selected*, merely navigating to one would jump it to the top of every list ordered by last activity. Read-only control queries dodge this with `persistSession: false` (`lib/sdkControlQuery.ts`); a pool entry cannot, because the turn it is warmed for must persist. `lib/claudeResumeTouch.ts` instead records the touch during prewarm and subtracts it in the Claude adapter's `listSessions`/`readSessionInfo`. The override is pinned to the exact post-resume mtime *and* file size, so any real write drops it on the next read — it can only hide a timestamp we caused. Codex's `thread/resume` was once checked to leave `updatedAt` alone; on codex-cli 0.157 it bumps it (see *Codex reads must not hold threads loaded*).
+
+#### Copilot reads must not activate the session (load-bearing)
+
+Resuming a Copilot session to read it costs **1.4-7.8s** and appends a synthetic
+`session.resume` event to the history it then hands back — so browsing a session
+changed what the session was made of, and the sidebar paid a multi-second stall
+per open. SDK 1.0.13's `sessions.readPersistedEvents` reads the durable journal
+directly (1-7ms, no activation), and `lib/adapters/copilot.ts` uses it for the
+transcript, `readSessionInfo`, and the model badge; `peekCopilotSession` returns
+a pooled runtime without spawning one, so a read can *decorate* its answer from
+a live session without bringing one up to find out.
+
+- **A cold read reports no context tier, and that is not a gap to fill.** The
+  journal records the model (`session.model_change` / `session.start`) but never
+  the tier, which is runtime state. The composer sends its tier back on every
+  send, so inventing a `default` here would silently downgrade a long-context
+  session on its next turn — `selectedCopilotContextTier` is therefore
+  `null`-until-known in `MessageView.tsx`, and an omitted tier lets
+  `sessionBackend` resolve the session's real one.
+- **Diagnostics and `readComposerOptions` still activate**, deliberately: status,
+  tool lists and the permission/agent mode are runtime state with no journal
+  equivalent, and both are reached by an explicit user action rather than by
+  selecting a session.
+- Guarded by `npm run copilot:sdk:smoke`, which asserts no read leaves a runtime
+  behind and that the journal maps to the same transcript as the activating
+  reader (verified to fail when the persisted path is disabled).
+
+### Web app (Next.js 16, React 19)
+
+Routes live under `app/api/`:
+
+- `provider/route.ts` — GET/POST active provider
+- `sessions/route.ts` — list for active provider; `sessions/project/messages/route.ts` for cross-session project feed
+- `sessions/[sessionId]/{route,messages,diagnostics,fork,interrupt,models,rewind,actions}/route.ts` — per-session reads + control actions
+- `sessions/[sessionId]/subagents/[agentId]/messages/route.ts` — nested transcript for spawned subagents
+- `session-index/{search,rebuild,stats}/route.ts` — full-text search over the persistent SQLite index (see Persistent search index below)
+- `git/route.ts`
+
+`proxy.ts` (Next 16's middleware replacement, lives at project root) blocks cross-origin mutation requests against `/api/*` to prevent drive-by CSRF — keep it.
+
+`next.config.ts` marks Claude/Pi SDKs as `serverExternalPackages` because they rely on Node APIs and cannot be bundled. Do not import them from client components.
+
+The page (`app/page.tsx`) drives polling: sessions list every 5s, active-session messages every 2s with an `offset` param for incremental delta.
+
+**`offset` is a positional index, not a stable cursor** (load-bearing). Every window is sliced from
+a transcript re-derived from the provider on that read, so a compaction or rollback can leave an
+offset pointing at a different message than it did last time. Two guards exist and both matter:
+callers pass `expectUuid` (the uuid they believe sits at `offset`) and get a `replace` tail back on
+a mismatch instead of a window they would splice into the wrong place; and the SSE pumps stop
+walking a cursor forward once it falls more than `MESSAGE_CATCHUP_MAX_MESSAGES` behind, because
+each catch-up step re-reads the *whole* transcript and paginating a large gap costs O(gap/limit)
+full reads. Both live in `lib/sessionBackend.ts`'s `windowForParams` and the shared
+`createWindowPump` in `app/api/sessions/[sessionId]/messages/events/route.ts`.
+
+That route's four provider pumps share `createWindowPump` for the fetch/diff/emit/cursor half and
+differ only in which harness they subscribe to. **Each pump must keep subscribing to its harness
+before its first `refetch()`** — an event arriving during that first read sets `pending` and is
+picked up afterwards, so nothing published during catch-up is lost. It reads like incidental
+ordering; it is the thing that closes the reconnect gap. `MessageView.tsx` uses a custom absolute-positioning virtual scroll (`ResizeObserver` per-row + RAF batching), not `react-window`.
+
+### Raw provider frames
+
+`lib/rawFrames.ts` keeps the provider's original frame beside every message the mappers normalize,
+so "the card rendered wrong — what did the SDK actually send?" is answerable. Served by
+`GET /api/sessions/[sessionId]/messages/[uuid]/raw` (full scope only — a frame carries whatever the
+provider sent) and surfaced as the `RAW` action on a transcript row.
+
+Deliberate boundaries: a frame is never a field on `SessionMessage`, never reaches the SQLite index,
+and lives only in this process. **Retention is pinned to the mapped-message cache** — frames are
+recorded by the mappers, and `lib/mappedMessagesCache.ts` serves an unchanged transcript *without*
+re-running its mapper, so a session that is cached but whose frames were dropped would never record
+them again. Bucketing per session under the same cap keeps the lifetimes aligned; a 404 means
+"no longer retained", which is normal, not an error.
+
+### Persistent search index
+
+`lib/sessionPersistence.ts` mirrors session metadata + messages into a SQLite database at `.agent-viewer-data/session-index/index.sqlite`. The file is large (~1570 lines) and load-bearing — it backs `/api/session-index/{search,rebuild,stats}` and the in-app session search UI. Key entry points: `syncPersistedSessions`, `syncPersistedSessionMessages`, `searchPersistedSessions`, `readPersistedIndexStats`, `removePersistedSession`, `clearPersistedSessionIndex`.
+
+**`node:sqlite` import quirk** (load-bearing — see commit `5099252`): `node:sqlite` cannot be statically imported because Turbopack/Next bundling rewrites it and breaks the runtime. Use the existing `(0, eval)('import("node:sqlite")')` indirection inside `openDatabase()` to bypass the bundler — do not "clean up" this eval.
+
+### Theming
+
+~30 themes — the five originals (`dark`, `light`, `terminal`, `imessage`, `paper`) plus popular editor palettes (`solarized-*`, `gruvbox-*`, `nord*`, `tokyo-night*`, `catppuccin-*`, `dracula`, `monokai`, `kanagawa`, `ayu-*`, etc.). Web themes are registered in `lib/themes.ts` (`Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META`); each maps to a `[data-theme="…"]` block in `app/globals.css`. TUI themes are registered separately in `lib/tuiState.ts` (`VALID_TUI_THEMES`) with palette tables in `tui/theme.ts` — adding a theme means touching both registries. Theme is restored before first paint by an inline script in `layout.tsx`. Tool colors use semantic CSS vars (`--t-bash`, `--t-edit`, …). Code-block syntax theme is independent, controlled via `CodeThemeContext`.
+
+### Two terminal UIs
+
+The TUI is mid-migration from Ink to OpenTUI. Both share the `lib/tui/service.ts` reader and `tui/format.ts` card formatters; they diverge only in the renderer.
+
+- **OpenTUI** (`tui/opentui/`, primary): `@opentui/react`. Entry `tui/opentui/main.tsx` runs under Bun. Uses `@jsxImportSource @opentui/react`. Background work (analytics, threading, metadata, session detail) is offloaded to worker files in `tui/opentui/*Worker.ts` with matching `*WorkerClient.ts` wrappers — keep that split when adding heavy computation.
+- **Ink** (`tui/App.tsx`, legacy): React for terminal via `node --import tsx`. Shipped with `--legacy` flag.
+
+Both TUIs depend on the same `lib/` provider layer — changes to `sessionBackend.ts`, mappers, or `threading.ts` affect web and TUI alike.
+
+#### The TUI theme can follow the terminal
+
+OpenTUI infers `light`/`dark` from the terminal's answer to OSC 10/11 and re-asks when the
+terminal reports an appearance change (`renderer.themeMode`, the `theme_mode` event). With
+`themeFollowsTerminal` set in `tui.json` the root switches between two remembered themes, one per
+side (`themeLight`, `themeDark`: the last theme picked by name from that group).
+
+- **Following is the default only when no theme was ever stored.** A stored theme with no flag is
+  a choice made before this existed, and it is kept.
+- **Picking a theme by name turns following off**; Tab in the theme menu turns it back on.
+- **A terminal that never answers changes nothing.** Until it answers, the stored theme is the
+  last one it was seen in, which is why exit writes the flag together with the theme.
+
+`themeFollowSmoke.tsx` plays the terminal's half on stdin (two mutations verified).
+
+**`terminal-palette` (TERMINAL in the menu) is made of the terminal's own colours** —
+`terminalPaletteTheme` in `tui/theme.ts`: the ANSI slots carry the accents, the surfaces are mixed
+from the reported default pair, and an unreported slot falls back to the built-in theme of the same
+lightness. It is asked for (`renderer.getPalette`) only once the theme is in use, and the root's
+`palette` listener is what makes OpenTUI re-read the colours when the terminal changes them. Its
+lightness depends on the terminal, so it heads whichever menu group it is on and every light/dark
+test goes through `isLightThemeMode`, never `LIGHT_MODES`. The test renderer refuses palette
+detection, so `terminalPaletteThemeSmoke.tsx` stubs the read and emits the event (two mutations
+verified); the OSC exchange itself is OpenTUI's and is not covered here.
+
+#### OpenTUI 0.6: what changed under the smokes (load-bearing)
+
+0.6 paints natively and asynchronously, and binds resources to a native Context. Nothing in the
+app's behaviour changed, but four things in how it is built and tested did:
+
+- **A `SyntaxStyle` belongs to the scene that draws it.** `SyntaxStyle.fromStyles(styles, owner)`
+  takes `renderer.nativeScene`; one built before the renderer exists cannot be attached to it. The
+  root builds its styles from `useRenderer().nativeScene`, and smokes use `testRenderWithSyntaxStyle`.
+- **Every smoke imports `testRender`/`act` from `tui/opentui/testRender.tsx`, not the library.** A
+  commit paints a frame later, so a capture right after `await act(...)` saw the frame before it
+  (an editor that had closed still on screen). The wrapped `act` lets the renderer settle after an
+  async act, `flush` waits for the output to drain (a capture during an in-flight frame throws
+  `OutputBusy`), and a throw exits the process — a 0.6 renderer keeps native handles alive, so a
+  failed smoke otherwise sat until its timeout with the reason buried. **Wait without blocking the
+  thread**: spinning inside the capture blocks the drain it is waiting for.
+- **No JS paint hook.** `root.render` is gone; per-frame sampling listens to the renderer's `frame`
+  event (`readerWindowSmoke.tsx`). Layout reads use `getLayout()`, not `getLayoutNode()`.
+- **A refresh effect keyed on a callback's identity blanks what it just loaded.** `GitPopover`
+  re-ran its load whenever the turn list arrived (the callback is rebuilt), resetting `data` to null
+  right after the first load; 0.5's timing hid it. It now keys on `sourceKey`.
+
+On 0.6.6 the whole `tui:smoke:run` chain (125 smokes) passes. 0.6.6 also changed two things a
+component can lean on: removing a style prop now restores its default (0.6.5 and earlier kept the
+old value, which is the "reused box keeps the padding" trap below), and `visible={null}` now shows
+a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
+
+#### OpenTUI performance patterns (load-bearing)
+
+- **Poll fingerprint bail-out** in `setSessionDetail`: return `prev` when `rawMessages.length`, last UUID, model, and title are unchanged so React's identity bail-out skips a full transcript reformat on idle 2s polls.
+- **`cardDisplayData` useMemo** pre-computes landmarks, bodyLines, diffText, headerMeta for all cards; the render `.map()` reads from this stable cache rather than recomputing per render.
+- **Rows are spent on content, and the defaults are compact.** The empty composer
+  dock is four rows (`COMPOSER_MIN_HEIGHT`: borders plus two of draft) and grows
+  with the draft; a sidebar session is one row outside `comfortable` density,
+  with its age right-aligned and the activity glyph standing in for the word;
+  the pane title carries state (`● LIVE`, `READING`), not the theme's name.
+  The rail's `SESSIONS n · PROVIDER` header is painted into its top border (an
+  absolute box at `top: -1`, because a `title` string cannot carry the badge or
+  the click that toggles the sort), and the first group has no blank row above
+  it. Marks sit before the age so ages form one flush column.
+  The coordinator rail follows the same form: a run is a `TITLE / n` heading in
+  its status colour, and an agent is one row — tree glyph, name in its
+  provider's colour, then state glyph and task. Role and provider are not
+  spelled out, and an idle agent with no task says nothing.
+- **Only the focused surface has a lit border.** The composer dock used the
+  focused-pane border colour whenever it was merely open in a stream view, so
+  two frames looked focused at once; it is accented only when routed or when it
+  can take a key (`composerActive && !composerFocusBlocked`).
+- **Place static content outside `scrollbox`** — the scrollbox has a fixed `height: transcriptViewportRows` budget. The live-mode spinner intentionally lives outside it.
+- **OpenTUI has one focus slot, and the composer must own it while open.** A renderable mounting
+  with `focused` true takes it: the transcript scrollbox remounting after a new session's first
+  turn left the textarea reading FOCUSED while dropping every key. Nothing else may be `focused`
+  while `composerActive`, and no printable key may be a global shortcut ahead of the composer
+  branch (⇧O swallowed drafts containing "OK" — `composerWrapSmoke.tsx` types a capital O).
+- **Module-level constants** for static option arrays (e.g. `PROVIDER_SELECT_OPTIONS`); not inside the component body.
+- Use **BMP-safe glyphs** (e.g. `●` U+25CF, not `⏺`) — terminal renderers truncate astral chars on Windows.
+- **A prefetch must not compete for the threading worker.** The sidebar neighbour prefetch warms the
+  worker's own threading/card caches (`warmTranscriptAsync` → the worker's `kind: 'warm'` request)
+  and deliberately gets no transcript back. Building and posting a full detail response is most of
+  the cost of a read — ~311ms of worker time for eight first-visit sessions against ~47ms to warm the
+  same eight — and the worker is serial, so a prefetch shaped as a `detail` spends that time holding
+  the queue against the open the user is actually waiting on. The worker's `THREADING_CACHE_LIMIT`
+  must stay ≥ reader + panes + `NEIGHBOR_PREFETCH_RADIUS × 2`, or a prefetch round evicts the session
+  being read and the cache thrashes itself.
+- **The open debounce is adaptive, and that is the point.** `DETAIL_OPEN_DELAY_MS` protects against
+  loading a transcript for every session scrubbed past; a session whose detail is already cached and
+  mtime-fresh does no read and no reformat, so it opens on the next tick
+  (`DETAIL_OPEN_CACHED_DELAY_MS`) instead of paying a wait for work that will not happen. The
+  `opensFromCache` test must keep mirroring `refreshSelectedSessionDetail`'s cached-and-unchanged
+  fast path — if they drift, the debounce is skipped for opens that really do read.
+- **The mounted card window must not depend on which pane has focus.** Browsing used to cap the
+  transcript to a small preview and the focused reader mounted `READER_CARD_WINDOW`, so every Tab
+  between the sidebar and the reader mounted or unmounted the difference and re-laid it out — 91% of
+  commits during focus toggling missed the 60fps budget, worst frame 46ms, against zero over budget
+  and 13ms once the window was held fixed. Holding it fixed costs nothing on open because browse-mode
+  cards all render collapsed (`expandedKeysForRender`), so a mounted card's cost there is bounded by
+  density, not by how many are mounted. (Scrubbing once unmounted the transcript while the selection ran
+  ahead of the open session; since every window became a transcript window nothing does, and
+  `sidebar-scroll` measures what scrubbing costs now.)
+- **Measure with `npm run tui:inputperf`** (`tui/opentui/inputPerf.tsx`) for anything that changes what
+  the reader mounts or how a keystroke renders. It drives each navigation surface at key-repeat speed
+  and reports the app's own frame canary: commits, how many blew the 60fps budget, and the worst one.
+  Each scenario runs in its **own process** — a scenario that leaves the app in an unexpected mode
+  (a stray escape on the exit confirm, a `/` reaching the composer instead of search) silently
+  mismeasures every scenario after it, and it reads as an app regression rather than a harness bug.
+  It is **not deterministic across runs**: scenarios drive the real sidebar, so a run measures
+  whichever sessions sit at those positions, and a 12-card session and a 263-card one are not
+  comparable. The `cards` column reports what the selected window was actually holding (its
+  `readerWindowTotal` gauge) — check it before
+  believing any before/after, and interleave A/B runs rather than batching them.
+- **A switch to another session mounts a seed, not the whole window** (`READER_OPEN_WINDOW`, 48
+  cards around the focus, grown to `READER_CARD_WINDOW` by the ordinary 8-card steps, anchored like
+  a slide). An earlier note here said window size did not matter for switching and that growing
+  "bought nothing"; once the card pipeline and root were cheap, the cost *was* the mount —
+  `AGENT_VIEWER_READER_WINDOW` 240/120/60 measured 34.6/25.8/18.1ms of render per switch, with
+  `createInstance` the largest share of samples. With the seed: tab-switch worst render 34.6 → 12.9ms
+  and over-budget commits 67 → 8; `NAV_PATTERN=tabs` select-to-paint p50 32-35 → 13-16ms
+  (interleaved A/B). More, smaller frames follow while the window grows. `tabReaderPositionSmoke` and
+  both `readerWindowSmoke` views pass unchanged, which is what says the restore anchors survive.
+  The harnesses cannot resolve a few ms against their own variance; profile, below, and A/B
+  interleaved.
+- **An idle app must not re-render its root, and must not animate fast.** The live-turn registry
+  poll (every 1.5s from boot) stored fresh `waiting`/`attention` arrays per poll, re-rendering the
+  root — mounted transcript included — 20 times per 30s idle with nothing changing; equal arrays
+  now keep their identity (`idleRenderSmoke.tsx` reads `readRootRenderCount()`). And every spinner
+  step is a whole OpenTUI frame (the full tree is redrawn and diffed), so the "on standby" idle
+  ticker ticks at `IDLE_TICKER_FRAME_MS` (400ms), not an in-progress spinner's 80ms. Together:
+  settled idle CPU 1.45s → 0.49s per 30s. **Before adding a poll or an animation, check it does
+  not commit the root or paint on every tick.**
+- **Browsing must not start send-path runtimes that selection does not need.** Composer
+  affordances (slash commands, options) read on the main isolate where they share a warm runtime
+  (Claude pool, Copilot/Pi session, Codex app-server); OpenCode has none, so its affordances read
+  in the transcript worker (`readTuiComposerAffordancesAsync`) and the main isolate's
+  `opencode serve` (~500MB) starts at composer engagement. Existing Pi sessions likewise warm on
+  composer engagement (`shouldPrewarmTuiRuntime`): warming on selection loaded Pi's SDK into the
+  main isolate (~130MB) for a cold open that now measures 0.2-0.6s.
+  **Codex too**: its prewarm is the first send-path import, so warming on selection evaluated the
+  whole send-path graph on the render thread at every launch. And the **Teammates badge**
+  (`TeammatesAttention.tsx`) observes a conversation's Coordinator only once the read-only ledger
+  says it has a team (`readTuiHasSessionCoordinator`) — observing loads `agentCoordination.ts`, and
+  it did so for whichever conversation was selected. Together: TUI footprint −35-40MB, boot CPU
+  −0.3-0.7s. `browseSendPathSmoke.tsx` traces module resolution through launch and browsing; each
+  of the two was verified to fail it on its own.
+- **`tui.json` is on the save path of every session visit**, so reader states are kept small:
+  default states are not stored and the rest are capped (`MAX_TUI_SESSION_READER_STATES`), merged
+  inside the synchronous read-modify-write (`tuiStateSmoke.ts`).
+- **`bun --cpu-prof --cpu-prof-md` is how to attribute a frame, and `inputPerf`'s render/commit
+  split is how to decide what to profile.** `INPUT_DEBUG_PROFILE=1` prints every over-budget frame
+  as `actual=` (React render CPU) against `commit=` (everything after the commit: OpenTUI's apply,
+  Yoga layout, paint). On a real-session `tab-switch` run the split is unambiguous — 879.6ms actual
+  against 25.7ms commit on the worst frame, 55.5/0.4 on a typical one — so the switch cost is React
+  rendering the root, **not** the terminal painting it. Do not read the aggregate profile the other
+  way round: OpenTUI's `onLifecyclePass`, `bufferDrawBox` and `yogaNodeCalculateLayout` dominate a
+  profile by sample count because they run every frame in the render loop, which says nothing about
+  what makes one frame long. Two more traps in that output: rank by **sample count**, never by the
+  attributed self-time (a single sample landing before a long native call is credited the whole
+  gap — `readContextForConsumer` showed 1.51s from one sample), and the edge counts under
+  "Called by"/"Calls" are samples, not invocations, so 645 there was 18 real `git` spawns.
+- **`findDescendantById` is a full-subtree walk, and the reader used to call it on a timer.**
+  OpenTUI's implementation recurses through every renderable and sorts each level's children on the
+  way down; under a mounted transcript that is the interior of every card. The scroll-slide and
+  tab-restore fixups call it up to `READER_FIXUP_MAX_TRIES` times on a 16ms timer, and it profiled
+  at **9.7% of all CPU** during tab switching. `findReaderCard` scans to
+  `READER_CARD_SEARCH_DEPTH` instead, which is where a card box actually sits, and falls back to the
+  full search. `scrollChildIntoView(id)` takes only an id and does the same walk internally — it was
+  a tenth the cost, so it was left alone. **This is a CPU reduction, not a measured frame win**:
+  interleaved A/B on `tab-switch` and `reader-scroll` could not resolve a difference in worst frame
+  or over-budget count either way, which is what you would expect from work that runs on a timer
+  between commits rather than inside one. Do not re-litigate it with those harnesses; the profile is
+  the measurement of record.
+- **A poll that reads layout must skip when nothing moved.** The sticky-header poll walked every
+  mounted card's `child.y` (a native layout read each) eight times a second; at the tail that is the
+  whole card window, and it was the largest share of main-thread samples while a session sat open.
+  It now compares scrollTop, content height, viewport height and child count with its last run
+  first. With a transcript growing once a second: 2.28s → 0.99s of process CPU per 31s.
+- **A reader card's body lines share one `<text>` per background** (`groupLinesByBackground`).
+  Each line was a box and a text, and mounting renderables is what a window slide spends its time on
+  (`createInstance` was a quarter of the samples). Spans carry each line's colour and `<a>` links
+  still paint link cells inside them. Worst React render: split-reader 62.9 → 42.1ms, sidebar-scroll-alt
+  41.9 → 32.1ms, card-page 11.5 → 7.0ms. The same rule then went to the reader's diff rows (seven
+  texts a row → three: the bar and note marker stay apart, being unselectable) and the plain-diff,
+  markdown-fallback and stream diff-preview lines: 9.0 → 7.5 renderables a card on the card fixture,
+  card-wheel-sustained over-budget commits 27-35 → 8-10. `INPUT_COUNT_NODES=1` (and
+  `INPUT_DUMP_CARD`) shows what a card is made of. In the stream views a body that is one paragraph of
+  plain text, `**bold**` and `` `code` `` skips `<markdown>` entirely (`isPlainMarkdownParagraph`): the
+  inline span renderer draws it identically, and `plainMarkdownSmoke.tsx` compares the two cell for cell
+  (characters, colours, attributes) on every accepted sample and checks the constructs they draw
+  differently are refused — `_`/single-`*` emphasis, `~~`, links (styled cyan by one, underlined by the
+  other), entities, blocks. The reader card's markdown branch takes the same gate (card fixture: markdown 129 → 22, code 151 → 44,
+  1,797 → 1,690 renderables). Stream fixture: markdown renderables 180 → 30, code renderables 225 → 75,
+  wheel ticks that moved the transcript +8% (stream) / +15% (transcript). The link-target and bracket
+  checks overlap on purpose; removing either alone still refuses links. Per-tool row boxes remain:
+  they are click targets.
+- **Leaving the collapsed preview expands the tail first** (`READER_EXPAND_FIRST` 16 cards, then
+  `READER_EXPAND_STEP` 40 per frame). The reader's first focus flips every default-expanded card at
+  once — ~130 bodies, a 39-43ms commit (counted with a memo comparator: `isExpanded` and `display`
+  are the props that change; giving collapsed cards a null `syntaxStyle` changed nothing, so that
+  is not it). Staged only while following the tail, where sticky scroll holds the bottom:
+  `INPUT_FOCUS_TRACE=1` reads 0 rows from the bottom on every frame through the stages. focus-toggle
+  worst render 42.6 → 15.3ms. Staging needs the viewport actually at the bottom, not just
+  `followTail`: the preview scrolls under the wheel without clearing it, and staging there drifted
+  the view down over several frames. Scrolled up, the expansion lands in one commit and anchors the
+  first visible row through the slide fixup (`kind: 'anchor'`) — before this the view jumped 132
+  cards on that commit. `readerFirstFocusSmoke.ts` runs both cases through `INPUT_FOCUS_TRACE`
+  (`1` and `detached`); removing the anchor was verified to fail it.
+- **What is left in sustained stream scrolling is OpenTUI's native frame, not this app.** Profiled
+  after the changes above: `sceneFrameStep` (native layout + paint) is ~40% of samples and React
+  ~19%; the mounted window does not matter (160 and 240 cards measured the same). The harness itself
+  was ~10% (a `findDescendantById` per press, now cached). Further gains here need OpenTUI's paint
+  or fewer cells changing per frame, not a smaller React tree.
+- **`tui:inputperf` samples the scene with `lastSceneTimeMs`**, not by wrapping `root.render`: 0.6
+  removed the JS paint pass, and every scenario had been exiting before measuring anything.
+- **Measure with `npm run tui:navperf`** (`tui/opentui/navPerf.tsx`) before changing any of this. It
+  mounts the real root against your local sessions and reports the metrics logger's `nav.*` rollup:
+  `select-to-open` (debounce), `open-to-detail` (worker read), `detail-to-paint`, and
+  `select-to-paint` — the number the user feels. `NAV_PATTERN=down|pingpong|scrub|tabs` covers
+  first visits, cached revisits, fly-by scrubbing, and switching between open tabs. Current settled navigation is ~50–85ms p50, from
+  ~210ms. The harness flushes on a frame cadence on purpose: React's scheduler is driven by `act()`
+  under the test renderer, so a single flush followed by a long sleep reports every state update as
+  taking the whole sleep.
+
+#### Composer turns: live overlay, reconcile, and parity (load-bearing)
+
+A turn renders from the live stream, then hands over to the persisted transcript
+(`awaitingPersistedTurn`, "Syncing transcript…"). Each rule below was a visible
+defect found by driving the real TUI in a PTY against each provider and timing
+it against the native CLI (see the composer flow harness in memory).
+
+- **A read never finalizes a turn this client is still streaming.** Codex persists
+  the user row at turn start; a foreground read that saw it (and no live reply
+  yet) deleted the baseline and cleared the overlay mid-turn, so the stream's end
+  had nothing to reconcile against and every first Codex turn sat in Syncing for
+  the 12s escape hatch. Both reconcile sites check `streamStillOwned`.
+- **A pending session's baseline is empty**, and the displayed detail is used as a
+  baseline only when its rows belong to the target — a pending session never
+  loads detail, so it still shows whatever was viewed before.
+- **A turn with no reply still lands**: once the stream has ended, two or more new
+  persisted rows settle it (`persistedTurnSettled`) — a user `!command` is an
+  input row and an output row, both user-role.
+- **The overlay drop and the persisted detail commit in one transition**, or the
+  reply blinks out for a frame between them.
+- **Every delta coalescer flushes on a timer** (Claude `CLAUDE_DELTA_FLUSH_MS`,
+  Codex `DELTA_FLUSH_MS`, Pi `PI_DELTA_FLUSH_MS`; OpenCode's harness already had
+  one). They only flushed on a non-delta event or 4000 buffered chars, so a reply
+  shorter than that appeared all at once when its block ended — Codex showed
+  nothing for 18s of a 300-line answer. Coalescing is for render cost, never for
+  holding text back. `claudeDeltaFlushSmoke.ts` pins Claude's.
+- **A plan approval carries its mode in the approval itself** (`updatedPermissions:
+  setMode`). Allowing ExitPlanMode leaves plan mode by restoring the pre-plan mode,
+  which overwrote a separately sent `setPermissionMode` — "approve · auto-accept
+  edits" went on asking for every edit. Both composers pass `permissionMode` on
+  `respondPermission`; `claudePlanApprovalSmoke.ts` pins the shape.
+- **CLI built-ins that are views run in the TUI** (`runTuiLocalCommand`): `/clear`
+  and `/new` open a fresh session in the same folder for every provider; for
+  Claude, `/status`, `/todos`, `/memory` and `/export` open or write what the CLI
+  would, where the SDK only answered "isn't available in this environment" (or,
+  for `/todos`, sent it to the model). A Claude local command's `<synthetic>`
+  output also ends the turn at once — it may persist nothing the SDK returns, so
+  waiting for rows only ended at the 12s escape hatch. The Enter-picks-highlighted
+  rule only completes a prefix of what was typed, or `/status` became `/codex:status`.
+- **Views every CLI has map onto TUI surfaces, for every provider**: `/diff` opens
+  the Git panel, `/mcp` diagnostics, `/copy` copies the last reply, `/export`
+  writes the conversation, `/resume` focuses session search, `/exit` asks to quit.
+  ⇧Tab cycles each provider's own mode — Claude permission modes, Copilot
+  interactive/plan/autopilot, OpenCode primary agents. OpenCode 2.0.8's
+  `agent.list` omits the built-in `build`/`plan` it still runs, so the adapter adds them.
+- **`/model <name>` is the composer's choice, not the provider's.** The composer
+  sends its model with every turn, so the SDK's own `/model` was reverted by the
+  next send; the TUI resolves the name against the listed models (Claude also
+  takes its aliases verbatim) and sets the override. Bare `/model` opens the picker.
+  Nothing may clear that override after a turn: a post-turn "follow the server's
+  model" reconcile, written for the SDK's own `/model`, reverted every local
+  switch the moment a command turn ended.
+- **`/fork` continues in a copy** (`forkTuiSession` → `forkViewSession`) for every
+  provider that can fork; the TUI had no fork at all. Codex's `/skills`, `/hooks`,
+  `/ps` and `/stop` answer from the app-server (`skills/list`, `hooks/list`,
+  `thread/backgroundTerminals/*`); `/mention` opens the `@` picker; `/btw <text>`
+  queues behind the running turn instead of steering into it.
+- **`/rewind` returns the conversation to just before an earlier prompt** and puts
+  that prompt back in the composer (Claude Code's rewind, Codex's backtrack).
+  Codex and OpenCode rewind in place; the Claude SDK has no in-place rewind, so
+  Claude continues in a fork taken at the message *before* the prompt — the fork
+  is inclusive, and forking at the prompt keeps the very turn being rewound
+  (`rewindTargetsSmoke.ts`). The prompt reaches a fork as that session's draft,
+  since opening a session restores its own draft over anything set earlier.
+  Files are left alone; ⇧U checkpoints restore code.
+- **Claude `/skills`, `/hooks`, `/permissions`, `/add-dir` answer instead of "isn't
+  available in this environment".** `/skills` lists the non-`builtin` commands the
+  SDK reports (skills, user/plugin/MCP commands — the flag is carried through
+  `readSlashCommands`); `/hooks` and `/permissions` open diagnostics, which lists
+  both. `/add-dir` has no live control, so the directory rides every turn as
+  `additionalDirectories` and a change recycles the warm entry (the CLI gets
+  `--add-dir`). The recorded system prompt does not learn about it mid-conversation,
+  so the model may still decline a path it has not been told about; permissions
+  already allow it.
+- **No native command ends in "cannot run", and none reaches the model as text.**
+  A sweep of every provider's own command set found three ways one could:
+  the provider has no handler (Codex's ~25 terminal-UI commands; Pi's `/hotkeys`,
+  `/settings`, `/tree`, which were *sent to the model as a prompt*), the SDK says
+  "isn't available", or the call throws. `TUI_COMMAND_EQUIVALENTS` answers a
+  terminal-UI command with the TUI surface that does the same job (theme picker,
+  shortcut guide, composer settings, pager, teammates) or says why there is none.
+  Codex's `/experimental`, `/rollout`, `/apps`, `/plugins`, `/memories`,
+  `/personality`, `/subagents`, `/agent`, `/feedback` and `/logout` call the
+  app-server; `/side` forks and sends the aside there.
+- **Codex 0.158 sub-agents are recorded on the parent, not listed.** `thread/list`
+  returns only legacy `thread_spawn` children; a `multi_agent` child appears as
+  `subAgentActivity` items (`agentThreadId`, `agentPath`) in the parent's own
+  turns, which is what `/subagents` and `/agent <name>` read.
+- **A Copilot command the CLI refuses is that command's answer, not a failed
+  turn.** `commands.invoke` *throws* for "Unknown slash command" and for one that
+  cannot run now; handled as an error it evicted the warm session and put the text
+  back in the composer, where the next command was typed in front of it and the
+  pair went to the model as one prompt. Every result kind is handled
+  (`select-subcommand` lists its options, `add-timeline-entry` may prefill the
+  composer, `show-dialog` opens the model picker, `set-model` applies), and a
+  command that outlasts the wait is reported as still running.
+- **A staged OpenCode revert hides its messages on read.** `/undo` stages a
+  revert that the next turn commits; until then `session.messages` still returns
+  the reverted turn, so the adapter cuts at `session.revert.messageID` as
+  OpenCode's TUI does, and `/redo` (`unrevert`) brings it back.
+- **Pi rewinds like Claude** — its fork is inclusive of an entry, so `/rewind`
+  and `/tree` fork at the entry before the prompt (`providerMessageId`).
+- **⌃R, ⌃G and ⌃T follow the native CLIs**: ⌃R finds the newest earlier prompt
+  containing what is typed (again for the next older), ⌃G opens the prompt in
+  `$VISUAL`/`$EDITOR`, ⌃T toggles the task list. ⌃R used to toggle bridge
+  routing; it still turns routing *off* while routed, and turning it on is the
+  bridge panel's ⌃R or the palette.
+- **codex-cli 0.158 removed `thread/rollback`** for `thread/revert { beforeTurnId }`
+  (the web's rollback broke with it). Reverting needs the thread loaded in that
+  app-server — "thread not found" otherwise — so the backend resumes first, and
+  the TUI drops its cached mtime or the re-read is skipped as unchanged.
+- **Codex Plan mode is a collaboration mode, sent on the turn.** ⇧Tab toggles
+  Plan/Default and `/plan [goal]` enters it; the composer sends
+  `collaborationMode` whenever one was chosen (it is sticky on the thread), with
+  `developer_instructions: null` to keep the preset's own instructions. A plan
+  turn emits a `plan` item and edits nothing.
+- **A multi-line command result is transcript output, not a notice.** A notice is
+  one line, so a listing rendered as its first line; it now lands as a
+  `local_command_stdout` row, as the native CLIs print it.
+- **An SDK Claude session gets the task tools the CLI has.** Without
+  `CLAUDE_CODE_ENABLE_TODO_TOOLS` the init frame lists only `Task`/`TaskStop`
+  (CLI 2.1.283) and the model reports it cannot track work; `CLAUDE_QUERY_ENV`
+  sets it unless the user already has.
+- **Native slash commands answer, never "cannot run".** Codex `/status` reports the
+  thread's model, effort, approvals and directory; `/init` runs its built-in
+  AGENTS.md prompt as a normal turn. OpenCode `/help` and `/models` (TUI views, not
+  server commands) are answered locally instead of "not available on this server".
+- **The composer's keys follow the native CLIs.** ↑ in an empty prompt opens the
+  prompt history; ↑/↓ move through the `/` and `@` menus; Enter on a partial
+  command name picks the highlighted entry. That last one lives in the textarea's
+  submit callback — the textarea handles Enter before the app's key handler.
+  `filterSlashCommands` ranks name matches (exact, prefix, word, substring) above
+  description mentions, which `composerInputSmoke.ts` pins.
+- **A draft is saved with the content behind its placeholders.** A multi-line
+  paste collapses to `[Pasted ~N lines]`; saving only the text restored that
+  placeholder with nothing behind it (after a restart or a session switch), and
+  sending it sent the placeholder literally. `drafts.json` entries carry `parts`,
+  restored only while their marker is still in the text (`composerDraftSmoke.ts`).
+- **A turn blocked on the user says so.** The status row reads "Waiting for your
+  answer/approval" while a question or permission is pending, not a busy phrase.
+- **Whatever error follows our own abort is the interrupt.** Claude answers an
+  interrupt with an error frame for the cut-off turn, which can land before the
+  abort does; handled as a failure it restored the old prompt and reattached to
+  the dying turn, so the next prompt waited ~30s. The catch checks
+  `controller.signal.aborted` first.
+- **An `error` frame is the turn's outcome, not a lost stream.** The registry can
+  still list the turn while it tears down; treating the error as a dropped stream
+  "reattached" and hid the reason (OpenCode's `Agent not found`) behind a turn that
+  then produced nothing.
+- **OpenCode 2 agents are sent by `id`** ("build"), never the display `name`
+  ("Build") — v1's `name` was the identifier (`opencode2Client.ts`).
+- **A pooled Pi session is not automatically the newest record.** A pool entry in
+  a read-only isolate (the transcript worker opens one for composer options) froze
+  at open and never saw turns the main isolate appended, so every Pi follow-up sat
+  in Syncing for 12s. Reads take the pooled branch while it streams, otherwise the
+  longer of it and the file (the branch is append-only; a new session has no file
+  until its first flush).
+- **User command output is conversation, not operational chrome.** `!command`
+  output (Claude `bash-output` frame; Codex `source: 'userShell'` items, OpenCode 2
+  `shell` messages, Pi `bashExecution` records and Copilot `tool.user_requested` +
+  `isUserRequested` completions all mapped to two bash-mode rows; Copilot runs `!`
+  through the SDK's `shell.executeUserRequested`, not as prompt text) and Claude local slash-command output render inline like the
+  native CLIs. Claude persists local-command output as a system row the SDK
+  returns *without content*, so `/context`'s output is kept from the stream's
+  `<synthetic>` assistant frame (`localCommandOutputs`) until that session's next
+  send — it does not survive a reload.
+- **Codex item ids are not all v7.** A user shell's id is v4; decoding its random
+  leading bits as a timestamp dated the card year 8979 and sorted it last.
+  `codexSchemaAlignmentSmoke.ts` pins both.
+
+#### Project editor: cost per keystroke and the file boundary (load-bearing)
+
+`plugins/editor/tui/EditorPopover.tsx` (the editor plugin; its `editor*.ts` modules sit beside it) is a real editor, so it is held to an editor's
+defining property: **a keystroke costs the same in a 20,000-line file as in a
+200-line one.** Measure with `npm run tui:editortypingperf`
+(`tui/opentui/editorTypingPerf.tsx`), which types into the real popover at
+key-repeat speed and reports **`cpu/key`** — process CPU per keystroke across
+every thread. A React Profiler cannot see this work: the highlighter runs on
+timers and in the tree-sitter worker, so `commits` stays flat while the editor
+gets slower. `EDITOR_TYPING_LONG_LINES=1` measures a minified file and
+`EDITOR_TYPING_EXT=txt` disables highlighting, which is how the highlighter's
+share of a cost is separated from the rest.
+
+**Measure at 6,000 lines, not 20,000.** At 6,000 the harness reproduces to ±2%;
+at 20,000 it swings ±25% run to run, which is wider than most changes worth
+making — two separate readings of the *same* build came out 30.8ms and 73.2ms.
+A/B interleaved (never batched), and treat a single 20,000-line reading as
+evidence of nothing. Two changes were nearly accepted and one nearly reverted on
+noise before this was pinned down.
+
+**The harness must drive the real key path.** `App.tsx` hands every key to the
+popover's `handleKey` first and only lets the textarea see it if that returns
+false, so a harness calling `mockInput.typeText` alone measures neither the
+auto-pair checks nor anything else `handleKey` does per character. Set
+`EDITOR_TYPING_RAW_INPUT=1` to get the textarea-only path for comparison.
+
+- **Syntax highlighting is incremental, and must stay that way.** It used to
+  call `highlightOnce(entireBuffer)` on a 90ms debounce after every keystroke
+  and apply the result with one `addHighlight` per token per line: in a
+  6,000-line file, a 181ms parse and 112,013 highlight calls **per character
+  typed**. `tui/opentui/editorSyntaxBuffer.ts` now holds one tree-sitter buffer
+  per open file and pushes `Edit` ranges, so the worker answers with **only the
+  lines it re-parsed** — one line for a one-character insert, 1.0ms at 6,000
+  lines and 2.7ms at 20,000. Measured end to end: `cpu/key` at 6,000 lines went
+  77.3ms → 12.1ms, and its growth from 200 lines 5.84x → 1.78x. Do not
+  reintroduce a whole-file re-highlight.
+- **The initial parse is applied in slices, viewport first.** It answers with
+  every line in the file, and applying 20,000 of them in one tick was a 45ms
+  frame — the single visible hitch in an otherwise flat profile, landing on
+  whichever keystroke happened to coincide with it. What is on screen is painted
+  immediately and the rest backfills in `SYNTAX_BACKFILL_CHUNK_LINES` slices,
+  abandoned if an edit lands (those lines describe the old content). Key p95 at
+  20,000 lines: 60ms → 21ms.
+- **A highlight response is only valid against the content that produced it.**
+  The handler drops a batch unless `editor.plainText === buffer.content`; a
+  pending update answers with fresh lines. Applying a stale batch decorates the
+  wrong text, and after a newline insert it decorates the wrong *lines*.
+- **Decoration that is not syntax is reapplied together** (`applyEditorOverlays`
+  — occurrences, brackets, extra cursors), because re-syntaxing a line clears
+  whatever those put on it. Each is bounded by the viewport or by cursor count.
+  Occurrence scanning is bounded in **characters** as well as lines
+  (`OCCURRENCE_MAX_SCAN_CHARS`): a line margin means nothing in a minified file.
+- **A file whose longest line exceeds `MAX_HIGHLIGHTED_LINE_CHARS` is not parsed
+  at all**, and the status bar says so. The parser would re-derive thousands of
+  ranges for that line on every keystroke and hand them over to be discarded —
+  the old code took **over ten minutes** to type 25 characters into a 660KB
+  minified file. Same threshold skips decorating a single over-wide line pasted
+  into an otherwise normal file.
+- **Do not read `editor.plainText` on a hot path.** It is not cached: **1.1ms
+  per read at 20,000 lines, 6.3ms immediately after an edit**, every time. The
+  highlight passes, the signature-help effect and the key handler each used to
+  take their own copy per keystroke — the key handler's on *every printable
+  character*, for auto-pair checks that only brackets and quotes reach.
+  `lineStartsFor` caches by string identity, `editorDocumentOffset` takes
+  optional `content`/`lineStarts`, and `detectEditorIndentUnit` samples a
+  bounded prefix rather than splitting the file.
+- **`activeTab.content` is the buffer's content, not a copy of it.** Every
+  change runs `updateActiveContent`, which writes back exactly the string it
+  read, and an edit landing before a debounced effect fires cancels and
+  reschedules it — so a debounced pass may use `activeTab.content` instead of
+  re-materialising the buffer, and gets `lineStartsFor` cache hits for free.
+  This invariant is what the whole file already relies on; breaking
+  `updateActiveContent` breaks far more than decoration.
+- **The language server is synced incrementally too.** `editorLsp.ts` used to
+  send the entire document in every `textDocument/didChange`, having never read
+  the server's advertised `textDocumentSync`. It now reads the capability and
+  sends the one replaced range that separates the two document states
+  (`editorLspSync.ts`): measured through the real client, **572.3KB → 0.3KB per
+  keystroke** at 20,000 lines, and constant rather than growing with the file.
+  A server that asks for full documents still gets them, and one that says
+  nothing is treated as asking for full — the spec's literal default of None
+  would mean never telling the server about edits at all.
+
+  **A wrong range here fails silently**, which is the whole reason this is
+  tested the way it is: the server's copy of the file diverges from the
+  editor's and every completion, diagnostic and rename after that is computed
+  against a document nobody is looking at, with plausible wrong answers on
+  screen. `editorLspSyncSmoke.ts` replays 1,500 randomised edits through a
+  conforming server's reconstruction and asserts it still equals the editor's
+  text, then runs the real client against a server that rebuilds the document
+  from the ranges it receives and reports what it ended up holding. Three
+  mutations were checked to fail it. Range boundaries never split a surrogate
+  pair: LSP positions are UTF-16 code units, but half a pair is not a character
+  and a server cannot recover from being sent one.
+
+- **Save hygiene is computed on the string that is about to be written**
+  (`editorSaveHygiene.ts`), never by applying edits to the live buffer and
+  reading the result back — an async state update is how a save writes
+  something other than what it formatted. Format-on-save, trim-trailing-
+  whitespace and final-newline are all **off by default and toggled from the
+  palette**: each rewrites lines the user did not touch, which turns a one-line
+  change into a whole-file diff in someone else's repository.
+- **A save must not adopt its own output over a newer edit.** Hygiene rewrites
+  the text, so the buffer has to take it — but only when the buffer has not
+  moved on since the save started. Typing during an in-flight save has to
+  survive it: recovery snapshots `content`, so overwriting a newer edit discards
+  unsaved work *and* its recovery copy. `editorSaveRecoverySmoke.tsx` caught
+  exactly this regression when the commit was written unconditionally.
+- **One `applyEditorTextEdits`, and it clamps.** The popover had its own copy
+  beside the one used for saving. Its offset helper returned `null` for a column
+  past the end of a line, and `slice(0, null)` then truncated the document to
+  nothing without a word. The surviving implementation clamps to the line end
+  and still throws on overlapping edits, because a server contradicting itself
+  has no safe interpretation. LSP edits are applied last-first: in document
+  order every later range is shifted by the earlier ones' length change.
+
+- **A symbol carries two ranges and they answer different questions.** `range`
+  is the jump target (the name), `enclosingRange` is the whole extent — which is
+  what says whether the caret is inside a symbol, and so what drives the status
+  bar's breadcrumb. A flat `SymbolInformation` has only one range and it means
+  the extent, so the two collapse there. The breadcrumb is derived from the
+  outline and the caret line, never asked for, so moving the caret costs
+  nothing; the outline itself is re-read `OUTLINE_REFRESH_DELAY_MS` after typing
+  stops, and the `@` picker reads that same state rather than fetching its own.
+
+- **Symbol navigation lives in the quick-open picker, not its own overlay.**
+  `@` is the outline of the current buffer, `@@` searches the workspace (`^⇧O`
+  and `Alt+O` seed them), alongside the existing `>` commands, `#` buffers and
+  `:` line. Reusing the picker means one keyboard model and one list widget.
+  **`documentSymbol` has two legal response shapes** and the server picks:
+  hierarchical `DocumentSymbol[]`, or flat `SymbolInformation[]` whose position
+  hides under `location`. A client that reads only one gets an empty outline
+  from half the table, and an empty outline is indistinguishable from a file
+  with no symbols — so `editorSymbolSmoke.ts` pins both. Symbols use their
+  `selectionRange`, so jumping to a class lands on its name rather than the top
+  of a body hundreds of lines long, and an outline is fetched once per buffer
+  and filtered locally while a workspace query is debounced per keystroke. A
+  blank workspace query is never sent: several servers answer it by enumerating
+  everything they know.
+
+- **A click on a tab must select it, and only the `×` may close it.** The tab's
+  box had no `flexDirection`, so it laid its children out in a *column*: the `×`
+  then stretched across the full tab width (cross-axis stretch is the default),
+  painted over the label's status glyph, and took every click meant for the tab
+  — selecting a buffer closed it instead. Nothing about the rendered row looked
+  wrong, which is why `editorTabMouseSmoke.tsx` clicks each column of the label
+  and asserts the buffer survives. Any box holding a click target beside other
+  content needs an explicit direction.
+- **Encoding is the third silent-data-loss boundary**, alongside line endings and
+  buffer capacity. `readFile(path, 'utf8')` never reports a bad byte, it
+  substitutes U+FFFD — so a Latin-1 file opened looking plausible and the first
+  save wrote the replacement character over its own bytes, whole-file and
+  silent. `decodeEditorFileText` (`editorLineEndings.ts`) decodes strictly and
+  **refuses** a file that is not valid UTF-8 or contains NUL, rather than
+  mangling it; `ignoreBOM` keeps a leading U+FEFF so a BOM round-trips.
+- **A save must not narrow a file's permissions.** `open(temp, 'wx', mode)` is
+  masked by the process umask, so a 0o666 file was rewritten 0o644. The
+  temporary file is created 0o600 and `fchmod`'d to the original mode, which is
+  not masked.
+- **A timestamp only proves a file unchanged once it is old enough to.** ext4
+  with 128-byte inodes records whole seconds and FAT two, so an in-place
+  same-size write in the same tick as the read leaves `dev:ino:size:mtime:ctime`
+  identical — and identical on every later poll. `editorDiskReader.ts` refuses
+  to cache against a stamp younger than `COARSE_TIMESTAMP_MS`, the same rule git
+  applies to a racily-clean entry. APFS records nanoseconds, so the case is
+  reached by injecting a truncating stamp source, not by writing files.
+- **The tree-sitter edit and the syntax classifier were linear in file size.**
+  Deriving one keystroke's edit did three full `positionAt` scans from offset 0
+  (~3.4M code-unit comparisons per character at 20,000 lines), and
+  `classifyEditorOffset` allocated three closures and materialized a
+  one-character string *per character of the prefix*. The edit path now compares
+  in 4,096-char blocks and carries a line-start table across edits; the
+  classifier retires impossible characters through a cached delimiter-start
+  table. Measured interleaved in-process at 20,000 lines: 5.12ms → 0.14ms per
+  edit, 26.8ms → 3.0ms per classify. Neither is O(edit) — both still make one
+  O(prefix) pass; the constants fell ~30x and ~9x. `editorSyntaxEditSmoke.ts`
+  and `editorSyntaxContextScanSmoke.ts` are differential (609,309 offsets, 3,000
+  random edits) because a wrong range fails **silently**: the tree diverges and
+  later highlights decorate the wrong text with no error.
+
+- **The line-number gutter must be given a windowed `getLineSources`**
+  (`installWindowedLineSources`). A textarea exposes only `lineInfo` — every line decoded from native
+  memory — so OpenTUI's gutter fallback read the whole file on every paint, 14% of all samples while
+  typing at 6,000 lines. Without wrapping a gutter row is its logical line; word wrap still takes the
+  full read. cpu/key at 6,000 lines 20.3-21.3 → 17.8-19.5ms (interleaved). `editorGutterSmoke.tsx`
+  checks every visible number against its row, scrolled deep and wrapped (off-by-one verified to fail).
+  Note cpu/key there is ~18-19ms on OpenTUI 0.6.6 against the 12.1ms recorded below on 0.5, and
+  ~14ms of it does not depend on the file at all (200 lines measures ~14ms): React's development
+  build under `act`, the 0.6 test renderer's frame and flush. What grows with size is the native edit
+  buffer and paint. Three per-keystroke reads were removed after that (the gutter's line count from
+  the buffer instead of a content scan, signature help reading `activeTab.content` instead of
+  `plainText`, the indent label from the saved content); each was real work, but together they are
+  inside this harness's ±1ms, so no number is claimed for them.
+- **One language server per workspace and command, not per buffer.** The server
+  process lives in `editorLspSession.ts` and is shared by every buffer that can
+  use it; `EditorLspClient` is now just one document's handle on it. It used to
+  be the other way round, and switching tabs killed the process and spawned a
+  new one — for gopls or rust-analyzer that is the whole workspace re-indexed
+  before the first completion, per Tab. A session is reaped only after
+  `AGENT_VIEWER_LSP_IDLE_MS` (3 min) with nothing holding it, and both the
+  session and each open document are refcounted, so the same file open in two
+  panes cannot have one pane's close send a `didClose` out from under the other.
+  Pooled children are killed on process exit, or they would outlive the TUI and
+  keep indexing a workspace nobody has open.
+- **A server that dies comes back on its own**, up to `AGENT_VIEWER_LSP_MAX_RESTARTS`
+  (3) with exponential backoff, reopening the buffer **as it is now** rather than
+  as it was when the server died — `liveText` is kept while nothing is running
+  for exactly that. Without the cap, a server that crashes during startup
+  respawns forever; `editorLspRestartSmoke.ts` pins both halves.
+- **A command is resolved before it is spawned** (`editorLspCommand.ts`). On
+  Windows most of these servers are `.cmd` shims that `spawn` cannot execute at
+  all, so the whole table was unreachable there — a shim is run through
+  `cmd.exe` with its own quoting, since the usual install path contains a space.
+  Path arithmetic uses the *target* platform's API, which is what lets
+  `editorLspServersSmoke.ts` drive win32 resolution from macOS; a `join` that
+  used the running platform would build `C:\tools\bin/gopls` and find nothing.
+  Resolution also means a missing server costs a `stat` rather than a failed
+  spawn, so a fallback chain (`basedpyright` → `pyright` → `ruff` → `pylsp`)
+  moves on immediately.
+- **The server table lives in `editorLspServers.ts` and a project can override
+  it** via `.agent-viewer/lsp.json` — `servers` (replacing the built-ins, or
+  prepending when an entry sets `extend`), `disabled`, and `rootMarkers`. The
+  file is parsed leniently (comments, trailing commas) because that is what
+  people write in an editor config. **Bare `tsc` is not a fallback for
+  TypeScript**: TypeScript 5's compiler has no `--lsp`, so it would spawn,
+  reject the flags and die; the second choice is `typescript-language-server`.
+- **C# needs a project opened before it is a language at all.** Roslyn will not
+  compile anything until it is told which solution or project a file belongs to,
+  through `solution/open` / `project/open` — Microsoft extensions, not standard
+  LSP. Without them it treats C# as a loose "miscellaneous file" and *looks*
+  like it is working: hover, definition and the outline all answer. But there
+  are **no compiler errors**, completion omits inherited members, and
+  `workspace/symbol` is empty. Measured on a real project: 1 style hint and 2
+  completions before, 5 diagnostics including two genuine CS0029 errors and 6
+  completions after. `editorLspStartupNotifications` sends them once per
+  session, and only to Roslyn.
+- **`initialize` returning is not readiness, and saying it is looks like a bug.**
+  Roslyn answers `initialize` in under a second and then spends minutes loading
+  a large solution — 131 seconds on dotnet/aspire — during which every
+  completion and hover comes back empty. Reporting "ready" there is
+  indistinguishable from a broken editor: the user types `.`, nothing appears,
+  and nothing explains why. A session handed a workspace to load stays in a
+  `loading` status until `workspace/projectInitializationComplete`, and the
+  status bar says so.
+- **Open the file's own project as well as the solution.** The one project the
+  user is looking at loads in a fraction of the time the whole solution does,
+  and it is enough to answer for the open buffer while the rest catches up.
+  Same file on dotnet/aspire: **131s to the first completion with the solution
+  alone, 32s with both.** A file with no project of its own opens only the
+  solution rather than dragging in an unrelated one.
+
+- **A server that says its answers changed must be listened to.** Loading a
+  project takes seconds, so whatever was pulled at startup is stale. Roslyn
+  announces readiness with `workspace/projectInitializationComplete`; the
+  standard spelling is `workspace/diagnostic/refresh`. The session used to
+  answer any unrecognised server request with "unsupported method", so the
+  buffer kept showing the pre-load answer forever. Both now re-pull.
+  `editorLspProjectSmoke.ts` pins this with a server whose state flips only when
+  it sends the notification — flipping it synchronously made ignoring the
+  notification accidentally harmless, and the mutation passed.
+
+- **A server is rooted at its own project, not at the editor's cwd**
+  (`resolveLspWorkspaceRoot`): gopls wants the `go.mod` module, rust-analyzer
+  the Cargo workspace. The search never escapes the root the editor was opened
+  at, and falls back to it, so a stray file still gets a server.
+- **Root markers are tiered, and the bigger unit of work wins.** Each tier is
+  searched up the whole ancestor chain before the next is tried, so `*.sln`
+  outranks a `*.csproj` sitting closer to the file (likewise `go.work` over
+  `go.mod`, a Gradle `settings.gradle` over a module's `build.gradle`). C# is
+  why: in the standard .NET layout — solution at the top, projects under `src/`
+  — the nearest marker is the project, so Roslyn was told about that project
+  alone and knew nothing about the others in the solution or the references
+  between them. Completion on a type from a referenced project returned
+  **nothing at all**, with no error to explain it. Measured on a real
+  two-project solution: 0 members before, 6 after, and four phantom
+  "type not found" diagnostics collapsed to one.
+
+- **The buffer counts display cells; the editor counts string indices.** The
+  cursor column, `cursorOffset`, selections, `setCursor` and `addHighlight` are
+  all in cells, so a tab (two cells), a CJK character or emoji (two) or a
+  control character (version-dependent: zero cells on 0.5, `^L` from 0.6.1)
+  before the cursor put every unconverted crossing a cell off — Ctrl+D after a
+  tab selected `"\tfo"`. `tui/opentui/editorCells.ts` converts, with widths
+  measured from OpenTUI itself (`measureEditText`, or a scratch buffer on
+  builds without it) rather than a table that would drift. **Go through the
+  helpers in `EditorPopover.tsx`** (`editorDocumentOffset`,
+  `setEditorCursorPosition`, `editorSelectionOffsets`,
+  `setEditorSelectionOffsets`, `addEditorHighlight`); a raw `getSelection()`
+  or `setCursor(line, character)` reintroduces the bug only on lines that are
+  not plain ASCII, which no ASCII fixture will show. Remembered tab cursors
+  stay in cells, because they are recorded on every move. The status bar's `Col`
+  is a character column, like the selection count beside it. A plain-ASCII line
+  costs a regex test and nothing else; typing cost at 6,000 lines is
+  unchanged. `editorCellsSmoke.ts` is differential against a real buffer;
+  `editorWideTextSmoke.tsx` drives the popover (it fails on the old code with
+  exactly the selection above).
+- **Tab is overloaded, and its claimants are ordered.** In one key handler, in
+  order: a snippet placeholder, an open completion list, a standing ghost, a
+  selection or Shift (indent/outdent lines), and finally plain Tab, which
+  advances to the next tab stop. That last branch had no one behind it — the
+  textarea has **no Tab action at all** (`TextareaAction` has no tab or indent
+  member), so the editor declining Tab left it doing *nothing*, silently, in the
+  one place a Tab key is expected to work. `editorPopoverSmoke.tsx` had asserted
+  the old contract, which was asserting the bug. `editorTabSmoke.tsx` now pins
+  every state Tab can be pressed in, including that a claimant added too early
+  swallows indenting — verified by moving the indent branch ahead of the
+  suggestion branches and watching it fail.
+- **Ghost text is an overlay, never buffer content.** The dim remainder of the
+  selected suggestion at the caret (`editorGhostSuffix` + an absolutely
+  positioned `<text>`) is painted over the terminal. OpenTUI's `ExtmarksController`
+  *would* give real virtual text, but it works by putting the text in the edit
+  buffer and marking the range virtual — which would put it into `plainText`,
+  and from there into the tab content, the dirty flag, the language server, the
+  tree-sitter buffer, and the file the moment anyone pressed save. Not worth it;
+  it is also documented upstream as a simulation pending a native implementation.
+  Because an overlay cannot push real text aside the way virtual text does, a
+  ghost is drawn **only where the rest of the line is blank**, only when the
+  suggestion is a case-exact continuation of the typed prefix, and never for a
+  snippet (whose body is `${1:name}` placeholder syntax, not text).
+- **The ghost outlives the completion list, on purpose.** The list is cleared on
+  every keystroke and a new one costs a 160ms debounce plus a round trip, so a
+  hint derived from the list blinks out for ~120ms per character — at typing
+  speed it is only ever visible to someone who has stopped. A standing
+  `ghostCandidate` is re-checked against the live buffer instead, so it shrinks
+  as the word is typed and drops the moment the word stops matching. Because it
+  outlives the list it must be retired explicitly: `closeCompletions` (Escape),
+  acceptance, and a tab switch all clear it, or the hint describes a suggestion
+  the user already refused. And because it is visible while no list is open,
+  **Tab accepts a standing ghost** — a hint you can see but cannot act on is
+  worse than no hint.
+- **A ghost must describe what acceptance actually does**, so
+  `editorGhostCandidate` mirrors `applyCompletion` rather than approximating it:
+  a server-supplied `textEdit` decides its own replaced range, which is often
+  not the word under the caret, and an edit that does not end at the caret is
+  not something a ghost can describe at all.
+- **The overlay's origin is one row and one column inside the caret's cell.**
+  Absolute coordinates are relative to the popover frame, which the completion
+  popup absorbs into its own rough placement but the ghost cannot — it has to
+  land on the caret exactly. `editorGhostTextSmoke.tsx` asserts the rendered
+  column against the typed text's, and a one-column shift was verified to fail
+  it; the constants were calibrated from the rendered frame, not derived.
+
+The file boundary is the other half, and both halves lose data silently when
+wrong — a smoke is the only thing that catches either, because a truncated
+buffer and a converted line ending both *render perfectly*:
+
+- **Line endings are normalized on read and restored on write**
+  (`tui/opentui/editorLineEndings.ts`). The edit buffer strips carriage returns,
+  so a CRLF file came back as LF and was saved that way: opening a
+  Windows-authored file, typing one character and saving rewrote **every line**.
+  The buffer holds only LF — which every offset, line table and tree-sitter edit
+  already assumes — and `BufferTab.lineEnding` carries the file's own. Every
+  disk read normalizes before comparing, including the 1.5s watcher's, or a CRLF
+  file reads as externally changed against its own copy forever. Guarded by
+  `editorLineEndingSmoke.tsx`.
+- **`setText` discards the undo history; `replaceText` keeps it.** Measured
+  directly on the renderable: undo after a `setText` does nothing at all, while
+  undo after a `replaceText` restores exactly the prior state. Any path that
+  rewrites the buffer behind the user — save hygiene, formatting, a workspace
+  edit — must use `replaceText`, or the rewrite is both unundoable itself and
+  takes every earlier step with it. The rest of the file already used
+  `replaceText` throughout; the save-hygiene rewrite was the one exception, and
+  `editorSaveOnDiskSmoke` now presses Ctrl+Z after a hygienic save to keep it
+  that way.
+- **A typed run undoes in one press** (`editorUndoRuns.ts`). The buffer records
+  one step per character, so taking back a line cost as many presses as it had
+  letters. A run is detected from its effect rather than from history metadata
+  the buffer does not expose: each step removes one character from the same
+  line, moving the caret back exactly one column. That test reads only
+  `logicalCursor`, which is O(1) — diffing `plainText` per step would cost about
+  a millisecond each on a large file, on a key that has to feel instant. "One
+  column" is the width of the character before the caret (read with a
+  two-cell `getTextRangeByCoords`), because the caret counts cells: a run of
+  CJK text moved it two per step and came off one character per press. A
+  newline, a paste, a multi-cursor edit or a formatting rewrite all move the
+  caret differently, so each stays its own step; the danger of coalescing is
+  undoing more than was typed, and every boundary is pinned.
+- **Quick open ranks by recency once matches tie.** An empty query scores every
+  file 0, so Ctrl+P listed whatever the file walk produced first — in a
+  repository of any size, files you have never opened. Recency orders the list
+  when nothing is typed and breaks ties when something is, but never outranks a
+  match: a typed query still finds a file you have never touched.
+
+- **A UTF-8 BOM is a file property, not buffer content — and this was the
+  Windows bug.** The terminal edit buffer silently drops a leading U+FEFF (13
+  characters handed in, 12 held), and the integrity check reads any such
+  shortfall as the buffer having refused the file, so it closed the tab and
+  reported that the file **"did not fit the editor buffer"**. Visual Studio
+  writes a BOM into most files it creates, so on Windows that was not an edge
+  case: it was most files, at any size, reported as a capacity problem. The mark
+  is now stripped for the buffer and restored on write, exactly like a CRLF
+  ending — dropping it instead would rewrite the first bytes of every
+  Windows-authored file on its first save. `editorTextFromDisk` /
+  `editorTextToDisk` are the one pair every read and write goes through; the
+  disk reader strips it too, or a BOM'd file reads as externally changed against
+  the editor's own copy forever.
+- **A file bigger than the buffer opens read-only rather than not at all.**
+  Refusing it meant the one thing still worth doing — reading it — was impossible
+  too. The buffer holds a prefix, the tab says which part it is showing, and
+  edits and saves are both refused: saving would replace the file with whatever
+  fitted. The refusal has two independent layers, because the key handler's
+  depends on the host routing keys through it — `updateActiveContent` puts the
+  buffer back whatever changed it.
+- **The size limit is counted in characters, the unit the buffer uses.**
+  Measuring bytes refused files that would have fit: UTF-8 accented or CJK text
+  runs to two or three bytes per character, so a 1.4 MB file of 700,000
+  characters was rejected for exceeding a limit it was nowhere near.
+- **Cut a truncated buffer on a line boundary only when there is one near the
+  limit.** A minified file is one enormous line after a short banner comment,
+  and honouring that boundary showed **212 bytes of a real 1 MB file** — the
+  only newline was at the top. Below `MIN_TRUNCATED_BUFFER_CHARS`, a hard cut
+  mid-line is far better than showing almost nothing.
+- **`MAX_FILE_BYTES` is the edit buffer's capacity, not a policy.** The buffer
+  holds 1,048,576 characters and discards the rest without a word, while the
+  editor advertised 2 MB: a 1.5 MB file opened as "Opened main.ts" missing two
+  thirds of itself, and every offset computed from it was wrong. The limit now
+  matches, and `verifiedBuffersRef` checks the claim after each mount — a buffer
+  that took less than it was handed closes its tab rather than presenting a
+  truncation as the file. Guarded by `editorLargeFileSmoke.tsx`; both layers are
+  verified to fail independently.
+- **`editorSyntaxHighlightSmoke.tsx` is the only test that can see highlighting
+  at all** — the editor renders identically whether every token was painted or
+  none was. It asserts colours on open, colours travelling with text when a line
+  is inserted above them, and a keyword typed mid-file picking up its own colour.
+
+#### Every window is a transcript window (load-bearing)
+
+There is no reader frame. Every session window is `SplitTranscriptPane` running the reader's card
+pipeline (`TranscriptWindowBody`, `useReaderWindowSliding`, `transcriptWindowState.ts`), so a split
+is never two different apps. "The reader" in older notes below means **the selected window**:
+focusing a window selects its session, and that window carries the `transcript-reader` /
+`transcript-scroll` ids, the view header and CHAT bar (`windowChrome.ts`, `chromeHost`), and
+receives the root's search, jumps and diff keys through its handle (`selectedWindowHandleRef`).
+Window numbers are indices + 1 (`windowNumberOffset`). Full screen draws the selected window
+frameless under the restore row.
+
+- **A letter with Ctrl or Meta is a chord in the window branch** (`letter`): under the kitty
+  protocol ⌃E arrives with `e` as its sequence, and the window's `e` folded a card instead of
+  opening the editor. `isTranscriptLocalKey` must not claim `n`/`N` without search matches
+  (Shift+N is new session).
+- **Watching a team keeps the lead's window first** (`planTeammateWatch`, `watchCoordinatorRun`).
+- **Lightweight windows are a toggle on the current view, not a view** (Tab in the `v` menu, the
+  palette; `lightweightWindows` in `tui.json`, which also reads an old `transcriptView: 'pane'`).
+  They draw the chosen view the old pane's way: system rows dropped, tool calls grouped and empty
+  placeholders dropped *whatever the view*, every card starting folded (`foldAll`), no header or
+  sticky prompt, and only the last `SPLIT_PANE_CARD_WINDOW` cards mounted, with `↑ N earlier
+  messages — k/g to load`; `jumpCursor` pages in an older target. The loaded count is kept with the
+  window's position (`loadedCount`), so a remount keeps its pages. `lightweightWindowSmoke.tsx`
+  (three mutations verified: fold-all, shaping, the kept count).
+- Smokes from before the change read row 0 (now the spaces bar), `READING` (a window title says
+  `paused`) and the view label in the title; find the window by id instead.
+
+#### Window layouts and mouse-driven windows
+
+The reader and its split panes are arranged by `tui/opentui/windowLayout.ts`: `split` (the tmux
+axis, now with `readerLast` for a reader on the right or below), `main-stack` (the reader beside a
+column of panes) and `grid` (reader and three panes, two by two; `SPLIT_PANE_ARRANGED_MAX`). The
+layout menu (`WindowLayoutPicker.tsx`, macOS's Move & Resize / Fill & Arrange) opens from the reader's
+`⊞ layout` title button, `⌃B w` or the palette; the arrangement is kept in `tui.json`. App renders
+from `computeWindowLayout`'s sizes, so the widths cards are laid out at and the frames they are
+drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles the area exactly.
+
+- **Sessions are dragged onto the window area.** A rail row or a pane's title row starts a drag; an
+  edge of the area makes the session a pane on that side, the middle opens it in the reader
+  (`windowDropZone`). **Rail rows select on release now**: selecting on press put the session in the
+  reader before it could be dropped beside it. Their text is `selectable={false}`, because a press on
+  selectable text starts a text selection and the drag never reaches the row.
+- **The divider drags** (`split-divider-handle`, the reader's border on the panes' side, held by a
+  root layer like the surface panel's), and each pane's title carries `⤢` (open in the reader) and `×`.
+- Switching arrangement remounts the reader frame under a different parent; its scroll position is
+  restored like any other remount.
+- **Drops are judged against what is under the pointer**: a pane is replaced (a session already in
+  another pane swaps with it); otherwise the zone is relative to the *reader*, so its edges stay
+  reachable when panes fill the rest of the area. A label follows the pointer saying what the drop
+  will do, and the divider shows the share and size it is setting.
+- **A layout short of tabs fills from the rail's most recent sessions** rather than leaving holes.
+- **A press starts a gesture layer** (`sessionPressing`): a transparent full-screen box that takes the
+  drag and the release. A tab strip or rail row is one row tall, and OpenTUI captures a drag for
+  whatever is under the pointer at the first motion, so a downward drag was captured by the reader
+  and the tab never saw it. Because the layer may also receive the release of a plain click, the
+  click's action (select the row, open the tab) is registered at press and run by whichever of the
+  row or the layer gets the release — `release` clears the press, so it runs once.
+- **Edge drops join a stack or grid** instead of re-laying everything as a split; a side drop moves
+  the reader to the other side.
+- **A second divider** (`split-secondary-divider`, drawn at the root over the border): the grid's
+  row split, or a stack's first pane (`secondaryShare`, kept in `tui.json`).
+- **Every callback handed to a split pane or a `WindowButton` must be stable** (`splitPaneActions`,
+  `sessionDragHandlers`, refs behind `useMemo`). Panes are `React.memo`'d; the first version passed
+  inline arrows for close/promote, which re-rendered every pane with the root — measured A/B
+  against ff6bbea with `tui:inputperf`: split-reader-rows went from 14 to 48 frames over budget, back
+  to level once stable. `WindowButton` is memoized for the same reason.
+- **`⌃B` arrows focus the window that way** (`windowInDirection`, from the laid-out frames,
+  preferring the frame directly beside); `⌃B o`/Tab still cycle.
+- **Title-bar controls are `WindowButton`s** (dim at rest, lit under the pointer); a double-click on a
+  title bar zooms the reader or opens a pane in the reader (`isDoubleClick` — OpenTUI reports
+  presses only). A click outside the layout menu closes it; its backdrop sits at the menu's own layer,
+  because one layer down is the scrim's, which is later in the tree and swallowed the click.
+
+- **Up to five panes** (`SPLIT_PANE_ARRANGED_MAX`): a grid takes the larger half of the windows in
+  its top row (`topPanes`), and drops panes before any falls below its minimum width.
+- **Surfaces are windows too**: every side-panel kind (shell, diff, files, browser, pull request,
+  agents), through the same `renderSurfaceBody` the side panel uses. A window's id is its kind, or
+  `kind#n` for a further shell, browser or file view (window menu: "Open another…"). **Each window
+  has its own key handler and capture** (`windowSurfaceKeysRef`/`windowSurfaceCaptureRef`, keyed by
+  window id, via `renderSurfaceBody`'s `slot`); the panel keeps its own refs. A shared ref was why a
+  kind could live in only one place: two shells would have typed into whichever mounted last.
+  **A layout short of room drops session panes first**, by pin order: a surface window was asked
+  for by name. A terminal window in shell mode and a browser window's address field are routed
+  ahead of the `⌃B` prefix (a browser lets `⌃B` itself through); other surface windows after it.
+  A just-opened surface is focused after the next render (`pendingSurfaceFocusRef`), since opening it
+  may drop a session pane and move its index.
+- **Where surfaces sit among the panes is a slot order** (`windowOrder.ts`): the session pins still
+  say which sessions show and in what order — every drop plan and undo works on them — and
+  `windowOrder` only says which slots are surfaces. Sessions fill session slots in pin order, so a
+  move rewrites both (`applyWindowOrder`). **Window indices count surfaces; pin indices do not** —
+  `split-pane:i`, focus, zoom and `fromPane` are window indices, and `pinIndexOfWindow` converts
+  before anything touches the pins. **Moves are made on the shown windows first, hidden after**
+  (`shownFirstWindowKeys`): with windows overflowing, a hidden session's slot between two visible
+  ones pulled a visible session into the place a swapped window went, and hid another.
+- **Surface windows never remount when they move** (`renderSurfaceLayer`). In the flow a surface
+  window is only a slot (`split-pane:i`, empty); its frame (`surface-frame:<id>`) is drawn by one
+  layer inside the window area, keyed by id, at the slot's rect from `windowLayoutRects` (the full
+  area when zoomed or peeked, the floating rect when floating). A move between grid rows, a tab
+  switch, a float or a dock is then a position or visibility change, so the files view, the diff's
+  cursor and the PR keep their state — under the old parent-per-row rendering each was a remount.
+  Background tabs and windows past what fits stay mounted, hidden; a hidden Git surface keeps
+  polling like any open one. The flow and the layer must agree cell for cell, which
+  `checkSurfaceAlignment` in `windowingMoreSmoke.tsx` asserts after moves. Moving between the side
+  panel and a window still remounts (a different parent).
+- **Dragging, beyond panes and tabs**: the reader drags by its title (onto a session pane it swaps,
+  onto its own far edge it changes side — `readerDropAction` labels it), a surface let go over the
+  reader floats there (`floatSurfaceAt`), and a floating window let go on a title row becomes a tab,
+  at the area's outer edge docks (`floatDockTarget`, hinted while it moves). **Esc cancels any drag**
+  (`cancelPointerGesture`, checked first in the key handler): a window or tab drag ends with no drop,
+  a float move or resize returns to its start, and a border drag is undone to its checkpoint.
+- **Popovers break out into windows** (`popoverWindows.ts`: every view popover — analytics, daily
+  summary, editor, control center, attention, prompts, playbooks, messaging, handoff, tasks,
+  checkpoints, file history, CLI/IDE bridges, teammates, desk, diagnostics; Git/Files/PR map onto
+  their existing surface kinds). `⌃⇧W`, the palette (`popwin:<kind>`, one entry per registry kind)
+  or the popover's `⧉ window` button — beside the reader, **as a tab in this workspace**, or in a new
+  workspace — moves an open popover; `⌃⇧W` on a focused popover window or tab, its `⤢` or "Open
+  full screen" puts it back. Each kind declares:
+  - `pin` — a session-pinned window (analytics) reads **its own copy** of that session's detail
+    (`usePinnedSessionDetail`, the split pane's poll-and-yield loop), so moving the reader never
+    changes what it shows; the pin lives in `windowSurfaceMeta` (workspace state, undo, saved
+    layouts) and the title names it. Returning to full screen opens the pinned session first.
+  - `single` — kinds whose state is a singleton exist once: opening the popover while its window
+    exists focuses the window (an effect on the open flags), and the window body keeps the
+    **root** view namespace so the editor's buffers are the same in both forms.
+  - `keys` — `'capture'` (the editor) is routed ahead of the global shortcuts, like a shell in
+    terminal mode, and only the `⌃B` prefix escapes; a key the editor declines reaches its
+    textarea, which takes the focus slot only while the window is focused (`active`).
+  **Popover tabs** (`popoverTabs`, `activePopoverTab`, workspace state) are entries of the session
+  tab strip after the session tabs: selecting one shows the popover **in the window that was focused**
+  (`popoverTabHost`; laid out in that window's rect, the transcript mounted but hidden), and ←/→,
+  `w`, `×`, right-click and clicks treat it like any tab (`selectStripIndex`). It takes that window's
+  number, and the window behind it is not a focus stop: `⌃B <n>` on it focuses the tab. Only with no
+  session window to take does it get a slot of its own (`primaryLeaf`). **The host is recorded**,
+  or a tab would follow the selection — focus is selection — from window to window. While focused
+  (`splitFocusIndex === null`) a shown popover tab takes the keys, Esc included; its own close
+  closes the tab.
+  `readerFrameNode` is a function so the tab frame renders after `renderSurfaceBody` exists. The
+  tab frame carries the reader's title controls (`≡` is the tab's own menu, `⊞ layout`, `⤢`, `×`).
+  Git, Files and PR (surface kinds with popovers, `SURFACE_POPOVER_KINDS`) take the same `⧉`
+  placements. Their docked layout counts its own border, so docked they keep it but draw it in the
+  background colour and untitled, instead of a second visible frame.
+  Strip tool tabs use their own surface identity in identification and the workspace overview;
+  keyboard close/float/tab and menu actions target that surface, not the session hidden behind it.
+  Saved layouts and undo retain strip tabs, and workspace moves use the shared atomic transfer.
+  Teammates and diagnostics are store-backed: they stay *open* while windowed or tabbed and only
+  their modal is suppressed (`windowedPopoverKinds`), so opening one as a window from the palette
+  opens the panel first, and closing the window (not returning it) closes the panel.
+  A docked popover (`dockedPopover.tsx`) fills its box and **passes no border props at all** —
+  `borderStyle` alone turns a border on, so `border={false}` with a style still drew a second
+  frame inside the window's. "In a new workspace" seeds a new workspace runtime (`windowSurfaces`, meta, zoom, the pinned
+  session) before it mounts. `popoverWindowSmoke.tsx` covers each, opens every other kind from the
+  palette and checks it is docked (no second frame); eleven mutations verified. The palette eats
+  `j`/`k` typed into its query (they move the selection) — a query must avoid them.
+- **A surface frame must not clip** (`overflow` is on its body box): its tab strip and title
+  buttons sit on the border at `top: -1`, and a clipping frame does not paint them — the `⇥ panel`
+  and `×` buttons were invisible (though still clickable) before this.
+- **A surface window drags by its title**: onto another window's middle it swaps, onto an edge it
+  goes beside; the reader refuses it. A session dropped on a surface window trades places with it,
+  or (from the rail) becomes a pane beside it. A grid move between rows remounts the window, so a
+  terminal window remembers its shell (`windowShellSelectionRef`); diff/files views start over.
+- **The window area's height is measured** (`measuredWindowAreaHeight`), like the reader's; the
+  budget estimate ran two rows short, leaving empty rows under a grid.
+- **A pane's edges insert beside it** (`insertSessionBesidePane`); its middle replaces it.
+- **Windows can share a frame as tabs** (`windowTabs.ts`, `windowStacks`): drop a window or a rail
+  session on a window's **title row**, or `⌃B t` (onto the window before). A tab strip replaces the
+  title; click shows a tab, `×` closes it (the frame shows the next), dragging one out makes it a
+  window (onto another window: a tab there), `⌃B ,`/`.` step, `⌃B !` breaks it out. A stack is only
+  window keys; **exactly one member is laid out** (the frame) and the rest are *parked* off the pins
+  and surface list, which is why the pin reconciler skips `parkedWindowKeysRef` — it refilled a
+  short pin list from the open tabs, pulling a background tab into a pane. `liveStacks` drops a
+  stack with no laid-out member and splits off a second one, so a stack can never be wrong for
+  longer than a render. Every move goes through `commitWindowKeys`, which rewrites pins, surfaces,
+  order and count from one key list.
+- **One window can float** (`⌃B f`, palette "Shell in a floating window"): it leaves the layout,
+  draws over the window area (opaque — an unpainted cell shows the frames under it; a floating
+  surface is drawn by the surface layer, and the floating box over it holds only the controls), moves by its
+  title, resizes by `◢`, and docks back into the slot it left (`slot`; appended past the shown
+  windows it docked out of sight). It focuses as pane index `FLOATING_PANE_INDEX`, so focus, the
+  pane handle and key routing need no other path; `windowItems[i]` never contains it, which is why
+  `focusedWindowItem` is the accessor. Not saved in layouts; undo covers both.
+- **Every shared border drags** (`window-border:<group>:<i>`): between the split's panes, a stack's
+  panes, and each grid row's. `computeResponsiveWindowLayout` returns `groups` (members and axis) and
+  divides each by `weights` (relative extents, `distributeExtent`: proportional, then frames held at
+  their minimum and the rest redistributed). Weights win over the older `secondaryShare` (stack) and
+  `bottomShare`, which still convert for layouts saved before. `⌃B [`/`]` move the focused pane's
+  border within its group; the reader's own border stays `split-divider-handle`, and the grid's row
+  split `split-secondary-divider`.
+- **Zoom hides, it does not remount** (`visible={false}` on every other window and row): a zoomed
+  pane re-mounted every other transcript on restore, reloading each.
+- **Keyboard**: `⌃B ⇧`arrows swap the focused window with its neighbour (surface or session),
+  `⌃B +`/`-` move the grid's row split, `⌃B m` zooms the focused window and restores.
+  `windowInDirection` only counts windows *beyond* the current one's edge, or "right" from a grid's
+  bottom-right pane reached the top row's slightly wider end.
+- **A click anywhere in a window focuses it**: a pane or surface window through its frame's
+  `onMouseDown` (mouse events bubble from the cell hit, selectable text included), the reader
+  through its own — which hands focus back from a pane, a floating window, the surface panel or
+  the rail. Before, the reader took it back only from the surface panel.
+- **Right-click menus** (`ContextMenu.tsx`) on rail rows, tabs, panes, surface windows and the
+  reader's title; backdrop at the menu's own layer, as the layout menu's.
+- **Saved layouts** (`windowLayoutStore.ts`, `.agent-viewer-data/window-layouts.json`, per project):
+  arrangement, shares and weights, reader, panes in order, surface windows, the slot order and tabs.
+  Restoring skips sessions that are gone and says how many.
+- **A pane searches its whole history**: `/` types into its title, Enter and `n`/`N` step older and
+  newer, and a match older than the loaded window pages it in (`search` on the pane handle).
+  Typed keys update the query functionally — keys arriving faster than a render all saw the same
+  closure, and only the last character survived.
+
+`windowingSmoke.tsx` drives all of it with the mouse against fixture sessions and reads laid-out
+frames; five mutations were verified to fail it. `windowingMoreSmoke.tsx` covers the grid of six,
+edge inserts, swap, zoom, the menus, saved layouts, pane search and a shell window (seven mutations
+verified, plus the direction rule in `windowLayoutSmoke.ts`).
+
+#### Fullscreen rendering: what the renderer already does, and the two escape hatches
+
+Claude Code's "fullscreen" renderer (alternate screen, send only changed cells,
+render only what is visible, in-app mouse) is how this TUI has always drawn —
+check before re-porting it. `createCliRenderer` in `tui/opentui/main.tsx` runs on
+`alternate-screen` with SGR mouse, and OpenTUI's native renderer diffs a double
+buffer and wraps every frame in synchronized output (`?2026h`, probed first).
+Measured in a PTY over 8 sidebar keystrokes: **45KB diffed against 539KB** with
+a forced full repaint. The reader mounts a bounded card window
+(`READER_CARD_WINDOW`) with `viewportCulling`, so the render tree does not grow
+with the conversation; copy-on-select (OSC 52 / host clipboard), the "+N new
+messages" notice and wheel acceleration already exist.
+
+- **`--no-mouse` / `AGENT_VIEWER_DISABLE_MOUSE=1`** hands the mouse back to the
+  terminal so its native selection works in tmux and over SSH.
+- **`--full-repaint` / `AGENT_VIEWER_FULL_REPAINT=1`** repaints every cell each
+  frame, for ConPTY hosts that leave fragments. OpenTUI (0.5.11 and 0.6 alike) has no public
+  switch, so it sets the renderer's own resize/resume repaint flag from a frame
+  callback, feature-detected — an upgrade that renames the field warns rather
+  than silently doing nothing.
+- **`⌃K v` pages the transcript** (`tui/opentui/transcriptPager.ts`): every block
+  expanded (`formatTranscriptExpandedText`), written 0600 to a temp dir, opened
+  in `$VISUAL`/`$EDITOR`/`less` with the renderer suspended, then removed. This
+  is the only way the terminal's own search sees the conversation. The renderer
+  is resumed in `finally` — a failed editor must not leave a frozen app —
+  and `transcriptPagerSmoke.ts` pins that, the expansion, and the cleanup.
+
+#### SCROLLBACK view: scrolled text, no card cursor (load-bearing)
+
+`v` → SCROLLBACK is STREAM's rows read the way a terminal scrollback is (Claude
+Code's transcript): nothing is highlighted, `j/k`, `⌃d/⌃u` and PgUp/PgDn move the
+text by rows, the wheel detaches from the tail, and reaching the bottom follows
+it again. It is a mode of the existing stream path (`isScrollbackView`), not a
+second renderer; TRANSCRIPT is the opencode-styled sibling and keeps its cursor.
+
+- **The cursor is hidden, not removed.** Every jump (search `n`, next prompt,
+  bookmarks, `g`/`G`) starts from `transcriptCursorKey`, so scrolling parks it on
+  a message the viewport still shows (`settleScrollbackPosition`). A cursor that
+  is still on screen stays put — re-parking it on the top row every poll walked
+  it backwards off the card a jump had just landed on.
+- **A scroll-parked cursor must never be revealed.** The reveal and recenter
+  effects skip a cursor matching `scrollbackSyncedCursorKeyRef`; revealing it
+  pulls the reply the top edge cuts through fully into view, i.e. undoes the
+  scroll. An explicit jump clears the ref so it *is* revealed.
+- **While following, only `scrollTop` decreasing under content that did not
+  shrink is the user.** A growing reply sits above the bottom for a frame before
+  sticky scroll catches up; reading that as a detach stops following mid-stream.
+- **`e`/Enter expand or fold everything** (Claude Code's ⌃O) — there is no card
+  for them to act on. A tool group expands to its tools, each folded by its own
+  key, so expand-all also names every nested tool (`scrollbackExpandedToolKeys`).
+- **A click expands a folded tool row or group; folding again takes a click on
+  its first row** (`releaseTranscriptPress`). It acts on mouse UP with the
+  pointer unmoved, like a link, so a drag is still a selection, and an expanded
+  item's body stays plain text (an expanded diff has its own click targets). A
+  click is a flip away from the expand-all state (`scrollbackToggledKeys`), which
+  `e` clears. Expanding at the tail lets go of it first — sticking to the bottom
+  would push the clicked row up by what it grew.
+- **A tool row's `card:` id is one level down**, inside a centering wrapper, so
+  anything walking the scrollbox's children for cards goes through
+  `readerRowCard`; reading `child.id` alone silently skips every tool row.
+- **The "new messages" banner is not reserved here.** Elsewhere two rows appear
+  above the transcript whenever the tail is left; SCROLLBACK leaves it on every
+  scroll, and the text jumped by two rows more than was asked for.
+- **The stream views budget only the chrome they draw** (`readerChromeRows`).
+  The viewport subtracted seven rows for a reader header, a context row and the
+  idle ticker in every view; STREAM and SCROLLBACK draw none of those, so those
+  rows sat blank under the transcript. The idle ticker is gone from both, the
+  action-hint row from SCROLLBACK (no card for the actions; its keys are in the
+  status bar), and a turn boundary with no duration to report is a blank row
+  rather than a full-width rule (landmark kind `break`). At 120x40 the
+  transcript went from 21 rows to 30.
+- `scrollbackTranscriptSmoke.tsx` reads the scroll position back row for row.
+  Nine mutations were verified to fail it: showing the cursor, selecting on
+  click, dropping the reveal guard, not re-following, the drag guard, the
+  first-row rule, the tail detach on expand, `e` not clearing clicks, and the
+  reserved banner. The recenter guard needs more than `READER_CARD_WINDOW` cards
+  and is not pinned.
+
+#### Clickable transcript targets (load-bearing)
+
+OpenTUI's `renderer.getLinkAt(x, y)` (0.5.11 and 0.6) reads a link id back out of the
+**painted cell attributes**, so a URL or path is clickable only if the renderer
+emitted an `<a href>` for it — a styled `<span>` with identical text renders
+byte-identically and is completely inert. The element choice *is* the feature,
+and no frame comparison can see the difference.
+
+- **`lib/tuiLinkTargets.ts` is the whole risk surface.** A missed target is
+  invisible; a false one paints ordinary prose as a link. It runs per rendered
+  line on every transcript render, so it does no filesystem access — the
+  detectors are conservative instead. A bare relative path needs a known
+  extension (`and/or`, `w/ the`, `50/50` and `build/test` all have a slash), an
+  absolute path does not, and a relative path with no cwd to resolve against
+  stays plain text rather than becoming a dead link.
+- **Link detection runs AFTER markdown tokenization, never before.** A path cited
+  in backticks is the most common way an agent names a file; linkifying first
+  would leave the backticks on screen as literal text. `parseInlineSpanTokens`
+  splits each markdown token instead, so a path in backticks stays `code`-colored
+  *and* clickable.
+- **The probe and the tokenizer share one pattern.** `hasTuiLinkTarget` is what
+  lets the renderer skip tokenizing most lines. An earlier version short-circuited
+  on `includes('/')`, which a slash-free markdown target (`[mail me](mailto:…)`)
+  has none of — so the probe silently dropped those lines before the tokenizer
+  saw them. Sharing the pattern makes the dangerous direction impossible by
+  construction rather than something a test must keep catching.
+- **A file path travels as a `file://` URL with `#L<n>`**, so one mechanism covers
+  both kinds and `parseTuiLinkTarget` maps it back for the editor.
+- **Opening happens on mouse UP, only when the pointer has not moved.** On mouse
+  down it would hijack the start of a text selection beginning on a path, which
+  is a far more common intent than following it. One handler on the transcript
+  scrollbox covers every card — `getLinkAt` resolves a screen cell, so nothing
+  needs to know which row was hit.
+- `linkTargetSmoke.ts` pins the tokenizer (reassembly, prose false positives,
+  `path:line`, trailing punctuation, probe parity); `transcriptLinkSmoke.tsx`
+  pins the rendered link cells, their boundaries, the click, and the drag guard,
+  against the real App. **Its assertion order is load-bearing**: the editor covers
+  the transcript, so the file-path click must come last or every later click lands
+  on the editor — ordered earlier, the negative assertions passed against a
+  covered transcript *and kept passing with the drag guard deleted*.
+
+#### Session policy diagnostics (load-bearing)
+
+Three sections in the ⇧D diagnostics surface, from Claude SDK 0.3.270
+(`lib/claudeSessionPolicy.ts`). Diagnostics was the right host because both UIs
+already render provider-supplied sections generically — no new chrome.
+
+- **Context rows are classified on `kind`, never on their English name.** The SDK
+  says so explicitly. The names are localized display strings, so a reader that
+  matched on them would count free space as used the first time one was
+  re-worded — a meter reading near-full on an empty session, with no error.
+  `deferred` rows are out-of-window tool schemas and are excluded from usage math;
+  folding them in overstates the meter by every tool the session has not loaded.
+  A row with no `kind` (an older CLI) gets its own heading rather than a guess.
+- **`listPermissionRules` and `getHooksListing` are implemented by the SDK but
+  NOT declared in its public `sdk.d.ts`.** That is why every read here
+  feature-detects and catches: diagnostics fans out a dozen control RPCs and must
+  not lose the other eleven because an undocumented one changed.
+- **A permission rule is stored verbatim and may carry invisible characters by
+  design.** `revealRuleText` escapes them to `\uXXXX` rather than stripping them:
+  two rules differing only by a zero-width space are *different* rules, and an
+  audit of why an allow rule is not matching would otherwise show a rule that
+  looks exactly right. A bidi override can reorder a rule on screen to read as
+  something else entirely.
+- **The rule list is capped, and it says so.** A real project has dozens (112 on
+  this repo). A silent cap is the wrong trade on an audit surface — the reason to
+  open it is usually a rule you cannot find, and a truncated list that does not
+  announce itself answers "that rule is not here" when it is. Deny rules are never
+  withheld: they are the ones that explain a refusal.
+- **The panel scrolls now (`⌃u`/`⌃d`), and the per-section `slice(0, 10)` is
+  gone.** Fifteen sections never fitted the 28-row overlay, so everything past
+  roughly the MCP list was never drawn and the panel looked complete. The slice
+  existed only because the panel clipped anyway; keeping it would be a second,
+  silent truncation on top of the one the adapter announces. A scrollbox needs an
+  explicit row budget — given `flexGrow` it laid itself over the title row.
+  Pinned by `diagnosticsPanelSmoke.tsx`, which first asserts its own fixture does
+  not fit (or scrolling proves nothing).
+  **Known, pre-existing:** the overlay's cells stay painted after it unmounts —
+  React stops rendering it, but the frame still shows it. Reproduces with the
+  original plain box, so it is not the scrollbox.
+
+#### OpenTUI render slots (load-bearing)
+
+`tui/opentui/slots.tsx` is a named-slot registry, taken from OpenCode's TUI plugin API
+(`packages/plugin/src/tui.ts`, where every built-in surface — the context panel, changed files, LSP
+and MCP status — is a plugin filling `sidebar_content`). The root declares where a surface may
+appear (`SlotName` plus the props that arrive there); a surface registers what it draws.
+
+**A slot is a structural seam, and in React it is not a performance fix by itself.** OpenCode's TUI
+is `@opentui/solid`, where a slot child is its own reactive scope and isolates by construction. Ours
+is `@opentui/react`: moving a surface into a slot changes which file it lives in and nothing about
+when it renders. The isolation comes from the *other* half — the surface reading its own state from
+a store instead of from the root's `useState`, so `memo` has stable props to compare. Do one without
+the other and you have moved lines, not work.
+
+- **The registry is deliberately not a React context.** A context provider puts every registration on
+  the root's render path, which is the coupling this exists to remove. `<Slot>` subscribes with
+  `useSyncExternalStore`, so registering re-renders that slot alone. `slotContributionIds` is the
+  test seam.
+- **`tui/opentui/coordinatorStore.ts` is the reference shape.** The coordinator rail was three
+  `useState`s and a polling effect in the root, so every reconcile tick and every pushed run change
+  re-rendered the whole app — mounted transcript included — to repaint a list in the left rail. The
+  store owns the state and the feed; `CoordinatorSidebar` subscribes and is `memo`'d; the root's key
+  handlers read `getCoordinatorState()` imperatively and so do not subscribe at all. The root keeps
+  one subscription, to the header counts alone, because the rail's box title is a string prop.
+- **The feed is refcounted, not per-mount.** Two subscribers must not each open their own poll and
+  SSE subscription. Mounting the rail acquires it and unmounting releases it, which reproduces the
+  old `sidebarView !== 'coordinator'` guard exactly.
+- **`readRootRenderCount()` is the only way to assert any of this.** The frame is identical whether
+  the root re-rendered or the rail did, and a `Profiler` wrapping the root cannot tell them apart
+  either — a commit caused by the memoized child still fires it. `coordinatorSlotSmoke.tsx` asserts
+  the count does not move on a coordinator store update; making the root's selector include
+  `selectedKey` was verified to fail it.
+
+- **Not every surface can take this treatment, and the test is whether its state is self-contained.**
+  The coordinator rail qualified: its own feed, its own selection, consumed nowhere else. The fleet
+  strip and the attention inbox do not. They share `waitingSessions` / `viewerAttentionNotes` /
+  `attentionDone` with `sidebarSessionActivity`, which is a dep of `buildSidebarRow` — so the same
+  derived state paints every sidebar session row inside the root's render — and `attentionItems` is
+  derived from four other pieces of root state (`pendingPermissions`, `backgroundPrompts`,
+  `sessions`, `composerTargetSession`). Moving those two behind slots would relocate JSX and isolate
+  nothing, because the root would still hold and re-render the state. Separating them means
+  splitting the activity registry from the reattach machinery first; that is the prerequisite, not
+  an optional extra.
+
+#### Interactive Coordinator in the TUI (load-bearing)
+
+`⌃K t` opens `tui/opentui/TeammatesPopover.tsx` for the conversation the reader is on — the TUI's
+counterpart to the web's `CoordinatorConversation`. It is **session-scoped where
+`CoordinationPopover` (`⌃K a`) is run-scoped**: promoting a chat to lead of a Coordinator run is a
+property of that chat, so the two answer "who is helping me here" and "what is every run doing".
+Enable/turn off, the continuation toggle, delivery reconciliation, teammate recovery and the roster
+all go through `lib/tui/service.ts`'s `readTuiSessionCoordinator` / `sendTuiSessionCoordination`,
+which mirror `app/api/sessions/[sessionId]/coordination/route.ts` action for action so the daemon
+(`--attach`) path is the same request.
+
+- **The delivery half was already done.** `streamTuiSessionTurn` goes through
+  `withCooperativeInbox`, so teammate mail, the lead context and the shell fallback client reach a
+  TUI turn exactly as they reach a web one, and `sweepInteractiveCoordinator` drives automatic
+  continuation server-side. What was missing was only the control surface.
+- **State lives in `tui/opentui/interactiveCoordinatorStore.ts`**, following `coordinatorStore.ts`:
+  the panel subscribes and is `memo`'d, and the root's only subscription is the open/closed boolean
+  (`isInteractiveCoordinatorOpen`), which its key dispatcher reads imperatively. A coordinator
+  refresh must never reach the root.
+- **Worktrees are a run setting the lead can flip** (`w` in the panel, the checkbox on the web): `configureInteractiveCoordinator({ useWorktrees })` updates the run row and the live controller. It applies to teammates started afterwards; a running teammate keeps its checkout.
+- **The feed starts on open, not at boot.** Reading coordination state loads
+  `lib/agentCoordination.ts`, which imports the send path; a surface the user may never open must
+  not be what pulls ~56MB in. The read itself is assembled from `lib/sessionActivity.ts` rather than
+  `readViewSessionRunning` for the same reason.
+- **Session rows carry their team's mark, read from the ledger alone** (herdr's rollup: the
+  sidebar says which chat's team needs you without opening anything). `tui/opentui/teamAttentionStore.ts`
+  polls `readTuiInteractiveAttention` from boot, so it goes through `lib/coordinatorLedger.ts` — a
+  read-only ledger open plus the row mappers and snapshot windows `agentCoordination.ts` also uses —
+  and **must never reach `coordination()`**: that would load the send path for every browse-only
+  session. `teamAttentionLedgerSmoke.ts` traces module resolution to pin it and checks the light
+  summary agrees with the Coordinator's. Results carry ids, and each client subtracts its own
+  reviewed markers (TUI files, web `coordinator:seen:v1:*`) — counting raw results left a
+  permanent `✓ n` on every team that had ever finished a task.
+- **A close keeps the session and its last read**, so reopening the same conversation paints its
+  roster immediately; switching conversations drops the read, because another chat's roster under
+  this one's heading is worse than a blank one.
+- **Teammate notifications fire on transitions, never on what a read already held**
+  (`lib/coordinatorSignals.ts`, herdr's rule). The store baselines each conversation's first read,
+  so launching the TUI or selecting an old chat replays nothing; a user taught that notifications
+  are noise stops reading them. Quiet requires positive evidence of looking: the panel open on that
+  conversation AND the terminal not known to be blurred (unknown focus counts as focused). The
+  root subscribes with `subscribeInteractiveCoordinatorNotifications`, which pushes events without
+  touching root state. A claimed task with no observed turn for `COORDINATOR_START_STALL_MS` reads
+  as stalled — "nothing observed", never "not delivered". Delivery waits `COORDINATOR_NOTIFICATION_DELAY_MS`
+  and re-checks the signal and focus when it fires (herdr's toast delay), so an approval answered
+  within a second never interrupts anyone. Both rosters sort by `coordinatorRosterOrder` (herdr's
+  priority panel), so **TUI selection is by teammate id, never index** — a reorder would otherwise
+  retarget `m`/`r` to whoever moved into the row. Opening a teammate's transcript reviews its results.
+  `backgroundAgents` (from the Stop hook's waiting registry) keeps a teammate working after its turn
+  ends — background subagents/monitors and scheduled wake-ups count, **a background shell alone does
+  not** (herdr #3414: a dev server would otherwise hold it "working" forever). Copilot feeds the same
+  registry from `tasks.list()` (`refreshCopilotBackgroundTasks`, on turn end and on
+  `session.background_tasks_changed`); it must never mark a session with a live turn, and the
+  running check **after** the RPC is the load-bearing one. Alert delivery is herdr's `ui.toast.delivery`:
+  `l` in the panel cycles desktop → in-app → off, persisted in `tui.json`, and a non-default mode is
+  stated in the panel header (the footer drops hints when narrow). `i` interrupts the selected
+  teammate: a **managed** teammate's turn runs in this process, so the external cancel flag would
+  never be read — `interruptInteractiveAgent` interrupts its live session instead, and the task stays
+  owned. `p` cycles which provider staffs the **next new** teammate (web: a select); the set is
+  durable per conversation (`teammate_providers`, schema v23) because failover after a restart must
+  know what the team may staff, and a provider choice never re-provisions an existing teammate.
+- **A roster row is a sentence, and the lead heads the roster.** State glyph in
+  its colour, name, the teammate's task and how that stands, then what the host
+  last saw. With the task on the row the TASKS list keeps only tasks no row
+  shows. The lead's row can be moved onto and opened but is never `selected`:
+  every roster action is something the lead does to a teammate. "this
+  conversation" marks the agent whose chat the panel was opened from, which is
+  a teammate when it was opened from a teammate's transcript. Below 70 columns
+  the rows stack instead — a status cut to fit says nothing.
+- **From `SPLIT_MIN_WIDTH` the panel is two panes**: roster and task board on
+  the left, the teammate under the cursor on the right (whole task title, paths,
+  last word, what to press), then the run and settings. Both panes are built as
+  pre-fitted `PaneRow`s (`wrapWords`), so the height is counted rather than
+  estimated. Below that width it is the stacked layout, which is what the
+  smokes drive (110 columns and narrower). The body reserves one column for
+  the scrollbar: laid out to the full width, an overflowing panel shrank each
+  row's first cell — `resumingCODEX`, a warning glyph with no space after it.
+- **A reused box keeps the padding of what it replaced.** The roster box sits in
+  the slot the "none asked yet" row occupies until the first teammate exists;
+  OpenTUI left that row's `paddingTop` on it, a stray blank row no source line
+  explains. State the zero.
+- **The panel's height follows its content**, with a floor of 12: the scrollbox has its own 6-row
+  minimum, and below that the footer draws *outside* the border. `bodyRows` mirrors the sections, so
+  a section added without updating it costs a blank row or a scrollbar — not the twenty empty rows a
+  fixed height cost. Both bounds are pinned in `teammatesPopoverSmoke.tsx`, in the empty state (where
+  the floor bites) and with a roster (where the cap does). Reviewed-result markers persist in
+  `lib/tui/coordinatorReviewed.ts`; in memory, a restart re-flagged every result. Pinned by
+  `scripts/coordSignalsSmoke.ts` and the store smoke.
+- **A lead is woken once its teammates' mail settles** (`INTERACTIVE_LEAD_WAKE_SETTLE_MS`, 2.5s
+  after the newest message). Teammates given work together finish together; waking on the first
+  result spent a lead turn on it and a second on the rest half a second later — results the lead had
+  usually already read through `coord_status`. Measured live with a Codex lead: two automatic turns
+  per round became one. A window cannot cover teammates finishing seconds apart, so while another
+  teammate is still on its task the wake also waits for it, at most
+  `INTERACTIVE_LEAD_WAKE_MAX_HOLD_MS` (45s) after the oldest unread result.
+  `coordInteractiveSmoke.ts` pins both. **Verify sweep changes against a fresh
+  process**: `next dev` hot-reloads route code but the old module's sweep timer keeps running, so a
+  live check against a long-running daemon measures the previous build.
+- **Host ownership comes from a user, never from a sweep.** `sweepMailboxes` starts at module load in
+  every process that imports `lib/agentCoordination.ts` — the AHP sidecar `agent-viewer web` spawns
+  included — and resolving a lead identity claims the run. So `sweepInteractiveCoordinator` works only
+  runs this process already owns: a team enabled from the TUI, whose TUI then exited, was taken over
+  by the always-running sidecar, and the restarted TUI and the web both showed "Running in another
+  host" with nothing to act on. A dead owner is adopted by a **UI read** instead
+  (`adoptOrphanedInteractiveHost`, called only from the coordination route and the TUI read), which
+  never displaces a live owner. `coordInteractiveHostsSmoke.ts` runs a real sweeping sidecar process.
+- **An unconfirmed request locks the panel.** The idempotency key makes a *replay* safe; it cannot
+  make a second, different mutation safe while the first's outcome is unknown. A failed action is
+  kept verbatim and only `r` (replay the same `requestId`) or `e` (discard) may follow it — the
+  web panel's `locked` rule, and the easiest thing to lose in a port.
+- **The panel owns every keystroke while it is up**, like every other popover here: a `⌃K` sent into
+  it is swallowed, not re-armed. `appSmoke.tsx` pins the chord and that Escape closes it;
+  `teammatesPopoverSmoke.tsx` pins enable, roster activity, inspect, drafts, continuation, the
+  unconfirmed gate and turn-off against a real seeded run.
+- **A modal is a scrim plus a panel, and the panel must sit above it**
+  (`tui/opentui/layers.ts`). While any modal in that list is up the root's scrim box dims and
+  desaturates everything painted below it (`paintModalScrim`, run as the box's `renderAfter`, so
+  it is a pass over the frame so far rather than a colour laid on top); a panel left at a lower
+  z-index is dimmed with the rest and reads as disabled rather than foregrounded.
+  `modalScrimSmoke.tsx` reads the painted colours (three mutations verified). This shipped once, because the char frame is byte-identical either
+  way — only the colours differ — so `teammatesPopoverSmoke.tsx` asserts the ORDER, not the pixels
+  (verified to fail when the panel is put back below the scrim). Adding a modal to the scrim's
+  condition without raising its panel is the whole bug; use the constants rather than a literal.
+- **The spaces bars sit just under the modal scrim** (`NAVIGATION_Z_INDEX`, `layers.ts`): above the
+  composer window, so a workspace can be switched with a draft open, and below the scrim, which
+  must dim every cell behind a modal (`modalScrimSmoke`). Full-screen popovers (editor, Git, pull
+  request, file viewer, desk) draw from the top row, so the bars drop beneath them while one is
+  open (`under`, from `fullScreenPopoverOpen`) — above them they hid the editor's title border.
+- **Contrast is a hierarchy, not a default.** Rendering a whole panel in `theme.dim` is the easy
+  mistake here and it reads as broken: content the user acts on is `theme.text`, secondary is
+  `theme.muted`, and `dim` is for separators and chrome alone. Key glyphs carry `theme.cyan` so the
+  footer can be scanned, and the header's status is the only coloured word on its line. The footer
+  drops whole hint entries **from the middle** when it will not fit, because the last one is how to
+  leave — the same escape-hatch rule the ⌃B/⌃K chord hint follows, and the smoke pins it.
+
+#### The MCP bridge and the tool contract are two definitions of one tool set (load-bearing)
+
+`bin/agent-viewer-mcp.mjs` registers each `coord_*` tool by hand (zod); in-process sessions build
+theirs from `lib/coordinatorToolContract.mjs`. An argument the contract has and the bridge lacks is
+**stripped without an error**, so the call succeeds and does something else: the skill and the
+Coordinator's own rejection both told agents to call `coord_read_inbox(unresolved=true)`, the
+bridge had no such field, and the "recovery" read acknowledged the inbox instead. `coord_wait`'s
+`agent`/`until` filter was lost the same way, and the bridge required receipt-decision fields the
+Coordinator treats as optional. `mcpBridgeSmoke.mjs` now asserts every contract field, string
+limit and enum exists on the bridge tool (the receipt's flattened fields are the one listed
+exception) — add a tool or argument to both, and to `COORDINATOR_MCP_TOOL_NAMES` /
+`COORDINATOR_READ_ACTIONS`. Descriptions have one source: the bridge calls `bridgeDescription(name)`,
+which reads the contract's, so an in-app teammate and a CLI are told the same thing (a suffix
+carries what only a stdio CLI needs). Guidance belongs in the tool description, because the
+contract's field specs carry no per-argument text across its five converters. The skill (`.agents/skills/coordinate-agents/SKILL.md`) is served as
+an MCP resource under a pinned 1,700-word budget; depth goes in `references/`, where
+`protocol-and-hosts.md` maps each rejection message to its fix — keep that table in step with the
+`throw new Error` strings in `lib/agentCoordination.ts`.
+**A tool result is read by a model, so its size is a correctness property.** `coord_status`
+kept 100 findings in view with their full detail, and a finding carries up to 32,000 characters —
+30 of them made every status call 970KB. Event detail is now an excerpt in status (600) and wait
+(2,000), `coord_query_context` returns the best match whole and the rest within a budget, and an
+in-app `coord_wait` drops the board the stdio bridge already dropped. The full text stays reachable
+through a specific query; `coordStatusBoundSmoke.ts` pins both halves (two mutations verified).
+`coord_resume` takes run and agent ids and reads the saved credential itself: a restarted CLI was
+otherwise asked for a token it is told never to read, and a failed resume used to clear a binding
+that was working.
+
+**The skill is in this repository's checkout and nobody else's.** Preambles named
+`<cwd>/.agents/skills/coordinate-agents/SKILL.md` "if it exists" and forbade looking elsewhere, so
+in any other project a coordinated agent ran on the preamble alone. `bin/agent-viewer.mjs` exports
+`AGENT_VIEWER_COORD_SKILL_PATH` (the shipped copy) and `skillGroundingLine` / the worker's
+`tickPrompt` name it as the fallback. Launched outside the bin entrypoint (`npm run dev`) the
+variable is unset and the line is as before.
+
+#### Teams outlive the window, and a script can drive a run (load-bearing)
+
+Two of herdr's promises, measured against its 0.9.3 docs: work survives the client, and the whole
+CLI is the API.
+
+- **`agent-viewer --daemon` hosts the work in a background daemon and attaches to it**
+  (`bin/agent-viewer-daemon.mjs`; `daemon status|start|stop`). The daemon is the ordinary
+  `agent-viewer web`, detached, using the production build when one exists (0.5s to answer, against
+  the dev server's many seconds). A port is classified before anything is started: only a listener
+  answering `GET /api/version` as `agent-viewer` is attached to, and one that answers as anything
+  else is refused rather than started over. `stop` kills only a daemon it has a pid record for — one
+  started by hand is not its to kill. It is **not the default**: attached reads go over HTTP, and the
+  navigation numbers in *OpenTUI performance patterns* were all measured in-process.
+- **Quitting an attached TUI is a detach.** `confirmExit` used to interrupt every running turn on
+  the way out, attached or not, so `--attach` stopped the daemon's work in every other client's view
+  of it. Attached, it drops only its own stream; the dialog says the turns keep going, and unattached
+  it names `--daemon`.
+- **Adopting a dead host's team resumes its teammates** (`resumeAdoptedTeammates`), staggered 100ms
+  as herdr spaces restored agents. It runs only where `adoptOrphanedInteractiveHost` actually took a
+  run over — a UI read — and **never from the maintenance sweep**, which cannot tell a turn that died
+  with its host from one between frames. Each teammate passes the checks `r` does and is tried once
+  per task per process. It is a per-conversation setting (`u` in the panel, a checkbox on the web;
+  `auto_resume`, schema v27, on by default) under a machine-wide switch,
+  `AGENT_VIEWER_COORD_AUTO_RESUME=0`, which the two smokes pinning the manual path set.
+  **The tries are counted on the task** (`auto_resume_count`, cap `INTERACTIVE_AUTO_RESUME_CAP` = 2),
+  not in memory: a host that dies every time it resumes a task would otherwise replay it on every
+  restart. Past the cap the teammate stays in recovery and the panel says why; `r` resets the count,
+  because a person has looked. **Only a teammate that died between turns is resumed.** One cut off
+  mid-turn has an unresolved execution attempt — its turn may already have acted — and the recovery
+  hardening forbids replaying that unseen; it waits for `r` and the panel says why
+  (`autoResumeUncertain`). The two rules once contradicted each other and auto-resume silently never
+  fired. `coordAutoResumeSmoke.ts` runs each case in real processes.
+- **`agent-viewer coord run|join|status|delegate|send|inbox|wait|runs|whoami|tools|call`**
+  (`bin/agent-viewer-coord-cli.mjs`) is the same `/api/agent-protocol/external` endpoint the MCP
+  bridge uses. `call <tool>` builds its request from `COORD_TOOL_SPECS`, so a tool added to the
+  contract is scriptable without touching the CLI. JSON on stdout; exit 1 with a JSON error, 2 for
+  usage, 3 for a `wait` that timed out. A run binds the **directory** it was started from, so later
+  commands need no identity flag; the token is saved 0600 beside the bridge's and never printed. The
+  launcher keeps its own copy of the verb list (importing the CLI would load the contract on every
+  launch) and `coordCliSmoke.mjs` asserts the two agree.
+- **An OpenCode 2 worker turn runs `opencode run --standalone`.** Without it `run` attaches to
+  OpenCode's shared background service, which never read the worker's `OPENCODE_CONFIG`, so the
+  teammate silently had no `coord_*` tools whenever that service was up. 1.x has no such flag; the
+  major comes from `opencode --version`. `coordWorkerSmoke.mjs` pins both.
+- **A caller that omits `provider` is identified, not assumed to be Codex.** The bridge reads the
+  MCP client's name (measured: Claude Code, `codex-mcp-client`, `copilot-cli`, `pi-mcp-<server>`,
+  and OpenCode 2.0.8's bare `cli`); the `coord` CLI reads Claude Code's and Codex's shell markers,
+  which the launcher hands on as `AGENT_VIEWER_CALLER_PROVIDER` before scrubbing them. The CLI binds
+  the directory a command was *typed in*, not `--cwd`, and a `join` never takes a directory bound to
+  another participant of the same run.
+- **`npm run coord:agents:live` is the agent-experience check** (`scripts/coordRealAgentsLive.mjs`):
+  real Codex, Copilot and OpenCode CLIs join a run through the stdio bridge, claim, work and
+  complete with no `provider` argument, and each must end by saying no tool result confused it.
+  It spends a little model usage per agent; `COORD_LIVE_AGENTS` narrows it. With
+  `scripts/coordInteractiveLiveSmoke.mjs` (chat-led teams) it is what to run after changing tool
+  descriptions, results or errors — a smoke proves the shape, only an agent proves it was usable.
+- **`daemon start` uses `.next` only when the build is newer than every file in `app/ lib/
+  components/ bin/`**; otherwise it starts the dev server and says why. In a working checkout an
+  old build silently served the previous code to every agent told to start a daemon.
+- **`coord worker --acp-command "<cmd>"` drives any agent that speaks ACP** (Gemini CLI, Goose, …),
+  not just the two with a built-in adapter. `runAcpProviderTick` already took a command; the worker
+  now passes the user's, records it in the identity file so a bare `--identity` restart keeps it,
+  and holds the worker on ACP whatever its provider says. The command is argv (a command line with
+  simple quoting, or a JSON array — `lib/acpCommand.mjs`, shared with the session pool) and never
+  reaches a shell. Given only a command, the worker joins as provider `acp` (below), so the roster
+  shows it as what it is. `acpCustomAgentSmoke.mjs` runs a whole tick against a hand-written agent.
+- **Command hooks are the user's, never the project's** (`lib/coordinatorCommandHooks.ts`,
+  `<coordinator home>/hooks.json`). The webhooks in `.agent-viewer/hooks.json` can only receive
+  data; a command read from a cloned repository would run its author's code the first time a run
+  finished there. `run` is argv, not a shell string, so event text cannot become syntax; the event
+  arrives on stdin and as `AGENT_VIEWER_HOOK_*`, and a hook is killed after 10s.
+
+#### Coordinated transcripts read as who said what (load-bearing)
+
+A coordinated agent's transcript is mostly text the Coordinator wrote, and raw it
+is a screen of instructions, a run of `[team message <uuid> from … kind=…
+priority=…]` headers, and kilobytes of JSON. `lib/coordinatorTranscript.ts` finds
+those regions and `lib/threading.ts` turns them into two blocks both UIs render.
+
+- **`coordinator_mail`** is teammates' mail: a lead's `--- Coordinator delivery
+  <id> ---` envelope, or a bare header steered into a live turn. It renders as
+  sender · kind and the body; the message id and routing metadata are dropped,
+  and `reply required` / `urgent` are kept because they oblige the reader.
+- **`coordinator_brief`** is the standing instructions at the top of a delivered
+  turn (the lead's, or a teammate's `Continue Coordinator run … as NAME (role).`).
+  It is named and folded, not printed; the web card expands it, the TUI has RAW.
+- **The parser and `formatInbox` are two halves of one wire format.** Change
+  `formatProtocolMailboxMessage` and `MAIL_HEADER_RE` together.
+  `scripts/coordinatorTranscriptSmoke.ts` builds its mail with the real
+  `formatInbox` rather than a typed-out fixture, so it fails when they drift.
+- **A card with these blocks has no `markdownContent`.** An expanded card renders
+  that string *instead of* its lines, and it is built from text blocks alone —
+  it showed the prompt and silently dropped the mail.
+- **A `coord_*` call arrives three ways and reads as one** (`coordinatorCall` in
+  `tui/format.ts`): an MCP tool, a bare tool where the provider drops the server
+  (Codex — arguments under `value`, result the MCP content array itself, typed
+  `inputText`), and a shell command running the session-bound `client.mjs` in a
+  conversation that predates its binding. Its result is digested to
+  `accepted · running · 3 tasks · 2 active · 1 done`.
+- **A call's header and result are a format the renderer reads back.**
+  `coordinatorHeader` writes `verb[ → who][ · qualifier…]  said` for every tool
+  in the contract and `coordinatorResultDigest` the row under it (what came
+  back, then what it obliges: replies owed, unread, plans to review). OpenTUI's
+  `coordinatorHeaderSegments` / `coordinatorResultSegments` colour those by
+  splitting on the two spaces and the ` · `, so change them together. A result
+  cut off by its transport does not parse and reads `running · result cut
+  short`, never the first hundred characters of JSON. `system` tone on any line
+  of a call marks the whole call `▲`, so it is kept for a reply owed or urgent
+  mail.
+- Not covered: the web still shows `coord_*` calls as generic tool cards, and the
+  structured worker preambles (`You are teammate "…" in a coordinated run`) are
+  left as prose because they carry the task itself.
+
+#### Coordinator run rollup, overlap, cancel and merge preview (load-bearing)
+
+What an engineer running several agents needs to see before it goes wrong.
+
+- **`snapshot.rollup` (`lib/coordinatorRollup.ts`) is computed server-side over every task**, not the
+  windowed `snapshot.tasks` — totals over a window shrink as the run ages. Usage is the number the
+  budget gate enforces (`budgetUsageSync`), cached per run on the event cursor because a snapshot is
+  read on every poll and summing usage walks every usage event the run ever logged.
+- **Overlap is judged on a finished task's reported `filesChanged`, not its grant.** A completed task's
+  `paths` are usually wider than what it touched; reporting the grant cries wolf. Whole-tree grants
+  (`**`) never count, failed/cancelled work cannot collide, and two *finished* tasks that touched one
+  file are history (`live: false`), not a risk. The lead sees live overlaps in `actionable.overlapWarnings`
+  on every mutation result — it is the one who can still reassign — and the TUI/web show them under RUN.
+- **Cancel task ≠ interrupt.** `i` stops a turn and the teammate starts again; `⇧X` / "Cancel task"
+  (`cancelInteractiveTask`) ends the task, releases its locks, fails its dependents and frees the
+  teammate. It confirms first, cancels *before* interrupting (an interrupt that ends a turn on an open
+  task is what the sweep re-dispatches), and the confirm line keeps its consequence on a narrow
+  terminal. `coordCancelTaskSmoke.ts`, `teammatesPopoverSmoke.tsx` (110 and 60 columns).
+- **Result review previews the merge** (`previewMergeConflicts`: `git merge-tree --write-tree`, which
+  touches neither checkout) and blocks integration with the conflicting file names instead of letting
+  `mergeWorktreeTask` fail and restore. Exit 1 also means "refused to merge" (unknown ref), so only a
+  tree id on the first line proves git actually merged; otherwise the answer is *unknown*, never clean.
+  It reads the branch's committed tip, so uncommitted worktree changes are not in the preview.
+
+#### Long and wide runs: what is bounded, and how to check (load-bearing)
+
+`npm run coord:scalebench` (`TASKS=300 EVENTS=6000`) reports per-call cost on a big run; it found the
+costs below, and each now has a smoke (`coordEventCostSmoke.ts`, `inboxBoundSmoke.ts`).
+
+- **An event costs the same on any run.** `appendProtocolEvent` rebuilt the run artifacts (every task
+  re-read and re-parsed) and read a whole snapshot back per event. Now telemetry types skip the rebuild
+  (`ARTIFACT_NEUTRAL_EVENTS` — add a type there only if nothing the capsule, phase reports or learning
+  candidates read can change), and in-process callers use `recordProtocolEvent`, which returns nothing;
+  only the HTTP route needs `appendProtocolEvent`'s snapshot. 15.7ms → 2.8ms per event at 160 tasks; a
+  heartbeat or finding is ~0.08ms flat.
+- **Usage totals are memoized** on (newest event rowid, the run's task stamps) — `budgetUsageSync` walked
+  every usage event on each snapshot, dispatch and completion.
+- **Overlap detection is indexed by path.** The pairwise form was 41% of CPU on a 160-task board and ran
+  on every snapshot; `coordRollupSmoke.ts` checks the indexed version against the pairwise definition on
+  300 random boards.
+- **What an LLM reads is bounded by run size, not run age.** `formatInbox` caps a message (6k chars) and a
+  delivery (30k) — reply-required and urgent mail is budgeted first and nothing is dropped silently;
+  `formatTaskBoard` lists every open task and the newest 12 finished ones, collapsing the rest to a count
+  (a finished task an open one depends on stays as a line); `coord_status` drops dispatch policy and
+  strips old finished tasks to an id, title and one-line outcome. Unbounded, each of these grew until it no
+  longer fit in a context window, hours into a run.
+- **A message wakes its recipient once** (`MAX_MAIL_WAKES`). Mail stays undelivered until the
+  recipient reads its inbox, and an undelivered message woke an idle recipient on every 5s sweep —
+  so a teammate that never reads (an agent with no working way to call `coord_*`) was re-run
+  forever: 12 turns and 190k input tokens in 90 seconds, measured with Copilot. The sweep's wake also
+  reset the turn-end nudge counter, which is why `MAX_TURN_NUDGES` never stopped it. Unread mail
+  now rides whatever turn the recipient gets next. A wake is counted when dispatch is attempted,
+  so one that starts no turn is still spent.
+- **The mailbox sweep runs on the TUI's render thread** once the send path has loaded (a composer
+  warm-up loads it), and its queries are synchronous. On a long-lived ledger (41 stale runs, 2,350
+  undelivered messages, nearly all to external participants) each 5s sweep stalled the UI ~100ms.
+  A run this process does not host now skips external recipients' mail in SQL (nothing could
+  steer or wake them), and `deliverMessagesLive` yields every `DELIVERY_YIELD_EVERY` messages.
+- **The open-task cap** (`AGENT_VIEWER_COORD_MAX_OPEN_TASKS`, default 120) stops a runaway lead flooding
+  the board; finished work is not counted. Known gap: a server-managed (non-chat) run whose process
+  restarts is not re-driven — it reads as running with nothing moving. It is not fixed, but it is no longer
+  silent: an unfinished run with no event or agent sign of life for `AGENT_VIEWER_COORD_IDLE_WARN_MINUTES`
+  (30) gets an idle warning under RUN (and counts for attention), so stop it and start again.
+
+#### Frecency, the stash, and the supersede queue (load-bearing)
+
+Three patterns taken from opencode in September 2026 (survey: `docs/opencode-survey-2026-09-12.md`).
+
+- **Frecency ranks file pickers, and it breaks ties rather than winning them.**
+  `lib/tuiFrecency.ts` scores a path as `frequency / (1 + ageInDays)` — frequency
+  alone pins a file you have finished with, recency alone forgets the file you
+  return to every day. It orders the editor's quick-open and the composer's
+  `@`-mention list, and **a typed query must still find a file that has never
+  been opened**: the sort is match quality first, frecency second. The mention
+  worker tiers its matches (exact basename, basename prefix, basename substring,
+  path substring, subsequence) precisely so frecency has a tie to break.
+  **Ranking happens in the worker, before the result limit.** A bare `@` matches
+  every file, so slicing to twelve first would hand back whatever the file walk
+  produced and leave frecency nothing to order — which is the one case where it
+  matters most. The table is JSONL, appended on use and compacted once per
+  process, so a crash costs the last line rather than the history; a key is
+  `frecencyKey(root, relativePath)` with separators normalized, because on
+  Windows `path.resolve` and a string join disagree and the symptom would be
+  every file silently scoring 0.
+- **The composer stash is durable.** `composerStash` was `useState`, so a
+  shelved prompt died with the process — and a prompt is shelved precisely
+  because the user is not ready to send it, which outlives one session. It is
+  written by `commitComposerStash` in the originating interaction and flushed
+  immediately, the same rule the follow-up queue follows, because a stash that
+  does not survive an immediate exit has not survived anything. Both files go
+  through one `createJsonListStore` in `lib/tuiComposerState.ts`: a torn write of
+  either reads back as unparseable JSON, which is indistinguishable from "nothing
+  stored" and silently discards work the user believed was kept.
+- **`tui/opentui/latestWorkerQueue.ts` supersedes, and only an idempotent read
+  may go through it.** A newer request for the same key replaces a pending older
+  one instead of queueing behind it. The shape it exists for is a surface that
+  re-asks the same question on every keystroke: without superseding, a slow
+  answer makes the queue grow while the user types, and every answer but the
+  last is computed and discarded — the worker spends its time on questions
+  nobody is waiting for any more, which is exactly when the one the user *is*
+  waiting for arrives late. A superseded caller is resolved with the newer
+  answer, which is sound only because it answers the same question of newer
+  state. **A dispatched request is never superseded** (it has already been
+  posted; a request arriving during `run` starts a new slot), and a rejecting
+  `run` is reported through `onError` rather than escaping — an unhandled
+  rejection is fatal under Bun, and the smoke caught exactly that.
+- **`supersede` is required, because superseding *drops* a request.** Nothing
+  will ever dispatch it, so an owner whose requests carry a promise must settle
+  it there. Omitting it is not a missing optimization, it is a caller that waits
+  forever with no error and no failing frame — the threading smoke caught it as
+  a test timeout rather than an assertion. A queue whose requests are pure side
+  effects passes an explicit no-op.
+- **`createKeyedWorkerQueue` serializes per key and lets keys run concurrently**
+  — the shape of opencode's `SessionRunCoordinator`. A single global queue would
+  be the wrong trade: two sessions' reads share no state to race over, so
+  serializing them would give up the overlap of their disk I/O for nothing.
+  Idle instances are dropped, or the map grows with every key ever seen, and
+  those keys carry a session id and a display variant.
+
+The composer's mention filter uses the plain queue; `threadingWorkerClient.ts`
+uses the keyed one for `detail`, `warm` and `format`.
+
+- **The key is the whole question, and that is what makes superseding sound.**
+  A superseded caller is handed the replacement's answer, so the key must carry
+  everything that would make the two answers different: the session *and* the
+  display variant for a detail or a warm, plus the threaded array's identity for
+  a format. Answering a `balanced` read with `dense` cards, or a format with
+  another transcript's cards, would render a different number of cards than the
+  caller has messages. The threaded identity is minted per array in a `WeakMap`
+  rather than derived from contents — this runs on every density toggle and the
+  arrays are the transcript.
+- **The delta baseline is captured inside `run`, at the moment of posting.**
+  Capturing it when the caller enqueued would reintroduce exactly the staleness
+  the queue removes: the baseline maps are updated on *response*, so a request
+  that waited behind another would carry a baseline the worker had already
+  superseded.
+- **What this is worth:** the worker handles each message in its own async task,
+  so two reads for one session interleaved there. Both sides guard their
+  baselines with tokens, so an overlap was never *wrong* — it fell back to
+  shipping the whole transcript. On the 10,000-message benchmark in
+  `transcriptDeliverySmoke.ts` that fallback is **42.6MB and a 49.3ms clone**
+  against **5.1KB and 0.007ms** for the suffix it should have sent. The reachable
+  case is a foreground detail landing while a background refresh for the same
+  session is in flight: `refreshSelectedSessionDetail` guards foreground loads
+  against each other and background polls per key, but not one against the other.
+- **`App.tsx` keeps its own coalescing, deliberately.**
+  `foregroundLoadInFlightRef` / `pendingForegroundLoadRef` are the same
+  serialize-and-supersede shape hand-rolled one layer up, and the neighbour
+  prefetch already yields to a foreground open between warms — so prefetch
+  starvation is bounded to one in-flight warm (~6ms), not worth a priority
+  queue. The client-side queue is a backstop for the paths that slip past those
+  guards, not a replacement for them.
+
+#### The desk: a Bloomberg-style workspace (`⌃K b`)
+
+`tui/opentui/DeskView.tsx` (lazy, full-screen, owns every key while open) over the pure
+`tui/opentui/deskModel.ts`. The terminal's vocabulary: a session is a *security* (ticker
+`CLD 3F9A2C`), the selected session is the *loaded* one every panel links to, a function is a
+mnemonic typed on the command line and run with ⏎ (`<GO>`): `MON TOP DES GP WEI MOST ALRT CN HELP`.
+`N <GO>` picks numbered row N (again on the loaded row opens it), anything that names no function
+is a security search, `LAY 1|2|3|4|6` / ⌃L picks the launchpad layout, ⌫ on an empty line is MENU
+(the panel's previous function), Esc is CANCEL, `THEME <GO>` switches the app to `bloomberg-dark`
+or `bloomberg-light` (whichever side it is on).
+
+- **Letters belong to the command line**, so panel navigation is arrows/PgUp/PgDn/Home/End and
+  Tab, never j/k.
+- **Its colours are fixed**, not the app theme's — that is the point of it. The app-wide themes
+  are `bloomberg-dark`/`bloomberg-light`, registered in both theme registries like any other.
+- **Loading is debounced** (`LOAD_DEBOUNCE_MS`): a load is the root's `selectTabSession`, which
+  re-renders the whole app behind the desk, so holding ↓ must not do it per row.
+- **The clock and the tape own their timers** and re-render only themselves; panels repaint on a
+  30s `now` and their inputs. `⌃T` holds the tape.
+- **The loaded transcript counts only once it is the selected session's**
+  (`transcriptSession` equal to `selectedSession`), or DES/GP/CN would describe the previous one.
+- Columns are cell-aware (`deskFit`): an emoji in a title is two cells.
+
+`deskViewSmoke.tsx` checks the model (every layout tiles exactly), drives the component by key and
+reads its painted colours, boots the App in `bloomberg-light` (un-registering it verified to fail),
+and opens/closes the desk through ⌃K b.
+
+#### Chord help is derived from the chord table (load-bearing)
+
+`tui/opentui/chordHelp.ts` builds every description of a prefix chord — the
+pending-chord hint in the status bar, the unknown-key notice, and the overlay —
+from one table per prefix. Taken from opencode's which-key panel, which renders
+from the binding registry rather than from a maintained list.
+
+The problem is drift, not effort. ⌃B was described in two places and ⌃K in two
+more, each a hand-written string, so a chord could be added to the dispatcher and
+stay out of some of its own help — or, worse, a removed chord could go on being
+advertised. `SPLIT_CHORD_HELP` had a partial guard; ⌃K had none, and its command
+ids and labels lived apart, so a renamed command kept its old label.
+`chordHelpSmoke.ts` now asserts both directions for ⌃K against
+`PORTABLE_COMMAND_CHORDS`, which is the dispatcher's own table.
+
+- **A self-revealed panel must not consume the keystroke it is advertising.**
+  Hesitating on a prefix reveals its keys after `CHORD_HELP_REVEAL_MS`; the
+  overlay's dismiss branch sits *above* the chord dispatcher, so a panel that
+  absorbed the next key would mean hesitating changed what that key does. Only a
+  panel the user opened on purpose (`⌃B ?`, the palette) sets `dismissOnKey`, and
+  that is the one that closes on any key — a reference card the user asked for
+  should not leave them hunting for the key that dismisses it.
+  `chordHelpRevealSmoke.tsx` presses an *unbound* key while a revealed panel is
+  up and asserts the dispatcher's notice appears: the panel and the pending chord
+  are both on screen, and which of them owns the next key is invisible in the
+  frame until you press one. Widening the branch to `if (chordHelp)` was verified
+  to fail it.
+- **The hint lists only what the next keystroke can do.** ⌃B's table also
+  documents the keys a *focused pane* takes, which need no prefix; those belong
+  in the overlay as reference and never in the hint.
+- **The hint is one line, and what truncation costs is the escape hatch.** It
+  shows one key per entry (an entry may bind aliases — `% · v` — and spelling all
+  of them out costs more width than the rest of the entry), uses `short` wording,
+  and an entry may opt out with `hint: false`. Entries are **included by
+  default**, so a new chord cannot go silently unadvertised; opting one out is a
+  deliberate decision that it refines a listed key. The smoke pins the rendered
+  width against a 120-column bar and asserts `cancel` and `all keys` survive.
+- **The overlay is budgeted against the composer dock, which draws over it.**
+  The old `height - 8` ignored the dock and clipped the footer — which is where
+  the panel says how to dismiss it, so an overflow note the reader never sees.
+
+#### Streaming markdown renders a block at a time (load-bearing)
+
+`lib/markdownStream.ts` splits a document into top-level blocks so a streaming
+answer re-renders only its tail: `MarkdownBlockView` in `components/MessageItem.tsx`
+is memoized per block, and react-markdown re-parses whatever it is handed, so
+handing it the whole document per delta makes the cost of one token grow with
+everything already written. Measured over 120 deltas: **191ms → 36ms at 1.5KB,
+374ms → 54ms at 4.7KB, 837ms → 104ms at 11.9KB** (5.3x / 6.9x / 8.0x). The
+saving growing with the document is the point.
+
+- **Splitting is only safe where a block means the same thing alone as it does
+  in the document**, and two constructs are document-scoped: a link reference
+  definition (`[1]: https://…`) and a GFM footnote definition both resolve
+  references anywhere in the document. Split apart, the paragraph loses its
+  definition and renders literal bracket text — a silent downgrade from a link,
+  with no error and a result that still looks like markdown. Both bail out to
+  whole-document rendering. Merely *mentioning* `[^` in prose (a regex, say)
+  must not: that would disable the optimization for the whole answer.
+- **The blocks must reassemble into exactly the input.** A `space` token is
+  attached to the preceding block rather than dropped, and the projection
+  verifies the total length before splitting — a lexer that rewrote a `raw`
+  would lose content from the middle of an answer and nothing else would notice.
+- **A finished block's `raw` must be byte-identical across deltas** or nothing
+  memoizes, and keys are positional for the same reason: keying by content would
+  remount the tail on every delta, which is the work this exists to avoid.
+- **The tail block is never marked complete**, even when it currently parses as
+  a finished construct — the next delta may extend it.
+- `scripts/markdownStreamSmoke.ts` compares per-block rendering against
+  whole-document rendering across a corpus, because both outputs look like
+  plausible markdown and only a differential test can tell them apart. Dropping
+  the reference-definition bail-out and dropping the `space` tokens were both
+  verified to fail it.
+
+#### The composer's git indicator is spawn-bound, not CPU-bound (load-bearing)
+
+`fetchGitSummary` runs three `git` commands (`rev-parse`, `status --porcelain -u`, `rev-list
+--walk-reflogs`) behind the composer's branch/dirty indicator. **Measure it in process spawns, not
+milliseconds.** On this repo one poll costs ~26ms wall but only **~4ms of main-thread CPU and under
+1ms of event-loop lag** — the work is in the child processes, on other cores. A CPU profile makes
+this look far worse than it is: `lib/gitNodeProvider.ts`'s node was credited 929.7ms, 562.8ms of
+which came from a *single* sample inside `node:child_process`, and its "645 calls" were 645 samples
+against 18 real spawns. Do not go looking for a render-thread stall here; there isn't one.
+
+What is real is the spawn rate. `tui/opentui/gitSummaryCache.ts` keys by **cwd rather than by
+session**, which is what collapses the waste: the composer effect fires immediately whenever
+`composerWorkingDirectory` changes, so switching between two sessions in the same repository — the
+common case, and the point of tabs — used to re-spawn all three commands per switch against an
+answer milliseconds old. The cache also single-flights, so concurrent readers share one spawn rather
+than thirty. Its TTL is deliberately **shorter than the poll interval**: this deduplicates
+back-to-back readers, it does not slow the poll, and a cache outliving the interval would make the
+working-tree indicator stale on purpose. `peekGitSummaryCached` is not TTL-gated for the opposite
+reason — a stale branch name for the moment before a refresh lands beats a blank one.
+`gitSummaryCacheSmoke.ts` asserts the reuse by timing (a cached read must be far under a real ~26ms
+one), because spawn count has no other observable.
+
+The poll itself backs off while the answer does not change (5s doubling to 30s,
+`COMPOSER_GIT_SUMMARY_IDLE_POLL_MS`), and snaps back to 5s on any change. At a fixed 5s an idle TUI
+spawned three `git` processes every five seconds indefinitely — a fifth of its idle main-thread
+samples — and 90s idle measured 4.56s of CPU with its children against 4.04s with the backoff.
+
+#### Git popover: workspace status, conflicts and scroll margin
+
+Taken from hunk 0.24 (`hunk status`, `scroll_off`, compact rename labels). `lib/gitWorkspaceStatus.ts`
+is the one module both popovers read; it has no Node imports, so client components import its helpers.
+
+- **The Status pane is a workspace compass, and it is one text for both UIs.** `fetchGitPaneContent`
+  pane 1 returns `formatGitWorkspaceStatus`: branch and upstream (zero counters omitted), a paused
+  operation, tracked and untracked groups in words (`modified (staged) · modified (unstaged)`), and
+  sibling worktrees. **No line may start with `+`, `-` or `@@`** — both popovers colour that pane's
+  text by diff prefix.
+- **A sibling that cannot be read is never a clean one.** A `prunable` or `bare` worktree is not
+  read at all, and a status with no `## ` header is `unreadable`. Reads use `--no-optional-locks`
+  (a plain `status` refreshes the index and takes the lock an agent in that worktree may be waiting
+  on), four at a time, capped at `WORKTREE_SIBLING_LIMIT` with the remainder counted.
+- **The paused operation is one spawn**: `git log --no-walk --ignore-missing --format=%S` over the
+  operation heads prints exactly the ones that exist. It rides `GitData.operation`.
+- **An unmerged path is checked before "staged"** (`isConflictEntry`). `UU` has a letter in the
+  staged column, so the tree painted a conflict green and showed one letter; `DD`/`AA` read as a
+  deletion and an addition.
+- **Only a rename or copy has an origin.** ` -> ` is a legal part of any other file name, so
+  `previousPath` is split out only when the status letter says so.
+- **Stepping keeps `DIFF_SCROLL_OFF` rows around the cursor** (`revealDiffScrollTop`), moving the
+  minimum distance. The margin is clamped to half the viewport or the row becomes unreachable, and
+  a wrapped row taller than the viewport shows its top.
+
+`gitWorkspaceStatusSmoke.tsx` builds a real repository with a paused merge, a staged rename and two
+sibling worktrees (one deleted from disk); eight mutations were verified to fail it. Not done: a
+sibling cannot be opened from the pane, and the web file tree does not show rename origins.
+
+#### Asking about code, and a file's history across turns
+
+`lib/selectionAsk.ts` builds every "ask an agent about these lines" prompt — editor `⌃A` then the menu key
+(`⌃A ⏎` for the palette's `Agent:` commands), the Git panel's `?` then one key, and a File History step's `a`. The
+prompt is the instruction, file, 1-based range, history, then the code in a fence longer than any
+backtick run inside it. `why` asks `readTuiLineHistory` (provenance index, then git blame for lines
+no turn accounts for), loaded on demand because provenance opens the search index.
+
+- **A selection that ends at the start of a line does not claim that line.** Claiming it names a
+  range one longer than what was selected. With nothing selected, the caret's line goes.
+- **The editor closes for the composer only when nothing is unsaved**; closing otherwise asks, and
+  confirming discards the buffers. The prompt is already in the composer either way.
+
+`⌃A h` in the editor, or `h` on a file row in ⇧U, opens `FileHistoryPopover` over
+`readFileCheckpointHistory`: one step per interval between consecutive snapshots in which the file
+changed (one `cat-file --batch-check` decides which; only those are diffed). The interval starting at
+a checkpoint is that turn's work plus any hand edits before the next turn, which nothing can separate.
+
+- **Checkpoints now record their worktree, and history skips other worktrees'.** Checkpoint refs
+  are shared by every worktree of a repository, so without this a history interleaves two checkouts.
+  Checkpoints from before this have no worktree and are kept.
+- **`u` reverses one hunk against the file as it is now and refuses when later edits rewrote its
+  lines** — never a fuzzy apply. A created or deleted file is undone with `R` (restore to before the
+  step), because reversing its hunk alone empties the file instead of removing it.
+
+`selectionAskSmoke.tsx` and `fileHistorySmoke.tsx` (a real repository, plus a foreign-worktree
+checkpoint) pin these; six mutations were verified to fail them. `gitDiffContextSmoke.tsx` covers `?`.
+
+#### Processes and logs, and the daily summary
+
+**The surface panel sits beside the reader or under it** (`|` while it is focused, or the palette;
+kept in `tui.json` as `surfacePanelPlacement`). Under the reader it is sized in rows (`+`/`-`, at
+least `SURFACE_PANEL_READER_MIN_ROWS` left to the reader) taken out of `mainContentHeight`, spans the
+reader's width, and the rail runs down beside it. **The main row must not grow back into those rows**
+(`flexGrow` 0 there, a spacer holds them in flow): the reader's frame stretches with its row, so a
+grown row put the transcript's bottom border under the panel. `surfacePanelPlacementSmoke.tsx` checks
+the laid-out frames, which is the only place an overlap shows.
+
+**The panel and its Terminal tab work with the mouse alone** (`surfacePanelMouseSmoke.tsx`): bar
+buttons (under/beside, expand, close), a draggable inner border, clickable process/shell tabs, and
+every hint is a button. Three OpenTUI facts shaped it:
+
+- **A renderable outside its parent's bounds is painted but takes no mouse events.** That is why the
+  under-the-reader panel is laid out in flow in its reserved rows, not positioned out of the main row.
+- **An empty box is not hit-testable, and a drag is captured by whatever is under the pointer at the
+  first motion event.** A one-cell border is left on that first move, so the handle (which redraws the
+  border glyphs to be hittable at all) only starts the resize; a transparent full-screen layer at the
+  root (`surfacePanelResizing`) takes the rest of the drag. Its text is `selectable={false}`, or the
+  release copies a run of `─` to the clipboard.
+- **In a row of `<text>`s each one's leading space is dropped**, so a label built from two texts reads
+  `❯sh`; one text with spans keeps it.
+
+A shell program that asked for the mouse (DECSET 1000/1002/1003, SGR 1006) is sent clicks, drags and
+the wheel (`encodeTerminalMouse`); otherwise the wheel scrolls back, or sends arrows to a full-screen
+program, and a click gives the shell the keyboard.
+
+The surface panel's **Terminal** tab is the Terminal plugin (`plugins/terminal/tui/ProcessPane.tsx`;
+`⌃K l` opens it; the stores stay host code behind `tui/opentui/shell/sdkTerminal.ts`): long-running processes
+and their output. A repository declares them in `.agent-viewer/processes.json`
+(`{ "processes": [{ "name", "command", "cwd" }] }`, comments and trailing commas allowed); without
+one, `processConfig.ts` suggests package.json's `dev`/`start`/`serve`/`watch` scripts (runner chosen
+by lockfile), `docker compose logs -f` and Procfile entries. Suggestions are listed, never started.
+
+- **Processes live in `processStore.ts`, not in the view.** Closing the panel or switching its tab
+  must not kill a dev server; the TUI exiting does (`process.once('exit')`).
+- **Each process is its own group, and stop signals the group** (`detached` + `kill(-pid)`, SIGKILL
+  after 3s). `npm run dev` is three processes deep; signalling the shell left the server on its port.
+- **Output is notified at most every 100ms, and lines are copied per notification, not per chunk.**
+  Only the pane subscribes — never the root. ANSI is stripped and a `\r` keeps the line's last state.
+- **A scrolled-back log is anchored to an absolute line** (dropped lines counted), so arriving
+  output does not drag it; reaching the newest line follows again.
+- `e` hands the newest trace to the composer (`lib/stackTraces.ts`: Node/Bun, Python, JVM, Go, Rust,
+  tsc, Ruby frames, or a `path:line` on an error line), with the project's own frames listed first;
+  `t` only finds it. File:line references are `<a>` links into the editor, through the same
+  `parseTuiLineTokens` the transcript uses.
+
+**`o` opens an interactive shell in the same tab**: a login `$SHELL` on a real PTY (the python3
+`pty.fork` shim, now `lib/ptyBridge.ts` and shared with the web terminal) whose output is parsed by
+`@wterm/core` — the headless emulator the web terminal draws — and painted cell for cell
+(`shellScreen.ts`, `ShellView.tsx`). `cd`, `export`, history, colours, `vim` and `less` work.
+
+- **While a shell has the keyboard it gets every key**, the panel's Escape, ⌃W, ⌃N, ⌃P, ⌃T, `=`
+  and ⇧O included, because a shell needs each one. **⌃] hands the keys back** (telnet's escape;
+  bound by no shell or editor). The pane reports `none | input | terminal` and the root routes on it.
+- **Keys are re-encoded, never forwarded.** The TUI asks its terminal for the kitty keyboard
+  protocol, so a raw ⌃A arrives as `CSI 97;5u`; `lib/terminalKeys.ts` turns name + modifiers back
+  into the legacy xterm bytes a shell reads (DECCKM arrows, xterm modifier params, tilde keys).
+  Pastes are bracketed when the program asked, with any end marker inside the paste removed.
+- **The PTY is the pane's size** (`resizeShell` on every layout change) and device queries are
+  answered by the emulator. The core reports no soft wraps, so text read for traces rejoins a row
+  filled to its last column with the next.
+- Shells live in `shellStore.ts` like processes: hiding the panel keeps them; SIGHUP on TUI exit.
+  The test renderer exits on ⌃C unless told not to (`exitOnCtrlC: false`, as `start.tsx` runs).
+
+`⌃K s` opens `DailySummaryPopover`: what every agent did today, yesterday or this week (`t`/`y`/`w`),
+grouped by repository (`findRepoRoot`, so worktrees join their repository), as the markdown `c`
+copies; `a` drafts a status update in the composer. `lib/dailySummary.ts` groups and formats (no Node
+imports); `lib/dailySummaryReader.ts` reads the index, then per repository `git log --all
+--author=<user.email>`, `git status` and `gh pr list --author @me`.
+
+- **The index now records which user rows are prompts** (`messages.is_prompt`, schema v5). A tool
+  result is a user-role row and only the payload tells them apart. The migration forces a re-sync, so
+  older sessions gain it as they are read again; until then an edit's own `prompt` still names its
+  turn.
+- **A session whose store moved past its last indexed message is reported as not indexed**, never
+  as having done nothing. A `gh` that is missing or logged out is stated, never read as "no PRs".
+- Waiting items come from the attention inbox and are filed under their session's repository, with
+  dirty working trees and open PRs (draft, changes requested, approved but unmerged).
+
+`processPaneSmoke.tsx` and `dailySummarySmoke.tsx` (a real index under a temporary cwd, a real
+repository with a colleague's commit) pin these; seven mutations were verified to fail them.
+`shellPaneSmoke.tsx` drives a real `/bin/sh` through the pane and `shellRoutingSmoke.tsx` through the
+App's key routing with kitty-encoded input.
+
+#### OpenTUI memory patterns (load-bearing)
+
+The TUI's footprint is dominated by **parsed module code across isolates**, not by live objects. A
+Bun `Worker` is a whole JS VM in the same process: it re-imports its entire graph, so anything the
+main isolate and the transcript worker both import is paid for twice. At steady state, live JS is
+~60MB (main) + ~65MB (worker) against a ~400MB physical footprint — the rest is module code, JIT
+output, and allocator arenas.
+
+- **The root's callbacks are `useStableEvent`, never `useCallback`** (`tui/opentui/useStableEvent.ts`).
+  A memoized closure keeps the render scope it was made in, and in the root that scope holds
+  every variable of a 20,000-line component, including that render's `sessionDetail`. Two
+  callbacks recreated at different renders each keep a scope holding the other's older copy, so
+  every past render stays reachable: browsing ~42 sessions retained one transcript per session,
+  heap 1,052MB against 262MB once the ladder was broken (`sidebar-walk`, below). The heap snapshot
+  showed one chain alternating `buildSidebarRow` and `jumpToTranscriptIndex` 42 times. A
+  `useStableEvent` wrapper is made once outside the component's scope and keeps only the latest
+  closure. `useMemo` values that hold closures or JSX can form the same ladder.
+  `INPUT_FIXTURE_DISTINCT=1 INPUT_MEMORY=1 INPUT_SCENARIO=sidebar-walk` measures it (every session
+  its own transcript, which the harness keeps none of), and `INPUT_HEAP_SNAPSHOT=<file>` writes a
+  V8-format snapshot for retainer paths.
+- **What a keystroke re-renders is countable**: `INPUT_COUNT_RENDERS=1` (with
+  `INPUT_COUNT_HOOKS=OpenTuiWorkspace` and `INPUT_COUNT_TRACE=n`) prints commits per press, renders
+  per component and which root state changed in each commit. A window's `j` was three commits,
+  one of them the whole root, because the cursor was mirrored into root state that nothing drew;
+  the cursor now lives in the workspace runtime unsubscribed (`readTranscriptCursorKey`). The
+  harness also turns off React's development performance tracks (`INPUT_REACT_TRACKS=1` keeps
+  them): they diffed every changed prop object and were half of every profile.
+- **Idle polling is the app's largest allocator, and allocation rate is what a user sees as
+  "it's using a gigabyte".** A JS engine keeps its allocator arenas mapped long after the garbage in
+  them is collected: a full `Bun.gc(true)` drops the physical footprint from 180MB to 60MB and moves
+  RSS *not at all*. So resident size tracks the high-water mark of churn, not what is live, and the
+  only way down is to allocate less. Both steady-state polls therefore ask what a file **is** before
+  reading what it **says**:
+  `lib/claudeSessionReads.ts` gates the open session's 2s re-read on size + mtime + subagent set
+  (3ms and no measurable allocation, against ~45MB to parse a 14.7MB transcript), and
+  `lib/claudeSessionListCache.ts` gates the 5s sidebar list on one stat per transcript (601 files in
+  1-2ms, against ~300ms and ~44MB to re-derive a 200-session page — listing is not a metadata
+  lookup, the SDK derives every entry's summary and first prompt from the transcript itself).
+  One minute of idle polling with a session open: **+291MB RSS and 2.1s of CPU before, +45MB and
+  0.35s after.** Each token is a gate, never a source — compared only against a previous token, and
+  any doubt returns null and re-derives. **Before adding a poll, measure what it allocates**, and
+  keep any cache's expiry rare: a 15s TTL on the list cache was itself worth a 45MB burst every
+  fourth poll, which is the cost it existed to avoid.
+- **The Claude list is patched, not re-derived, when only some transcripts changed**
+  (`readClaudeListPage`). A gate that answers only "changed or not" re-derives on almost every
+  poll in real use: a running turn writes its transcript, and so do transcripts the list never shows
+  (this very session's, a claude-mem observer's) — measured here, the full derive ran on every 5s
+  poll. The sweep keeps per-file stamps; a changed transcript on the page is re-read with
+  `getSessionInfo` (0 differences from the list entry over 157 sessions) and re-sorted in the SDK's
+  order (mtime, then id descending); a changed transcript off the page is asked whether it now has
+  an entry at all (the SDK drops one whose 64KB head/tail yields nothing to show, and that flips as a
+  transcript grows); anything else — added, removed, `continued-in` — re-derives. The page and its
+  sweep are kept in `.agent-viewer-data/claude-session-list.json`, so a new process patches the
+  last one's page: boot listing 237ms / worker heap 63MB → 51ms / 8MB, a live poll 208ms → 12ms.
+  An entry the SDK lists *without* a first prompt must patch too — the first version required one
+  and silently re-derived for exactly the big sessions it was for. `claudeListPatchSmoke.ts` compares
+  every step with the SDK's own `listSessions` and counts derives (seven mutations verified).
+- **`AGENT_VIEWER_TUI_MEM_RAW=1` measures churn; `AGENT_VIEWER_TUI_MEM=1` measures retention.** Both
+  live in `tui/opentui/workerHeapProbe.ts` and both write to `AGENT_VIEWER_TUI_MEM_LOG`. The
+  retention probe collects before reading, so it can look perfectly flat while resident size climbs
+  all night; the raw sampler does not, so a repeating step of the same size in its `objs` column is
+  one periodic job, which is how the list cache's expiry was caught.
+- **`tui/opentui/memPhases.sh` attributes a phase; `memRun.sh` reports one aggregate peak.** memRun
+  hid that the ratchet was on the list path rather than in any one feature. memPhases drives a
+  scripted `label:keys:reps:dwell` sequence (`PHASES=`) and prints footprint and RSS after each, so
+  "analytics costs 55MB" and "nothing is released when it closes" are separate, visible facts. Run
+  it with `MEM_CWD=$PWD` — in an empty temp dir the git, editor and composer phases do nothing.
+- **Measure physical footprint, not RSS** — except when chasing churn, where RSS is the point
+  (above). RSS counts the resident slice of Bun's own ~2GB binary,
+  which is shared and file-backed; it swamps the app's real cost and swings 100MB between identical
+  runs. `npm run tui:memrun` reports `vmmap`'s physical footprint, sampled throughout the run
+  (a single reading lands wherever the collector happened to leave the heap and varies ~2x).
+  `npm run tui:memperf` reports the same split under the test renderer, plus per-isolate JS heap;
+  `AGENT_VIEWER_TUI_MEM=1` turns on `tui/opentui/workerHeapProbe.ts`, which is the only way to
+  attribute memory to a specific VM.
+- **The scenario decides what you measure.** Sidebar navigation alone never fetches session
+  metadata; you have to Tab into the reader (`KEYS=$'j\t'`) before that path runs at all. A memory
+  A/B against the wrong key sequence reports "no change" for a change worth 95MB.
+- **A provider SDK must not load until that provider is used.** `lib/adapters/registry.ts` resolves
+  adapters by dynamic import for exactly this reason — importing all eight cost ~88MB. The same rule
+  applies to anything in `lib/sessionBackend.ts`'s graph: `claudePool` is loaded on demand behind
+  `ensureClaudePool()` because it is the *send* path, and the transcript worker never sends a turn
+  yet was paying ~31MB to hold a pool it could not use. Its call sites use the synchronous
+  `claudePoolModule()` accessor, which **throws** rather than loading, so a use that is not behind a
+  send-path entry point is loud instead of a stall on a hot path.
+- **Don't spend a whole VM on a small answer.** Session model + context usage had its own Worker for
+  isolation from a read that can block for over a second. That Worker re-imported the full provider
+  graph — ~95MB of RSS for a model badge. It now runs in the transcript worker
+  (`kind: 'metadata'`), which already holds that graph. The isolation survives because the read is
+  I/O-bound: it awaits a provider round-trip and yields immediately, so it interleaves with a detail
+  read rather than queueing behind one. That is what separates it from a `warm` prefetch, which is
+  CPU-bound and must stay off the critical path.
+- **Evict every per-session cache together.** `lastFormattedByKey` (in both the worker and its
+  client) is keyed by `${sessionKey}|${cardsVariant}`, not by session, so evicting a session from
+  the threading cache used to leave its threaded transcript *and* its card array pinned. With four
+  variants per session the worker could hold 24 whole transcripts while intending to hold 6.
+  `dropLastFormattedForSession` runs alongside every threading-cache eviction; a new per-session
+  cache must join it.
+- **Load a rare renderer on demand.** `beautiful-mermaid` costs ~21MB to evaluate and `tui/format.ts`
+  is imported by both TUIs *and* the transcript worker. It is now behind
+  `ensureTuiMermaidRenderer()`, which the worker awaits only for a transcript that actually contains
+  a Mermaid fence (`textNeedsTuiMermaid`); formatting itself stays synchronous. The legacy Ink TUI
+  bumps a `mermaidEpoch` to re-run its memo once the renderer resolves.
+- **Overlays load when first opened** (`tui/opentui/lazyComponent.tsx`). The root imported every
+  popover, so Shiki (via `@pierre/diffs`), zod (via the review store) and the editor were evaluated
+  on the render thread before the first frame: the App graph was ~150ms and 46MB, now ~65ms and
+  32MB. **Not `React.lazy`**: React 19 throttles revealing Suspense content by ~300ms, so every first
+  open waited on a timer for a module that arrives in milliseconds (appSmoke caught it). Transcript
+  diff cards still need a patch parser and a file order at once; `tui/opentui/pierreLight.ts` loads
+  just those files from beside the packages' entry points (~8MB against ~23MB), falls back to the
+  entry points if a release moves them, and `pierreLightSmoke.ts` asserts it did not fall back and
+  that the order matches `prepareFileTreeInput`. **It loads synchronously** (`require` of ESM): a
+  top-level await there made the Git highlight worker drop the messages posted while its module was
+  still evaluating. Highlighting imports the full package on demand.
+- **Measure memory A/B on a frozen store, interleaved, against a worktree of HEAD.** The live corpus
+  changes under you (other agents create sessions, the open one grows), and run-to-run noise was
+  ±40MB — larger than most changes. Copy `~/.claude/projects` (plus `settings.json`) somewhere, point
+  `CLAUDE_CONFIG_DIR` at it, reset the cwd's `.agent-viewer-data` from a fixture before each run, and
+  alternate base/new. On that setup this round measured settled footprint 236-244MB → 180-192MB.
+- **`memPhases.sh` measures the newest TUI it finds** (`pgrep -n`). With the user's own TUI open it
+  used to measure that one, which produced a run where the old build looked 30MB *smaller*. Final
+  frozen-store A/B for this round (three interleaved pairs, base = the commit before it): boot
+  275-281 → 211-221MB, browse 242-251 → 187-192MB, git 270-285 → 214-225MB, settled 259-267 →
+  211-215MB, and the analytics-close spike (290MB) gone.
+- **Two things that look like levers and are not:** a full `Bun.gc(true)` in both isolates frees
+  nothing measurable from the settled footprint (the retained arena is high-water, not garbage), and
+  `--smol` changes nothing either. JSC's wasm tier flags (`BUN_JSC_useBBQJIT=0`) do shrink the
+  tree-sitter grammars (~12MB), but Bun documents `BUN_JSC_*` as an unstable debugging API.
+- **Do not set `NODE_ENV` for the TUI.** Bun leaves it unset, which costs React's development
+  build — an `Error` allocated per JSX element for owner stacks, ~6,000 per session opened — and
+  defaulting the spawn in `bin/agent-viewer.mjs` to `NODE_ENV=production` did buy that back
+  (~27MB peak / ~60MB settled, plus the churn). It also broke running the TUI, because `NODE_ENV`
+  is not a React flag: every other module the app and its dependencies load reads it too. It has
+  been removed from both `bin/agent-viewer.mjs` and `npm run tui`. **React's production build is
+  now reclaimed by a mechanism scoped to React alone:** `tui/opentui/reactProduction.ts` is a Bun
+  runtime plugin that rewrites only the `react`, `react-reconciler` and `scheduler` entry shims to
+  their production builds, and maps `jsxDEV` (which Bun emits, and React's production dev-runtime
+  leaves undefined) onto the production `jsx`. It must run before anything imports React, so
+  `main.tsx` installs it and then dynamically imports `start.tsx`. Measured on real sessions:
+  boot footprint −27 to −63MB, browse −30 to −60MB, main-isolate heap peak ~120MB → ~80MB.
+  Test-renderer smokes and harnesses import `App.tsx` directly and stay on the development build —
+  `act()` does not exist in production React. `AGENT_VIEWER_TUI_REACT_DEV=1` opts out.
+- **Keep the send path out of read-path modules.** `lib/adapters/claude.ts` is a read adapter and
+  was importing `claudePool` for a single `peekClaudeSession` — 30MB of send-path pool in every
+  isolate that reads a session, the transcript worker included. It now asks through
+  `lib/claudePoolHandle.ts`, which **is the only module that imports the pool**. That handle's
+  read-path answer is exact rather than approximate: a warm entry cannot exist unless the pool has
+  been loaded, because only the send path creates one and the send path loads it — so "not loaded"
+  and "no warm entry" are the same answer, and the caller's existing cold path is correct. Don't
+  reintroduce a direct `import … from './claudePool'`; go through the handle.
+- **This graph is cycle-laden, so single-module deferrals measure as zero.** `lib/agentCoordination.ts`
+  imports `lib/sessionBackend.ts`, which imports every provider's client, which import the
+  coordination tools — so almost any one module, imported alone, drags in nearly the whole layer.
+  Three separate deferrals were measured and abandoned because of it: the Claude Agent SDK, the
+  coordination SDK tools, and the non-active providers' clients each have a **marginal cost of
+  ~0.1MB** inside the full graph, despite costing 30-57MB in isolation. The costs only separate when
+  a whole class is excluded at once: with the other providers' clients out, the Claude SDK is 29.5MB
+  and zod/typebox (via `agentCoordinationSdkTools`) is 15.5MB. **Always measure the marginal cost in
+  the real graph before deferring anything here** — an isolated `import` number will lie to you.
+- **The read path is its own module, and the send path loads on demand.**
+  `lib/sessionReads.ts` holds every adapter-routed read (list, info, title/tag,
+  delete, transcript window, subagents, models, composer options, slash commands,
+  diagnostics) plus the shared tail each read ends with — provider-instance
+  provenance, inbox ordering, the search-index mirror, and `windowForParams`.
+  **Nothing in it may import `lib/sessionBackend.ts`, a provider client, or a
+  provider SDK**; adapters load lazily, so a process materializes only the
+  providers it talks to. `lib/tui/reads.ts` is the TUI's three read wrappers over
+  it (plus the `--attach` HTTP path). `sessionBackend.ts` and `lib/tui/service.ts`
+  re-export both, so existing callers are unchanged.
+
+  This is what lets the two isolates stop paying for each other's work:
+  `tui/opentui/threadingWorker.ts` imports `lib/tui/reads.ts` rather than
+  `lib/tui/service.ts` (72MB → 16MB before its adapter loads), and `service.ts`
+  reaches `sessionBackend` and `agentCoordination` only through `sendPath()` /
+  `coordination()` loaders, so the main isolate boots without the send path at
+  all. Measured on a browse-only run: peak footprint 547MB → 372MB.
+
+  The send path arrives on first use — composer prewarm, a turn, an interrupt —
+  and costs one ~94ms import, off the keystroke path. Keep new send-path calls in
+  `service.ts` behind `sendPath()`; a static import there silently restores the
+  whole graph. `subscribeTuiProtocolRunChanges` is the one synchronous caller: it
+  must return an unsubscribe immediately, so it subscribes once the loader
+  resolves and its disposer cancels a subscription still in flight.
+
+- **A deferral is only worth what its callers respect.** The live-turn registry
+  read (`lib/sessionActivity.ts`) describes turns but is squarely on the *read*
+  path: the TUI polls it from boot, every few seconds, to drive live-turn
+  reattach and the attention inbox. While it lived in `sessionBackend.ts` that
+  poll loaded the whole send path within seconds of startup, so a read-only
+  session paid the composer's footprint anyway and the `sendPath()` deferral
+  bought nothing. It now answers from `lib/sessionRuntime.ts` and
+  `lib/viewerAttention.ts` alone; `sessionBackend` registers a reader for the
+  pending-prompt/permission payloads, which are its own state, and until it does
+  there are none — exact, not approximate, because nothing can be pending before
+  a turn has run. Browsing now never loads the send path at all (verified by
+  tracing the loader), worth ~35MB settled on top of the split.
+
+  **When adding a poll or a boot-time read, check what it pulls.** One
+  `sendPath()` call on a timer undoes the whole thing, silently.
+
+### Remote access
+
+Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two
+credential kinds that are deliberately different:
+
+- A **pairing token** is what the QR carries: single-use, ~10 minute TTL, stored in plaintext so the
+  popover can re-render the same code while it is live. It rides in the URL **hash**
+  (`/pair#token=…`, `app/pair/page.tsx`) so it never reaches the server or any access log.
+- A **device session secret** is what a paired device keeps. It is returned exactly once by
+  `POST /api/remote/handshake` as an httpOnly cookie (`<sessionId>.<secret>`) and persisted only as
+  a SHA-256 hash, so the state file cannot be replayed as a device. One session per device, so
+  revoking one phone leaves the others paired.
+
+`proxy.ts` calls `evaluateRequestTrust()` and enforces two scopes — `full` and `read-only`. Keep it
+at two: a scope set can widen later, it cannot shrink.
+
+**What read-only may reach is declared per route+method in `lib/routeScopes.ts`, not inferred from
+the HTTP method.** The method is a proxy for intent and gets it wrong both ways: `POST
+/api/sessions/project/messages` is a pure read (so a read-only phone could not load the project
+feed), and `GET /api/remote-access` returns the live pairing token (so a read-only device could mint
+itself a full-scope credential). Anything undeclared is `write`, so a new route fails closed, and
+`npm run routes:smoke` asserts every route file and every method it exports appears in the table —
+the same anti-drift pairing as `CAPABILITY_METHODS` in `lib/adapters/registry.ts`. Where patterns
+overlap (`/api/sessions/running` vs `/api/sessions/[sessionId]`), the one with more literal segments
+wins.
+
+State files under `.agent-viewer-data/` that hold credentials are written `0600` via temp-and-rename:
+`remote-access.json` carries a live plaintext pairing token, and a torn write would leave
+unparseable JSON, which reads as "no state" and silently unpairs every device.
+
+**`lib/remoteAuth.ts` and `lib/remoteEndpoints.ts` must not cache their state files in module
+scope** (load-bearing). Next gives `proxy.ts` and the route handlers *separate module instances*, so
+a cache in one never sees writes made by the other — an earlier version let a revoked device keep
+working because the proxy's copy was stale. Reads only happen for genuinely remote requests; local
+callers short-circuit before touching disk.
+
+`lib/remoteEndpoints.ts` enumerates every interface and tags it `loopback | lan | private | tunnel`,
+persisting the user's default **by kind, not by literal address** — a remembered IP stops matching
+the moment DHCP hands out a new lease. `lib/tailscale.ts` is an opt-in *endpoint provider* on top of
+that, not a new connection kind: tailnet addresses become extra `listAdvertisedEndpoints()` entries
+and pair through the ordinary bearer path. A missing or logged-out Tailscale reports
+`available`/`running` false and is never an error.
+
+Upgrade path: the pre-per-device state file (`{ enabled, token, createdAt }`) migrates on read into
+one device session with a fixed id, so already-paired devices keep working rather than being
+silently signed out.
+
+### Other machines' teams (`agent-viewer machines`)
+
+The TUI's coordinator rail can list other machines' Coordinator teams beside this one's — herdr's
+combined agent list across machines. `agent-viewer machines add <name> <pairing url>` redeems a
+pairing URL from `agent-viewer pair --scope read-only` run on the other machine, once, for the same
+per-device credential a phone gets (so the other machine lists and can revoke it); it is stored in
+`.agent-viewer-data/machines.json`, 0600 via temp-and-rename, and never printed. `lib/machines.mjs`
+is the store (plain JS: the bin CLI shares it), `lib/tui/machines.ts` the read side.
+
+- **A machine never holds up the local list.** Each has its own feed with its own deadline
+  (`MACHINE_READ_TIMEOUT_MS`), separate from the local refresh and from the others; a failed read
+  keeps the last good roster and says why on the machine's heading (herdr #4234). An unreadable
+  machine is shown under every filter — dropping it would read as "nobody there needs you".
+- **Run and agent ids are only unique within one ledger**, so remote entry keys are scoped by
+  machine name. Enter on a remote agent says where it runs rather than opening a transcript this
+  process cannot read.
+- Machines are read at feed start; one added while the TUI runs appears after a restart.
+  `scripts/machinesSmoke.ts` runs against a fake daemon that enforces the credential.
+
+### Session lifecycle and linked pull requests
+
+`lib/sessionInbox.ts` owns `pin | unpin | settle | reopen | snooze | unsnooze` plus
+`link-pr | unlink-pr`, stored in `.agent-viewer-data/session-inbox.json`. A session linked to a pull
+request settles itself when that PR merges, so finished work leaves the active list on its own.
+
+`lib/linkedPullRequests.ts` runs that sweep: throttled process-wide, batched per repo, and
+**fire-and-forget off the sessions-list route, never inside it** — resolving PR state shells out to
+`gh`, which must not sit in the path of a 5s sidebar refresh. Settling is one-shot (it fires on the
+transition into `MERGED`), so deliberately reopening a settled session is not undone on the next
+sweep. A missing or logged-out `gh` yields no state at all and is never an error.
+
+### Local data
+
+`.agent-viewer-data/` (gitignored) stores per-provider local-only state: tags, title overrides, selected provider. Do not commit it; do not expect it to exist on first run.
+
+### Stack notes
+
+- Tailwind v4 + shadcn UI (`components/ui/`); `components.json` is the registry config — use `npx shadcn add <component>` rather than hand-writing.
+- React 19 with View Transitions (stable `ViewTransition` from `'react'`, used directly in `components/RouteTransition.tsx`/`TabBar.tsx`/`app/page.tsx` — no `next.config.ts` flag needed as of Next 16.3, which dropped `experimental.viewTransition`).
+- Fonts: Oxanium (display), IBM Plex Sans (body), IBM Plex Mono (code), self-hosted from `app/fonts/`
+  under their own family names (`@font-face` at the top of `globals.css`, Google's subsets and
+  unicode ranges). They were a render-blocking `@import` from fonts.googleapis.com, which held the
+  app's scripts and first API calls behind a third-party stylesheet (~0.5s here; a timeout with no
+  network). The optional render fonts are `next/font` with `preload: false`, since they apply only
+  once picked. `lib/export.ts` keeps the remote import on purpose: an exported HTML file has no
+  `app/fonts` to point at.
+- TypeScript path alias: `@/*` → repo root.
+
+## Working with the large files
+
+A handful of files dominate the codebase. **Don't `Read` these without `offset`/`limit`** — `Grep` for the symbol first to find a line number, then read a 100–200 line window around it.
+
+| File | Lines | What lives there |
+|---|---:|---|
+| `tui/opentui/App.tsx` | ~6700 | OpenTUI root: `OpenTuiApp` and the `OpenTuiWorkspace` composition root — it calls the state hooks, wires events/effects/memos to their extracted implementations, and returns the JSX shell. Domain code lives in `tui/opentui/app/` (below) |
+| `tui/opentui/app/*` | ~26,000 total | Everything extracted from App.tsx, ~110 modules: top level (`TranscriptCard.tsx`, `SplitTranscriptPane.tsx`, `TranscriptWindowBody.tsx`, `transcriptRows.ts`, `liveStream.ts`, `inlineText.tsx`, `clipboard.ts`, `themes.ts`, `commands.ts`, `types.ts`, …); `keys/` (the key handler, one module per group of branches, called in order from `useKeyboard`); `overlays/` (overlay and chrome components); `actions/` (`sendComposerMessage`, `commandPalette`, `windows`, `sessionData`, …); `effects/`; `derived/` (memos and render-time values); `state/` and `slices/` (custom hooks holding runs of `useState`/`useRef`/event/memo declarations) |
+| `components/MessageView.tsx` | ~2480 | Web timeline root: `MessageViewInner` wires state hooks, the virtual-scroll handlers (`handleTimelineScroll`, row measurement — kept inline, they run per scroll event) and the JSX shell. The rest lives in `components/message-view/` (below) |
+| `components/message-view/*` | ~9,000 total | Extracted from MessageView.tsx: `types.ts`, `constants.ts`, `liveStream.ts`, `heightEstimate.ts`, `timelineRows.ts`, row/card components (`TimelineMessageRow`, `VirtualTimelineRow`, `PlanApprovalCard`, `AskUserQuestionPicker`), the big JSX blocks (`ComposerShell`, `TimelineBody`, `MessageViewTopBar`), `actions/` (`sendMessage`, composer, permissions, session actions), `effects/`, and `slices/` (hook groups). Same context-object pattern and pitfalls as `tui/opentui/app/` |
+| `components/MessageItem.tsx` | ~6750 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
+| `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
+| `lib/extensions/providers/claude/runtime.ts` | ~2230 | Claude send path (pool turns, actions, fork/rewind); codex/copilot/opencode/pi runtimes sit beside it |
+| `components/SessionList.tsx` | ~2330 | Sidebar: project grouping, search, tag filters, collapsible groups |
+| `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
+| `plugins/git/web/GitPopover.tsx` | ~2370 | Web Git diff/branch view (Git plugin) |
+| `plugins/git/tui/GitPopover.tsx` | ~2360 | OpenTUI Git review (Git plugin) |
+| `plugins/editor/tui/EditorPopover.tsx` | ~5510 | Project editor: explorer, buffers, LSP, completion, search, highlighting, key handling |
+| `plugins/analytics/tui/AnalyticsView.tsx` | ~1200 | OpenTUI analytics overlay (separate impl from the web one) |
+| `plugins/analytics/web/AnalyticsView.tsx` | ~1240 | Recharts analytics |
+| `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |
+| `app/globals.css` | ~1000 | All ~30 themes' CSS vars + base styles (each `[data-theme="…"]` block is contiguous) |
+| `tui/format.ts` | ~2915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
+| `tui/theme.ts` | ~990 | LIGHT/DARK/CYBER palettes + `getProviderAccent` |
+
+**How the component was split (and how to keep it split).** Each extracted event, effect, memo, key branch group and overlay takes a context object holding exactly the variables it used from `OpenTuiWorkspace`; the call site rebuilds that object from the current render's closure, so semantics match the inline code. Three things are not safe to move blindly: (1) a **memo or render-time value** whose callbacks reach a variable declared *later* in the component — building the context object reads it eagerly and throws a TDZ `ReferenceError` on first render (`pluginServices` stayed inline for this reason); (2) a **hook run** with the same problem; (3) **narrowing** — a prop typed from a variable that control flow had narrowed inside the original block must be passed with `!`/`as` at the call site. Typechecks do not catch (1) and (2): run a boot smoke (`composerStatusRowSmoke`) after every move. Cost measured on the full split: JS heap about +13% (more modules and context objects), tab-switch p95 about +1.5ms; composer typing and root render counts are unchanged.
+
+`tui/opentui/app/` modules must never import `App.tsx` (no cycles). Module singletons (`perf.ts` render counter, `transcriptStyle.tsx` turn-summary opener, `diffCache.ts`, `clipboard.ts`) live in exactly one module and are written through functions (`noteRootRender`, `registerTurnSummaryOpener`), because an importer cannot assign to another module's `let`. Smokes still import a few names from `./App`, which re-exports them.
+
+Recommended access patterns:
+
+- Tool card rendering for tool `X` → `Grep "X" components/MessageItem.tsx` then read the matched range.
+- Provider X behavior in the backend → `lib/extensions/providers/X/runtime.ts` (send) and `lib/adapters/X.ts` (read).
+- A theme variable → `Grep "--<var>" app/globals.css`; each theme block is contiguous.
+- OpenTUI key handling, scrollbox, or memos → `Grep` for the keyword in `tui/opentui/App.tsx` (`useKeyboard`, `cardDisplayData`, `scrollbox`, `followTail`, `setSessionDetail`).
+- `Explore` agent is worth it for cross-file searches that would otherwise need 3+ Greps; for a single known symbol, just Grep directly.
+
+Also: never `Read` `package-lock.json` (~573 KB), `pnpm-lock.yaml` (~360 KB), or `bun.lock` (~248 KB) directly — `grep` them for the package name instead.
+
+## Common changes — where to start
+
+Concrete recipes for typical asks. Each lists every file you usually need to touch.
+
+- **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
+- **Add a provider** → `npm run providers:scaffold -- <id> "<Name>"`, then implement its `manifest.ts`, `adapter.ts` (read path) and `runtime.ts` (send path) under `lib/extensions/providers/<id>/` — see `docs/provider-extensions.md`. `AgentProvider` is inferred from the catalog; no root, palette or backend switch needs an entry. Verify with `npm run providers:extensions:smoke` and `npm run adapters:smoke`.
+- **Add a feature plugin** → `plugins/<id>/manifest.ts` (metadata only: surfaces, commands, services), one line in `lib/plugins/catalog.ts`, and one lazy loader per renderer in `tui/opentui/shell/pluginViews.ts` / `components/shell/pluginViews.ts`; views live in `plugins/<id>/{tui,web}/` and reach the host only through `tui/opentui/shell/sdk*.ts` / `components/shell/`. No root switch, palette entry or window-kind union changes. It appears in the plugin manager automatically. Verify with `npm run plugins:smoke` (the boundary check fails on a root, provider or cross-plugin import). See `docs/composable-plugin-architecture-plan.md`.
+- **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
+- **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
+- **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).
+- **Add a session-level API action** → new folder under `app/api/sessions/[sessionId]/<action>/route.ts`; add a host entry point on `lib/sessionBackend.ts` that dispatches to a `ProviderRuntime` method (`lib/extensions/providers/types.ts`), implemented per extension; reflect via a `SessionCapabilities` flag in `lib/provider.ts` if the UI gates it; thread it through `lib/tui/service.ts` if the TUIs need it too.
+- **Touch persistent search behavior** → `lib/sessionPersistence.ts` (SQL + aggregation), then the routes under `app/api/session-index/`. Don't import `node:sqlite` statically — use the existing `(0, eval)('import("node:sqlite")')` indirection.
+- **Add an OpenTUI keybinding or modal** → `tui/opentui/App.tsx`; grep for `useKeyboard`. Heavy work belongs in a new `tui/opentui/<thing>Worker.ts` + `<thing>WorkerClient.ts` pair, not on the render thread.
+
+- **Handle a new Claude SDK message type** → `lib/claudeMapper.ts` (`normalizeSystemMessage` for `type:'system'` subtypes, `normalizeClaudeEventAsSystem` for top-level event types — the live-stream path passes the record flat, the history path nests it under `.message`, so both shapes must enrich); then the accent color + badges in `components/MessageItem.tsx`'s `ClaudeSystemCard`, and both `formatBlock`/`formatBlockExpanded` in `tui/format.ts`. Pin it in `scripts/claudeSdkSurfaceSmoke.ts`.
+
+Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner, but there are smoke suites: `npm run composer:smoke` (fast, no network), `npm run routes:smoke` (asserts the remote-access scope table covers every API route), `npm run adapters:smoke` (drives every provider's read path against your real local sessions; providers with no local sessions report SKIP), and `npm run tui:smoke` (slow, spawns real CLIs).

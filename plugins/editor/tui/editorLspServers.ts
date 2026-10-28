@@ -1,0 +1,339 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, isAbsolute, join, parse, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+export type EditorLspServerSpec = { command: string; args: string[]; name: string }
+
+const moduleRequire = createRequire(import.meta.url)
+
+function typescriptLspCommand(): EditorLspServerSpec[] {
+  const packagedCommand = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
+  const native = (command: string): EditorLspServerSpec => ({ command, args: ['--lsp', '--stdio'], name: 'TypeScript 7' })
+  if (packagedCommand) return [native(packagedCommand)]
+  const specs: EditorLspServerSpec[] = []
+  try {
+    const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
+    const packagePath = moduleRequire.resolve(platformPackage)
+    specs.push(native(join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')))
+  } catch { /* the native server is not installed for this platform */ }
+  // Bare `tsc` is not a fallback: TypeScript 5's compiler has no `--lsp`, so it
+  // would spawn, reject the flags and die. The community server is the real
+  // second choice, and it is what most machines already have.
+  specs.push({ command: 'typescript-language-server', args: ['--stdio'], name: 'typescript-language-server' })
+  return specs
+}
+
+const TYPESCRIPT_FILETYPES = new Set(['javascript', 'javascriptreact', 'typescript', 'typescriptreact'])
+
+/**
+ * Built-in servers per filetype, in preference order. A filetype may list
+ * several: the first one actually installed wins, so a machine with basedpyright
+ * and one with pylsp both work with no configuration.
+ */
+const SERVER_BY_FILETYPE: Readonly<Record<string, readonly EditorLspServerSpec[]>> = {
+  bash: [{ command: 'bash-language-server', args: ['start'], name: 'bash-language-server' }],
+  c: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
+  clojure: [{ command: 'clojure-lsp', args: [], name: 'clojure-lsp' }],
+  cpp: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
+  csharp: [{ command: 'roslyn-language-server', args: ['--stdio'], name: 'Roslyn' }],
+  css: [{ command: 'vscode-css-language-server', args: ['--stdio'], name: 'css-language-server' }],
+  dart: [{ command: 'dart', args: ['language-server', '--protocol=lsp'], name: 'Dart' }],
+  dockerfile: [{ command: 'docker-langserver', args: ['--stdio'], name: 'dockerfile-language-server' }],
+  elixir: [
+    { command: 'elixir-ls', args: [], name: 'ElixirLS' },
+    { command: 'lexical', args: [], name: 'Lexical' },
+  ],
+  elm: [{ command: 'elm-language-server', args: [], name: 'elm-language-server' }],
+  erlang: [{ command: 'erlang_ls', args: [], name: 'erlang_ls' }],
+  go: [{ command: 'gopls', args: [], name: 'gopls' }],
+  graphql: [{ command: 'graphql-lsp', args: ['server', '-m', 'stream'], name: 'graphql-language-service' }],
+  haskell: [{ command: 'haskell-language-server-wrapper', args: ['--lsp'], name: 'haskell-language-server' }],
+  html: [{ command: 'vscode-html-language-server', args: ['--stdio'], name: 'html-language-server' }],
+  java: [
+    { command: 'jdtls', args: [], name: 'Eclipse JDT LS' },
+    { command: 'java-language-server', args: [], name: 'java-language-server' },
+  ],
+  json: [{ command: 'vscode-json-language-server', args: ['--stdio'], name: 'json-language-server' }],
+  julia: [{ command: 'julia-lsp', args: [], name: 'julia-lsp' }],
+  kotlin: [{ command: 'kotlin-language-server', args: [], name: 'kotlin-language-server' }],
+  lua: [{ command: 'lua-language-server', args: [], name: 'lua-language-server' }],
+  markdown: [
+    { command: 'marksman', args: ['server'], name: 'Marksman' },
+    { command: 'vscode-markdown-language-server', args: ['--stdio'], name: 'markdown-language-server' },
+  ],
+  nix: [
+    { command: 'nixd', args: [], name: 'nixd' },
+    { command: 'nil', args: [], name: 'nil' },
+  ],
+  objc: [{ command: 'clangd', args: ['--background-index'], name: 'clangd' }],
+  ocaml: [{ command: 'ocamllsp', args: [], name: 'ocaml-lsp' }],
+  php: [
+    { command: 'intelephense', args: ['--stdio'], name: 'Intelephense' },
+    { command: 'phpactor', args: ['language-server'], name: 'Phpactor' },
+  ],
+  powershell: [{ command: 'powershell-editor-services', args: ['--stdio'], name: 'PowerShell Editor Services' }],
+  python: [
+    { command: 'basedpyright-langserver', args: ['--stdio'], name: 'basedpyright' },
+    { command: 'pyright-langserver', args: ['--stdio'], name: 'pyright' },
+    { command: 'ruff', args: ['server'], name: 'Ruff' },
+    { command: 'pylsp', args: [], name: 'pylsp' },
+  ],
+  r: [{ command: 'R', args: ['--slave', '-e', 'languageserver::run()'], name: 'r-languageserver' }],
+  ruby: [
+    { command: 'ruby-lsp', args: [], name: 'ruby-lsp' },
+    { command: 'solargraph', args: ['stdio'], name: 'Solargraph' },
+  ],
+  rust: [{ command: 'rust-analyzer', args: [], name: 'rust-analyzer' }],
+  scala: [{ command: 'metals', args: [], name: 'Metals' }],
+  solidity: [{ command: 'nomicfoundation-solidity-language-server', args: ['--stdio'], name: 'Solidity' }],
+  sql: [{ command: 'sqls', args: [], name: 'sqls' }],
+  svelte: [{ command: 'svelteserver', args: ['--stdio'], name: 'svelte-language-server' }],
+  swift: [{ command: 'sourcekit-lsp', args: [], name: 'SourceKit-LSP' }],
+  terraform: [
+    { command: 'terraform-ls', args: ['serve'], name: 'terraform-ls' },
+    { command: 'tofu-ls', args: ['serve'], name: 'tofu-ls' },
+  ],
+  tex: [{ command: 'texlab', args: [], name: 'TexLab' }],
+  toml: [{ command: 'taplo', args: ['lsp', 'stdio'], name: 'Taplo' }],
+  vue: [{ command: 'vue-language-server', args: ['--stdio'], name: 'vue-language-server' }],
+  yaml: [{ command: 'yaml-language-server', args: ['--stdio'], name: 'yaml-language-server' }],
+  zig: [{ command: 'zls', args: [], name: 'zls' }],
+}
+
+export type LspStartupNotification = { method: string; params: unknown }
+
+/**
+ * Notifications a server needs after `initialized` before it will do real work.
+ *
+ * Roslyn is the reason this exists. Until it is told which solution or project a
+ * file belongs to — through `solution/open` / `project/open`, Microsoft
+ * extensions rather than standard LSP — it analyses C# as a loose "miscellaneous
+ * file": style hints only, no compiler errors, no inherited members in
+ * completion, and nothing from `workspace/symbol`. Everything looks like it is
+ * working, which is what makes it worth wiring rather than leaving to the user.
+ */
+export function editorLspStartupNotifications(
+  spec: EditorLspServerSpec,
+  rootPath: string,
+  filePath?: string,
+): LspStartupNotification[] {
+  if (!/roslyn/i.test(spec.name) && !/roslyn/i.test(spec.command)) return []
+  const uri = (file: string) => pathToFileURL(file).href
+  let entries: string[]
+  try {
+    entries = readdirSync(rootPath)
+  } catch {
+    return []
+  }
+  const solution = entries.find((entry) => entry.toLowerCase().endsWith('.sln'))
+    ?? entries.find((entry) => entry.toLowerCase().endsWith('.slnx'))
+  const project = filePath ? nearestProjectFile(filePath, rootPath) : null
+  // The file's own project is opened first even when a solution follows. A
+  // large solution takes minutes — 131 seconds on dotnet/aspire — during which
+  // every completion comes back empty; the one project the user is looking at
+  // loads in a fraction of that and makes the buffer usable while the rest
+  // catches up. Measured on the same file: 131s to first completion with the
+  // solution alone, 27s with both.
+  const notifications: LspStartupNotification[] = []
+  if (project) notifications.push({ method: 'project/open', params: { projects: [uri(project)] } })
+  if (solution) notifications.push({ method: 'solution/open', params: { solution: uri(join(rootPath, solution)) } })
+  else if (!project) {
+    const projects = entries.filter((entry) => /\.(cs|fs|vb)proj$/i.test(entry))
+    if (projects.length > 0) {
+      notifications.push({ method: 'project/open', params: { projects: projects.map((entry) => uri(join(rootPath, entry))) } })
+    }
+  }
+  return notifications
+}
+
+/** The nearest `*.csproj` at or above `filePath`, never above `boundary`. */
+function nearestProjectFile(filePath: string, boundary: string): string | null {
+  const limit = resolve(boundary)
+  let current = dirname(resolve(filePath))
+  while (true) {
+    let entries: string[]
+    try {
+      entries = readdirSync(current)
+    } catch {
+      return null
+    }
+    const project = entries.find((entry) => /\.(cs|fs|vb)proj$/i.test(entry))
+    if (project) return join(current, project)
+    if (current === limit) return null
+    const parent = dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
+export type EditorLspConfig = {
+  /** Servers to try for a filetype, replacing the built-ins unless `extend` is set. */
+  servers?: Record<string, Array<{ command: string; args?: string[]; name?: string; extend?: boolean }>>
+  /** Extra filenames or directories that mark a workspace root, per filetype. */
+  rootMarkers?: Record<string, string[]>
+  /** Filetypes to never start a server for. */
+  disabled?: string[]
+}
+
+const CONFIG_FILENAMES = ['.agent-viewer/lsp.json', '.agent-viewer-lsp.json']
+
+type LoadedConfig = { config: EditorLspConfig; source: string | null; error: string | null }
+
+const configCache = new Map<string, LoadedConfig>()
+
+function parseConfig(raw: string): EditorLspConfig {
+  // Trailing commas and `//` comments are what people actually write in an
+  // editor config file; refusing the file over one is worse than accepting it.
+  const stripped = raw
+    .replace(/^﻿/, '')
+    .replace(/(^|[^:])\/\/[^\n\r]*/g, '$1')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/,\s*([}\]])/g, '$1')
+  const parsed = JSON.parse(stripped) as unknown
+  return parsed && typeof parsed === 'object' ? parsed as EditorLspConfig : {}
+}
+
+/** The nearest `lsp.json` at or above `root`, cached per root. */
+export function loadEditorLspConfig(root: string): LoadedConfig {
+  const cached = configCache.get(root)
+  if (cached) return cached
+  let loaded: LoadedConfig = { config: {}, source: null, error: null }
+  for (const filename of CONFIG_FILENAMES) {
+    const candidate = join(root, filename)
+    if (!existsSync(candidate)) continue
+    try {
+      loaded = { config: parseConfig(readFileSync(candidate, 'utf8')), source: candidate, error: null }
+    } catch (error) {
+      loaded = { config: {}, source: candidate, error: error instanceof Error ? error.message : 'unreadable' }
+    }
+    break
+  }
+  configCache.set(root, loaded)
+  return loaded
+}
+
+export function clearEditorLspConfigCache(): void {
+  configCache.clear()
+}
+
+function builtinSpecs(filetype: string): readonly EditorLspServerSpec[] {
+  if (TYPESCRIPT_FILETYPES.has(filetype)) return typescriptLspCommand()
+  return SERVER_BY_FILETYPE[filetype] ?? []
+}
+
+/**
+ * The servers to try for a filetype, in order. Without a project config this is
+ * the built-in table; a config entry replaces that list, or prepends to it when
+ * the entry sets `extend`, so a project can add one server without restating
+ * the defaults.
+ */
+export function getEditorLspServerSpecs(filetype: string, root?: string): readonly EditorLspServerSpec[] {
+  const builtin = builtinSpecs(filetype)
+  if (!root) return builtin
+  const { config } = loadEditorLspConfig(root)
+  if (config.disabled?.includes(filetype)) return []
+  const configured = config.servers?.[filetype]
+  if (!configured || configured.length === 0) return builtin
+  const specs = configured
+    .filter((entry) => entry && typeof entry.command === 'string' && entry.command.length > 0)
+    .map((entry) => ({
+      command: entry.command,
+      args: Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : [],
+      name: entry.name ?? entry.command,
+    }))
+  const extend = configured.some((entry) => entry?.extend === true)
+  return extend ? [...specs, ...builtin] : specs
+}
+
+/**
+ * Files or directories that mark the root of a workspace for a language, in
+ * tiers: every tier is searched up the whole ancestor chain before the next one
+ * is tried, so a marker that describes a *bigger* unit of work wins even when a
+ * smaller one sits closer to the file.
+ *
+ * C# is why this is tiered. In the standard .NET layout — `Demo.sln` at the top,
+ * projects under `src/` — the nearest marker is the project, so Roslyn was told
+ * about that project alone. It then knows nothing about the other projects in
+ * the solution or the references between them: completion on a type from a
+ * referenced project returns **nothing**, with no error to say why. Verified
+ * against a real two-project solution: 0 members before, 6 after.
+ */
+const ROOT_MARKERS: Readonly<Record<string, readonly (readonly string[])[]>> = {
+  c: [['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile']],
+  clojure: [['project.clj', 'deps.edn']],
+  cpp: [['compile_commands.json', '.clangd', 'CMakeLists.txt', 'Makefile']],
+  csharp: [['*.sln', '*.slnx'], ['*.csproj']],
+  dart: [['pubspec.yaml']],
+  elixir: [['mix.exs']],
+  elm: [['elm.json']],
+  erlang: [['rebar.config']],
+  go: [['go.work'], ['go.mod']],
+  haskell: [['stack.yaml', 'cabal.project', '*.cabal']],
+  java: [['settings.gradle', 'settings.gradle.kts'], ['pom.xml', 'build.gradle', 'build.gradle.kts']],
+  javascript: [['package.json', 'jsconfig.json']],
+  javascriptreact: [['package.json', 'jsconfig.json']],
+  kotlin: [['settings.gradle.kts', 'settings.gradle'], ['build.gradle.kts', 'build.gradle']],
+  objc: [['compile_commands.json']],
+  ocaml: [['dune-project', '*.opam']],
+  php: [['composer.json']],
+  python: [['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile']],
+  r: [['DESCRIPTION']],
+  ruby: [['Gemfile', '*.gemspec']],
+  rust: [['Cargo.toml']],
+  scala: [['build.sbt', 'build.sc']],
+  swift: [['Package.swift']],
+  terraform: [['main.tf', '.terraform']],
+  tex: [['*.tex']],
+  typescript: [['tsconfig.json', 'package.json']],
+  typescriptreact: [['tsconfig.json', 'package.json']],
+  zig: [['build.zig']],
+}
+
+const ALWAYS_ROOT = ['.git', '.hg', '.agent-viewer']
+
+function markerExists(directory: string, marker: string): boolean {
+  if (!marker.includes('*')) return existsSync(join(directory, marker))
+  // A single glob suffix (`*.csproj`, `*.cabal`) is the only pattern the
+  // markers use, and a readdir per directory is cheaper than a glob library.
+  const suffix = marker.slice(marker.indexOf('*') + 1)
+  try {
+    const { readdirSync } = moduleRequire('node:fs') as typeof import('node:fs')
+    return readdirSync(directory).some((entry) => entry.endsWith(suffix))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The directory a server should treat as the workspace for this file: the
+ * nearest ancestor carrying one of the language's markers, never above
+ * `fallbackRoot`. Falls back to `fallbackRoot`, so a file with no project
+ * around it still gets a server.
+ */
+export function resolveLspWorkspaceRoot(filetype: string, filePath: string, fallbackRoot: string): string {
+  const absolute = isAbsolute(filePath) ? filePath : resolve(fallbackRoot, filePath)
+  const boundary = resolve(fallbackRoot)
+  const configured = loadEditorLspConfig(boundary).config.rootMarkers?.[filetype]
+  // A project's own configuration outranks the built-in tiers.
+  const tiers = [...(configured ? [configured] : []), ...(ROOT_MARKERS[filetype] ?? [])]
+  const { root: filesystemRoot } = parse(absolute)
+
+  let gitRoot: string | null = null
+  const ancestors: string[] = []
+  for (let current = dirname(absolute); ; ) {
+    ancestors.push(current)
+    if (!gitRoot && ALWAYS_ROOT.some((marker) => existsSync(join(current, marker)))) gitRoot = current
+    if (current === boundary || current === filesystemRoot) break
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+
+  for (const markers of tiers) {
+    for (const directory of ancestors) {
+      if (markers.some((marker) => markerExists(directory, marker))) return directory
+    }
+  }
+  return gitRoot ?? boundary
+}

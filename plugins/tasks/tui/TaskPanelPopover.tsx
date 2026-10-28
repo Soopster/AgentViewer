@@ -1,0 +1,502 @@
+/** @jsxImportSource @opentui/react */
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { open } from 'node:fs/promises'
+import type { ScrollBoxRenderable } from '@opentui/core'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import type { ThreadedMessage } from '../../../lib/threading'
+import {
+  buildTaskRegistry,
+  groupAndSortTasks,
+  isStoppableTask,
+  type TaskGroup,
+  type TaskState,
+} from '../../../lib/taskRegistry'
+
+type TaskPanelKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
+
+type Props = {
+  messages: ThreadedMessage[]
+  theme: TuiThemePalette
+  width: number
+  height: number
+  onClose: () => void
+  onSelectTask: (eventUuid: string) => void
+  onKeyHandlerReady: (handler: (key: TaskPanelKeyEvent) => void) => void
+  /** Cancel a running SDK background task via query.stopTask(). Absent when the
+   *  viewed provider/session can't stop tasks (only Claude warm sessions can). */
+  onStopTask?: (taskId: string) => void
+  /** Read a Claude shell/Monitor output tail from the session's warm Query. */
+  onReadTaskOutput?: (taskId: string) => Promise<{ available: boolean; output: string; totalBytes: number; truncated: boolean }>
+  /** Fill the given box inside a window, with no frame of its own. */
+  docked?: boolean
+  /** Shows the `⧉ window` button: break the popover out into a window. */
+  onDetach?: () => void
+}
+
+const STATUS_ICON: Record<TaskState['status'], string> = {
+  pending: '○',
+  in_progress: '◐',
+  paused: 'Ⅱ',
+  completed: '✓',
+  failed: '×',
+  stopped: '■',
+}
+
+const GROUP_LABEL: Record<TaskGroup, string> = {
+  in_progress: 'IN PROGRESS',
+  blocked: 'BLOCKED',
+  paused: 'PAUSED',
+  pending: 'PENDING',
+  failed: 'FAILED',
+  stopped: 'STOPPED',
+  completed: 'COMPLETED',
+}
+
+const STATUS_LABEL: Record<TaskState['status'], string> = {
+  pending: 'pending',
+  in_progress: 'running',
+  paused: 'paused',
+  completed: 'completed',
+  failed: 'failed',
+  stopped: 'stopped',
+}
+
+type FlatRow =
+  | { kind: 'header'; group: TaskGroup; count: number }
+  | { kind: 'task'; group: TaskGroup; task: TaskState; openBlockers: string[] }
+
+function flattenGroups(groups: ReturnType<typeof groupAndSortTasks>, completedIds: Set<string>): FlatRow[] {
+  const rows: FlatRow[] = []
+  for (const { group, tasks } of groups) {
+    rows.push({ kind: 'header', group, count: tasks.length })
+    for (const task of tasks) {
+      const openBlockers = group === 'blocked'
+        ? task.blockedBy.filter((id) => !completedIds.has(id))
+        : []
+      rows.push({ kind: 'task', group, task, openBlockers })
+    }
+  }
+  return rows
+}
+
+function statusColor(status: TaskState['status'], theme: TuiThemePalette): string {
+  if (status === 'completed') return theme.green
+  if (status === 'failed') return theme.red
+  if (status === 'in_progress') return theme.amber
+  if (status === 'paused') return theme.amber
+  return theme.dim
+}
+
+function compactText(value: string | undefined): string {
+  return value?.replace(/\s+/g, ' ').trim() ?? ''
+}
+
+function sameText(a: string, b: string): boolean {
+  return a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
+}
+
+function taskTitle(task: TaskState): string {
+  return compactText(
+    task.status === 'in_progress' && task.activeForm
+      ? task.activeForm
+      : task.subject || task.summary || task.description || task.activeForm,
+  ) || `#${task.id}`
+}
+
+function taskDetail(task: TaskState, title: string): string {
+  const candidates = [task.summary, task.description, task.activeForm, task.error]
+    .map(compactText)
+    .filter(Boolean)
+  return candidates.find((value) => !sameText(value, title)) ?? ''
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const totalSeconds = Math.round(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tok`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k tok`
+  return `${n} tok`
+}
+
+function formatTime(value: string): string {
+  const time = new Date(value)
+  if (Number.isNaN(time.getTime())) return ''
+  return time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function taskMeta(task: TaskState, openBlockers: string[]): string {
+  const parts = [`#${task.id}`, STATUS_LABEL[task.status]]
+  if (task.events.length > 1) parts.push(`${task.events.length} events`)
+  if (task.firstSeenAt) {
+    const created = formatTime(task.firstSeenAt)
+    if (created) parts.push(`created ${created}`)
+  }
+  if (task.lastUpdatedAt && task.lastUpdatedAt !== task.firstSeenAt) {
+    const updated = formatTime(task.lastUpdatedAt)
+    if (updated) parts.push(`updated ${updated}`)
+  }
+  if (task.owner) parts.push(`@${task.owner}`)
+  if (task.subagentType) parts.push(task.subagentType)
+  else if (task.taskType) parts.push(task.taskType)
+  if (task.workflowName) parts.push(task.workflowName)
+  if (task.lastToolName) parts.push(`last ${task.lastToolName}`)
+  if (task.toolUses != null) parts.push(`${task.toolUses} tool${task.toolUses === 1 ? '' : 's'}`)
+  if (task.durationMs != null) parts.push(formatDuration(task.durationMs))
+  if (task.totalTokens != null) parts.push(formatTokens(task.totalTokens))
+  if (task.pausedMs != null) parts.push(`paused ${formatDuration(task.pausedMs)}`)
+  if (task.isBackgrounded) parts.push('background')
+  if (openBlockers.length > 0) parts.push(`blocked by ${openBlockers.map((id) => `#${id}`).join(', ')}`)
+  if (task.blocks.length > 0) parts.push(`blocks ${task.blocks.map((id) => `#${id}`).join(', ')}`)
+  return parts.join(' · ')
+}
+
+function eventColor(event: TaskState['events'][number], theme: TuiThemePalette): string {
+  if (event.status === 'failed') return theme.red
+  if (event.status === 'completed') return theme.green
+  if (event.status === 'in_progress' || event.kind === 'created') return theme.amber
+  return theme.dim
+}
+
+function eventKindLabel(kind: TaskState['events'][number]['kind']): string {
+  return kind.replace(/_/g, ' ')
+}
+
+function eventStatusLabel(status: TaskState['events'][number]['status']): string {
+  return status ? STATUS_LABEL[status] : ''
+}
+
+function eventMetaLine(event: TaskState['events'][number]): string {
+  const parts = [
+    event.timestamp ? formatTime(event.timestamp) : '',
+    eventKindLabel(event.kind),
+    eventStatusLabel(event.status),
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function taskAnchorId(taskId: string): string {
+  return `task-panel-task-${taskId.replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+function taskEndAnchorId(taskId: string): string {
+  return `task-panel-task-end-${taskId.replace(/[^A-Za-z0-9_-]/g, '_')}`
+}
+
+export function TaskPanelPopover({
+  messages,
+  theme,
+  width,
+  height,
+  onClose,
+  onSelectTask,
+  onKeyHandlerReady,
+  onStopTask,
+  onReadTaskOutput,
+  docked = false,
+  onDetach,
+}: Props) {
+  const registry = useMemo(() => buildTaskRegistry(messages), [messages])
+  const completedIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of registry.values()) if (t.status === 'completed') set.add(t.id)
+    return set
+  }, [registry])
+  const groups = useMemo(() => groupAndSortTasks(registry), [registry])
+  const rows = useMemo(() => flattenGroups(groups, completedIds), [groups, completedIds])
+  const taskRowIndexes = useMemo(
+    () => rows.flatMap((r, i) => (r.kind === 'task' ? [i] : [])),
+    [rows],
+  )
+
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const detailTask = detailId ? registry.get(detailId) : undefined
+  const [shellOutput, setShellOutput] = useState<{ output: string; totalBytes: number; truncated: boolean } | null>(null)
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    setShellOutput(null)
+    if (!detailTask) return
+    let cancelled = false
+    const refresh = async () => {
+      let file
+      try {
+        const canReadClaudeTask = detailTask.taskType === 'local_bash' || detailTask.taskType === 'shell' || detailTask.taskType === 'monitor'
+        if (canReadClaudeTask && onReadTaskOutput) {
+          const result = await onReadTaskOutput(detailTask.id)
+          if (!cancelled && result.available) setShellOutput(result)
+          if (result.available) return
+        }
+        if (detailTask.outputFile) {
+          file = await open(detailTask.outputFile, 'r')
+          const stat = await file.stat()
+          if (!stat.isFile()) return
+          const size = Math.min(stat.size, 32_768)
+          const buffer = Buffer.alloc(size)
+          const { bytesRead } = await file.read(buffer, 0, size, Math.max(0, stat.size - size))
+          if (!cancelled) setShellOutput({ output: buffer.subarray(0, bytesRead).toString('utf8'), totalBytes: stat.size, truncated: stat.size > size })
+        }
+      } catch {
+        // The SDK may not have created the output file yet.
+      } finally {
+        await file?.close()
+        if (!cancelled) setNow(Date.now())
+      }
+    }
+    void refresh()
+    const shouldPoll = detailTask.status === 'in_progress' || detailTask.status === 'paused'
+    const timer = shouldPoll ? setInterval(() => { void refresh() }, 1000) : undefined
+    return () => { cancelled = true; if (timer) clearInterval(timer) }
+  }, [detailId, detailTask?.outputFile, detailTask?.id, detailTask?.taskType, detailTask?.status, onReadTaskOutput])
+
+  const [selectedTaskIdx, setSelectedTaskIdx] = useState(0)
+  const clampedSelected = Math.min(Math.max(selectedTaskIdx, 0), Math.max(taskRowIndexes.length - 1, 0))
+
+  // Reset selection if the row count shrinks past the cursor.
+  useEffect(() => {
+    if (selectedTaskIdx > taskRowIndexes.length - 1) {
+      setSelectedTaskIdx(Math.max(taskRowIndexes.length - 1, 0))
+    }
+  }, [selectedTaskIdx, taskRowIndexes.length])
+
+  const scrollRef = useRef<ScrollBoxRenderable>(null)
+  const lastScrolledTaskIdxRef = useRef(clampedSelected)
+  const highlightedFlatIdx = taskRowIndexes[clampedSelected] ?? -1
+  const highlightedRow = highlightedFlatIdx >= 0 ? rows[highlightedFlatIdx] : undefined
+  const highlightedTask = highlightedRow?.kind === 'task' ? highlightedRow.task : undefined
+
+  useEffect(() => {
+    if (!highlightedTask) return
+    const previousIdx = lastScrolledTaskIdxRef.current
+    lastScrolledTaskIdxRef.current = clampedSelected
+    const targetId = clampedSelected < previousIdx
+      ? taskAnchorId(highlightedTask.id)
+      : taskEndAnchorId(highlightedTask.id)
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollChildIntoView(targetId)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [clampedSelected, highlightedTask?.id, highlightedTask?.events.length])
+
+  const handleKey = useCallback((key: TaskPanelKeyEvent) => {
+    if (detailTask) {
+      if (key.name === 'left') { setDetailId(null); return }
+      if (['escape', 'return', 'enter', 'space'].includes(key.name)) { onClose(); return }
+      if (key.name === 'x' && onStopTask && isStoppableTask(detailTask)) { onStopTask(detailTask.id); return }
+      if (key.name === 'down' || key.name === 'j') scrollRef.current?.scrollBy(1)
+      if (key.name === 'up' || key.name === 'k') scrollRef.current?.scrollBy(-1)
+      if (key.name === 'd') scrollRef.current?.scrollBy(10)
+      if (key.name === 'u') scrollRef.current?.scrollBy(-10)
+      return
+    }
+    if (key.name === 'escape') { onClose(); return }
+    if (key.name === 'j' || key.name === 'down') {
+      setSelectedTaskIdx((i) => Math.min(i + 1, Math.max(taskRowIndexes.length - 1, 0)))
+      return
+    }
+    if (key.name === 'k' || key.name === 'up') {
+      setSelectedTaskIdx((i) => Math.max(i - 1, 0))
+      return
+    }
+    if (key.name === 'g' && !key.shift) {
+      setSelectedTaskIdx(0)
+      return
+    }
+    if (key.name === 'g' && key.shift) {
+      setSelectedTaskIdx(Math.max(taskRowIndexes.length - 1, 0))
+      return
+    }
+    if (key.name === 'd') { scrollRef.current?.scrollBy(10); return }
+    if (key.name === 'u') { scrollRef.current?.scrollBy(-10); return }
+    if (key.name === 'c') {
+      const flatIdx = taskRowIndexes[clampedSelected]
+      if (flatIdx == null) return
+      const row = rows[flatIdx]
+      if (row?.kind === 'task') onSelectTask(row.task.createdEventUuid ?? row.task.latestEventUuid)
+      return
+    }
+    if (key.name === 'x') {
+      if (!onStopTask) return
+      const flatIdx = taskRowIndexes[clampedSelected]
+      if (flatIdx == null) return
+      const row = rows[flatIdx]
+      if (row?.kind === 'task' && isStoppableTask(row.task)) onStopTask(row.task.id)
+      return
+    }
+    if (key.name === 'return' || key.name === 'enter') {
+      const flatIdx = taskRowIndexes[clampedSelected]
+      if (flatIdx == null) return
+      const row = rows[flatIdx]
+      if (row?.kind === 'task') {
+        if (row.task.taskType === 'local_bash') setDetailId(row.task.id)
+        else onSelectTask(row.task.latestEventUuid)
+      }
+      return
+    }
+  }, [detailTask, clampedSelected, onClose, onSelectTask, onStopTask, rows, taskRowIndexes])
+
+  useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
+
+  const frame = popoverFrameCells(docked)
+  const popW = docked ? width : Math.max(24, width - 16)
+  const popH = docked ? height : Math.max(12, Math.min(height - 4, 36))
+  const headerH = 3
+  const bodyH = popH - headerH - frame
+  const popTop = Math.floor((height - popH) / 2)
+  const popLeft = Math.floor((width - popW) / 2)
+  const contentW = Math.max(12, popW - frame - 2)
+  const subjectW = Math.max(10, contentW - 2)
+
+  return (
+    <box
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, 50)}
+      // borderStyle alone turns a border on, so a docked popover passes none.
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
+      backgroundColor={theme.surface}
+      flexDirection="column"
+      title={docked ? undefined : (detailTask ? " Shell details " : " Tasks / shells ")}
+      titleColor={theme.cyan}
+      titleAlignment="left"
+    >
+      {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
+      <box
+        height={headerH}
+        flexDirection="row"
+        paddingX={1}
+        border={['bottom']}
+        borderStyle="single"
+        borderColor={theme.border}
+      >
+        <text fg={theme.muted}>
+          {detailTask ? 'Shell details' : `${registry.size} tasks · ${[...registry.values()].filter(task => task.taskType === 'local_bash').length} shells`}
+        </text>
+        {onStopTask && highlightedTask && isStoppableTask(highlightedTask) ? (
+          <text fg={theme.amber}>{`  x stop #${highlightedTask.id}`}</text>
+        ) : null}
+        <box flexGrow={1} />
+        <text fg={theme.dim}>{detailTask ? '← back · Esc/Enter/Space close · x stop · d/u scroll' : 'j/k navigate · enter details/latest · c create · esc close'}</text>
+      </box>
+
+      <scrollbox
+        ref={scrollRef}
+        width={popW - frame}
+        height={bodyH}
+        backgroundColor={theme.surface}
+        scrollY
+        scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+      >
+        {detailTask ? (
+          <box paddingX={1} paddingY={1} flexDirection="column">
+            <text fg={statusColor(detailTask.status, theme)}>{`Status:  ${STATUS_LABEL[detailTask.status]}`}</text>
+            <text fg={theme.text}>{`Runtime: ${detailTask.durationMs != null ? formatDuration(detailTask.durationMs) : detailTask.firstSeenAt ? formatDuration(Math.max(0, (detailTask.status === 'in_progress' ? now : Date.parse(detailTask.lastUpdatedAt ?? detailTask.firstSeenAt)) - Date.parse(detailTask.firstSeenAt))) : 'unknown'}`}</text>
+            <text fg={theme.text} wrapMode="word">{`Command: ${detailTask.command ?? detailTask.subject}`}</text>
+            <box marginTop={1} flexDirection="column">
+              <text fg={theme.muted}>{`Output:${shellOutput ? ` ${shellOutput.totalBytes.toLocaleString()} bytes${shellOutput.truncated ? ' · showing tail' : ''}` : ''}`}</text>
+              <text fg={theme.text} wrapMode="word">{shellOutput?.output ?? detailTask.output ?? 'No output available'}</text>
+            </box>
+          </box>
+        ) : rows.length === 0 ? (
+          <box paddingX={1} paddingY={1}>
+            <text fg={theme.dim}>no tasks in this session</text>
+          </box>
+        ) : rows.map((row, i) => {
+          if (row.kind === 'header') {
+            return (
+              <box key={`h-${row.group}`} paddingX={1} marginTop={i === 0 ? 0 : 1}>
+                <text fg={theme.dim} wrapMode="none">
+                  {`${GROUP_LABEL[row.group]} · ${row.count}`}
+                </text>
+              </box>
+            )
+          }
+          const { task, group, openBlockers } = row
+          const isSelected = i === highlightedFlatIdx
+          const bg = isSelected ? theme.surface2 : 'transparent'
+          const baseFg = task.status === 'completed' ? theme.dim
+            : task.status === 'failed' ? theme.red
+            : group === 'blocked' ? theme.muted
+            : theme.text
+          const subject = taskTitle(task)
+          const detail = taskDetail(task, subject)
+          const meta = taskMeta(task, openBlockers)
+          const hasLineage = isSelected && task.events.length > 0
+          return (
+            <box
+              key={`t-${task.id}`}
+              flexDirection="column"
+              paddingX={1}
+              backgroundColor={bg}
+            >
+              <box id={taskAnchorId(task.id)} flexDirection="row">
+                <text fg={statusColor(task.status, theme)} wrapMode="none">
+                  {`${STATUS_ICON[task.status]} `}
+                </text>
+                <box width={subjectW}>
+                  <text fg={baseFg} wrapMode="word">
+                    {subject}
+                  </text>
+                </box>
+              </box>
+              {detail ? (
+                <box paddingLeft={2} width={contentW}>
+                  <text fg={task.error ? theme.red : theme.muted} wrapMode="word">
+                    {detail}
+                  </text>
+                </box>
+              ) : null}
+              {meta ? (
+                <box id={!hasLineage && isSelected ? taskEndAnchorId(task.id) : undefined} paddingLeft={2} width={contentW}>
+                  <text fg={theme.dim} wrapMode="word">
+                    {meta}
+                  </text>
+                </box>
+              ) : null}
+              {hasLineage ? (
+                <box
+                  flexDirection="column"
+                  paddingLeft={1}
+                  marginTop={1}
+                  width={contentW}
+                  border={['left']}
+                  borderStyle="single"
+                  borderColor={theme.border}
+                >
+                  <text fg={theme.cyan} wrapMode="none">lineage</text>
+                  {task.events.map((event, eventIndex) => (
+                    <box
+                      key={`${task.id}:event:${event.uuid}:${eventIndex}`}
+                      id={eventIndex === task.events.length - 1 ? taskEndAnchorId(task.id) : undefined}
+                      flexDirection="column"
+                      width={contentW - 1}
+                      marginTop={eventIndex === 0 ? 0 : 1}
+                      paddingLeft={1}
+                    >
+                      <box flexDirection="row">
+                        <box width={2}>
+                          <text fg={eventColor(event, theme)} wrapMode="none">
+                            {eventIndex === task.events.length - 1 ? '◉' : '●'}
+                          </text>
+                        </box>
+                        <text fg={theme.dim} wrapMode="none">
+                          {eventMetaLine(event)}
+                        </text>
+                      </box>
+                      <text fg={eventColor(event, theme)} wrapMode="word">
+                        {compactText(event.subject || event.summary || event.description || event.activeForm || event.details) || ' '}
+                      </text>
+                    </box>
+                  ))}
+                </box>
+              ) : null}
+            </box>
+          )
+        })}
+      </scrollbox>
+    </box>
+  )
+}

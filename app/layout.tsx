@@ -1,23 +1,82 @@
 import type { Metadata } from 'next'
+import { Atkinson_Hyperlegible, Inter, Lexend, Merriweather, Noto_Sans, Open_Sans, Roboto, Source_Sans_3 } from 'next/font/google'
 import './globals.css'
+import { ProviderLoadingToasts } from '@/components/ProviderLoadingToasts'
+import { THEMES } from '@/lib/themes'
+import { RouteTransition } from '@/components/RouteTransition'
+import { RENDER_FONT_IDS, RENDER_FONT_STORAGE_KEY } from '@/lib/renderFonts'
+import { COLOR_TREATMENTS, COLOR_TREATMENT_STORAGE_KEY } from '@/lib/colorTreatment'
+
+// The render fonts below apply only once someone picks one (data-render-font), so none is
+// preloaded: preloading put nine font files ahead of the app's scripts on every first load.
+const atkinson = Atkinson_Hyperlegible({
+  weight: ['400', '700'],
+  subsets: ['latin'],
+  variable: '--font-atkinson',
+  display: 'swap',
+  preload: false,
+})
+const sourceSans = Source_Sans_3({
+  subsets: ['latin'],
+  variable: '--font-source-sans',
+  display: 'swap',
+  preload: false,
+})
+const merriweather = Merriweather({
+  subsets: ['latin'],
+  variable: '--font-merriweather',
+  display: 'swap',
+  preload: false,
+})
+const lexend = Lexend({
+  subsets: ['latin'],
+  variable: '--font-lexend',
+  display: 'swap',
+  preload: false,
+})
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+  preload: false,
+})
+const openSans = Open_Sans({
+  subsets: ['latin'],
+  variable: '--font-open-sans',
+  display: 'swap',
+  preload: false,
+})
+const notoSans = Noto_Sans({
+  subsets: ['latin'],
+  variable: '--font-noto-sans',
+  display: 'swap',
+  preload: false,
+})
+const roboto = Roboto({
+  subsets: ['latin'],
+  variable: '--font-roboto',
+  display: 'swap',
+  preload: false,
+})
 
 export const metadata: Metadata = {
   title: 'Agent Viewer',
   description: 'Browse Claude Code sessions and messages',
 }
 
-// Runs synchronously before first paint — prevents a flash of the wrong theme.
+// Runs synchronously before first paint — prevents a flash of the wrong theme or render font.
 // Safe: this is a static literal, not user-supplied content.
-const themeScript = `(function(){var t=localStorage.getItem('theme');if(t==='light'||t==='dark'||t==='terminal'||t==='paper'||t==='imessage'){document.documentElement.dataset.theme=t;}})()`
+const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}var f=${JSON.stringify(RENDER_FONT_IDS)};var rf=localStorage.getItem(${JSON.stringify(RENDER_FONT_STORAGE_KEY)});if(rf&&f.indexOf(rf)>=0){document.documentElement.dataset.renderFont=rf;}var c=${JSON.stringify(COLOR_TREATMENTS)};var ct=localStorage.getItem(${JSON.stringify(COLOR_TREATMENT_STORAGE_KEY)});if(ct&&c.indexOf(ct)>=0){document.documentElement.dataset.colorTreatment=ct;}}catch(e){}})()`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${atkinson.variable} ${sourceSans.variable} ${merriweather.variable} ${lexend.variable} ${inter.variable} ${notoSans.variable} ${roboto.variable} ${openSans.variable}`} suppressHydrationWarning>
       <head>
-        {/* eslint-disable-next-line react/no-danger */}
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* Intentional blocking inline script: must run synchronously before first paint to prevent theme FOUC. Content is a static literal, not user input. */}
+        {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
+        <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body>{children}</body>
+      <body><RouteTransition>{children}</RouteTransition><ProviderLoadingToasts /></body>
     </html>
   )
 }

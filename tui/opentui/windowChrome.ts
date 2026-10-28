@@ -1,0 +1,59 @@
+import { useLayoutEffect, useMemo } from 'react'
+import { useWorkspaceContext } from './workspaceContext'
+import type { ReactNode } from 'react'
+
+// Chrome the root draws around the transcript being read — the view header,
+// context meter, fleet strip, banners and search above it; the turn status,
+// idle ticker and CHAT's composer bar below — rendered inside whichever window
+// shows that transcript. A store rather than a prop: the chrome changes with
+// every root render, and as a prop it would re-render every transcript window
+// with it; subscribed, it re-renders the outlet alone.
+export type WindowChrome = {
+  /** Rows the chrome takes from the window. */
+  rows: number
+  render: (width: number) => ReactNode
+}
+
+export type WindowChromeStore = {
+  get: () => WindowChrome | null
+  set: (next: WindowChrome | null) => void
+  subscribe: (listener: () => void) => () => void
+}
+
+function createWindowChromeStore(): WindowChromeStore {
+  let current: WindowChrome | null = null
+  const listeners = new Set<() => void>()
+  return {
+    get: () => current,
+    set: (next) => {
+      if (next === current) return
+      current = next
+      for (const listener of listeners) listener()
+    },
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+}
+
+/** Chrome contains render closures and native styles, so its ownership must
+ * match a workspace view, never the module/process. */
+export function useTranscriptWindowChrome() {
+  const runtime = useWorkspaceContext()?.runtime
+  return useMemo(() => {
+    const create = () => ({ header: createWindowChromeStore(), footer: createWindowChromeStore() })
+    return runtime ? runtime.get('ref:transcriptWindowChrome', create, false) : create()
+  }, [runtime])
+}
+
+/** The selected transcript's host publishes only after commit. Cleanup belongs
+ * to this workspace's stores, so a previous workspace cannot clear new chrome. */
+export function useTranscriptWindowChromeHost(header: WindowChrome, footer: WindowChrome) {
+  const stores = useTranscriptWindowChrome()
+  useLayoutEffect(() => () => { stores.header.set(null); stores.footer.set(null) }, [stores])
+  useLayoutEffect(() => {
+    stores.header.set(header.rows > 0 ? header : null)
+    stores.footer.set(footer.rows > 0 ? footer : null)
+  })
+}

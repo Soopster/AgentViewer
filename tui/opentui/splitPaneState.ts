@@ -1,0 +1,441 @@
+import { sessionIdentityKey } from './sessionIdentity'
+import type { Session } from '../../lib/types'
+
+export type SplitPaneLayout = {
+  visibleCount: number
+  /** Extent (columns side-by-side, rows when stacked) of each split pane. */
+  paneExtent: number
+  /** Extent left for the primary reader on the same axis. */
+  readerExtent: number
+}
+
+/**
+ * Side-by-side splits the reader area into columns; stacked splits it into
+ * rows. Stacked is what makes the split view usable on a narrow terminal,
+ * where two 46-column panes never fit beside each other.
+ */
+export type SplitPaneOrientation = 'columns' | 'rows'
+
+/** Reader share bounds for the manual resize keys; 0 means "even split". */
+export const SPLIT_SHARE_MIN = 0.25
+export const SPLIT_SHARE_MAX = 0.8
+export const SPLIT_SHARE_STEP = 0.05
+export const SPLIT_SHARE_EVEN = 0
+
+export function adjustSplitReaderShare(
+  current: number,
+  delta: number,
+  evenShare: number,
+): number {
+  const base = current === SPLIT_SHARE_EVEN ? evenShare : current
+  const next = Math.round((base + delta) * 100) / 100
+  if (next <= SPLIT_SHARE_MIN) return SPLIT_SHARE_MIN
+  if (next >= SPLIT_SHARE_MAX) return SPLIT_SHARE_MAX
+  return next
+}
+
+// Every ⌃B chord in one table. The overlay, the status bar's chord hint and the
+// unknown-key notice all read it, so a chord cannot be added to the dispatcher
+// and quietly stay out of its own help.
+export type SplitChordEntry = {
+  keys: string
+  label: string
+  /** Terser wording for the one-line pending-chord hint. */
+  short?: string
+  /**
+   * Set false to keep an entry out of the one-line hint. Entries are included
+   * by default, so a new chord cannot go silently unadvertised — opting one out
+   * is a deliberate decision that it is a refinement of a listed key and that
+   * the overlay is where it belongs.
+   */
+  hint?: false
+}
+export type SplitChordSection = { title: string; entries: SplitChordEntry[] }
+export const SPLIT_CHORD_HELP: SplitChordSection[] = [
+  {
+    title: 'split',
+    entries: [
+      { keys: '% · v', label: 'split side by side', short: 'split' },
+      { keys: '" · s', label: 'split stacked', short: 'stacked' },
+      { keys: 'r', label: 'rotate the focused split: side-by-side ↔ stacked', short: 'rotate' },
+      { keys: 'n', label: 'next session in this pane', short: 'next' },
+      { keys: 'x', label: 'close pane', short: 'close' },
+      // Out of the one-line hint, which these four took past its 120-column
+      // budget (cutting off "cancel"); listed here in ⌃B ?, and in the palette.
+      { keys: 'U', label: 'redo window change', hint: false },
+      { keys: 'X', label: 'reopen closed pane', hint: false },
+      { keys: 'L', label: 'recent windows across workspaces', hint: false },
+      { keys: 'u', label: 'undo window change', short: 'undo', hint: false },
+      { keys: 'a', label: 'next window needing attention', short: 'attention', hint: false },
+      { keys: 'p', label: 'workspace tree: windows, tabs, and hidden windows', short: 'switch', hint: false },
+      { keys: 'b', label: 'broadcast prompt to selected session windows', short: 'broadcast', hint: false },
+      // Out of the one-line hint, which is at its width budget; the reader's ⊞ button and the palette advertise it.
+      { keys: 'S', label: 'spaces and workspaces', hint: false },
+      { keys: 'W', label: 'enable or disable workspaces', hint: false },
+      { keys: 'q', label: 'identify windows (numbers select panes)', hint: false },
+      { keys: 'e', label: 'manage windows until Escape or Enter', hint: false },
+      { keys: 'enter', label: 'focused window menu', hint: false },
+      { keys: 'w', label: 'window layout menu (move, arrange, full screen)', short: 'layout', hint: false },
+      { keys: 'z', label: 'toggle split panes off/on', short: 'toggle' },
+    ],
+  },
+  {
+    title: 'size',
+    entries: [
+      { keys: '<', label: 'shrink the focused pane', short: 'shrink' },
+      { keys: '>', label: 'grow the focused pane', short: 'grow' },
+      { keys: '=', label: 'even sizes', short: 'even' },
+      { keys: '+ · -', label: 'the grid\'s row split', hint: false },
+      { keys: '[ · ]', label: 'shrink · grow the focused pane in its row or column', hint: false },
+      { keys: 'm', label: 'zoom the focused window / restore the layout', hint: false },
+      { keys: 't', label: 'make the focused window a tab of the one before', hint: false },
+      { keys: ', · .', label: 'previous · next tab in the focused window', hint: false },
+      { keys: '!', label: 'break the shown tab out into its own window', hint: false },
+      { keys: 'f', label: 'float the focused window over the layout / dock it', hint: false },
+    ],
+  },
+  {
+    title: 'focus',
+    entries: [
+      { keys: 'o · tab', label: 'focus next pane', short: 'focus' },
+      { keys: '← · → · ↑ · ↓', label: 'focus the window that way', hint: false },
+      { keys: '⇧← · ⇧→ · ⇧↑ · ⇧↓', label: 'swap the focused window with the one that way', hint: false },
+      { keys: ';', label: 'toggle the last two focused panes', hint: false },
+      { keys: '1 … 9', label: 'focus pane by number', hint: false },
+      { keys: '?', label: 'this help', short: 'all keys' },
+      { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
+    ],
+  },
+  {
+    // These need no prefix — a focused pane owns the keyboard outright, and
+    // everything not listed here is deliberately inert while it does.
+    title: 'inside a focused pane (no ⌃B)',
+    entries: [
+      { keys: 'j · k', label: 'move card cursor' },
+      { keys: 'g · G', label: 'first · last card' },
+      { keys: '⌃u · ⌃d', label: 'page up · down' },
+      { keys: 'e', label: 'expand / collapse card' },
+      { keys: '/ · n · N', label: 'search this pane (older · newer match)' },
+      { keys: 'y', label: 'copy card' },
+      { keys: 'b', label: 'bookmark card' },
+      { keys: 'Q', label: 'quote and reply' },
+      { keys: 'c', label: 'compose to this session' },
+      { keys: 'i', label: 'toggle thinking mode' },
+      { keys: '↵', label: 'zoom this pane / restore layout' },
+      { keys: '⌃G · D', label: 'git · diagnostics for this session' },
+      { keys: '⌃C', label: 'interrupt this session' },
+      { keys: 'esc', label: 'focus a session pane' },
+    ],
+  },
+]
+
+/** Flat set of prefix keys the help documents, for the anti-drift assertion. */
+export function documentedSplitChordKeys(): string[] {
+  return SPLIT_CHORD_HELP
+    .filter((section) => !section.title.includes('no ⌃B'))
+    .flatMap((section) => section.entries.flatMap((entry) => entry.keys.split(' · ')))
+}
+
+export function splitCommandKey(command: string, runningInsideTmux: boolean): string {
+  return runningInsideTmux ? '? palette' : `⌃B ${command}`
+}
+
+export function calculateSplitPaneLayout({
+  availableExtent,
+  requestedCount,
+  availableCount,
+  maxPanes,
+  minPaneExtent,
+  minReaderExtent,
+  readerShare = SPLIT_SHARE_EVEN,
+}: {
+  availableExtent: number
+  requestedCount: number
+  availableCount: number
+  maxPanes: number
+  minPaneExtent: number
+  minReaderExtent: number
+  /**
+   * Fraction of the axis the reader keeps. `SPLIT_SHARE_EVEN` (0) divides the
+   * axis equally, which is what every caller wanted before the resize keys
+   * existed; any other value is clamped so neither side drops below its
+   * minimum rather than dropping a pane the user explicitly asked for.
+   */
+  readerShare?: number
+}): SplitPaneLayout {
+  let visibleCount = Math.min(requestedCount, maxPanes, availableCount)
+  let paneExtent = 0
+  let readerExtent = Math.max(availableExtent, minReaderExtent)
+  while (visibleCount > 0) {
+    // Frames sit border to border, so the whole axis is theirs.
+    const usable = availableExtent
+    const maxReader = usable - visibleCount * minPaneExtent
+    if (maxReader >= minReaderExtent) {
+      if (readerShare === SPLIT_SHARE_EVEN) {
+        // Even: every frame the same size, the rounding remainder to the reader.
+        paneExtent = Math.floor(usable / (visibleCount + 1))
+      } else {
+        const reader = Math.min(Math.max(Math.round(usable * readerShare), minReaderExtent), maxReader)
+        paneExtent = Math.floor((usable - reader) / visibleCount)
+      }
+      readerExtent = usable - visibleCount * paneExtent
+      break
+    }
+    visibleCount -= 1
+  }
+  return {
+    visibleCount,
+    paneExtent,
+    readerExtent: visibleCount === 0 ? Math.max(availableExtent, minReaderExtent) : readerExtent,
+  }
+}
+
+/** The share the even split would produce, used as the resize keys' origin. */
+export function evenSplitReaderShare(visibleCount: number): number {
+  return visibleCount <= 0 ? 1 : 1 / (visibleCount + 1)
+}
+
+// A pane spends rows only on its frame: the session and its state are the top
+// border's title and the key hints are painted into the bottom border, so
+// neither costs a row. That also keeps focus from resizing the scroll viewport
+// — changing its height shifts scrollTop and can make the same saved offset
+// show a different set of cards on return.
+export function calculateSplitPaneBodyRows(height: number, statusRowCount: number): number {
+  return Math.max(height - 2 - statusRowCount, 3)
+}
+
+export function preserveArrayIdentity<T>(previous: T[], next: T[]): T[] {
+  if (previous === next) return previous
+  if (previous.length === next.length && previous.every((item, index) => item === next[index])) {
+    return previous
+  }
+  return next
+}
+
+export function groupItemsBySplitPaneKey<T>(
+  paneKeys: readonly string[],
+  items: readonly T[],
+  itemKey: (item: T) => string | null,
+  previous: ReadonlyMap<string, T[]>,
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>(paneKeys.map((key) => [key, []]))
+  for (const item of items) {
+    const key = itemKey(item)
+    const bucket = key ? grouped.get(key) : undefined
+    if (bucket) bucket.push(item)
+  }
+  for (const [key, bucket] of grouped) {
+    const prior = previous.get(key)
+    if (prior) grouped.set(key, preserveArrayIdentity(prior, bucket))
+  }
+  return grouped
+}
+
+export function removeSplitPaneKey(pinnedKeys: readonly string[], paneIndex: number): string[] {
+  if (paneIndex < 0 || paneIndex >= pinnedKeys.length) return [...pinnedKeys]
+  return pinnedKeys.filter((_, index) => index !== paneIndex)
+}
+
+/**
+ * Synthetic session ids assigned to external MCP coordinator participants.
+ * There is no transcript file behind them, so opening one in the reader can
+ * only ever show a blank or unrelated session.
+ */
+export const EXTERNAL_SESSION_PREFIX = 'external:'
+
+export function transcriptSessionKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
+  return sessionIdentityKey(session)
+}
+
+export type CoordinationTranscriptTarget =
+  | { kind: 'unreadable'; reason: string }
+  | { kind: 'open'; sessionKey: string; session: Session; indexed: boolean }
+
+/**
+ * Resolve a coordinator agent to the transcript session the reader should
+ * open. Returns the indexed sidebar session when one exists (its list-level
+ * metadata like lastModified keeps the reader's mtime guards working), a
+ * draft session when the agent's transcript is not indexed yet, or an
+ * `unreadable` refusal for agents that have no transcript at all — the caller
+ * must surface the reason instead of opening anything.
+ */
+export function resolveCoordinationTranscriptTarget(
+  agent: Pick<ProtocolAgentLike, 'name' | 'role' | 'provider' | 'providerInstanceId' | 'sessionId' | 'worktreePath'>,
+  sessionsByKey: ReadonlyMap<string, Session>,
+  now: number,
+): CoordinationTranscriptTarget {
+  const sessionId = agent.sessionId?.trim() ?? ''
+  if (!sessionId) {
+    return { kind: 'unreadable', reason: `${agent.name} has no readable transcript: no session recorded` }
+  }
+  if (sessionId.startsWith(EXTERNAL_SESSION_PREFIX)) {
+    return { kind: 'unreadable', reason: `${agent.name} has no readable transcript: external MCP participant` }
+  }
+  const key = transcriptSessionKey({ sessionId, provider: agent.provider, providerInstanceId: agent.providerInstanceId })
+  const indexed = sessionsByKey.get(key)
+  if (indexed) return { kind: 'open', sessionKey: key, session: indexed, indexed: true }
+  return {
+    kind: 'open',
+    sessionKey: key,
+    session: {
+      sessionId,
+      provider: agent.provider,
+      providerInstanceId: agent.providerInstanceId,
+      cwd: agent.worktreePath || undefined,
+      createdAt: now,
+      lastModified: now,
+      summary: `${agent.name} · ${agent.role}`,
+    },
+    indexed: false,
+  }
+}
+
+type ProtocolAgentLike = {
+  name: string
+  role: string
+  provider?: Session['provider']
+  providerInstanceId?: string
+  sessionId?: string | null
+  worktreePath?: string
+}
+
+/**
+ * Which teammates get a split pane when the user asks to watch them. Targets
+ * arrive in priority order (the Teammates panel passes attention order), so
+ * when there are more teammates than panes the ones that need the user win.
+ * The reader's own session never takes a pane, watched sessions go to the
+ * front of the pins so the reconcile effect keeps them, and the pane count only
+ * grows — watching one teammate must not close a pane the user opened.
+ */
+export function planTeammateWatch<T extends { sessionKey: string }>({
+  targets,
+  selectedSessionKey,
+  currentPins,
+  currentCount,
+  maxPanes,
+}: {
+  targets: readonly T[]
+  selectedSessionKey: string | null
+  currentPins: readonly string[]
+  currentCount: number
+  maxPanes: number
+}): { watched: T[]; pins: string[]; count: number; skipped: number } {
+  const eligible = targets.filter((target, index) =>
+    target.sessionKey !== selectedSessionKey
+    && targets.findIndex((other) => other.sessionKey === target.sessionKey) === index)
+  // The selected session's own window stays, first: watching a team keeps
+  // the lead's chat on screen beside it.
+  const lead = selectedSessionKey && currentPins.slice(0, currentCount).includes(selectedSessionKey) ? [selectedSessionKey] : []
+  const watched = eligible.slice(0, maxPanes - lead.length)
+  const keys = watched.map((target) => target.sessionKey)
+  return {
+    watched,
+    pins: [...lead, ...keys, ...currentPins.filter((key) => !keys.includes(key) && !lead.includes(key))].slice(0, maxPanes),
+    count: watched.length ? Math.min(maxPanes, Math.max(currentCount, lead.length + keys.length)) : currentCount,
+    skipped: eligible.length - watched.length,
+  }
+}
+
+export function resolveSelectedSessionIndex<S>(
+  selectedSessionKey: string | null,
+  sessions: readonly S[],
+  keyOf: (session: S) => string,
+): number {
+  if (sessions.length === 0) return -1
+  if (!selectedSessionKey) return 0
+  return sessions.findIndex((session) => keyOf(session) === selectedSessionKey)
+}
+
+/**
+ * The reader's session-selection fallback chain: pending open tab first, then
+ * the indexed sidebar session, then any open tab matching the key, then the
+ * first session. Pinning an un-indexed session as an open tab before selecting
+ * it is what keeps the final `sessions[0]` fallback from silently swapping in
+ * an unrelated transcript.
+ */
+export function resolveSelectedSession<S>(
+  selectedSessionKey: string | null,
+  selectedIndex: number,
+  sessions: readonly S[],
+  openTabSessions: readonly S[],
+  keyOf: (session: S) => string,
+  isPending: (session: S) => boolean,
+): S | null {
+  if (selectedSessionKey) {
+    const fromTab = openTabSessions.find((session) => keyOf(session) === selectedSessionKey)
+    if (fromTab && isPending(fromTab)) return fromTab
+  }
+  if (selectedIndex >= 0) return sessions[selectedIndex] ?? null
+  if (selectedSessionKey) {
+    const fromTab = openTabSessions.find((session) => keyOf(session) === selectedSessionKey)
+    if (fromTab) return fromTab
+  }
+  return sessions[0] ?? null
+}
+
+/**
+ * Send to the explicitly activated session. Background activity is not a routing choice.
+ */
+export function resolveComposerTargetSession({
+  paneTargetKey,
+  selectedSession,
+  sessions,
+  openTabSessions,
+  keyOf,
+}: {
+  paneTargetKey: string | null
+  preferredTargetKey: string | null
+  selectedSession: Session | null
+  runningSessions: readonly Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>[]
+  sessions: readonly Session[]
+  openTabSessions: readonly Session[]
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>) => string
+}): Session | null {
+  if (paneTargetKey) {
+    // An explicit pane target must never fall through to the reader's session.
+    // Closing the pane's tab (or the pane) while a message is composed for it
+    // used to leave the draft aimed at whatever the reader happened to show —
+    // silently sending it to a different agent, the worst outcome this
+    // function can produce. Look the target up in the full session list too,
+    // so the ordinary case still resolves, and refuse rather than guess when
+    // it genuinely cannot be found.
+    return openTabSessions.find((tab) => keyOf(tab) === paneTargetKey)
+      ?? sessions.find((session) => keyOf(session) === paneTargetKey)
+      ?? null
+  }
+
+  // Running status never changes the destination of a user-authored message.
+  return selectedSession
+}
+
+export function isComposerTargetReady({
+  preparingTargetKey,
+  targetSession,
+  keyOf,
+}: {
+  preparingTargetKey: string | null
+  targetSession: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'> | null
+  keyOf: (session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>) => string
+}): boolean {
+  if (!targetSession) return false
+  return preparingTargetKey !== keyOf(targetSession)
+}
+
+export async function runComposerSessionPreparation({
+  refreshSessions,
+  prewarmRuntime,
+  loadDetail,
+  loadAffordances,
+}: {
+  refreshSessions: () => Promise<unknown>
+  prewarmRuntime: () => Promise<unknown>
+  loadDetail: () => Promise<unknown>
+  loadAffordances: () => Promise<unknown>
+}): Promise<void> {
+  await Promise.all([
+    refreshSessions(),
+    prewarmRuntime(),
+    loadDetail(),
+  ])
+  await loadAffordances()
+}
