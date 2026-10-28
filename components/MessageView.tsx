@@ -132,7 +132,7 @@ import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleAp
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect } from './message-view/effects/composer'
-import { runReattachRunningEffect, runOptimisticTextTimeoutEffect } from './message-view/effects/session'
+import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1523,42 +1523,13 @@ function MessageViewInner({
     return true
   }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
-  useLayoutEffect(() => {
-    if (!awaitingPersistedTurn || !session) return
-
-    const baseline = pendingMessageBaselineRef.current
-    if (!baseline || baseline.sessionId !== session.sessionId) return
-
-    const durableMessages = messages.filter(isDurableSessionMessage)
-    const currentLastMessage = durableMessages.at(-1)
-    const currentLastUuid = currentLastMessage?.uuid ?? null
-    const currentLastFingerprint = sessionMessageFingerprint(currentLastMessage)
-    const changedMessages = messagesChangedSinceBaseline(durableMessages, baseline)
-    const persistedTurnArrived =
-      changedMessages.length > 0
-      || durableMessages.length !== baseline.count
-      || currentLastUuid !== baseline.lastUuid
-      || currentLastFingerprint !== baseline.lastFingerprint
-    const persistedAssistantArrived = changedMessages.some((message) => message.type === 'assistant')
-    const liveAssistantVisible = liveAssistantTextRef.current.trim().length > 0 || liveThreadedMessages.length > 0
-
-    if (persistedTurnArrived && (persistedAssistantArrived || !liveAssistantVisible)) {
-      setOptimisticUserText(null)
-      setSteeredUserTexts([])
-      clearLiveAssistantText()
-      setLiveToolActivities([])
-      setLiveThreadedMessages([])
-      clearLiveSubagentText()
-      awaitingPersistedTurnRef.current = false
-      setAwaitingPersistedTurn(false)
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
-      liveToolInputJsonRef.current.clear()
-      if (autoFollow) {
-        window.requestAnimationFrame(() => scrollTimelineToBottom())
-      }
-    }
-  }, [autoFollow, awaitingPersistedTurn, clearLiveAssistantText, liveAssistantText, liveThreadedMessages.length, messages, scrollTimelineToBottom, session])
+  useLayoutEffect(() => runOptimisticTextEffect({
+    awaitingPersistedTurn, session, pendingMessageBaselineRef, messages, liveAssistantTextRef,
+    liveThreadedMessages, setOptimisticUserText, setSteeredUserTexts, clearLiveAssistantText,
+    setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
+    awaitingPersistedTurnRef, setAwaitingPersistedTurn, liveToolIndexesRef, liveToolInputJsonRef,
+    autoFollow, scrollTimelineToBottom,
+  }), [autoFollow, awaitingPersistedTurn, clearLiveAssistantText, liveAssistantText, liveThreadedMessages.length, messages, scrollTimelineToBottom, session])
 
   // Escape hatch for a persisted row that never lands. Without this, a lost or
   // badly delayed write leaves the composer stuck on "Syncing transcript…"
