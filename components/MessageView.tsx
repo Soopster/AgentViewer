@@ -131,7 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
-import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect } from './message-view/effects/composer'
+import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect } from './message-view/effects/composer'
 import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
@@ -1262,38 +1262,12 @@ function MessageViewInner({
     }
   }, [composerDraftKey, flushComposerDraft])
 
-  useEffect(() => () => {
-    for (const key of composerSessions.keys()) {
-      composerSessions.peekRef<AbortController | null>(key, 'abortControllerRef')?.current?.abort()
-      const retry = composerSessions.peekRef<ReturnType<typeof setTimeout> | null>(key, 'transientRetryTimerRef')?.current
-      if (retry) clearTimeout(retry)
-      for (const name of ['liveAssistantFlushFrameRef', 'liveSubagentFlushFrameRef']) {
-        const frame = composerSessions.peekRef<number | null>(key, name)?.current
-        if (frame != null) window.cancelAnimationFrame(frame)
-      }
-    }
-    if (measurementFrameRef.current != null) {
-      window.cancelAnimationFrame(measurementFrameRef.current)
-    }
-    if (scrollRafRef.current != null) {
-      window.cancelAnimationFrame(scrollRafRef.current)
-    }
-    if (liveAssistantFlushFrameRef.current != null) {
-      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
-    }
-    if (liveSubagentFlushFrameRef.current != null) {
-      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
-    }
-    if (userScrollingTimerRef.current != null) {
-      window.clearTimeout(userScrollingTimerRef.current)
-    }
-    pendingTimelineScrollCompensationRef.current = 0
-    pendingMountedAnchorCaptureRef.current = false
-    timelineHeightOverrideRef.current = null
-    wheelScrollCompensationUntilRef.current = 0
-    activeTimelineScrollAnchorRef.current = null
-    pendingTimelineAnchorRestoreRef.current = false
-  }, [])
+  useEffect(() => runDraftFlushEffect({
+    composerSessions, measurementFrameRef, scrollRafRef, liveAssistantFlushFrameRef,
+    liveSubagentFlushFrameRef, userScrollingTimerRef, pendingTimelineScrollCompensationRef,
+    pendingMountedAnchorCaptureRef, timelineHeightOverrideRef, wheelScrollCompensationUntilRef,
+    activeTimelineScrollAnchorRef, pendingTimelineAnchorRestoreRef,
+  }), [])
 
   const captureTimelineScrollAnchor = useCallback((): TimelineScrollAnchor | null => {
     const node = timelineRef.current

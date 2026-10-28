@@ -11,6 +11,7 @@ import { type SendState, type SendAttachment } from '@/lib/types'
 import { type WebComposerQueueDurability } from '@/lib/webComposerQueue'
 import { type QueuedWebSend } from '../types'
 import { getWebComposerQueueStore } from '../composerStorage'
+import { type TimelineScrollAnchor } from '@/lib/timelineVirtualizer'
 
 export type MentionSearchEffectContext = {
   mentionQuery: { start: number; query: string; } | null
@@ -196,4 +197,60 @@ export function runQueuedSendsEffect(ctx: QueuedSendsEffectContext) {
   }).finally(() => {
     composerQueueClaimInFlightRef.current.delete(next.id)
   })
+}
+
+export type DraftFlushEffectContext = {
+  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): MutableRefObject<T>; peekRef<T>(key: string, name: string): MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  measurementFrameRef: RefObject<number | null>
+  scrollRafRef: RefObject<number | null>
+  liveAssistantFlushFrameRef: MutableRefObject<number | null>
+  liveSubagentFlushFrameRef: MutableRefObject<number | null>
+  userScrollingTimerRef: RefObject<number | null>
+  pendingTimelineScrollCompensationRef: RefObject<number>
+  pendingMountedAnchorCaptureRef: RefObject<boolean>
+  timelineHeightOverrideRef: RefObject<number | null>
+  wheelScrollCompensationUntilRef: RefObject<number>
+  activeTimelineScrollAnchorRef: RefObject<TimelineScrollAnchor | null>
+  pendingTimelineAnchorRestoreRef: RefObject<boolean>
+}
+
+export function runDraftFlushEffect(ctx: DraftFlushEffectContext) {
+  const {
+    composerSessions, measurementFrameRef, scrollRafRef, liveAssistantFlushFrameRef,
+    liveSubagentFlushFrameRef, userScrollingTimerRef, pendingTimelineScrollCompensationRef,
+    pendingMountedAnchorCaptureRef, timelineHeightOverrideRef, wheelScrollCompensationUntilRef,
+    activeTimelineScrollAnchorRef, pendingTimelineAnchorRestoreRef,
+  } = ctx
+return () => {
+  for (const key of composerSessions.keys()) {
+    composerSessions.peekRef<AbortController | null>(key, 'abortControllerRef')?.current?.abort()
+    const retry = composerSessions.peekRef<ReturnType<typeof setTimeout> | null>(key, 'transientRetryTimerRef')?.current
+    if (retry) clearTimeout(retry)
+    for (const name of ['liveAssistantFlushFrameRef', 'liveSubagentFlushFrameRef']) {
+      const frame = composerSessions.peekRef<number | null>(key, name)?.current
+      if (frame != null) window.cancelAnimationFrame(frame)
+    }
+  }
+  if (measurementFrameRef.current != null) {
+    window.cancelAnimationFrame(measurementFrameRef.current)
+  }
+  if (scrollRafRef.current != null) {
+    window.cancelAnimationFrame(scrollRafRef.current)
+  }
+  if (liveAssistantFlushFrameRef.current != null) {
+    window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+  }
+  if (liveSubagentFlushFrameRef.current != null) {
+    window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
+  }
+  if (userScrollingTimerRef.current != null) {
+    window.clearTimeout(userScrollingTimerRef.current)
+  }
+  pendingTimelineScrollCompensationRef.current = 0
+  pendingMountedAnchorCaptureRef.current = false
+  timelineHeightOverrideRef.current = null
+  wheelScrollCompensationUntilRef.current = 0
+  activeTimelineScrollAnchorRef.current = null
+  pendingTimelineAnchorRestoreRef.current = false
+}
 }
