@@ -132,7 +132,7 @@ import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleAp
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect } from './message-view/effects/composer'
-import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect } from './message-view/effects/session'
+import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect, runPanelPreferencesEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -389,37 +389,10 @@ function MessageViewInner({
     writeLocalStorageValue('agentViewer:diffShowHunkHeaders', String(diffOptions.showHunkHeaders))
   }, [diffOptions, preferencesHydrated])
   const [composerCollapsed, setComposerCollapsed] = useState(false)
-  useEffect(() => {
-    const storedViewMode = readLocalStorageValue('agentViewer:viewMode')
-    setShowVisualizer(readLocalStorageValue('agentViewer:messageVisualizer') === 'true')
-    setShowReviewMode(readLocalStorageValue('agentViewer:diffReviewMode') === 'true')
-    if (storedViewMode === 'full' || storedViewMode === 'continue' || storedViewMode === 'stream' || storedViewMode === 'agents') {
-      setViewMode(storedViewMode)
-    } else if (readLocalStorageValue('agentViewer:showTools') === 'false') {
-      setViewMode('continue')
-    }
-    const storedDensity = readLocalStorageValue('agentViewer:density')
-    if (storedDensity === 'comfortable' || storedDensity === 'dense') setDensity(storedDensity)
-    setTimelineWidth(readLocalStorageValue('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered')
-    setStickyHeaders(readLocalStorageValue('agentViewer:stickyHeaders') === 'true')
-    setDiffStyle(readLocalStorageValue('agentViewer:diffStyle') === 'split' ? 'split' : 'stacked')
-    const changeStyle = readLocalStorageValue('agentViewer:diffChangeStyle')
-    const inlineDiffStyle = readLocalStorageValue('agentViewer:diffInlineStyle')
-    const showBackgrounds = readLocalStorageValue('agentViewer:diffShowBackgrounds')
-    const wrap = readLocalStorageValue('agentViewer:diffWrap')
-    const showLineNumbers = readLocalStorageValue('agentViewer:diffShowLineNumbers')
-    const showHunkHeaders = readLocalStorageValue('agentViewer:diffShowHunkHeaders')
-    setDiffOptions({
-      changeStyle: changeStyle === 'bars' || changeStyle === 'classic' || changeStyle === 'none' ? changeStyle : DEFAULT_DIFF_OPTIONS.changeStyle,
-      inlineDiffStyle: inlineDiffStyle === 'word-alt' || inlineDiffStyle === 'word' || inlineDiffStyle === 'char' || inlineDiffStyle === 'none' ? inlineDiffStyle : DEFAULT_DIFF_OPTIONS.inlineDiffStyle,
-      showBackgrounds: showBackgrounds === null ? DEFAULT_DIFF_OPTIONS.showBackgrounds : showBackgrounds === 'true',
-      wrap: wrap === null ? DEFAULT_DIFF_OPTIONS.wrap : wrap === 'true',
-      showLineNumbers: showLineNumbers === null ? DEFAULT_DIFF_OPTIONS.showLineNumbers : showLineNumbers === 'true',
-      showHunkHeaders: showHunkHeaders === null ? DEFAULT_DIFF_OPTIONS.showHunkHeaders : showHunkHeaders === 'true',
-    })
-    setComposerCollapsed(readLocalStorageValue('agentViewer:composerCollapsed') === 'true')
-    setPreferencesHydrated(true)
-  }, [])
+  useEffect(() => runPanelPreferencesEffect({
+    setShowVisualizer, setShowReviewMode, setViewMode, setDensity, setTimelineWidth,
+    setStickyHeaders, setDiffStyle, setDiffOptions, setComposerCollapsed, setPreferencesHydrated,
+  }), [])
   useEffect(() => {
     if (!preferencesHydrated) return
     writeLocalStorageValue('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')

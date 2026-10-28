@@ -18,6 +18,10 @@ import { readJsonResponse } from '@/lib/httpResponse'
 import { type GitSummary } from '@/lib/gitProvider'
 import { COMPOSER_GIT_SUMMARY_POLL_MS } from '../constants'
 import { gitSummariesMatch } from '../composerUi'
+import { type MessageDensity, type WebViewMode } from '../../MessageItem'
+import { type PierreDiffStyle } from '../../PierreDiffView'
+import { DEFAULT_DIFF_OPTIONS, type DiffOptions } from '../../messageItemShared'
+import { readLocalStorageValue } from '../constants'
 
 export type ReattachRunningEffectContext = {
   session: Session | null
@@ -390,4 +394,53 @@ export function runGitSummaryEffect(ctx: GitSummaryEffectContext) {
     controller.abort()
     if (timer !== null) window.clearTimeout(timer)
   }
+}
+
+export type PanelPreferencesEffectContext = {
+  setShowVisualizer: Dispatch<SetStateAction<boolean>>
+  setShowReviewMode: Dispatch<SetStateAction<boolean>>
+  setViewMode: Dispatch<SetStateAction<WebViewMode>>
+  setDensity: Dispatch<SetStateAction<MessageDensity>>
+  setTimelineWidth: Dispatch<SetStateAction<'full' | 'centered'>>
+  setStickyHeaders: Dispatch<SetStateAction<boolean>>
+  setDiffStyle: Dispatch<SetStateAction<PierreDiffStyle>>
+  setDiffOptions: Dispatch<SetStateAction<DiffOptions>>
+  setComposerCollapsed: Dispatch<SetStateAction<boolean>>
+  setPreferencesHydrated: Dispatch<SetStateAction<boolean>>
+}
+
+export function runPanelPreferencesEffect(ctx: PanelPreferencesEffectContext) {
+  const {
+    setShowVisualizer, setShowReviewMode, setViewMode, setDensity, setTimelineWidth,
+    setStickyHeaders, setDiffStyle, setDiffOptions, setComposerCollapsed, setPreferencesHydrated,
+  } = ctx
+  const storedViewMode = readLocalStorageValue('agentViewer:viewMode')
+  setShowVisualizer(readLocalStorageValue('agentViewer:messageVisualizer') === 'true')
+  setShowReviewMode(readLocalStorageValue('agentViewer:diffReviewMode') === 'true')
+  if (storedViewMode === 'full' || storedViewMode === 'continue' || storedViewMode === 'stream' || storedViewMode === 'agents') {
+    setViewMode(storedViewMode)
+  } else if (readLocalStorageValue('agentViewer:showTools') === 'false') {
+    setViewMode('continue')
+  }
+  const storedDensity = readLocalStorageValue('agentViewer:density')
+  if (storedDensity === 'comfortable' || storedDensity === 'dense') setDensity(storedDensity)
+  setTimelineWidth(readLocalStorageValue('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered')
+  setStickyHeaders(readLocalStorageValue('agentViewer:stickyHeaders') === 'true')
+  setDiffStyle(readLocalStorageValue('agentViewer:diffStyle') === 'split' ? 'split' : 'stacked')
+  const changeStyle = readLocalStorageValue('agentViewer:diffChangeStyle')
+  const inlineDiffStyle = readLocalStorageValue('agentViewer:diffInlineStyle')
+  const showBackgrounds = readLocalStorageValue('agentViewer:diffShowBackgrounds')
+  const wrap = readLocalStorageValue('agentViewer:diffWrap')
+  const showLineNumbers = readLocalStorageValue('agentViewer:diffShowLineNumbers')
+  const showHunkHeaders = readLocalStorageValue('agentViewer:diffShowHunkHeaders')
+  setDiffOptions({
+    changeStyle: changeStyle === 'bars' || changeStyle === 'classic' || changeStyle === 'none' ? changeStyle : DEFAULT_DIFF_OPTIONS.changeStyle,
+    inlineDiffStyle: inlineDiffStyle === 'word-alt' || inlineDiffStyle === 'word' || inlineDiffStyle === 'char' || inlineDiffStyle === 'none' ? inlineDiffStyle : DEFAULT_DIFF_OPTIONS.inlineDiffStyle,
+    showBackgrounds: showBackgrounds === null ? DEFAULT_DIFF_OPTIONS.showBackgrounds : showBackgrounds === 'true',
+    wrap: wrap === null ? DEFAULT_DIFF_OPTIONS.wrap : wrap === 'true',
+    showLineNumbers: showLineNumbers === null ? DEFAULT_DIFF_OPTIONS.showLineNumbers : showLineNumbers === 'true',
+    showHunkHeaders: showHunkHeaders === null ? DEFAULT_DIFF_OPTIONS.showHunkHeaders : showHunkHeaders === 'true',
+  })
+  setComposerCollapsed(readLocalStorageValue('agentViewer:composerCollapsed') === 'true')
+  setPreferencesHydrated(true)
 }
