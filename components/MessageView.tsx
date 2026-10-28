@@ -129,7 +129,7 @@ import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
-import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks } from './message-view/actions/claude'
+import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer } from './message-view/actions/claude'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2275,26 +2275,9 @@ function MessageViewInner({
     setClaudeMcpPermissionModes, runClaudeSessionAction,
   }, serverName, permissionModeKey, mode, previous), [runClaudeSessionAction])
 
-  const addClaudeMcpServer = useCallback(async () => {
-    const serverName = window.prompt('MCP server name')?.trim()
-    if (!serverName) return
-    const rawConfig = window.prompt(
-      'MCP configuration JSON',
-      '{"type":"http","url":"https://example.com/mcp"}',
-    )
-    if (!rawConfig) return
-    try {
-      const config = JSON.parse(rawConfig) as unknown
-      await runClaudeSessionAction(
-        'setMcpServers',
-        { operation: 'add', serverName, config },
-        `mcp:add:${serverName}`,
-        `Added dynamic MCP server ${serverName}.`,
-      )
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Invalid MCP configuration JSON')
-    }
-  }, [runClaudeSessionAction])
+  const addClaudeMcpServer = useCallback(async () => runAddClaudeMcpServer({
+    runClaudeSessionAction, setSessionActionError,
+  }), [runClaudeSessionAction])
 
   const searchClaudeHookEvents = useCallback(async () => runSearchClaudeHookEvents({
     session, setClaudeHookSearching, setSessionActionError, claudeHookQuery, setDiagnosticSections,

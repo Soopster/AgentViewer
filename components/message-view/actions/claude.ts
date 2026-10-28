@@ -5,6 +5,7 @@ import { type SessionDiagnosticSection } from '@/lib/types'
 import { type MutableRefObject } from 'react'
 import { type ContextComposerHandle } from '../../ContextComposer'
 import { readOptionalJsonResponse } from '@/lib/httpResponse'
+import dynamic from 'next/dynamic'
 
 export type SearchClaudeHookEventsContext = {
   session: Session | null
@@ -113,5 +114,34 @@ export async function runBackgroundClaudeTasks(ctx: BackgroundClaudeTasksContext
   } finally {
     setBackgroundingTasks(false)
     textareaRef.current?.focus()
+  }
+}
+
+export type AddClaudeMcpServerContext = {
+  runClaudeSessionAction: (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => Promise<Record<string, unknown> | null>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+}
+
+export async function runAddClaudeMcpServer(ctx: AddClaudeMcpServerContext) {
+  const {
+    runClaudeSessionAction, setSessionActionError,
+  } = ctx
+  const serverName = window.prompt('MCP server name')?.trim()
+  if (!serverName) return
+  const rawConfig = window.prompt(
+    'MCP configuration JSON',
+    '{"type":"http","url":"https://example.com/mcp"}',
+  )
+  if (!rawConfig) return
+  try {
+    const config = JSON.parse(rawConfig) as unknown
+    await runClaudeSessionAction(
+      'setMcpServers',
+      { operation: 'add', serverName, config },
+      `mcp:add:${serverName}`,
+      `Added dynamic MCP server ${serverName}.`,
+    )
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Invalid MCP configuration JSON')
   }
 }
