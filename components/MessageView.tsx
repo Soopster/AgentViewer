@@ -141,6 +141,7 @@ import { useMarkProgrammaticTimelineScrollGroup } from './message-view/slices/ma
 import { useBuildBookmarkMetaGroup } from './message-view/slices/buildBookmarkMeta'
 import { useFlushLiveAssistantTextGroup } from './message-view/slices/flushLiveAssistantText'
 import { useAutoFollowRefGroup } from './message-view/slices/autoFollowRef'
+import { useScrollRafRefGroup } from './message-view/slices/scrollRafRef'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -605,18 +606,11 @@ function MessageViewInner({
   const scheduleTimelineMeasurementFlushRef = useRef<() => void>(() => {})
   const pendingTimelineScrollCompensationRef = useRef(0)
   const pendingMountedAnchorCaptureRef = useRef(false)
-  const scrollRafRef = useRef<number | null>(null)
-  const programmaticScrollUntilRef = useRef<number>(0)
-  const wheelScrollCompensationUntilRef = useRef<number>(0)
-  const timelineHeightOverrideRef = useRef<number | null>(null)
-  const activeTimelineScrollAnchorRef = useRef<TimelineScrollAnchor | null>(null)
-  const pendingTimelineAnchorRestoreRef = useRef(false)
-  // Set true on each scroll event, cleared SCROLL_IDLE_MS after the last
-  // event. Direct scrollbar/touch scrubbing suppresses scrollTop adjustment;
-  // wheel/trackpad input opts back in via wheelScrollCompensationUntilRef.
-  const userScrollingRef = useRef(false)
-  const userScrollingTimerRef = useRef<number | null>(null)
-  const suppressFollowEvalUntilRef = useRef<number>(0)
+  const {
+    scrollRafRef, programmaticScrollUntilRef, wheelScrollCompensationUntilRef,
+    timelineHeightOverrideRef, activeTimelineScrollAnchorRef, pendingTimelineAnchorRestoreRef,
+    userScrollingRef, userScrollingTimerRef, suppressFollowEvalUntilRef,
+  } = useScrollRafRefGroup()
   const {
     autoFollowRef, timelineRowsRef, handledTargetMessageRequestRef, initialScrollDoneRef,
     sessionCapabilities, activeProvider, cliCommand, modelOptions, selectedModelValue,
