@@ -195,3 +195,40 @@ export async function runHandleApplyRewind(ctx: HandleApplyRewindContext) {
     setApplyingRewind(false)
   }
 }
+
+export type HandleApplyRollbackContext = {
+  session: Session | null
+  rollbackPreview: RollbackPreview | null
+  applyingRewind: boolean
+  setApplyingRewind: Dispatch<SetStateAction<boolean>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  setRollbackPreview: Dispatch<SetStateAction<RollbackPreview | null>>
+}
+
+export async function runHandleApplyRollback(ctx: HandleApplyRollbackContext) {
+  const {
+    session, rollbackPreview, applyingRewind, setApplyingRewind, setSessionActionError,
+    setSessionActionNotice, setRollbackPreview,
+  } = ctx
+  if (!session || !rollbackPreview || applyingRewind) return
+
+  setApplyingRewind(true)
+  setSessionActionError(null)
+  setSessionActionNotice(null)
+  try {
+    const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+    })
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+    setRollbackPreview(null)
+    setSessionActionNotice(`Rolled back ${rollbackPreview.numTurns} turn${rollbackPreview.numTurns === 1 ? '' : 's'}.`)
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Failed to roll back thread')
+  } finally {
+    setApplyingRewind(false)
+  }
+}

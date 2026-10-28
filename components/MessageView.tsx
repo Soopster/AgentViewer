@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -3710,28 +3710,10 @@ function MessageViewInner({
     setSessionActionError, setSessionActionNotice, setRollbackPreview,
   }), [applyingRewind, previewingRewind, rollbackTurns, session])
 
-  const handleApplyRollback = useCallback(async () => {
-    if (!session || !rollbackPreview || applyingRewind) return
-
-    setApplyingRewind(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setRollbackPreview(null)
-      setSessionActionNotice(`Rolled back ${rollbackPreview.numTurns} turn${rollbackPreview.numTurns === 1 ? '' : 's'}.`)
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to roll back thread')
-    } finally {
-      setApplyingRewind(false)
-    }
-  }, [applyingRewind, rollbackPreview, session])
+  const handleApplyRollback = useCallback(async () => runHandleApplyRollback({
+    session, rollbackPreview, applyingRewind, setApplyingRewind, setSessionActionError,
+    setSessionActionNotice, setRollbackPreview,
+  }), [applyingRewind, rollbackPreview, session])
 
   if (!session && !projectView) {
     return (
