@@ -154,3 +154,44 @@ export async function runHandleRollbackPreview(ctx: HandleRollbackPreviewContext
     setPreviewingRewind(false)
   }
 }
+
+export type HandleApplyRewindContext = {
+  session: Session | null
+  rewindPreview: RewindPreview | null
+  applyingRewind: boolean
+  setApplyingRewind: Dispatch<SetStateAction<boolean>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  selectedModel: string
+  setRewindPreview: Dispatch<SetStateAction<RewindPreview | null>>
+}
+
+export async function runHandleApplyRewind(ctx: HandleApplyRewindContext) {
+  const {
+    session, rewindPreview, applyingRewind, setApplyingRewind, setSessionActionError,
+    setSessionActionNotice, selectedModel, setRewindPreview,
+  } = ctx
+  if (!session || !rewindPreview || applyingRewind) return
+
+  setApplyingRewind(true)
+  setSessionActionError(null)
+  setSessionActionNotice(null)
+  try {
+    const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+    })
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+    if (!data.canRewind) throw new Error(data.error ?? 'Rewind unavailable for this session state')
+
+    const fileCount = Array.isArray(data.filesChanged) ? data.filesChanged.length : rewindPreview.filesChanged.length
+    setRewindPreview(null)
+    setSessionActionNotice(fileCount > 0 ? `Rewound ${fileCount} file${fileCount === 1 ? '' : 's'}.` : 'Rewind complete.')
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
+  } finally {
+    setApplyingRewind(false)
+  }
+}

@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -3700,31 +3700,10 @@ function MessageViewInner({
     setSessionActionError, setSessionActionNotice, selectedModel, setRewindPreview,
   }), [applyingRewind, previewingRewind, selectedModel, selectedRewindTarget, session])
 
-  const handleApplyRewind = useCallback(async () => {
-    if (!session || !rewindPreview || applyingRewind) return
-
-    setApplyingRewind(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      if (!data.canRewind) throw new Error(data.error ?? 'Rewind unavailable for this session state')
-
-      const fileCount = Array.isArray(data.filesChanged) ? data.filesChanged.length : rewindPreview.filesChanged.length
-      setRewindPreview(null)
-      setSessionActionNotice(fileCount > 0 ? `Rewound ${fileCount} file${fileCount === 1 ? '' : 's'}.` : 'Rewind complete.')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
-    } finally {
-      setApplyingRewind(false)
-    }
-  }, [applyingRewind, rewindPreview, selectedModel, session])
+  const handleApplyRewind = useCallback(async () => runHandleApplyRewind({
+    session, rewindPreview, applyingRewind, setApplyingRewind, setSessionActionError,
+    setSessionActionNotice, selectedModel, setRewindPreview,
+  }), [applyingRewind, rewindPreview, selectedModel, session])
 
   const handleRollbackPreview = useCallback(async () => runHandleRollbackPreview({
     session, previewingRewind, applyingRewind, rollbackTurns, setPreviewingRewind,
