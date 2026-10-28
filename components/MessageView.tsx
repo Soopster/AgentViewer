@@ -142,6 +142,7 @@ import { useBuildBookmarkMetaGroup } from './message-view/slices/buildBookmarkMe
 import { useFlushLiveAssistantTextGroup } from './message-view/slices/flushLiveAssistantText'
 import { useAutoFollowRefGroup } from './message-view/slices/autoFollowRef'
 import { useScrollRafRefGroup } from './message-view/slices/scrollRafRef'
+import { useTurnProducedOutputRefGroup } from './message-view/slices/turnProducedOutputRef'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -556,24 +557,13 @@ function MessageViewInner({
   const sendInFlightRef = composerSessions.ref(composerOwnerKey, 'sendInFlightRef', false)
   const awaitingPersistedTurnRef = composerSessions.ref(composerOwnerKey, 'awaitingPersistedTurnRef', false)
   const pushedCopilotAttachmentsRef = composerSessions.ref<SendAttachment[]>(composerOwnerKey, 'pushedCopilotAttachmentsRef', [])
-  // Transient auto-retry bookkeeping. turnProducedOutputRef gates retries to
-  // turns that streamed nothing yet (so a retry can't duplicate work);
-  // transientRetryCountRef counts attempts within one logical send;
-  // transientRetryTimerRef holds the pending backoff so cancel can clear it.
-  const turnProducedOutputRef = composerSessions.ref(composerOwnerKey, 'turnProducedOutputRef', false)
-  const transientRetryCountRef = composerSessions.ref(composerOwnerKey, 'transientRetryCountRef', 0)
-  const transientRetryTimerRef = composerSessions.ref<ReturnType<typeof setTimeout> | null>(composerOwnerKey, 'transientRetryTimerRef', null)
-  // Set when a send was blocked because the model list hadn't resolved yet
-  // (see the modelsLoading guard in sendMessage). The composer draft is left
-  // untouched in that case — this just re-fires the send once the fetch
-  // settles, so a cold custom-model connection reads as "sending" rather than
-  // making the user notice the error and hit enter again.
-  const pendingSendOnModelsReadyRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingSendOnModelsReadyRef', null)
-  const pendingMessageBaselineRef = composerSessions.ref<PendingMessageBaseline | null>(composerOwnerKey, 'pendingMessageBaselineRef', null)
-  const liveTurnSessionHandoffRef = composerSessions.ref<string | null>(composerOwnerKey, 'liveTurnSessionHandoffRef', null)
-  const liveAssistantTextRef = composerSessions.ref(composerOwnerKey, 'liveAssistantTextRef', '')
-  const pendingLiveAssistantTextRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingLiveAssistantTextRef', null)
-  const liveAssistantFlushFrameRef = composerSessions.ref<number | null>(composerOwnerKey, 'liveAssistantFlushFrameRef', null)
+  const {
+    turnProducedOutputRef, transientRetryCountRef, transientRetryTimerRef,
+    pendingSendOnModelsReadyRef, pendingMessageBaselineRef, liveTurnSessionHandoffRef,
+    liveAssistantTextRef, pendingLiveAssistantTextRef, liveAssistantFlushFrameRef,
+  } = useTurnProducedOutputRefGroup({
+    composerSessions, composerOwnerKey,
+  })
   // Reasoning shares the assistant flush frame (one RAF flushes both buffers).
   const liveReasoningTextRef = composerSessions.ref(composerOwnerKey, 'liveReasoningTextRef', '')
   const pendingLiveReasoningTextRef = composerSessions.ref<string | null>(composerOwnerKey, 'pendingLiveReasoningTextRef', null)
