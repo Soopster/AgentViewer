@@ -645,20 +645,18 @@ function diffTreePaths(files: FileDiffMetadata[]): string[] {
 }
 
 export function diffDisplayPath(file: FileDiffMetadata): string {
-  return stripDiffPathPrefix(file.name || file.prevName || 'unknown')
+  // Pierre metadata already removes Git's a/ and b/ prefixes; these can also be real directories.
+  return file.name || file.prevName || 'unknown'
 }
 
 function diffFileLabel(file: FileDiffMetadata): string {
   const name = diffDisplayPath(file)
-  const prevName = file.prevName ? stripDiffPathPrefix(file.prevName) : null
+  const prevName = file.prevName || null
   const change = file.type.replaceAll('-', ' ')
   if (prevName && prevName !== name) return `${change} ${prevName} -> ${name}`
   return `${change} ${name}`
 }
 
-function stripDiffPathPrefix(path: string): string {
-  return path.replace(/^[ab]\//, '')
-}
 
 function treePathLabel(path: string, index: number, total: number): string {
   return `${index === total - 1 ? '└─' : '├─'} ${path}`

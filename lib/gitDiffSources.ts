@@ -109,7 +109,13 @@ export async function fetchSourceStatus(
   source: GitDiffSource,
 ): Promise<GitStatusEntry[]> {
   if (source.kind === 'commit-range') {
-    return sortEntries(parseNameStatus(await runGit(cwd, ['diff', '--no-renames', '--name-status', source.base, source.head])))
+    const raw = await runGit(cwd, ['diff', '--no-renames', '--name-status', '-z', source.base, source.head])
+    const fields = raw.split('\0'), entries: GitStatusEntry[] = []
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      const code = fields[index]![0], path = fields[index + 1]!
+      if (code && path) entries.push({ x: ' ', y: code, path })
+    }
+    return sortEntries(entries)
   }
   if (source.kind === 'turn') {
     const successor = await resolveTurnSuccessor(cwd, source.sha)

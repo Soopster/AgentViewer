@@ -31,7 +31,7 @@ try {
   const reviewAndConfirm = async () => { await press('return', '\r', true); await wait(() => setup.captureCharFrame().includes('Enter confirms'), 'Action confirmation missing'); await press('return', '\r'); await wait(() => !capture, 'Action did not finish') }
   try {
     await wait(() => setup.captureCharFrame().includes('conflict.txt'), 'Workspace did not load')
-    await press('g'); await wait(() => setup.captureCharFrame().includes('[: Actions]'), 'Workspace did not open')
+    await press('g'); await wait(() => setup.captureCharFrame().includes('unstaged: conflict.txt'), 'Workspace did not open')
     await press(':'); await choose('Create stash')
     await act(async () => { setup.mockInput.typeText('TUI saved changes') }); await settle()
     await reviewAndConfirm()
@@ -40,7 +40,13 @@ try {
     await act(async () => { setup.mockInput.typeText('tui-feature') }); await settle()
     await reviewAndConfirm()
     if ((await git('branch', '--show-current')).trim() !== 'tui-feature') throw new Error('Create/switch branch failed')
-    await press('5'); await press(':'); await choose('Apply stash@{0}'); await reviewAndConfirm()
+    await press('n', 'n', true);
+    const clickNavigation = async (text: string) => {
+      const y = setup.captureCharFrame().split('\n').findIndex(line => line.includes(text)); if (y < 0) throw new Error(`Missing navigation ${text}`);
+      await act(async () => { await setup.mockMouse.click(5, y) }); await settle()
+    }
+    await clickNavigation('▶ Stashes'); await clickNavigation('stash@{0}');
+    await press(':'); await choose('Apply stash@{0}'); await reviewAndConfirm()
     if (await readFile(join(root, 'conflict.txt'), 'utf8') !== 'TUI stash\n') throw new Error('Stash application failed')
     if (!(await git('stash', 'list')).includes('TUI saved changes')) throw new Error('Apply unexpectedly dropped stash')
     // Introduce a real merge conflict and refresh the existing workspace.
@@ -48,7 +54,8 @@ try {
     await writeFile(join(root, 'conflict.txt'), 'other\n'); await git('commit', '-qam', 'Other')
     await git('switch', '-q', 'tui-feature'); await writeFile(join(root, 'conflict.txt'), 'feature\n'); await git('commit', '-qam', 'Feature')
     await git('merge', 'other').catch(() => '')
-    await press('r'); await wait(() => setup.captureCharFrame().includes('merge'), 'Merge state did not refresh')
+    await press('n', 'n', true); await press('home'); await press('return'); await press('g');
+    await press('r', 'r', true); await wait(() => setup.captureCharFrame().includes('merge'), 'Merge state did not refresh')
     await press('2'); await press('f'); await wait(() => setup.captureCharFrame().includes('Resolve conflict'), 'Conflict editor missing')
     await wait(() => !setup.captureCharFrame().includes('Loading conflict versions…') && setup.captureCharFrame().includes('ours · b/o/t'), 'Conflict versions did not load')
     await press('e'); await wait(() => setup.captureCharFrame().includes('1 conflict blocks remain'), 'Editable conflict result missing')

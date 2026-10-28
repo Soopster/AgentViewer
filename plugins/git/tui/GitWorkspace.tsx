@@ -6,16 +6,19 @@ import { useGitWorkspace } from '../../../lib/git/useGitWorkspace'
 import { localWorkspaceTransport } from '../../../lib/git/workspaceService'
 import { filesForSide, patchRows } from '../../../lib/git/workspaceTypes'
 import { readCommitDraft, writeCommitDraft } from '../../../lib/git/commitDraft'
+import { GitDivider } from './GitDivider'
 import { GitWorkflowMenu } from './GitWorkflowMenu'
 import { GitConflictEditor } from './GitConflictEditor'
 import type { WorkspaceSnapshot } from '../../../lib/git/workspaceTypes'
 import type { WorkflowContext } from '../../../lib/git/workflowMenu'
-import { DiffCodeText } from '../../../tui/opentui/shell/sdkDiff'
+import { DiffCodeText, useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
 import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
 
 type Section = 'files' | 'branches' | 'commits' | 'stashes'
-export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, onClose, onReview, onKeyHandlerReady, onKeyCaptureChange, onDetach }: GitPopoverProps & { onReview: () => void }) {
+export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, onClose, onReview, onKeyHandlerReady, onKeyCaptureChange, onDetach, embedded = false, startCompose = false, onRepositoryChange, onBusyChange, refreshRevision }: GitPopoverProps & { onReview: () => void; startCompose?: boolean }) {
+  const visible = useWindowVisible()
   const root = cwd || process.cwd(), workspace = useGitWorkspace(root, localWorkspaceTransport)
+  useEffect(() => { if (refreshRevision !== undefined) void workspace.refresh() }, [refreshRevision, workspace.refresh])
   const { snapshot, side, files, path, preview, busy, selected, commitPreview } = workspace
   const [section, setSection] = useState<Section>('files')
   const [remoteBranches, setRemoteBranches] = useState(false)
@@ -23,7 +26,10 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
   const [cursor, setCursor] = useState(0)
   const [diffCursor, setDiffCursor] = useState(0)
   const [anchor, setAnchor] = useState<number | null>(null)
-  const [focus, setFocus] = useState<'list' | 'diff' | 'compose' | 'confirm'>('list')
+  const [focus, setFocus] = useState<'list' | 'diff' | 'compose' | 'confirm'>(startCompose ? 'compose' : 'list')
+  useEffect(() => { if (startCompose) setFocus('compose') }, [startCompose])
+  useEffect(() => { onRepositoryChange?.() }, [snapshot?.revision, snapshot?.workflowRevision, snapshot?.head, onRepositoryChange])
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false) }, [busy, onBusyChange])
   const [message, setMessage] = useState(() => readCommitDraft(root))
   const [amend, setAmend] = useState(false)
   const [inspection, setInspection] = useState<{ kind: 'branch' | 'remote-branch' | 'commit' | 'stash'; ref: string; label: string; selector?: string } | null>(null)
@@ -36,8 +42,9 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
   const closeAction = useCallback(() => { setWorkflowTarget(null); setConflictPath(null); setInspection(null); setSection('files'); setFocus('list') }, [])
   const editor = useRef<TextareaRenderable | null>(null)
   const popW = Math.max(20, docked ? width : width - 2), popH = Math.max(8, docked ? height : height - 2)
+  const [filePaneWidth, setFilePaneWidth] = useState<number | null>(null)
   const narrow = popW < 72
-  const leftW = narrow ? 0 : Math.max(24, Math.min(46, Math.floor(popW * .32)))
+  const leftW = narrow ? 0 : Math.max(24, Math.min(filePaneWidth ?? Math.min(46, Math.floor(popW * .32)), Math.floor(popW * .65), popW - 24))
   const rightW = Math.max(12, popW - leftW - 3)
   const currentPatch = commitPreview ? commitPreview.patch : inspection ? content : preview?.patch ?? ''
   const rows = useMemo(() => commitPreview || inspection ? patchRows(currentPatch) : workspace.rows, [commitPreview, inspection, currentPatch, workspace.rows])
@@ -53,7 +60,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     if (inspection) void localWorkspaceTransport.inspect(root, inspection.kind, inspection.ref).then(value => { if (live) setContent(value || 'No differences from HEAD.') }).catch(error => { if (live) setContent(String(error)) })
     return () => { live = false }
   }, [root, inspection])
-  useLayoutEffect(() => { onKeyCaptureChange?.(Boolean(compose || workflowTarget || conflictPath)); return () => onKeyCaptureChange?.(false) }, [compose, workflowTarget, conflictPath, onKeyCaptureChange])
+  useLayoutEffect(() => { onKeyCaptureChange?.(Boolean(visible && (compose || workflowTarget || conflictPath))); return () => onKeyCaptureChange?.(false) }, [visible, compose, workflowTarget, conflictPath, onKeyCaptureChange])
   const selectItem = useCallback((nextSection: Section, index: number) => {
     setSection(nextSection); setCursor(index); setFocus('list')
     if (nextSection === 'files') { setInspection(null); if (files[index]) workspace.setPath(files[index]!.path) }
@@ -81,9 +88,10 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
       }
       return false
     }
-    if (key.sequence === ':' || key.sequence === '?') { openActions(); return }
+    if (key.sequence === ':' || key.sequence === '?') { if (!snapshot) return false; openActions(); return }
     if (key.sequence === 'f' && path && snapshot?.files.some(file => file.path === path && file.conflict)) { setConflictPath(path); return }
     if (key.name === 'escape') { onClose(); return }
+    if (embedded && ['3', '4', '5', 'B'].includes(key.sequence)) return
     if (key.sequence === 'B') {
       const next = remoteBranches ? snapshot?.branches[0] : snapshot?.remoteBranches[0]?.name
       setRemoteBranches(value => !value); setSection('branches'); setCursor(0)
@@ -119,7 +127,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
         selectItem(section, Math.max(0, Math.min(count - 1, cursor + delta)))
       }
     }
-  }, [workflowTarget, conflictPath, openActions, busy, focus, workspace, root, message, submit, reviewCommit, onClose, onReview, snapshot, side, selectItem, diffCursor, anchor, rows, section, files, path, viewH, cursor, branchList, remoteBranches])
+  }, [workflowTarget, conflictPath, openActions, busy, focus, workspace, root, message, submit, reviewCommit, onClose, onReview, snapshot, embedded, side, selectItem, diffCursor, anchor, rows, section, files, path, viewH, cursor, branchList, remoteBranches])
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
   const sidebarH = Math.max(1, popH - 6)
   const overviewH = Math.max(2, Math.floor((sidebarH - 5) / 5))
@@ -134,20 +142,21 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     </box>
   }
   const firstDiffRow = Math.min(Math.max(0, diffCursor), rows.length - 1)
-  return <box position={docked ? undefined : 'absolute'} left={docked ? undefined : 1} top={docked ? undefined : 1} width={popW} height={popH} border={!docked} borderColor={theme.border2} backgroundColor={theme.surface} zIndex={docked ? undefined : zIndex} flexDirection="column" title={docked ? undefined : ' Git workspace '} titleColor={theme.cyan}>
+  return <box position={docked ? undefined : 'absolute'} left={docked ? undefined : 1} top={docked ? undefined : 1} width={popW} height={popH} border={docked ? [] : true} borderColor={theme.border2} backgroundColor={theme.surface} zIndex={docked ? undefined : zIndex} flexDirection="column" title={docked ? undefined : ' Git workspace '} titleColor={theme.cyan}>
     {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
     <box height={1} paddingX={1} flexDirection="row" flexShrink={0}>
       <text fg={theme.green} wrapMode="none">{`${snapshot?.branch ?? 'Loading…'}  ↑${snapshot?.ahead ?? 0} ↓${snapshot?.behind ?? 0} `}</text>
-      <box onMouseDown={() => { if (!busy) onReview() }}><text fg={theme.cyan}>[G Review] </text></box>
+      <box onMouseDown={() => { if (!busy) onReview() }}><text fg={theme.cyan}>[G Annotated review] </text></box>
       <box onMouseDown={() => { if (!busy) openActions() }}><text fg={theme.cyan}>[: Actions]</text></box>
     </box>
     <box flexGrow={1} minHeight={1} flexDirection="row">
-      {!narrow ? <box width={leftW} flexShrink={0} flexDirection="column" border={['right']} borderColor={theme.border} paddingX={1}>
-        <box height={3} flexShrink={0} flexDirection="column"><text fg={theme.cyan}>[1] Status</text><text fg={theme.muted} wrapMode="none">{snapshot?.operation ?? snapshot?.upstream ?? 'No upstream'}</text></box>
-        {listSection('files', `[2] ${side === 'staged' ? 'Staged' : 'Unstaged'} · t switch`, files.map(file => `${file.x}${file.y} ${file.path}`), fileH)}
-        {listSection('branches', remoteBranches ? '[3] Remotes · B local' : '[3] Branches · B remotes', branchList.map(branch => `${branch === snapshot?.branch ? '● ' : ''}${branch}`), overviewH)}
+      {!narrow ? <box width={leftW} flexShrink={0} flexDirection="column" paddingX={1}>
+        {!embedded ? <box height={3} flexShrink={0} flexDirection="column"><text fg={theme.cyan}>[1] Status</text><text fg={theme.muted} wrapMode="none">{snapshot?.operation ?? snapshot?.upstream ?? 'No upstream'}</text></box> : null}
+        {listSection('files', `[2] ${side === 'staged' ? 'Staged' : 'Unstaged'} · t switch`, files.map(file => `${file.x}${file.y} ${file.path}`), embedded ? sidebarH : fileH)}
+        {!embedded ? <>{listSection('branches', remoteBranches ? '[3] Remotes · B local' : '[3] Branches · B remotes', branchList.map(branch => `${branch === snapshot?.branch ? '● ' : ''}${branch}`), overviewH)}
         {listSection('commits', '[4] Commits', snapshot?.commits.map(commit => `${commit.sha.slice(0, 7)} ${commit.subject}`) ?? [], overviewH)}
-        {listSection('stashes', '[5] Stashes', snapshot?.stashes.map(stash => stash.label) ?? [], overviewH)}
+        {listSection('stashes', '[5] Stashes', snapshot?.stashes.map(stash => stash.label) ?? [], overviewH)}</> : null}
+        <box position="absolute" top={0} right={0} width={1} height={sidebarH}><GitDivider id="git-staging-divider" vertical width={1} height={sidebarH} size={leftW} theme={theme} onResize={value => setFilePaneWidth(Math.max(24, Math.min(value, Math.floor(popW * .65), popW - 24)))} /></box>
       </box> : null}
       <box flexGrow={1} minWidth={0} flexDirection="column">
         <box height={1} flexShrink={0} paddingX={1}><text fg={theme.cyan} wrapMode="none">{commitPreview ? `${amend ? 'Amend HEAD' : 'Commit'} · staged preview` : inspection?.label ?? `${side}: ${path ?? 'clean'}`}</text></box>
@@ -174,7 +183,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
         </box>
         {compose ? <box height={7} flexShrink={0} paddingX={1} flexDirection="column">
           <text fg={theme.cyan}>{`${amend ? 'Amend HEAD' : 'Commit message'} · ${filesForSide(snapshot?.files ?? [], 'staged').length} staged files`}</text>
-          {focus === 'compose' ? <box height={4} border borderColor={theme.cyan}><textarea key={root} id="git-workspace-message" ref={editor} focused initialValue={message} width="100%" height="100%" placeholder="Describe the staged changes…" onContentChange={() => setMessage(editor.current?.plainText ?? '')} /></box>
+          {focus === 'compose' ? <box height={4} border borderColor={theme.cyan}><textarea key={root} id="git-workspace-message" ref={editor} focused={visible && focus === 'compose'} initialValue={message} width="100%" height="100%" placeholder="Describe the staged changes…" onContentChange={() => setMessage(editor.current?.plainText ?? '')} /></box>
             : <box height={4} flexDirection="column"><text fg={theme.text} wrapMode="word">{message}</text></box>}
           <box onMouseDown={() => { if (busy) return; if (focus === 'confirm') void submit(); else void reviewCommit() }}><text fg={theme.amber} wrapMode="none">{focus === 'confirm' ? 'Enter confirms · Esc edits · preview above' : 'Ctrl+Enter reviews staged diff · Esc saves draft'}</text></box>
         </box> : null}

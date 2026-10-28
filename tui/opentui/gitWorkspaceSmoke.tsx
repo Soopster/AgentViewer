@@ -28,8 +28,8 @@ try {
   const waitText = async (text: string) => { for (let i = 0; i < 30; i++) { await settle(); if (setup.captureCharFrame().includes(text)) return }; expect(text) }
   const expect = (text: string) => { const frame = setup.captureCharFrame(); if (!frame.includes(text)) throw new Error(`Missing ${text}\n${frame}`) }
   try {
-    await settle(); expect('[1] Status');
-    await act(async () => key('g')); await waitText('[: Actions]'); expect('Git workspace'); expect('sample.txt'); expect('[3] Branches'); expect('[5] Stashes')
+    await settle(); expect('Local Changes');
+    await act(async () => key('g')); await waitText('[: Actions]'); expect('Annotated review'); expect('sample.txt'); expect('Branches'); expect('Stashes')
     await act(async () => key('tab', '\t')); await settle()
     await act(async () => key('down')); await act(async () => key('a')); await settle()
     expect('2 lines selected')
@@ -46,9 +46,9 @@ try {
     const subject = (await exec('git', ['log', '-1', '--format=%s'], { cwd: root })).stdout.trim()
     if (subject !== 'Workspace UI commit') throw new Error(`Wrong commit message ${subject}`)
     if (capture) throw new Error('Commit completion must release shortcut capture')
-    await act(async () => key('G')); await settle(); expect('[1] Status')
+    await act(async () => key('G')); await settle(); expect('Local Changes')
     console.log('Git workspace TUI smoke passed: changes by default, workspace navigation, hunk staging, staged view, native composer, reviewed commit, review-mode navigation.')
   } finally { act(() => setup.renderer.destroy()) }
   const small = await testRender(<RoutedWorkspace cwd={root} width={50} height={18} theme={DARK_THEME} onClose={() => {}} onKeyHandlerReady={next => { handler = next }} />, { width: 50, height: 18 })
-  try { await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); await small.flush() }); await act(async () => { key('g'); await small.flush() }); await small.flush(); if (!small.captureCharFrame().includes('Git workspace')) throw new Error('Small terminal workspace missing') } finally { act(() => small.renderer.destroy()) }
+  try { await act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); await small.flush() }); await act(async () => { key('g'); await small.flush() }); await small.flush(); if (!small.captureCharFrame().includes('[: Actions]')) throw new Error('Small terminal workspace missing') } finally { act(() => small.renderer.destroy()) }
 } finally { await rm(root, { recursive: true, force: true }) }

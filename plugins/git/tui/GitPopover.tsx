@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
-import { GitWorkspace } from './GitWorkspace'
+import { GitDivider } from './GitDivider'
+import { GitBrowser } from './GitBrowser'
 import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../../lib/review/useReview'
@@ -563,6 +564,12 @@ const LEFT_PANE_RESIZE_STEP = 4
 const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 export type GitPopoverProps = {
+  refreshRevision?: string | number
+  onRepositoryChange?: () => void
+  onBusyChange?: (busy: boolean) => void
+  initialFilePath?: string
+  embedded?: boolean
+  initialSource?: DiffSourceSelection
   onWorkspace?: () => void
   cwd?: string | null
   /** Scopes the turn list to the session being read. Without it the menu offers
@@ -592,12 +599,10 @@ const DIFF_CONTROLS_WIDTH = 62
 const DIFF_REVIEW_ACTIONS_MIN_WIDTH = 48
 
 export function GitPopover(props: GitPopoverProps) {
-  const [mode, setMode] = useState<'workspace' | 'review'>('review')
-  if (mode === 'workspace') return <GitWorkspace key={props.cwd} {...props} onReview={() => setMode('review')} />
-  return <GitReviewPopover {...props} onWorkspace={() => setMode('workspace')} />
+  return <GitBrowser {...props} />
 }
 
-export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: GitPopoverProps) {
+export function GitReviewPopover({ embedded = false, initialSource, initialFilePath, refreshRevision, onWorkspace, cwd, sessionId, scopeLabel, zIndex = 50, docked = false, onDetach, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer, onAskAgent, onClipboardWrite, onKeyCaptureChange }: GitPopoverProps) {
   const visible = useWindowVisible()
   const reviewSearchEditingRef = useRef(false)
   const reviewActionKeyRef = useRef<(key: ReviewActionKey) => boolean>(() => false)
@@ -645,7 +650,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   const [commitIndex, setCommitIndex] = useState(0)
   const [commitRangeAnchorIndex, setCommitRangeAnchorIndex] = useState<number | null>(null)
   const [watching, setWatching] = useState(false)
-  const [sourceSelection, setSourceSelection] = useState<DiffSourceSelection>({ kind: 'working' })
+  const [sourceSelection, setSourceSelection] = useState<DiffSourceSelection>(initialSource ?? { kind: 'working' })
   const [turns, setTurns] = useState<GitTurnRef[]>([])
   const [turnsScoped, setTurnsScoped] = useState(false)
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
@@ -775,7 +780,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     setData(null)
     watchSignatureRef.current = ''
     void refreshGitDataRef.current()
-  }, [repoCwd, sourceKey])
+  }, [repoCwd, sourceKey, refreshRevision])
 
   // Watching is opt-in and only runs while the review panel is mounted. The
   // patch fingerprint catches edits to an already-changed file as well as
@@ -814,11 +819,11 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     // visibleNodes to recompute in a separate render cycle.
     const nodes = buildVisibleNodes(data.status, dirs)
     const firstFile = nodes.findIndex((n) => n.kind === 'file')
-    const previousFile = nodes.findIndex(node => node.kind === 'file' && node.path === selectedFilePathRef.current)
+    const previousFile = nodes.findIndex(node => node.kind === 'file' && node.path === (initialFilePath ?? selectedFilePathRef.current))
     setTreeCursor(previousFile >= 0 ? previousFile : firstFile >= 0 ? firstFile : 0)
     branchesScrollRef.current?.scrollTo(0)
     commitsScrollRef.current?.scrollTo(0)
-  }, [data])
+  }, [data, initialFilePath])
 
   // Visible tree nodes (recomputed when data or expanded state changes)
   const visibleNodes = useMemo(
@@ -832,18 +837,12 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     return node?.kind === 'file' ? node.path : null
   }, [visibleNodes, treeCursor])
 
-  // File count for the N of M counter
-  const fileCount = useMemo(
-    () => visibleNodes.filter((n) => n.kind === 'file').length,
-    [visibleNodes],
-  )
-  const filePosition = useMemo(() => {
-    let pos = 0
-    for (let i = 0; i <= treeCursor && i < visibleNodes.length; i++) {
-      if (visibleNodes[i]?.kind === 'file') pos++
-    }
-    return pos
-  }, [visibleNodes, treeCursor])
+  // Count the comparison's files, including files inside collapsed directories.
+  const orderedFilePaths = useMemo(() => data ? sortTreePaths(data.status.filter(entry => matchesDiffFile(entry.path, normalizedFilter)).map(entry => entry.path)) : [], [data, normalizedFilter])
+  const fileCount = orderedFilePaths.length
+  const filePosition = selectedFilePath ? orderedFilePaths.indexOf(selectedFilePath) + 1 : 0
+
+  useEffect(() => { if (initialFilePath) { setJumpFilePath(initialFilePath); setFileJumpRevision(value => value + 1) } }, [initialFilePath])
 
   // Keep the file tree scrollbox centred on the cursor row.
   useEffect(() => {
@@ -988,12 +987,12 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   const popLeft = Math.floor((width - popW) / 2)
 
   const leftInnerH = popH - 2
-  const statusH = 4
+  const statusH = embedded ? 0 : 4
   const branchesH = Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2))
   // Files: grow with content up to 60 % of the left panel, with a scrollbox inside.
   // Commits gets whatever is left via flexGrow.
   const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
-  const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
+  const fileTreeH = embedded ? leftInnerH : Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
   // Commits gets the remaining height after Status + Files + Branches (minus 3 section borders).
   const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 3)
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
@@ -1002,7 +1001,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   // View controls and review actions share one row when both fit; stacking
   // them cost a row of diff on every terminal wide enough not to need it.
   const diffBarsShareRow = fileDiffMode === 'viewer' && rightW >= DIFF_CONTROLS_WIDTH + DIFF_REVIEW_ACTIONS_MIN_WIDTH
-  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? (diffBarsShareRow ? 3 : 4) : 2 : 1))
+  const diffViewportHeight = Math.max(1, rightH - (pane === 2 ? fileDiffMode === 'viewer' ? (diffBarsShareRow ? 3 : 4) : 3 : 1))
 
   function navigateTreeCursor(next: number | ((index: number) => number)) {
     const index = typeof next === 'function' ? next(treeCursor) : next
@@ -1111,7 +1110,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
       clearMouseCellSelection(); if (fileFilter) { setFileFilter(''); return }; onClose(); return
     }
 
-    if (key.sequence === 't') {
+    if (key.sequence === 't' && !(embedded && initialSource?.kind === 'commit-range')) {
       const active = Math.max(0, sourceMenuItems.findIndex((item) => isSameSelection(item.selection, sourceSelection)))
       sourceMenuCursorRef.current = active
       setSourceMenuCursor(active)
@@ -1131,7 +1130,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     }
 
     // 1–4 switch left-side sections.
-    if (key.sequence >= '1' && key.sequence <= '4') {
+    if (!embedded && key.sequence >= '1' && key.sequence <= '4') {
       setPane(parseInt(key.sequence, 10) as PaneId)
       return
     }
@@ -1416,7 +1415,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
       return
     }
   }, [askSpan, onAskAgent, sourceLabel, reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      height, leftPaneMode, onClose, onWorkspace, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
+      height, embedded, initialSource?.kind, leftPaneMode, onClose, onWorkspace, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1466,6 +1465,16 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     const patch = [...(baseDiffView?.patches ?? [])].filter(([path]) => matchesDiffFile(path, normalizedFilter)).map(([, text]) => text).join('\n')
     return (patch || 'No files match this filter. / to edit, Esc to clear.').split('\n')
   }, [baseDiffView, normalizedFilter, pane, rightContent])
+  const plainDiffRows = useMemo(() => {
+    const pathsByHeader = new Map<string, string>()
+    for (const [path, patch] of baseDiffView?.patches ?? []) pathsByHeader.set(patch.split('\n', 1)[0]!, path)
+    let filePath: string | undefined
+    return diffLines.map((text, index): TuiPierreDiffRow => {
+      const header = text.startsWith('diff --git ')
+      if (header) filePath = pathsByHeader.get(text)
+      return { key: `text:${index}`, text, filePath, tone: header ? 'file' : text.startsWith('@@') ? 'hunk' : 'meta' }
+    })
+  }, [baseDiffView?.patches, diffLines])
   const previousContextView = useRef<{ scope: string; layout: string; rows: Array<TuiPierreDiffRow | TuiPierreSplitRow> } | null>(null)
   useLayoutEffect(() => {
     const rows = (diffLayout === 'split' ? rightDiffView?.splitRows : rightDiffView?.rows) ?? []
@@ -1595,13 +1604,13 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
             + (diffNotesByEndIndex.get(index) ?? []).reduce((height, { key, note }) =>
               height + (key === draftNote?.rowKey || !note.text ? 0 : 3 + note.text.split('\n').length + (onSendDiffNoteToComposer ? 1 : 0)), 0),
         }))
-      : diffLines.map((line, index) => ({ keys: [`text:${index}`], height: diffTextHeight(line, rightW - 1, diffTabWidth, wrapDiffLines) })),
-  ), [activeDiffRows, codeHeights, diffTabWidth, wrapDiffLines, rightW, diffDraftSpan, diffLines, diffNotesByEndIndex, draftNote, fileDiffMode, onSendDiffNoteToComposer, pane, rightDiffView, showHunkHeaders])
+      : diffLines.map((line, index) => ({ keys: [`text:${index}`, ...(pane === 2 && plainDiffRows[index]?.tone === 'file' && plainDiffRows[index]?.filePath ? [`${plainDiffRows[index]!.filePath}\0file`] : [])], height: diffTextHeight(line, rightW - 1, diffTabWidth, wrapDiffLines) })),
+  ), [activeDiffRows, codeHeights, diffTabWidth, wrapDiffLines, rightW, diffDraftSpan, diffLines, diffNotesByEndIndex, draftNote, fileDiffMode, onSendDiffNoteToComposer, pane, plainDiffRows, rightDiffView, showHunkHeaders])
   const geometryRef = useRef<DiffGeometry>(geometry)
   useLayoutEffect(() => { geometryRef.current = geometry }, [geometry])
   const window = useGitDiffViewport(diffScrollRef, geometry, loadedContentKey + ':' + fileDiffMode + ':filter:' + normalizedFilter,
     rightContent !== 'Loading…' && loadedContentKey === contentKey, diffViewportHeight,
-    pane === 2 && fileDiffMode === 'viewer' && jumpFilePath ? `${jumpFilePath}\0file` : undefined, setDiffCursorRow, fileJumpRevision, loadedContentKey + ':' + fileDiffMode)
+    pane === 2 && jumpFilePath ? `${jumpFilePath}\0file` : undefined, setDiffCursorRow, fileJumpRevision, loadedContentKey + ':' + fileDiffMode)
   const reviewActions = useGitDiffReviewActions({ rows: activeDiffRows, geometry, scrollRef: diffScrollRef,
     cursor: diffSelectionCurrentIndex, anchor: diffSelectionAnchorRow, enabled: pane === 2 && fileDiffMode === 'viewer',
     scope: noteScope, keyRef: reviewActionKeyRef, onCursor: selectSearchRow, onFocus: focusDiff, onOffset: setHorizontalOffset,
@@ -1617,8 +1626,27 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
   }, [captureReviewKeys, onKeyCaptureChange])
   const diffHighlights = useGitDiffHighlighting(baseDiffView?.files, activeDiffRows, window.start, window.end,
     pierreAppearance, pane === 2 && fileDiffMode === 'viewer')
-  const progressAt = useMemo(() => buildDiffProgress(activeDiffRows, rightDiffView?.files?.map(diffDisplayPath)), [activeDiffRows, rightDiffView?.files])
+  const progressAt = useMemo(() => buildDiffProgress(fileDiffMode === 'viewer' ? activeDiffRows : plainDiffRows, rightDiffView?.files?.map(diffDisplayPath)), [fileDiffMode, activeDiffRows, plainDiffRows, rightDiffView?.files])
   const diffProgress = useMemo(() => progressAt(diffRowAt(geometry, window.top)), [geometry, progressAt, window.top])
+  const syncedViewportFile = useRef<string | null>(null)
+  useEffect(() => {
+    if (!visible || pane !== 2 || loadedContentKey !== contentKey) { syncedViewportFile.current = null; return }
+    const path = diffProgress?.filePath
+    if (!path || !data) return
+    const identity = JSON.stringify([loadedContentKey, fileDiffMode, normalizedFilter, path])
+    if (syncedViewportFile.current === identity) return
+    const entries = data.status.filter(entry => matchesDiffFile(entry.path, normalizedFilter))
+    if (!entries.some(entry => entry.path === path)) return
+    const expanded = new Set(expandedDirs)
+    for (const directory of allDirPaths([{ x: ' ', y: 'M', path }])) expanded.add(directory)
+    const nodes = buildVisibleNodes(entries, expanded)
+    const index = nodes.findIndex(node => node.kind === 'file' && node.path === path)
+    if (index < 0) return
+    syncedViewportFile.current = identity
+    if (expanded.size !== expandedDirs.size) setExpandedDirs(expanded)
+    // Scroll-follow is passive: only explicit tree navigation changes the diff's jump target.
+    setTreeCursor(index)
+  }, [visible, pane, fileDiffMode, loadedContentKey, contentKey, diffProgress?.filePath, normalizedFilter, data, expandedDirs])
   const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
     ? (() => {
         const controls: Array<[string, string]> = [
@@ -1747,13 +1775,13 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
     >
       {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
-      {onWorkspace ? <box position="absolute" top={0} right={3} zIndex={1} onMouseDown={(event) => { event.stopPropagation(); onWorkspace() }}><text fg={theme.cyan}>[g Git workspace]</text></box> : null}
+      {onWorkspace && !embedded ? <box position="absolute" top={0} right={3} zIndex={1} onMouseDown={(event) => { event.stopPropagation(); onWorkspace() }}><text fg={theme.cyan}>[g Git workspace]</text></box> : null}
       {/* ── Left column ─────────────────────────────────── */}
       {!leftPaneHidden ? (
       <box width={leftW} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border}>
 
         {/* [1] Status */}
-        <box
+        {!embedded ? <box
           height={statusH}
           flexDirection="column"
           border={['bottom']} borderStyle="single"
@@ -1775,7 +1803,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
               {fitTerminalText(`◇ ${sourceLabel}`, Math.max(leftW - 3, 6))}
             </text>
           </box>
-        </box>
+        </box> : null}
 
         {/* [2] Files — tree view (scrollbox so large lists scroll naturally) */}
         <box
@@ -1797,6 +1825,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
             <text fg={theme.cyan} wrapMode="none">{fitTerminalText(`/ ${fileFilter}${filterEditing ? '▌' : ''}`, leftW - 4)}</text>
           </box> : null}
           <scrollbox
+            id="git-review-files"
             ref={fileTreeScrollRef}
             flexGrow={1}
             scrollY
@@ -1852,7 +1881,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
         </box>
 
         {/* [3] Branches */}
-        <box
+        {!embedded ? <><box
           height={branchesH}
           flexDirection="column"
           border={['bottom']} borderStyle="single"
@@ -1922,21 +1951,12 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
             })}
           </scrollbox>
         </box>
+        </> : null}
       </box>
       ) : null}
 
       {!leftPaneHidden ? (
-        <box
-          width={1}
-          height={popH - 2}
-          backgroundColor={theme.surface}
-        >
-          {Array.from({ length: Math.max(1, popH - 2) }, (_, i) => (
-            <box key={i} width={1}>
-              <text fg={theme.border2}>│</text>
-            </box>
-          ))}
-        </box>
+        <GitDivider id="git-review-divider" vertical width={1} height={popH - 2} size={leftW} theme={theme} onResize={value => { setLeftPaneMode('normal'); setLeftPaneWidth(clampLeftPaneWidth(value)) }} />
       ) : null}
 
       {/* ── Right column ────────────────────────────────── */}
@@ -1944,7 +1964,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
         <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
           {(() => {
             const groups: Array<[string, string]> = [
-              ['1-4', 'sections'], ['t', 'source'], ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide'],
+              ...(embedded ? [] : [['1-4', 'sections']] as Array<[string, string]>), ...(embedded && initialSource?.kind === 'commit-range' ? [] : [['t', 'source']] as Array<[string, string]>), ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide'],
               ['j/k', 'move'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [
@@ -1970,7 +1990,7 @@ export function GitReviewPopover({ onWorkspace, cwd, sessionId, scopeLabel, zInd
           onSearch={() => { if (!draftNote && !filterEditing) reviewActions.openSearch() }}
           onNext={reviewActions.next} onCopy={side => { if (!draftNote) void reviewActions.copy(side) }} /> : null}
         </box>
-        {pane === 2 && fileDiffMode === 'viewer' ? <DiffStickyHeader width={rightW} theme={theme} progress={diffProgress} /> : null}
+        {pane === 2 ? <DiffStickyHeader width={rightW} theme={theme} progress={diffProgress} /> : null}
         <scrollbox
           id="git-diff-scroll"
           ref={diffScrollRef}

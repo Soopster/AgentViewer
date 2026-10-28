@@ -1,6 +1,26 @@
 # Git workspace
 
-Open Git from the existing Git action. The popup opens directly in the annotated changes view, including branch and agent-turn comparisons. **Git workspace** opens staging, commits, and the full repository workflow (press `g` in OpenTUI); **Review changes** returns to the changes view. Reopening the popup starts in the changes view.
+Open Git from the existing Git action. OpenTUI uses one repository browser, opening into **Local Changes → Changes** with history collapsed. Web retains its changes-first review and separate Git workspace.
+
+## OpenTUI repository browser
+
+The sidebar pins Local Changes (with a file count) and All Commits above a filter. Worktrees, Branches, Remotes (grouped by remote), Tags, Stashes, and Submodules start collapsed. Click a group to expand it. Click the filter, or press `/` with navigation focused, to search across groups; Enter returns to navigation and Escape clears the filter. Pinned navigation remains visible while the group list scrolls. Click ◀ in the sidebar heading or toolbar to collapse it; **▶ Sidebar** restores it at its previous width. Ctrl+N can still open navigation while it is collapsed. Tags open history; initialized submodules open in their own Git context. Selecting a branch filters history without checking it out. Selecting a worktree changes only the Git browser's context; the active agent session stays in its existing directory.
+
+History shows graph markers, refs, subject, author, SHA and date. It loads 100 commits at a time. Select a commit to inspect it; Shift+arrows and Enter compare a range. Root commits compare against the empty tree and merge commits against their first parent.
+
+The detail area has three tabs:
+
+- **Commit:** author/committer metadata, full message, navigable parents, and changed files. Local Changes provides the existing commit/amend editor with staged preview and confirmation.
+- **Changes:** changed-file tree and annotated diff review. The selected file and file counter follow the diff viewport in parsed and plain (`v`) views, including wrapped lines; clicking a file still jumps to it. Local Changes offers **g Stage changes** for file/hunk/line staging and **G Annotated review** to return. Existing source comparisons, notes, search, copy and agent actions remain available in review.
+- **File Tree:** all files at the selected commit, or current tracked and non-ignored untracked files under Local Changes. Directories load on expansion. File previews are bounded to 1 MiB; binary files, symlinks and submodules have explicit placeholders. Historical contents come from Git objects.
+
+Use Ctrl+N for navigation, Ctrl+H to toggle history, and Ctrl+R to refresh. Tab/Shift+Tab move through regions, including the file and diff focus positions inside detail panels. Focus the tab strip to change tabs with Left/Right, then Enter to enter the panel. Escape leaves a menu/editor first, then returns to the tab strip, then closes Git. Text editors retain their own Tab behavior.
+
+Drag the sidebar divider, history divider, or any file/preview divider to resize its panes. Sizes are bounded to keep adjacent content accessible.
+
+Below 110 columns navigation opens as a selector. Below 32 rows history and details alternate; Enter opens details and Ctrl+H returns to history. The shell supports overlays, docked panels and detached windows. Opened tabs and worktree contexts retain their local reading state while hidden review subscriptions pause.
+
+The **Actions** control (`:`) exposes existing branch, stash, sync and recovery operations. In staging, actions use the selected file; in repository navigation they use the selected branch, commit or stash. Existing revision checks and confirmations still apply.
 
 ## Local workflow
 
@@ -13,11 +33,11 @@ Commit message drafts are retained per repository directory. Web stores drafts i
 
 Branches, remote branches, recent commits, and stashes can be selected for inspection. Branch, stash, sync, and conflict actions are described below. History editing and general worktree management remain later phases. Existing agent-task worktree actions remain available through their existing entry points.
 
-## OpenTUI keys
+## OpenTUI staging keys
 
 | Key | Action |
 | --- | --- |
-| `2` / `3` / `4` / `5` | Files / branches / commits / stashes |
+| `2` | Focus the staging file list |
 | `j` / `k` or arrows | Navigate the focused list or diff |
 | `Tab` / `Enter` | Switch focus / focus diff |
 | `t` | Switch staged and unstaged |
@@ -46,6 +66,8 @@ The workspace does not automatically retry mutations after transport failures. R
 
 ## Verification
 
+- `node --import tsx scripts/gitBrowseSmoke.ts` — structured history, paging, revision contents and file edge cases.
+- `bun run tui/opentui/gitBrowserSmoke.tsx` — repository navigation, detail tabs, historical diffs and file previews.
 - `node --import tsx scripts/gitWorkspaceSmoke.ts` — temporary-repository integration coverage.
 - `bun run tui/opentui/gitWorkspaceSmoke.tsx` — keyboard routing, staging, native composer, commit confirmation, narrow rendering, and annotated-review navigation.
 - `npx tsc --noEmit`, `npm run tui:check`, and `npm run routes:smoke`.
