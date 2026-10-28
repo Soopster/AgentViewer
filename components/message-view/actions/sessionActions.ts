@@ -6,6 +6,7 @@ import { downloadHtml } from '@/lib/downloadHtml'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { type RewindPreview } from '../types'
+import { type RollbackPreview } from '../types'
 
 export type HandleExportContext = {
   session: Session | null
@@ -103,6 +104,52 @@ export async function runHandleRewind(ctx: HandleRewindContext) {
       : 'No tracked file changes at that prompt.')
   } catch (err) {
     setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
+  } finally {
+    setPreviewingRewind(false)
+  }
+}
+
+export type HandleRollbackPreviewContext = {
+  session: Session | null
+  previewingRewind: boolean
+  applyingRewind: boolean
+  rollbackTurns: number
+  setPreviewingRewind: Dispatch<SetStateAction<boolean>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  setRollbackPreview: Dispatch<SetStateAction<RollbackPreview | null>>
+}
+
+export async function runHandleRollbackPreview(ctx: HandleRollbackPreviewContext) {
+  const {
+    session, previewingRewind, applyingRewind, rollbackTurns, setPreviewingRewind,
+    setSessionActionError, setSessionActionNotice, setRollbackPreview,
+  } = ctx
+  if (!session || previewingRewind || applyingRewind || rollbackTurns < 1) return
+
+  setPreviewingRewind(true)
+  setSessionActionError(null)
+  setSessionActionNotice(null)
+  try {
+    const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+    })
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+    const turnsRemoved = Array.isArray(data.turnsRemoved)
+      ? data.turnsRemoved.filter((turn: unknown): turn is { turnId: string; preview: string } =>
+          Boolean(turn)
+          && typeof turn === 'object'
+          && typeof (turn as { turnId?: unknown }).turnId === 'string'
+          && typeof (turn as { preview?: unknown }).preview === 'string'
+        )
+      : []
+    setRollbackPreview({ numTurns: rollbackTurns, turnsRemoved })
+    setSessionActionNotice(`Previewed rollback of ${rollbackTurns} turn${rollbackTurns === 1 ? '' : 's'}.`)
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Failed to preview rollback')
   } finally {
     setPreviewingRewind(false)
   }

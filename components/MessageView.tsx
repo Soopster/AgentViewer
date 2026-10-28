@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -3726,36 +3726,10 @@ function MessageViewInner({
     }
   }, [applyingRewind, rewindPreview, selectedModel, session])
 
-  const handleRollbackPreview = useCallback(async () => {
-    if (!session || previewingRewind || applyingRewind || rollbackTurns < 1) return
-
-    setPreviewingRewind(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      const turnsRemoved = Array.isArray(data.turnsRemoved)
-        ? data.turnsRemoved.filter((turn: unknown): turn is { turnId: string; preview: string } =>
-            Boolean(turn)
-            && typeof turn === 'object'
-            && typeof (turn as { turnId?: unknown }).turnId === 'string'
-            && typeof (turn as { preview?: unknown }).preview === 'string'
-          )
-        : []
-      setRollbackPreview({ numTurns: rollbackTurns, turnsRemoved })
-      setSessionActionNotice(`Previewed rollback of ${rollbackTurns} turn${rollbackTurns === 1 ? '' : 's'}.`)
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to preview rollback')
-    } finally {
-      setPreviewingRewind(false)
-    }
-  }, [applyingRewind, previewingRewind, rollbackTurns, session])
+  const handleRollbackPreview = useCallback(async () => runHandleRollbackPreview({
+    session, previewingRewind, applyingRewind, rollbackTurns, setPreviewingRewind,
+    setSessionActionError, setSessionActionNotice, setRollbackPreview,
+  }), [applyingRewind, previewingRewind, rollbackTurns, session])
 
   const handleApplyRollback = useCallback(async () => {
     if (!session || !rollbackPreview || applyingRewind) return
