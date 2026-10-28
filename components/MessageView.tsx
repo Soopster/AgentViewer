@@ -132,7 +132,7 @@ import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleAp
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect } from './message-view/effects/composer'
-import { runReattachRunningEffect } from './message-view/effects/session'
+import { runReattachRunningEffect, runOptimisticTextTimeoutEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1564,23 +1564,12 @@ function MessageViewInner({
   // badly delayed write leaves the composer stuck on "Syncing transcript…"
   // indefinitely (the reconcile effect above only resolves on arrival). After a
   // bounded wait we tear down the live overlay and reveal whatever the poll has.
-  useEffect(() => {
-    if (!awaitingPersistedTurn) return
-    const timer = window.setTimeout(() => {
-      setOptimisticUserText(null)
-      setSteeredUserTexts([])
-      clearLiveAssistantText()
-      setLiveToolActivities([])
-      setLiveThreadedMessages([])
-      clearLiveSubagentText()
-      awaitingPersistedTurnRef.current = false
-      setAwaitingPersistedTurn(false)
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
-      liveToolInputJsonRef.current.clear()
-    }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
-    return () => window.clearTimeout(timer)
-  }, [awaitingPersistedTurn, clearLiveAssistantText, clearLiveSubagentText])
+  useEffect(() => runOptimisticTextTimeoutEffect({
+    awaitingPersistedTurn, setOptimisticUserText, setSteeredUserTexts, clearLiveAssistantText,
+    setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
+    awaitingPersistedTurnRef, setAwaitingPersistedTurn, pendingMessageBaselineRef,
+    liveToolIndexesRef, liveToolInputJsonRef,
+  }), [awaitingPersistedTurn, clearLiveAssistantText, clearLiveSubagentText])
 
   // 'Interrupting…' is only meaningful while we're waiting for the interrupted
   // turn to reconcile. Once awaitingPersistedTurn clears (the partial turn

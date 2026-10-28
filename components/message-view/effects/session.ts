@@ -4,6 +4,9 @@ import type { SetStateAction } from 'react'
 import type { MutableRefObject } from 'react'
 import { extractPendingPermissions, type PendingPermission } from '@/lib/permissions'
 import { REATTACH_POLL_MS } from '../constants'
+import { type ThreadedMessage } from '@/lib/threading'
+import { type PendingMessageBaseline, type SteeredSendEntry, type LiveToolActivity } from '../types'
+import { AWAITING_PERSISTED_TURN_TIMEOUT_MS } from '../constants'
 
 export type ReattachRunningEffectContext = {
   session: Session | null
@@ -84,4 +87,43 @@ export function runReattachRunningEffect(ctx: ReattachRunningEffectContext) {
     cancelled = true
     if (timer) clearTimeout(timer)
   }
+}
+
+export type OptimisticTextTimeoutEffectContext = {
+  awaitingPersistedTurn: boolean
+  setOptimisticUserText: Dispatch<SetStateAction<string | null>>
+  setSteeredUserTexts: Dispatch<SetStateAction<SteeredSendEntry[]>>
+  clearLiveAssistantText: () => void
+  setLiveToolActivities: Dispatch<SetStateAction<LiveToolActivity[]>>
+  setLiveThreadedMessages: Dispatch<SetStateAction<ThreadedMessage[]>>
+  clearLiveSubagentText: () => void
+  awaitingPersistedTurnRef: MutableRefObject<boolean>
+  setAwaitingPersistedTurn: Dispatch<SetStateAction<boolean>>
+  pendingMessageBaselineRef: MutableRefObject<PendingMessageBaseline | null>
+  liveToolIndexesRef: MutableRefObject<Map<number, string>>
+  liveToolInputJsonRef: MutableRefObject<Map<number, string>>
+}
+
+export function runOptimisticTextTimeoutEffect(ctx: OptimisticTextTimeoutEffectContext) {
+  const {
+    awaitingPersistedTurn, setOptimisticUserText, setSteeredUserTexts, clearLiveAssistantText,
+    setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
+    awaitingPersistedTurnRef, setAwaitingPersistedTurn, pendingMessageBaselineRef,
+    liveToolIndexesRef, liveToolInputJsonRef,
+  } = ctx
+  if (!awaitingPersistedTurn) return
+  const timer = window.setTimeout(() => {
+    setOptimisticUserText(null)
+    setSteeredUserTexts([])
+    clearLiveAssistantText()
+    setLiveToolActivities([])
+    setLiveThreadedMessages([])
+    clearLiveSubagentText()
+    awaitingPersistedTurnRef.current = false
+    setAwaitingPersistedTurn(false)
+    pendingMessageBaselineRef.current = null
+    liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
+  }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
+  return () => window.clearTimeout(timer)
 }
