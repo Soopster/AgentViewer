@@ -130,7 +130,7 @@ import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmCo
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
-import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect } from './message-view/effects/bridge'
+import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2399,26 +2399,9 @@ function MessageViewInner({
   }, [canUseChannelBridge])
 
   // Listen for new bridge sent/reply entries from the hook
-  useEffect(() => {
-    const entries = channelBridge.entries.filter(
-      (e): e is Extract<typeof e, { kind: 'sent' | 'reply' }> => e.kind === 'sent' || e.kind === 'reply'
-    )
-    setBridgeTranscriptEntries((prev) => {
-      // Find entries we haven't already added
-      const newEntries = entries.filter((entry) =>
-        !prev.some((p) => p.kind === entry.kind && p.text === entry.text)
-      )
-      if (newEntries.length === 0) return prev
-      return [
-        ...prev,
-        ...newEntries.map((e) => ({
-          kind: e.kind,
-          text: e.text,
-          timestamp: new Date().toISOString(),
-        })),
-      ]
-    })
-  }, [channelBridge.entries.length])
+  useEffect(() => runBridgeEntriesEffect({
+    channelBridge, setBridgeTranscriptEntries,
+  }), [channelBridge.entries.length])
 
   // Sync bridge permission requests into the permission composer
   useEffect(() => runBridgePermissionsEffect({

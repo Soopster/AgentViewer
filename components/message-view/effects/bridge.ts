@@ -110,3 +110,32 @@ export function runBridgePermissionsEffect(ctx: BridgePermissionsEffectContext) 
     return [...prev, ...newPerms]
   })
 }
+
+export type BridgeEntriesEffectContext = {
+  channelBridge: ChannelBridge
+  setBridgeTranscriptEntries: Dispatch<SetStateAction<{ kind: 'sent' | 'reply'; text: string; timestamp: string; }[]>>
+}
+
+export function runBridgeEntriesEffect(ctx: BridgeEntriesEffectContext) {
+  const {
+    channelBridge, setBridgeTranscriptEntries,
+  } = ctx
+  const entries = channelBridge.entries.filter(
+    (e): e is Extract<typeof e, { kind: 'sent' | 'reply' }> => e.kind === 'sent' || e.kind === 'reply'
+  )
+  setBridgeTranscriptEntries((prev) => {
+    // Find entries we haven't already added
+    const newEntries = entries.filter((entry) =>
+      !prev.some((p) => p.kind === entry.kind && p.text === entry.text)
+    )
+    if (newEntries.length === 0) return prev
+    return [
+      ...prev,
+      ...newEntries.map((e) => ({
+        kind: e.kind,
+        text: e.text,
+        timestamp: new Date().toISOString(),
+      })),
+    ]
+  })
+}
