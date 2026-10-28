@@ -151,16 +151,7 @@ import { usePluginOverlayGroup } from './message-view/slices/pluginOverlay'
 import { useActiveQueuedSendsGroup } from './message-view/slices/activeQueuedSends'
 import { useInputTextGroup } from './message-view/slices/inputText'
 import { useTeamAttentionGroup } from './message-view/slices/teamAttention'
-
-// Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
-function formatLiveThinkingTokens(tokens: number): string {
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`
-}
-
-function useLazyRef<T>(create: () => T): { current: T } {
-  const [ref] = useState(() => ({ current: create() }))
-  return ref
-}
+import { useLazyRef, formatLiveThinkingTokens } from './message-view/liveHelpers'
 
 function MessageViewInner({
   hideCoordinator = false,
