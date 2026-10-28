@@ -132,7 +132,7 @@ import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleAp
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect } from './message-view/effects/composer'
-import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect } from './message-view/effects/session'
+import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1131,74 +1131,24 @@ function MessageViewInner({
   }, [activeProvider, attachmentType])
 
   // Reset context usage when switching sessions
-  useEffect(() => {
-    const handoffSessionId = liveTurnSessionHandoffRef.current
-    if (
-      handoffSessionId
-      && session?.sessionId === handoffSessionId
-      && (sendInFlightRef.current || awaitingPersistedTurnRef.current)
-    ) {
-      liveTurnSessionHandoffRef.current = null
-      return
-    }
-    liveTurnSessionHandoffRef.current = null
-    if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
-      setContextUsage(null)
-      setSessionActionError(null)
-      setSessionActionNotice(null)
-      setResumeFromMessageId(null)
-      setRewindPreview(null)
-      setRollbackPreview(null)
-      setShowDiagnostics(false)
-      setDiagnosticSections([])
-      setAttachments([])
-      setAttachmentPath('')
-      setSelectedEffort('auto')
-      setSelectedAgent('')
-      setSelectedCopilotMode('interactive')
-      setComposerOptions({})
-      setPendingPermissions([])
-      setOptimisticUserText(null)
-      setSteeredUserTexts([])
-      clearLiveAssistantText()
-      setLiveToolActivities([])
-      setLiveThreadedMessages([])
-      clearLiveSubagentText()
-      setAwaitingPersistedTurn(false)
-      setSendState('idle')
-      setSendError(null)
-      setFailedSend(null)
-    }
-    setAutoFollow(false)
-    commitTimelineScrollTop(0)
-    setTimelineViewportHeight(0)
-    rowHeightsRef.current.clear()
-    timelineEstimateCalibrationRef.current.clear()
-    timelineEstimateSamplesRef.current.clear()
-    timelineEstimateCalibrationFrozenRef.current = false
-    threadedCacheRef.current.clear()
-    prevThreadingRef.current = null
-    pendingRowMeasurementsRef.current.clear()
-    pendingTimelineScrollCompensationRef.current = 0
-    pendingMountedAnchorCaptureRef.current = false
-    if (measurementFrameRef.current != null) {
-      window.cancelAnimationFrame(measurementFrameRef.current)
-      measurementFrameRef.current = null
-    }
-    timelineHeightOverrideRef.current = null
-    wheelScrollCompensationUntilRef.current = 0
-    activeTimelineScrollAnchorRef.current = null
-    pendingTimelineAnchorRestoreRef.current = false
-    setTimelineHeightOverride(null)
-    setRowMeasurementVersion(0)
-    setPersistedMeasurementVersion(0)
-    if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
-      liveToolInputJsonRef.current.clear()
-    }
-    initialScrollDoneRef.current = false
-  }, [clearLiveAssistantText, commitTimelineScrollTop, composerOwnerKey])
+  useEffect(() => runSessionResetEffect({
+    liveTurnSessionHandoffRef, session, sendInFlightRef, awaitingPersistedTurnRef, setContextUsage,
+    setSessionActionError, setSessionActionNotice, setResumeFromMessageId, setRewindPreview,
+    setRollbackPreview, setShowDiagnostics, setDiagnosticSections, setAttachments,
+    setAttachmentPath, setSelectedEffort, setSelectedAgent, setSelectedCopilotMode,
+    setComposerOptions, setPendingPermissions, setOptimisticUserText, setSteeredUserTexts,
+    clearLiveAssistantText, setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
+    setAwaitingPersistedTurn, setSendState, setSendError, setFailedSend, setAutoFollow,
+    commitTimelineScrollTop, setTimelineViewportHeight, rowHeightsRef,
+    timelineEstimateCalibrationRef, timelineEstimateSamplesRef,
+    timelineEstimateCalibrationFrozenRef, threadedCacheRef, prevThreadingRef,
+    pendingRowMeasurementsRef, pendingTimelineScrollCompensationRef,
+    pendingMountedAnchorCaptureRef, measurementFrameRef, timelineHeightOverrideRef,
+    wheelScrollCompensationUntilRef, activeTimelineScrollAnchorRef,
+    pendingTimelineAnchorRestoreRef, setTimelineHeightOverride, setRowMeasurementVersion,
+    setPersistedMeasurementVersion, pendingMessageBaselineRef, liveToolIndexesRef,
+    liveToolInputJsonRef, initialScrollDoneRef,
+  }), [clearLiveAssistantText, commitTimelineScrollTop, composerOwnerKey])
 
   useEffect(() => {
     suppressDraftSaveRef.current = true

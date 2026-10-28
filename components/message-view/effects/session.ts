@@ -9,6 +9,11 @@ import { type PendingMessageBaseline, type SteeredSendEntry, type LiveToolActivi
 import { AWAITING_PERSISTED_TURN_TIMEOUT_MS } from '../constants'
 import { type SessionMessage } from '../../../lib/types'
 import { isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline } from '../threadedCompare'
+import { type RefObject } from 'react'
+import { type SendState, type ContextUsage, type SessionComposerOptions, type SessionDiagnosticSection, type SendAttachment, type ReasoningEffortLevel } from '@/lib/types'
+import { type IncrementalThreadingCache } from '@/lib/threading'
+import { type TimelineScrollAnchor } from '@/lib/timelineVirtualizer'
+import { type TimelineEstimateBucket, type TimelineEstimateCalibration, type FailedSend, type RewindPreview, type RollbackPreview, type TimelineEstimateSample } from '../types'
 
 export type ReattachRunningEffectContext = {
   session: Session | null
@@ -193,4 +198,147 @@ export function runOptimisticTextEffect(ctx: OptimisticTextEffectContext) {
       window.requestAnimationFrame(() => scrollTimelineToBottom())
     }
   }
+}
+
+export type SessionResetEffectContext = {
+  liveTurnSessionHandoffRef: MutableRefObject<string | null>
+  session: Session | null
+  sendInFlightRef: MutableRefObject<boolean>
+  awaitingPersistedTurnRef: MutableRefObject<boolean>
+  setContextUsage: Dispatch<SetStateAction<ContextUsage | null>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  setResumeFromMessageId: Dispatch<SetStateAction<string | null>>
+  setRewindPreview: Dispatch<SetStateAction<RewindPreview | null>>
+  setRollbackPreview: Dispatch<SetStateAction<RollbackPreview | null>>
+  setShowDiagnostics: Dispatch<SetStateAction<boolean>>
+  setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>
+  setAttachments: Dispatch<SetStateAction<SendAttachment[]>>
+  setAttachmentPath: Dispatch<SetStateAction<string>>
+  setSelectedEffort: Dispatch<SetStateAction<ReasoningEffortLevel | 'auto'>>
+  setSelectedAgent: Dispatch<SetStateAction<string>>
+  setSelectedCopilotMode: Dispatch<SetStateAction<string>>
+  setComposerOptions: Dispatch<SetStateAction<SessionComposerOptions>>
+  setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
+  setOptimisticUserText: Dispatch<SetStateAction<string | null>>
+  setSteeredUserTexts: Dispatch<SetStateAction<SteeredSendEntry[]>>
+  clearLiveAssistantText: () => void
+  setLiveToolActivities: Dispatch<SetStateAction<LiveToolActivity[]>>
+  setLiveThreadedMessages: Dispatch<SetStateAction<ThreadedMessage[]>>
+  clearLiveSubagentText: () => void
+  setAwaitingPersistedTurn: Dispatch<SetStateAction<boolean>>
+  setSendState: Dispatch<SetStateAction<SendState>>
+  setSendError: Dispatch<SetStateAction<string | null>>
+  setFailedSend: Dispatch<SetStateAction<FailedSend | null>>
+  setAutoFollow: Dispatch<SetStateAction<boolean>>
+  commitTimelineScrollTop: (value: number) => void
+  setTimelineViewportHeight: Dispatch<SetStateAction<number>>
+  rowHeightsRef: { current: Map<string, number>; }
+  timelineEstimateCalibrationRef: { current: Map<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>; }
+  timelineEstimateSamplesRef: { current: Map<string, TimelineEstimateSample>; }
+  timelineEstimateCalibrationFrozenRef: RefObject<boolean>
+  threadedCacheRef: { current: Map<string, ThreadedMessage>; }
+  prevThreadingRef: RefObject<IncrementalThreadingCache | null>
+  pendingRowMeasurementsRef: { current: Map<string, number>; }
+  pendingTimelineScrollCompensationRef: RefObject<number>
+  pendingMountedAnchorCaptureRef: RefObject<boolean>
+  measurementFrameRef: RefObject<number | null>
+  timelineHeightOverrideRef: RefObject<number | null>
+  wheelScrollCompensationUntilRef: RefObject<number>
+  activeTimelineScrollAnchorRef: RefObject<TimelineScrollAnchor | null>
+  pendingTimelineAnchorRestoreRef: RefObject<boolean>
+  setTimelineHeightOverride: Dispatch<SetStateAction<number | null>>
+  setRowMeasurementVersion: Dispatch<SetStateAction<number>>
+  setPersistedMeasurementVersion: Dispatch<SetStateAction<number>>
+  pendingMessageBaselineRef: MutableRefObject<PendingMessageBaseline | null>
+  liveToolIndexesRef: MutableRefObject<Map<number, string>>
+  liveToolInputJsonRef: MutableRefObject<Map<number, string>>
+  initialScrollDoneRef: RefObject<boolean>
+}
+
+export function runSessionResetEffect(ctx: SessionResetEffectContext) {
+  const {
+    liveTurnSessionHandoffRef, session, sendInFlightRef, awaitingPersistedTurnRef, setContextUsage,
+    setSessionActionError, setSessionActionNotice, setResumeFromMessageId, setRewindPreview,
+    setRollbackPreview, setShowDiagnostics, setDiagnosticSections, setAttachments,
+    setAttachmentPath, setSelectedEffort, setSelectedAgent, setSelectedCopilotMode,
+    setComposerOptions, setPendingPermissions, setOptimisticUserText, setSteeredUserTexts,
+    clearLiveAssistantText, setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
+    setAwaitingPersistedTurn, setSendState, setSendError, setFailedSend, setAutoFollow,
+    commitTimelineScrollTop, setTimelineViewportHeight, rowHeightsRef,
+    timelineEstimateCalibrationRef, timelineEstimateSamplesRef,
+    timelineEstimateCalibrationFrozenRef, threadedCacheRef, prevThreadingRef,
+    pendingRowMeasurementsRef, pendingTimelineScrollCompensationRef,
+    pendingMountedAnchorCaptureRef, measurementFrameRef, timelineHeightOverrideRef,
+    wheelScrollCompensationUntilRef, activeTimelineScrollAnchorRef,
+    pendingTimelineAnchorRestoreRef, setTimelineHeightOverride, setRowMeasurementVersion,
+    setPersistedMeasurementVersion, pendingMessageBaselineRef, liveToolIndexesRef,
+    liveToolInputJsonRef, initialScrollDoneRef,
+  } = ctx
+  const handoffSessionId = liveTurnSessionHandoffRef.current
+  if (
+    handoffSessionId
+    && session?.sessionId === handoffSessionId
+    && (sendInFlightRef.current || awaitingPersistedTurnRef.current)
+  ) {
+    liveTurnSessionHandoffRef.current = null
+    return
+  }
+  liveTurnSessionHandoffRef.current = null
+  if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
+    setContextUsage(null)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    setResumeFromMessageId(null)
+    setRewindPreview(null)
+    setRollbackPreview(null)
+    setShowDiagnostics(false)
+    setDiagnosticSections([])
+    setAttachments([])
+    setAttachmentPath('')
+    setSelectedEffort('auto')
+    setSelectedAgent('')
+    setSelectedCopilotMode('interactive')
+    setComposerOptions({})
+    setPendingPermissions([])
+    setOptimisticUserText(null)
+    setSteeredUserTexts([])
+    clearLiveAssistantText()
+    setLiveToolActivities([])
+    setLiveThreadedMessages([])
+    clearLiveSubagentText()
+    setAwaitingPersistedTurn(false)
+    setSendState('idle')
+    setSendError(null)
+    setFailedSend(null)
+  }
+  setAutoFollow(false)
+  commitTimelineScrollTop(0)
+  setTimelineViewportHeight(0)
+  rowHeightsRef.current.clear()
+  timelineEstimateCalibrationRef.current.clear()
+  timelineEstimateSamplesRef.current.clear()
+  timelineEstimateCalibrationFrozenRef.current = false
+  threadedCacheRef.current.clear()
+  prevThreadingRef.current = null
+  pendingRowMeasurementsRef.current.clear()
+  pendingTimelineScrollCompensationRef.current = 0
+  pendingMountedAnchorCaptureRef.current = false
+  if (measurementFrameRef.current != null) {
+    window.cancelAnimationFrame(measurementFrameRef.current)
+    measurementFrameRef.current = null
+  }
+  timelineHeightOverrideRef.current = null
+  wheelScrollCompensationUntilRef.current = 0
+  activeTimelineScrollAnchorRef.current = null
+  pendingTimelineAnchorRestoreRef.current = false
+  setTimelineHeightOverride(null)
+  setRowMeasurementVersion(0)
+  setPersistedMeasurementVersion(0)
+  if (!sendInFlightRef.current && !awaitingPersistedTurnRef.current) {
+    pendingMessageBaselineRef.current = null
+    liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
+  }
+  initialScrollDoneRef.current = false
 }
