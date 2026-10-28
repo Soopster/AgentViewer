@@ -14,6 +14,7 @@ import { readOptionalJsonResponse } from '@/lib/httpResponse'
 import { type ThreadedMessage } from '@/lib/threading'
 import { clearComposerQueueTarget, restoreComposerDraftPayload, selectComposerQueueTarget } from '@/lib/composerAttachments'
 import { type QueuedWebSend, type PendingMessageBaseline, type SteeredSendEntry, type LiveToolActivity } from '../types'
+import { createContextAttachment } from '@/lib/composerContext'
 
 export type HandleKeyDownContext = {
   isComposingRef: RefObject<boolean>
@@ -349,4 +350,66 @@ export function runCancelSend(ctx: CancelSendContext) {
     liveToolInputJsonRef.current.clear()
   }
   textareaRef.current?.focus()
+}
+
+export type IngestFileAttachmentsContext = {
+  activeComposerDraftKeyRef: RefObject<string | null>
+  attachmentReadsRef: RefObject<number>
+  setSendError: Dispatch<SetStateAction<string | null>>
+  insertContextAttachments: (incoming: SendAttachment[]) => void
+}
+
+export async function runIngestFileAttachments(ctx: IngestFileAttachmentsContext, files: File[]) {
+  const {
+    activeComposerDraftKeyRef, attachmentReadsRef, setSendError, insertContextAttachments,
+  } = ctx
+  const owner = activeComposerDraftKeyRef.current
+  if (files.length === 0) return
+  const next: SendAttachment[] = []
+  attachmentReadsRef.current += 1
+  try {
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/')
+      if (!isImage) {
+        const path = (file as File & { path?: string }).path
+        if (path) {
+          next.push({
+            id: `${Date.now()}-${next.length}-${file.name}`,
+            type: 'file',
+            path,
+            displayName: file.name,
+          })
+        } else if (file.size <= 2 * 1024 * 1024 && (file.type.startsWith('text/') || /\.(txt|md|json|csv|tsv|log|js|jsx|ts|tsx|py|css|html|yaml|yml|xml|sh|sql)$/i.test(file.name))) {
+          next.push(createContextAttachment('file', file.name, await file.text()))
+        } else {
+          setSendError(`Attach ${file.name} by its local path; this browser cannot read it as text context.`)
+        }
+        continue
+      }
+      try {
+        const buffer = await file.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        const chunk = 0x8000
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+        }
+        const data = typeof window === 'undefined' ? '' : window.btoa(binary)
+        next.push({
+          id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
+          type: 'blob',
+          mimeType: file.type || 'image/png',
+          data,
+          displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
+        })
+      } catch {
+        setSendError(`Unable to read ${file.name || 'the pasted image'}. Attach it again.`)
+      }
+    }
+  } catch {
+    setSendError('Unable to read the attachment. Attach it again.')
+  } finally { attachmentReadsRef.current -= 1 }
+  if (next.length === 0) return
+  if (owner !== activeComposerDraftKeyRef.current) return
+  insertContextAttachments(next.map(a => ({ ...a, id: crypto.randomUUID(), contextKind: a.type === 'blob' || a.type === 'image' ? 'image' : 'file' })))
 }

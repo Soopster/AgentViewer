@@ -126,7 +126,7 @@ import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
-import { runHandleKeyDown, runCancelSend } from './message-view/actions/composer'
+import { runHandleKeyDown, runCancelSend, runIngestFileAttachments } from './message-view/actions/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2193,57 +2193,9 @@ function MessageViewInner({
 
   const activeComposerDraftKeyRef = useRef(composerDraftKey)
   useLayoutEffect(() => { activeComposerDraftKeyRef.current = composerDraftKey }, [composerDraftKey])
-  const ingestFileAttachments = useCallback(async (files: File[]) => {
-    const owner = activeComposerDraftKeyRef.current
-    if (files.length === 0) return
-    const next: SendAttachment[] = []
-    attachmentReadsRef.current += 1
-    try {
-      for (const file of files) {
-        const isImage = file.type.startsWith('image/')
-        if (!isImage) {
-          const path = (file as File & { path?: string }).path
-          if (path) {
-            next.push({
-              id: `${Date.now()}-${next.length}-${file.name}`,
-              type: 'file',
-              path,
-              displayName: file.name,
-            })
-          } else if (file.size <= 2 * 1024 * 1024 && (file.type.startsWith('text/') || /\.(txt|md|json|csv|tsv|log|js|jsx|ts|tsx|py|css|html|yaml|yml|xml|sh|sql)$/i.test(file.name))) {
-            next.push(createContextAttachment('file', file.name, await file.text()))
-          } else {
-            setSendError(`Attach ${file.name} by its local path; this browser cannot read it as text context.`)
-          }
-          continue
-        }
-        try {
-          const buffer = await file.arrayBuffer()
-          const bytes = new Uint8Array(buffer)
-          let binary = ''
-          const chunk = 0x8000
-          for (let i = 0; i < bytes.length; i += chunk) {
-            binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
-          }
-          const data = typeof window === 'undefined' ? '' : window.btoa(binary)
-          next.push({
-            id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
-            type: 'blob',
-            mimeType: file.type || 'image/png',
-            data,
-            displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
-          })
-        } catch {
-          setSendError(`Unable to read ${file.name || 'the pasted image'}. Attach it again.`)
-        }
-      }
-    } catch {
-      setSendError('Unable to read the attachment. Attach it again.')
-    } finally { attachmentReadsRef.current -= 1 }
-    if (next.length === 0) return
-    if (owner !== activeComposerDraftKeyRef.current) return
-    insertContextAttachments(next.map(a => ({ ...a, id: crypto.randomUUID(), contextKind: a.type === 'blob' || a.type === 'image' ? 'image' : 'file' })))
-  }, [insertContextAttachments, setSendError])
+  const ingestFileAttachments = useCallback(async (files: File[]) => runIngestFileAttachments({
+    activeComposerDraftKeyRef, attachmentReadsRef, setSendError, insertContextAttachments,
+  }, files), [insertContextAttachments, setSendError])
 
   const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLDivElement>) => {
     const items = event.clipboardData?.items
