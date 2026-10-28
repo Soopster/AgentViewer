@@ -1979,6 +1979,37 @@ function OpenTuiWorkspace() {
       ? { ...describeCoordinatorWindow(windowSessionTarget(item.session, true)), detail: `${key === floatingKey ? 'floating window' : 'background tab'} · ${windowSessionTarget(item.session, false).detail}` }
       : { key, title: surfaceTitle(item.surface), detail: key === floatingKey ? 'floating window' : 'background tab', hidden: true, surface: item.surface })
   }
+  const currentFocusedTargetKey = splitFocusIndex === null
+    ? shownPopoverTab ? surfaceWindowKey(shownPopoverTab) : selectedSessionKey
+    : focusedWindowItem ? windowItemKey(focusedWindowItem) : null
+  for (const target of windowTargets) {
+    const inWorkspaceTab = popoverTabs.includes(target.surface ?? '')
+    const overflow = orderedWindowKeys.includes(target.key) && !fittedWindowKeys.includes(target.key)
+    const isFloating = target.key === floatingKey
+    const hiddenByZoom = windowPresentation?.mode === 'zoom' && windowPresentation.target !== target.key
+    const hiddenByFullscreen = windowPresentation?.mode === 'fullscreen' && windowPresentation.target !== target.key
+    const focused = windowPresentation?.target === target.key || (!windowPresentation && currentFocusedTargetKey === target.key)
+    if (inWorkspaceTab && shownPopoverTab !== target.surface) {
+      target.hidden = true
+      target.detail = 'workspace tab · use the workspace tab strip to switch'
+    } else if (hiddenByFullscreen) {
+      target.hidden = true
+      target.detail = `hidden by fullscreen · Shift+Z to restore${focused ? ' · owns input' : ''}`
+    } else if (hiddenByZoom) {
+      target.hidden = true
+      target.detail = `hidden by zoom · Ctrl+B m to restore${focused ? ' · owns input' : ''}`
+    } else if (overflow) {
+      target.hidden = true
+      target.detail = `overflow · Ctrl+B w to reveal${focused ? ' · owns input' : ''}`
+    } else if (isFloating) {
+      target.hidden = Boolean(hiddenByZoom || hiddenByFullscreen)
+      target.detail = `${(hiddenByZoom || hiddenByFullscreen) ? 'floating · hidden by presentation' : 'floating window'} · Ctrl+B o to focus${focused ? ' · owns input' : ''}`
+    } else if (target.hidden) {
+      target.detail = `${target.detail.replace(/ · hidden$/, '')} · background tab · Ctrl+B o to focus${focused ? ' · owns input' : ''}`
+    } else if (focused) {
+      target.detail = `${target.detail} · owns input`
+    }
+  }
   const overflowWindowItems: WindowItem[] = orderedWindowKeys
     .filter((key) => !fittedWindowKeys.includes(key))
     .map(windowItemFor)
