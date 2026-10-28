@@ -150,6 +150,7 @@ import { useLiveAssistantTextGroup } from './message-view/slices/liveAssistantTe
 import { usePluginOverlayGroup } from './message-view/slices/pluginOverlay'
 import { useActiveQueuedSendsGroup } from './message-view/slices/activeQueuedSends'
 import { useInputTextGroup } from './message-view/slices/inputText'
+import { useTeamAttentionGroup } from './message-view/slices/teamAttention'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -197,14 +198,12 @@ function MessageViewInner({
   rightPanelOpen,
   onToggleRightPanel,
 }: Props) {
-  const [teamAttention, setTeamAttention] = useState({ sessionId: '', count: 0 })
-  const updateTeamAttention = useCallback((count: number) => setTeamAttention(previous => previous.sessionId === session?.sessionId && previous.count === count ? previous : { sessionId: session?.sessionId ?? '', count }), [session?.sessionId])
-  const [composerDock, setComposerDock] = useState({ sessionId: '', tab: 'chat' })
-  const composerTab = composerDock.sessionId === session?.sessionId ? composerDock.tab : 'chat'
-  const returnToChat = useCallback(() => setComposerDock({ sessionId: session?.sessionId ?? '', tab: 'chat' }), [session?.sessionId])
-  const [composerSessions] = useState(createComposerSessions)
-  const composerOwnerKey = session ? sessionIdentityKey(session) : 'unselected'
-  const activeWebComposerOwnerRef = useRef(composerOwnerKey)
+  const {
+    teamAttention, updateTeamAttention, setComposerDock, composerTab, returnToChat,
+    composerSessions, composerOwnerKey, activeWebComposerOwnerRef,
+  } = useTeamAttentionGroup({
+    session,
+  })
   useLayoutEffect(() => { activeWebComposerOwnerRef.current = composerOwnerKey }, [composerOwnerKey])
   const {
     inputText, setInputText, sendState, setSendState, sendError, setSendError,
