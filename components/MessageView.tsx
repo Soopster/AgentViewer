@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -3695,40 +3695,10 @@ function MessageViewInner({
     setRewindTargetId((prev) => rewindCandidates.some((candidate) => candidate.uuid === prev) ? prev : fallbackId)
   }, [messages, session?.sessionId])
 
-  const handleRewind = useCallback(async () => {
-    if (!session || !selectedRewindTarget || previewingRewind || applyingRewind) return
-
-    setPreviewingRewind(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      if (!data.canRewind) throw new Error(data.error ?? 'Rewind unavailable for this session state')
-
-      const filesChanged = Array.isArray(data.filesChanged)
-        ? data.filesChanged.filter((file: unknown): file is string => typeof file === 'string')
-        : []
-
-      setRewindPreview({
-        userMessageId: selectedRewindTarget.uuid,
-        contentPreview: selectedRewindTarget.content.replace(/\s+/g, ' ').trim().slice(0, 160),
-        filesChanged,
-      })
-      setSessionActionNotice(filesChanged.length > 0
-        ? `Previewed ${filesChanged.length} file change${filesChanged.length === 1 ? '' : 's'}.`
-        : 'No tracked file changes at that prompt.')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
-    } finally {
-      setPreviewingRewind(false)
-    }
-  }, [applyingRewind, previewingRewind, selectedModel, selectedRewindTarget, session])
+  const handleRewind = useCallback(async () => runHandleRewind({
+    session, selectedRewindTarget, previewingRewind, applyingRewind, setPreviewingRewind,
+    setSessionActionError, setSessionActionNotice, selectedModel, setRewindPreview,
+  }), [applyingRewind, previewingRewind, selectedModel, selectedRewindTarget, session])
 
   const handleApplyRewind = useCallback(async () => {
     if (!session || !rewindPreview || applyingRewind) return
