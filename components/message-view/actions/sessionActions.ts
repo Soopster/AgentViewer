@@ -12,6 +12,8 @@ import { readOptionalJsonResponse } from '@/lib/httpResponse'
 import { withProviderQuery } from '../threadedCompare'
 import { type SessionDiagnosticSection } from '@/lib/types'
 import { claudeDiagnosticActionNotice } from '../lazyPanels'
+import { type RefObject } from 'react'
+import { readJsonResponse } from '@/lib/httpResponse'
 
 export type HandleExportContext = {
   session: Session | null
@@ -388,4 +390,44 @@ export async function runRunClaudeSessionAction(ctx: RunClaudeSessionActionConte
   } finally {
     setClaudeMcpBusy(null)
   }
+}
+
+export type ToggleBookmarkContext = {
+  session: Session | null
+  bookmarkIdsRef: RefObject<Set<string>>
+  setBookmarkIds: Dispatch<SetStateAction<Set<string>>>
+  buildBookmarkMeta: (uuid: string) => { role: 'user' | 'assistant' | 'system' | undefined; label: string; preview: string | undefined; sessionTitle: string | undefined; messageTimestamp: string | undefined; }
+}
+
+export function runToggleBookmark(ctx: ToggleBookmarkContext, uuid: string) {
+  const {
+    session, bookmarkIdsRef, setBookmarkIds, buildBookmarkMeta,
+  } = ctx
+  if (!session) return
+  const next = !bookmarkIdsRef.current.has(uuid)
+  setBookmarkIds((prev) => {
+    const updated = new Set(prev)
+    if (next) updated.add(uuid)
+    else updated.delete(uuid)
+    return updated
+  })
+  const meta = next ? buildBookmarkMeta(uuid) : undefined
+  fetch(`/api/sessions/${session.sessionId}/bookmarks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId, uuid, bookmarked: next, meta }),
+  })
+    .then(readJsonResponse)
+    .then((data) => {
+      if (Array.isArray(data?.ids)) setBookmarkIds(new Set(data.ids as string[]))
+    })
+    .catch(() => {
+      // Revert the optimistic update on failure.
+      setBookmarkIds((prev) => {
+        const updated = new Set(prev)
+        if (next) updated.delete(uuid)
+        else updated.add(uuid)
+        return updated
+      })
+    })
 }

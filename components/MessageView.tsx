@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -988,35 +988,9 @@ function MessageViewInner({
     }
   }, [session?.customTitle, session?.summary, session?.firstPrompt, sessionInfo?.customTitle, sessionInfo?.summary])
 
-  const toggleBookmark = useCallback((uuid: string) => {
-    if (!session) return
-    const next = !bookmarkIdsRef.current.has(uuid)
-    setBookmarkIds((prev) => {
-      const updated = new Set(prev)
-      if (next) updated.add(uuid)
-      else updated.delete(uuid)
-      return updated
-    })
-    const meta = next ? buildBookmarkMeta(uuid) : undefined
-    fetch(`/api/sessions/${session.sessionId}/bookmarks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId, uuid, bookmarked: next, meta }),
-    })
-      .then(readJsonResponse)
-      .then((data) => {
-        if (Array.isArray(data?.ids)) setBookmarkIds(new Set(data.ids as string[]))
-      })
-      .catch(() => {
-        // Revert the optimistic update on failure.
-        setBookmarkIds((prev) => {
-          const updated = new Set(prev)
-          if (next) updated.delete(uuid)
-          else updated.add(uuid)
-          return updated
-        })
-      })
-  }, [session, buildBookmarkMeta])
+  const toggleBookmark = useCallback((uuid: string) => runToggleBookmark({
+    session, bookmarkIdsRef, setBookmarkIds, buildBookmarkMeta,
+  }, uuid), [session, buildBookmarkMeta])
 
   // Fetches the live model list + current model from the active provider.
   // Used both on session change and after each turn — `/model X` slashes
