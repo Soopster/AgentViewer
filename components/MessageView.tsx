@@ -133,6 +133,7 @@ import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgrou
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect, runQueueHydrateEffect } from './message-view/effects/composer'
 import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect, runPanelPreferencesEffect } from './message-view/effects/session'
+import { useTimelineRowsGroup } from './message-view/slices/timelineRows'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2376,55 +2377,14 @@ function MessageViewInner({
     showLiveTimelineOverlay,
     steeredUserTexts,
   ])
-  const timelineRows = useMemo<TimelineRow[]>(() => {
-    if (persistedTimelineRows.length === 0) return liveTimelineRows
-    if (liveTimelineRows.length === 0) return persistedTimelineRows
-    return [...persistedTimelineRows, ...liveTimelineRows]
-  }, [liveTimelineRows, persistedTimelineRows])
-  const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
-  const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
-    if (maximized) return timelineRows
-    // Preserve referential identity with timelineRows when nothing is focused —
-    // the scroll-anchor logic below relies on this equality.
-    if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '' && !bookmarksOnly) return timelineRows
-    return timelineRows.filter((row) => {
-      if (bookmarksOnly && !bookmarkIds.has(row.message.uuid)) return false
-      if (!timelineRowMatchesTranscriptFilters(row, transcriptFilters)) return false
-      if (!normalizedTranscriptSearch) return true
-      return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
-    })
-  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds, maximized])
-  const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
-    if (viewMode === 'agents') return groupAgentsToolRows(transcriptTimelineRows)
-    if (viewMode === 'stream') {
-      // Rows whose message renders nothing in Stream view (no prose, no tool
-      // calls) must be dropped, not just render null: the row wrapper's stream
-      // padding and the virtual row's minimum height would otherwise paint
-      // empty selectable ghost rows.
-      const streamRows = decorateStreamTurnLandmarks(transcriptTimelineRows, !showLiveTimelineOverlay)
-      return groupAgentsToolRows(streamRows).filter((row) => streamMessageHasContent(row.message))
-    }
-    return transcriptTimelineRows
-  }, [showLiveTimelineOverlay, transcriptTimelineRows, viewMode])
-  const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
-  const visualizerRows = useMemo<MessageVisualizerRow[]>(
-    () => showVisualizer
-      ? timelineRows.map((row) => ({
-          key: row.key,
-          message: row.message,
-          dimmed: row.dimmed,
-          previewBadge: row.previewBadge,
-          showSession: row.showSession,
-        }))
-      : [],
-    [showVisualizer, timelineRows],
-  )
-  const timelineTargetMessageId = useMemo(
-    () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),
-    [messages, targetMessageId, timelineRows],
-  )
-  const hasLiveTimeline = timelineRows.length > 0
-  const hasTranscriptTimeline = renderedTimelineRows.length > 0
+  const {
+    timelineRows, renderedTimelineRows, hasTranscriptFocus, visualizerRows,
+    timelineTargetMessageId, hasLiveTimeline, hasTranscriptTimeline,
+  } = useTimelineRowsGroup({
+    persistedTimelineRows, liveTimelineRows, deferredTranscriptSearch, maximized,
+    transcriptFilters, bookmarksOnly, bookmarkIds, viewMode, showLiveTimelineOverlay,
+    transcriptSearch, showVisualizer, targetMessageId, messages,
+  })
   useLayoutEffect(() => {
     timelineRowsRef.current = renderedTimelineRows
   }, [renderedTimelineRows])
