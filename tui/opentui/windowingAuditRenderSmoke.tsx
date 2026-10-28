@@ -292,6 +292,11 @@ check(frame('surface-frame:browser')!.width === frame('window-area')!.width, 'zo
 check(setup.renderer.root.findDescendantById('surface-frame:browser') === zoomedBrowser, 'resizing a zoomed surface remounted it')
 await act(async () => { setup.resize(360, 54) }); await settle(200)
 check((runtime.values.get('windowPresentation') as { target?: string } | null)?.target === 'surface:browser', 'growing the terminal cancelled tool-pane zoom')
+await chordKey('p')
+await waitFor('workspace overview for hidden windows', () => setup.captureCharFrame().includes('Workspace overview'))
+const overviewText = setup.captureCharFrame()
+check(overviewText.includes('hidden by zoom') && overviewText.includes('Ctrl+B p to switch target'), 'zoom-hidden window has no accurate overview guidance')
+await escape()
 await chordKey('m')
 check(runtime.values.get('windowPresentation') == null, 'restoring the layout did not finish zoom')
 for (const legacy of [false, true]) {

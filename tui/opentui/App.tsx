@@ -1991,23 +1991,26 @@ function OpenTuiWorkspace() {
     const focused = windowPresentation?.target === target.key || (!windowPresentation && currentFocusedTargetKey === target.key)
     if (inWorkspaceTab && shownPopoverTab !== target.surface) {
       target.hidden = true
-      target.detail = 'workspace tab · use the workspace tab strip to switch'
+      target.detail = 'workspace tab · select from the tab strip (←/→)'
     } else if (hiddenByFullscreen) {
       target.hidden = true
-      target.detail = `hidden by fullscreen · Shift+Z to restore${focused ? ' · owns input' : ''}`
+      target.detail = `hidden by fullscreen · Ctrl+B p to switch target · Shift+Z to restore${focused ? ' · owns input' : ''}`
     } else if (hiddenByZoom) {
       target.hidden = true
-      target.detail = `hidden by zoom · Ctrl+B m to restore${focused ? ' · owns input' : ''}`
+      target.detail = `hidden by zoom · Ctrl+B p to switch target · Ctrl+B m to restore${focused ? ' · owns input' : ''}`
     } else if (overflow) {
       target.hidden = true
-      target.detail = `overflow · Ctrl+B w to reveal${focused ? ' · owns input' : ''}`
+      target.detail = `overflow · Ctrl+B p, then select this window${focused ? ' · owns input' : ''}`
     } else if (isFloating) {
       target.hidden = Boolean(hiddenByZoom || hiddenByFullscreen)
-      target.detail = `${(hiddenByZoom || hiddenByFullscreen) ? 'floating · hidden by presentation' : 'floating window'} · Ctrl+B o to focus${focused ? ' · owns input' : ''}`
+      target.detail = `${(hiddenByZoom || hiddenByFullscreen) ? 'floating · hidden by presentation' : 'floating window'} · Ctrl+B p, then select this window${focused ? ' · owns input' : ''}`
     } else if (target.hidden) {
-      target.detail = `${target.detail.replace(/ · hidden$/, '')} · background tab · Ctrl+B o to focus${focused ? ' · owns input' : ''}`
+      target.detail = `${target.detail.replace(/ · hidden$/, '')} · background tab · Ctrl+B p, then select this window${focused ? ' · owns input' : ''}`
     } else if (focused) {
-      target.detail = `${target.detail} · owns input`
+      const capture = target.surface ? windowSurfaceCaptureRef.current.get(target.surface) : undefined
+      const captureHint = capture === 'terminal' ? ' · terminal receives keys'
+        : capture === 'input' ? ' · editor input receives keys' : ''
+      target.detail = `${target.detail} · owns input${captureHint}`
     }
   }
   const overflowWindowItems: WindowItem[] = orderedWindowKeys
