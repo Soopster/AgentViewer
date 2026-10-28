@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -3287,39 +3287,12 @@ function MessageViewInner({
     restoreTimelineScrollAnchor()
   }, [restoreTimelineScrollAnchor, rowLayout, timelineHeightOverride])
 
-  const handleVisualizerSelectMessage = useCallback((messageId: string) => {
-    setShowVisualizer(false)
-    setTranscriptFilters([])
-    setTranscriptSearch('')
-    setHighlightedMessageId(messageId)
-    autoFollowRef.current = false
-    setAutoFollow(false)
-
-    const scrollToMessage = () => {
-      const node = timelineRef.current
-      const rows = timelineRowsRef.current
-      const layout = rowLayoutRef.current
-      if (!node) return
-
-      const rowIndex = rows.findIndex((row) => rowContainsMessage(row, messageId))
-      if (rowIndex < 0) return
-
-      const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
-      suppressFollowEvalUntilRef.current = performance.now() + 300
-      markProgrammaticTimelineScroll()
-      node.scrollTop = targetTop
-      commitTimelineScrollTop(targetTop)
-    }
-
-    window.requestAnimationFrame(() => {
-      scrollToMessage()
-      window.requestAnimationFrame(() => {
-        if (!scrollMountedTimelineRowIntoView(messageId)) {
-          scrollToMessage()
-        }
-      })
-    })
-  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+  const handleVisualizerSelectMessage = useCallback((messageId: string) => runHandleVisualizerSelectMessage({
+    setShowVisualizer, setTranscriptFilters, setTranscriptSearch, setHighlightedMessageId,
+    autoFollowRef, setAutoFollow, timelineRef, timelineRowsRef, rowLayoutRef,
+    suppressFollowEvalUntilRef, markProgrammaticTimelineScroll, commitTimelineScrollTop,
+    scrollMountedTimelineRowIntoView,
+  }, messageId), [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
   // Used by TaskRail to scroll the transcript to a task's most recent event.
   // Same scroll/highlight behavior as the visualizer-select path but without

@@ -17,6 +17,8 @@ import { readJsonResponse } from '@/lib/httpResponse'
 import { type TimelineRowLayout } from '@/lib/timelineVirtualizer'
 import { type TimelineRow } from '../types'
 import { TIMELINE_TARGET_TOP_GUTTER_PX } from '../constants'
+import { type ActiveTranscriptFilter } from '../types'
+import { rowContainsMessage } from '../timelineRows'
 
 export type HandleExportContext = {
   session: Session | null
@@ -476,6 +478,62 @@ export function runHandleJumpToMessage(ctx: HandleJumpToMessageContext, messageI
     scrollToMessage()
     window.requestAnimationFrame(() => {
       if (!scrollMountedTimelineRowIntoView(messageId)) scrollToMessage()
+    })
+  })
+}
+
+export type HandleVisualizerSelectMessageContext = {
+  setShowVisualizer: Dispatch<SetStateAction<boolean>>
+  setTranscriptFilters: Dispatch<SetStateAction<ActiveTranscriptFilter[]>>
+  setTranscriptSearch: Dispatch<SetStateAction<string>>
+  setHighlightedMessageId: Dispatch<SetStateAction<string | null>>
+  autoFollowRef: RefObject<boolean>
+  setAutoFollow: Dispatch<SetStateAction<boolean>>
+  timelineRef: RefObject<HTMLDivElement | null>
+  timelineRowsRef: RefObject<TimelineRow[]>
+  rowLayoutRef: { current: TimelineRowLayout; }
+  suppressFollowEvalUntilRef: RefObject<number>
+  markProgrammaticTimelineScroll: (duration?: number) => void
+  commitTimelineScrollTop: (value: number) => void
+  scrollMountedTimelineRowIntoView: (messageId: string) => boolean
+}
+
+export function runHandleVisualizerSelectMessage(ctx: HandleVisualizerSelectMessageContext, messageId: string) {
+  const {
+    setShowVisualizer, setTranscriptFilters, setTranscriptSearch, setHighlightedMessageId,
+    autoFollowRef, setAutoFollow, timelineRef, timelineRowsRef, rowLayoutRef,
+    suppressFollowEvalUntilRef, markProgrammaticTimelineScroll, commitTimelineScrollTop,
+    scrollMountedTimelineRowIntoView,
+  } = ctx
+  setShowVisualizer(false)
+  setTranscriptFilters([])
+  setTranscriptSearch('')
+  setHighlightedMessageId(messageId)
+  autoFollowRef.current = false
+  setAutoFollow(false)
+
+  const scrollToMessage = () => {
+    const node = timelineRef.current
+    const rows = timelineRowsRef.current
+    const layout = rowLayoutRef.current
+    if (!node) return
+
+    const rowIndex = rows.findIndex((row) => rowContainsMessage(row, messageId))
+    if (rowIndex < 0) return
+
+    const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 300
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    commitTimelineScrollTop(targetTop)
+  }
+
+  window.requestAnimationFrame(() => {
+    scrollToMessage()
+    window.requestAnimationFrame(() => {
+      if (!scrollMountedTimelineRowIntoView(messageId)) {
+        scrollToMessage()
+      }
     })
   })
 }
