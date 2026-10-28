@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2310,32 +2310,9 @@ function MessageViewInner({
   // Tracks only policies applied in this viewer. Absence is deliberately shown
   // as unknown rather than guessing the SDK's current per-server override.
   const [claudeMcpPermissionModes, setClaudeMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
-  const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => {
-    if (!session) return null
-    setClaudeMcpBusy(busyKey)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId, ...extra }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
-      const result = data.result && typeof data.result === 'object' && !Array.isArray(data.result)
-        ? data.result as Record<string, unknown>
-        : data as Record<string, unknown>
-      setSessionActionNotice(claudeDiagnosticActionNotice(action, successNotice, result))
-      await refreshDiagnostics()
-      return result
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Action failed')
-      return null
-    } finally {
-      setClaudeMcpBusy(null)
-    }
-  }, [refreshDiagnostics, session])
+  const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => runRunClaudeSessionAction({
+    session, setClaudeMcpBusy, setSessionActionError, setSessionActionNotice, refreshDiagnostics,
+  }, action, extra, busyKey, successNotice), [refreshDiagnostics, session])
 
   const applyClaudeMcpPermissionMode = useCallback(async (
     serverName: string,
