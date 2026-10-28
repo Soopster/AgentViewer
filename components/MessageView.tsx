@@ -144,6 +144,7 @@ import { useAutoFollowRefGroup } from './message-view/slices/autoFollowRef'
 import { useScrollRafRefGroup } from './message-view/slices/scrollRafRef'
 import { useTurnProducedOutputRefGroup } from './message-view/slices/turnProducedOutputRef'
 import { useBridgeTranscriptEntriesGroup } from './message-view/slices/bridgeTranscriptEntries'
+import { useIdeBridgeOpenGroup } from './message-view/slices/ideBridgeOpen'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -524,15 +525,12 @@ function MessageViewInner({
   useLayoutEffect(() => {
     channelBridgeRef.current = channelBridge
   }, [channelBridge])
-  // IDE bridge — the third Claude composer flow (agentViewer hosts an IDE
-  // endpoint an external `claude` connects to; see channels/agentviewer-ide.ts).
-  // Shares the Claude-only availability gate with the channel bridge.
-  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
-  const canUseIdeBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
-  const ideBridge = useIdeBridge({ open: ideBridgeOpen, available: canUseIdeBridge })
-  const handledIdeBridgeOpenRequestRef = useRef(ideBridgeOpenRequest)
-  const handledIdeBridgeRouteRequestRef = useRef(ideBridgeRouteToggleRequest)
-  const ideBridgeRef = useRef(ideBridge)
+  const {
+    ideBridgeOpen, setIdeBridgeOpen, canUseIdeBridge, ideBridge, handledIdeBridgeOpenRequestRef,
+    handledIdeBridgeRouteRequestRef, ideBridgeRef,
+  } = useIdeBridgeOpenGroup({
+    projectView, session, ideBridgeOpenRequest, ideBridgeRouteToggleRequest,
+  })
   useLayoutEffect(() => {
     ideBridgeRef.current = ideBridge
   }, [ideBridge])
