@@ -5216,9 +5216,11 @@ function OpenTuiWorkspace() {
   })
 
   const pickWindowTarget = useStableEvent((key: string) => {
-    if (windowPresentation && windowTargets.some(target => target.key === key)) setWindowPresentation({ ...windowPresentation, target: key })
+    const fallbackSessions = [...openTabSessions, ...(workspaceReaderSession ? [workspaceReaderSession] : [])]
+    if (windowPresentation && (windowTargets.some(target => target.key === key) || fallbackSessions.some(session => sessionKey(session) === key))) setWindowPresentation({ ...windowPresentation, target: key })
     runPickWindowTarget({
-    windowTargets, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
+    windowTargets, fallbackSessions,
+    showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
     setSplitFocusIndex, parkedWindowKeysRef, windowStackFor, activateWindowTab, pendingSurfaceFocusRef,
     popoverTabs, showPopoverTab, setWindowZoom: windowPresentation ? () => {} : setWindowZoom, setWindowSurfacePeek, setSurfacePanelFocused,
     windowItems, focusSplitPane, splitPinnedKeys, watchedCoordinator, splitPaneSessions,

@@ -4,7 +4,7 @@ import type { SetStateAction } from 'react'
 import type { RefObject } from 'react'
 import React from 'react'
 import { isSurfaceWindowKey, surfaceIdOfKey } from '../../windowOrder'
-import { type WindowTarget } from '../../windowTargets'
+import { windowSessionTarget, type WindowTarget } from '../../windowTargets'
 import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
 import { type Session } from '../../../../lib/types'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
@@ -71,6 +71,7 @@ import { windowInDirection } from '../../windowLayout'
 
 export type PickWindowTargetContext = {
   windowTargets: WindowTarget[]
+  fallbackSessions: Session[]
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   floatingKey: string | null
   setWindowSwitcherOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -102,7 +103,7 @@ export type PickWindowTargetContext = {
 
 export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
   const {
-    windowTargets, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
+    windowTargets, fallbackSessions, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
     setSplitFocusIndex, parkedWindowKeysRef, windowStackFor, activateWindowTab, pendingSurfaceFocusRef,
     popoverTabs, showPopoverTab, setWindowZoom, setWindowSurfacePeek, setSurfacePanelFocused,
     windowItems, focusSplitPane, splitPinnedKeys, watchedCoordinator, splitPaneSessions,
@@ -110,6 +111,10 @@ export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
     selectedSession, setOpenTabSessions, selectTabSession, focusReaderFromSplit,
   } = ctx
   const target = windowTargets.find((entry) => entry.key === key)
+    ?? (() => {
+      const session = fallbackSessions.find((entry) => sessionKey(entry) === key)
+      return session ? windowSessionTarget(session, true) : undefined
+    })()
   if (!target) { showNotice('info', 'That window is no longer open'); return }
   if (key === floatingKey) {
     setWindowSwitcherOpen(false)
