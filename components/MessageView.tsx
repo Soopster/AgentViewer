@@ -139,6 +139,7 @@ import { useIngestFileAttachmentsGroup } from './message-view/slices/ingestFileA
 import { useRemoveQueuedSendGroup } from './message-view/slices/removeQueuedSend'
 import { useMarkProgrammaticTimelineScrollGroup } from './message-view/slices/markProgrammaticTimelineScroll'
 import { useBuildBookmarkMetaGroup } from './message-view/slices/buildBookmarkMeta'
+import { useFlushLiveAssistantTextGroup } from './message-view/slices/flushLiveAssistantText'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -680,97 +681,14 @@ function MessageViewInner({
   useEffect(() => {
     awaitingPersistedTurnRef.current = awaitingPersistedTurn
   }, [awaitingPersistedTurn])
-
-  const flushLiveAssistantText = useCallback(() => {
-    liveAssistantFlushFrameRef.current = null
-    const nextText = pendingLiveAssistantTextRef.current
-    if (nextText != null) {
-      pendingLiveAssistantTextRef.current = null
-      setLiveAssistantText(nextText)
-    }
-    const nextReasoning = pendingLiveReasoningTextRef.current
-    if (nextReasoning != null) {
-      pendingLiveReasoningTextRef.current = null
-      setLiveReasoningText(nextReasoning)
-    }
-  }, [pendingLiveAssistantTextRef, liveAssistantFlushFrameRef, pendingLiveReasoningTextRef, setLiveAssistantText, setLiveReasoningText])
-
-  const flushLiveAssistantTextNow = useCallback(() => {
-    if (liveAssistantFlushFrameRef.current != null) {
-      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
-      liveAssistantFlushFrameRef.current = null
-    }
-    flushLiveAssistantText()
-  }, [flushLiveAssistantText, liveAssistantFlushFrameRef])
-
-  const clearLiveAssistantText = useCallback(() => {
-    if (liveAssistantFlushFrameRef.current != null) {
-      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
-      liveAssistantFlushFrameRef.current = null
-    }
-    liveAssistantTextRef.current = ''
-    pendingLiveAssistantTextRef.current = null
-    setLiveAssistantText('')
-    liveReasoningTextRef.current = ''
-    pendingLiveReasoningTextRef.current = null
-    setLiveReasoningText('')
-    setLiveThinkingTokens(0)
-  }, [liveAssistantTextRef, pendingLiveAssistantTextRef, liveAssistantFlushFrameRef, liveReasoningTextRef, pendingLiveReasoningTextRef, setLiveAssistantText, setLiveReasoningText, setLiveThinkingTokens])
-
-  const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
-    const nextText = replace ? deltaText : `${liveAssistantTextRef.current}${deltaText}`
-    liveAssistantTextRef.current = nextText
-    pendingLiveAssistantTextRef.current = nextText
-    if (liveAssistantFlushFrameRef.current == null) {
-      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
-    }
-  }, [flushLiveAssistantText, liveAssistantTextRef, pendingLiveAssistantTextRef, liveAssistantFlushFrameRef])
-
-  // Reasoning is always append-only (no replace semantics like the codex
-  // realtime answer transcript), and piggybacks on the assistant flush frame.
-  const queueLiveReasoningText = useCallback((deltaText: string) => {
-    const nextText = `${liveReasoningTextRef.current}${deltaText}`
-    liveReasoningTextRef.current = nextText
-    pendingLiveReasoningTextRef.current = nextText
-    if (liveAssistantFlushFrameRef.current == null) {
-      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
-    }
-  }, [flushLiveAssistantText, liveAssistantFlushFrameRef, liveReasoningTextRef, pendingLiveReasoningTextRef])
-
-  const flushLiveSubagentText = useCallback(() => {
-    liveSubagentFlushFrameRef.current = null
-    // Snapshot the ref into a fresh object so context consumers see one new
-    // identity per frame; the ref keeps mutating in place between flushes.
-    setLiveSubagentText({ ...liveSubagentTextRef.current })
-  }, [liveSubagentTextRef, liveSubagentFlushFrameRef, setLiveSubagentText])
-
-  const scheduleLiveSubagentFlush = useCallback(() => {
-    if (liveSubagentFlushFrameRef.current == null) {
-      liveSubagentFlushFrameRef.current = window.requestAnimationFrame(flushLiveSubagentText)
-    }
-  }, [flushLiveSubagentText, liveSubagentFlushFrameRef])
-
-  const queueLiveSubagentDelta = useCallback((parentId: string, delta: string) => {
-    const map = liveSubagentTextRef.current
-    map[parentId] = (map[parentId] ?? '') + delta
-    scheduleLiveSubagentFlush()
-  }, [scheduleLiveSubagentFlush, liveSubagentTextRef])
-
-  const removeLiveSubagentEntry = useCallback((parentId: string) => {
-    const map = liveSubagentTextRef.current
-    if (!(parentId in map)) return
-    delete map[parentId]
-    scheduleLiveSubagentFlush()
-  }, [scheduleLiveSubagentFlush, liveSubagentTextRef])
-
-  const clearLiveSubagentText = useCallback(() => {
-    if (liveSubagentFlushFrameRef.current != null) {
-      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
-      liveSubagentFlushFrameRef.current = null
-    }
-    liveSubagentTextRef.current = {}
-    setLiveSubagentText({})
-  }, [liveSubagentTextRef, liveSubagentFlushFrameRef, setLiveSubagentText])
+  const {
+    flushLiveAssistantTextNow, clearLiveAssistantText, queueLiveAssistantText,
+    queueLiveReasoningText, queueLiveSubagentDelta, removeLiveSubagentEntry, clearLiveSubagentText,
+  } = useFlushLiveAssistantTextGroup({
+    liveAssistantFlushFrameRef, pendingLiveAssistantTextRef, setLiveAssistantText,
+    pendingLiveReasoningTextRef, setLiveReasoningText, liveAssistantTextRef, liveReasoningTextRef,
+    setLiveThinkingTokens, liveSubagentFlushFrameRef, setLiveSubagentText, liveSubagentTextRef,
+  })
 
   useEffect(() => {
     if (!cliPopoverOpen) return
