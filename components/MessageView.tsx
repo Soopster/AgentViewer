@@ -127,6 +127,7 @@ import { TimelineBody } from './message-view/TimelineBody'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
+import { runRespondToPermission } from './message-view/actions/permissions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2229,62 +2230,10 @@ function MessageViewInner({
     }
   }, [session, sessionActionLoading])
 
-  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => {
-    if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
-      window.open(permission.url, '_blank', 'noopener,noreferrer')
-    }
-    // Bridge permissions are those without a sessionId (they came from the CLI bridge)
-    if (!permission.sessionId && !permission.provider) {
-      setSessionActionLoading(`permission:${permission.id}`)
-      setSessionActionError(null)
-      try {
-        const behavior = response === 'reject' ? 'deny' : 'allow'
-        await respondToChannelPermission(readBridgeConfigFromEnv(), permission.id, behavior)
-        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
-      } catch (err) {
-        setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to bridge permission')
-      } finally {
-        setSessionActionLoading(null)
-      }
-      return
-    }
-
-    if (!session || sessionActionLoading) return
-    setSessionActionLoading(`permission:${permission.id}`)
-    setSessionActionError(null)
-    try {
-      const targetSessionId = permission.sessionId ?? session.sessionId
-      const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'respondPermission',
-          permissionId: permission.id,
-          response,
-          permissionDecisionReason: response === 'reject' ? permissionDenialReason(permission) : undefined,
-          permissionMode,
-          provider: session.provider,
-          providerInstanceId: session.providerInstanceId,
-        }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw Object.assign(new Error(data.error), { code: (data as { code?: string }).code })
-      setPendingPermissions((prev) => prev.filter((entry) =>
-        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
-      ))
-    } catch (err) {
-      if (isPendingRequestGone(err)) {
-        setPendingPermissions((prev) => prev.filter((entry) =>
-          entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
-        ))
-        setSessionActionError(PENDING_REQUEST_GONE_NOTICE)
-      } else {
-        setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
-      }
-    } finally {
-      setSessionActionLoading(null)
-    }
-  }, [session, sessionActionLoading])
+  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => runRespondToPermission({
+    setSessionActionLoading, setSessionActionError, setPendingPermissions, session,
+    sessionActionLoading,
+  }, permission, response, permissionMode), [session, sessionActionLoading])
 
   // Submit answers to a structured question prompt. Codex keys answers by its
   // schema id; Claude falls back to question text. Arrays stay lossless for
