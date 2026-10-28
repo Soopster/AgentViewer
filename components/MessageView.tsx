@@ -140,6 +140,7 @@ import { useRemoveQueuedSendGroup } from './message-view/slices/removeQueuedSend
 import { useMarkProgrammaticTimelineScrollGroup } from './message-view/slices/markProgrammaticTimelineScroll'
 import { useBuildBookmarkMetaGroup } from './message-view/slices/buildBookmarkMeta'
 import { useFlushLiveAssistantTextGroup } from './message-view/slices/flushLiveAssistantText'
+import { useAutoFollowRefGroup } from './message-view/slices/autoFollowRef'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -616,63 +617,16 @@ function MessageViewInner({
   const userScrollingRef = useRef(false)
   const userScrollingTimerRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
-  const autoFollowRef = useRef(false)
-  const timelineRowsRef = useRef<TimelineRow[]>([])
-  const handledTargetMessageRequestRef = useRef(0)
-  const initialScrollDoneRef = useRef(false)
-  const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
-  const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
-  const activeProvider = sessionInfo?.provider ?? session?.provider
-  const cliCommand = useMemo(() => {
-    if (!session) return null
-    return getContinueInCliCommand(
-      activeProvider ?? 'claude',
-      session.sessionId,
-      sessionInfo?.cwd ?? session.cwd,
-    )
-  }, [session, activeProvider, sessionInfo])
-  const modelOptions = useMemo(() => {
-    const filtered = availableModels.filter((model) => normalizeSelectValue(model.value))
-    if (filtered.length > 0) return filtered
-
-    const fallbackValue = normalizeSelectValue(selectedModel)
-    return fallbackValue ? [{ value: fallbackValue, displayName: fallbackValue, description: '' }] : []
-  }, [availableModels, selectedModel])
-  const selectedModelValue = normalizeSelectValue(selectedModel)
-  const selectedModelInfo = useMemo(
-    () => modelOptions.find((model) => model.value === selectedModelValue) ?? null,
-    [modelOptions, selectedModelValue],
-  )
-  const composerAgentOptions = useMemo(
-    () => composerOptions.agents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
-    [composerOptions.agents],
-  )
-  const composerMentionAgentOptions = useMemo(
-    () => composerOptions.mentionAgents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
-    [composerOptions.mentionAgents],
-  )
-  const composerModeOptions = useMemo(
-    () => composerOptions.modes?.filter((mode) => normalizeSelectValue(mode.value)) ?? [],
-    [composerOptions.modes],
-  )
-  const effortOptions = useMemo<ReasoningEffortLevel[]>(() => {
-    if (!selectedModelInfo?.supportsEffort) return []
-    if (activeProvider === 'opencode') return []
-    const levels = selectedModelInfo.supportedEffortLevels?.filter((level) => {
-      if (activeProvider === 'codex') return level === 'low' || level === 'medium' || level === 'high'
-      if (activeProvider === 'copilot') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
-      if (activeProvider === 'claude') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
-      if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
-      return false
-    }) ?? []
-    if (levels.length > 0) return levels
-    if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-    if (activeProvider === 'codex') return ['low', 'medium', 'high']
-    return ['low', 'medium', 'high']
-  }, [activeProvider, selectedModelInfo])
-  const [loadedComposerDraftKey, setLoadedComposerDraftKey] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'loadedComposerDraftKey', null)
-  const attachmentReadsRef = useRef(0)
-  const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
+  const {
+    autoFollowRef, timelineRowsRef, handledTargetMessageRequestRef, initialScrollDoneRef,
+    sessionCapabilities, activeProvider, cliCommand, modelOptions, selectedModelValue,
+    selectedModelInfo, composerAgentOptions, composerMentionAgentOptions, composerModeOptions,
+    effortOptions, loadedComposerDraftKey, setLoadedComposerDraftKey, attachmentReadsRef,
+    composerDraftKey,
+  } = useAutoFollowRefGroup({
+    sessionInfo, session, availableModels, selectedModel, composerOptions, composerSessions,
+    composerOwnerKey,
+  })
 
   useEffect(() => {
     inputTextRef.current = inputText
