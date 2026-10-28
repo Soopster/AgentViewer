@@ -1,5 +1,6 @@
 import type { Session } from '../../../lib/types'
 import type { RefObject } from 'react'
+import { type Dispatch, type SetStateAction } from 'react'
 
 export type BridgePersistEffectContext = {
   canUseChannelBridge: boolean
@@ -46,4 +47,37 @@ export function runBridgePersistEffect(ctx: BridgePersistEffectContext) {
     }
   })()
   return () => { cancelled = true }
+}
+
+export type BridgeLoadEffectContext = {
+  canUseChannelBridge: boolean
+  session: Session | null
+  setBridgeTranscriptEntries: Dispatch<SetStateAction<{ kind: 'sent' | 'reply'; text: string; timestamp: string; }[]>>
+  persistedBridgeCountRef: RefObject<number>
+}
+
+export function runBridgeLoadEffect(ctx: BridgeLoadEffectContext) {
+  const {
+    canUseChannelBridge, session, setBridgeTranscriptEntries, persistedBridgeCountRef,
+  } = ctx
+  if (!canUseChannelBridge || !session) {
+    setBridgeTranscriptEntries([])
+    persistedBridgeCountRef.current = 0
+    return
+  }
+  let isMounted = true
+  ;(async () => {
+    try {
+      const res = await fetch(`/api/bridge-messages?provider=${encodeURIComponent(session.provider ?? 'claude')}&sessionId=${encodeURIComponent(session.sessionId)}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json() as { messages: Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }> }
+      if (isMounted) {
+        setBridgeTranscriptEntries(data.messages)
+        persistedBridgeCountRef.current = data.messages.length
+      }
+    } catch (err) {
+      console.error('[bridge-messages] Failed to load:', err)
+    }
+  })()
+  return () => { isMounted = false }
 }

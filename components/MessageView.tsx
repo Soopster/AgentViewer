@@ -130,7 +130,7 @@ import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmCo
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
-import { runBridgePersistEffect } from './message-view/effects/bridge'
+import { runBridgePersistEffect, runBridgeLoadEffect } from './message-view/effects/bridge'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2481,28 +2481,9 @@ function MessageViewInner({
   }, [ideBridge.routeComposer, onIdeBridgeRoutingChange])
 
   // Load persisted bridge messages when session changes
-  useEffect(() => {
-    if (!canUseChannelBridge || !session) {
-      setBridgeTranscriptEntries([])
-      persistedBridgeCountRef.current = 0
-      return
-    }
-    let isMounted = true
-    ;(async () => {
-      try {
-        const res = await fetch(`/api/bridge-messages?provider=${encodeURIComponent(session.provider ?? 'claude')}&sessionId=${encodeURIComponent(session.sessionId)}`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json() as { messages: Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }> }
-        if (isMounted) {
-          setBridgeTranscriptEntries(data.messages)
-          persistedBridgeCountRef.current = data.messages.length
-        }
-      } catch (err) {
-        console.error('[bridge-messages] Failed to load:', err)
-      }
-    })()
-    return () => { isMounted = false }
-  }, [canUseChannelBridge, session?.provider, session?.sessionId])
+  useEffect(() => runBridgeLoadEffect({
+    canUseChannelBridge, session, setBridgeTranscriptEntries, persistedBridgeCountRef,
+  }), [canUseChannelBridge, session?.provider, session?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
   useEffect(() => runBridgePersistEffect({
