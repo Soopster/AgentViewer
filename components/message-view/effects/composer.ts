@@ -308,3 +308,38 @@ export function runComposerOptionsEffect(ctx: ComposerOptionsEffectContext) {
     .catch(() => { /* ignore; provider defaults still apply on send */ })
   return () => controller.abort()
 }
+
+export type QueueHydrateEffectContext = {
+  composerQueueMountedRef: RefObject<boolean>
+  queuedSendsRef: RefObject<QueuedWebSend[]>
+  setQueuedSends: Dispatch<SetStateAction<QueuedWebSend[]>>
+  setComposerQueueDurability: Dispatch<SetStateAction<WebComposerQueueDurability>>
+  setComposerQueueStorageReady: Dispatch<SetStateAction<boolean>>
+}
+
+export function runQueueHydrateEffect(ctx: QueueHydrateEffectContext) {
+  const {
+    composerQueueMountedRef, queuedSendsRef, setQueuedSends, setComposerQueueDurability,
+    setComposerQueueStorageReady,
+  } = ctx
+  let cancelled = false
+  composerQueueMountedRef.current = true
+  const store = getWebComposerQueueStore()
+  const sync = store.hydrateSync()
+  queuedSendsRef.current = sync.entries
+  setQueuedSends(sync.entries)
+  setComposerQueueDurability(sync.durability)
+  void store.hydrateAsync().then((restored) => {
+    if (cancelled) return
+    if (restored) {
+      queuedSendsRef.current = restored.entries
+      setQueuedSends(restored.entries)
+      setComposerQueueDurability(restored.durability)
+    }
+    setComposerQueueStorageReady(true)
+  })
+  return () => {
+    cancelled = true
+    composerQueueMountedRef.current = false
+  }
+}

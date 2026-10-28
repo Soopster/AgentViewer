@@ -131,7 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
-import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect } from './message-view/effects/composer'
+import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect, runQueueHydrateEffect } from './message-view/effects/composer'
 import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect, runPanelPreferencesEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
@@ -247,28 +247,10 @@ function MessageViewInner({
       if (composerQueueCommitCounterRef.current === commitNumber) setComposerQueueDurability(durability)
     })
   }, [setInputText, setSendState, setSendError, setLivePromptSuggestion, setLiveStatus, setLiveSubagentText, setContextUsage, setSessionInfo, setAvailableModels, setModelsLoading, setSelectedModel, setSelectedEffort, setSelectedCopilotContextTier, setComposerOptions, setSelectedAgent, setSelectedCopilotMode, setSelectedPermissionMode, setSelectedCodexApproval])
-  useEffect(() => {
-    let cancelled = false
-    composerQueueMountedRef.current = true
-    const store = getWebComposerQueueStore()
-    const sync = store.hydrateSync()
-    queuedSendsRef.current = sync.entries
-    setQueuedSends(sync.entries)
-    setComposerQueueDurability(sync.durability)
-    void store.hydrateAsync().then((restored) => {
-      if (cancelled) return
-      if (restored) {
-        queuedSendsRef.current = restored.entries
-        setQueuedSends(restored.entries)
-        setComposerQueueDurability(restored.durability)
-      }
-      setComposerQueueStorageReady(true)
-    })
-    return () => {
-      cancelled = true
-      composerQueueMountedRef.current = false
-    }
-  }, [])
+  useEffect(() => runQueueHydrateEffect({
+    composerQueueMountedRef, queuedSendsRef, setQueuedSends, setComposerQueueDurability,
+    setComposerQueueStorageReady,
+  }), [])
   const composerQueueTargetKey = session
     ? sessionIdentityKey(session)
     : null
