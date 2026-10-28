@@ -110,13 +110,14 @@ import {
   type TimelineRowLayout,
   type TimelineScrollAnchor,
 } from '@/lib/timelineVirtualizer'
-import type { ComposerDraft, QueuedWebSend, PendingMessageBaseline, TimelineRow, TimelineEstimateBucket, TimelineEstimateCalibration, ActiveTranscriptFilter, OpenCodeTodo, Props, CopilotContextTier, FailedSend, RewindPreview, RollbackPreview, SteeredSendEntry, LiveToolActivity, MentionResult, TimelineEstimateSample } from './message-view/types'
+import type { ComposerDraft, QueuedWebSend, PendingMessageBaseline, TimelineRow, TimelineEstimateBucket, TimelineEstimateCalibration, ActiveTranscriptFilter, Props, CopilotContextTier, FailedSend, RewindPreview, RollbackPreview, SteeredSendEntry, LiveToolActivity, MentionResult, TimelineEstimateSample } from './message-view/types'
 import { SPINNER_FRAMES, COMPOSER_DRAFT_STORAGE_PREFIX, SEND_ATTACHMENT_TYPES, COMPOSER_QUEUE_LOCAL_INLINE_LIMIT, writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, TIMELINE_BOTTOM_GUTTER_PX, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
 import { assistantDisplayName, extractSseFrames, extractLiveToolStart, upsertThreadedMessage, updateLiveToolThreadInput, extractCompletedToolKey, completeLiveToolThread, extractLiveToolStopIndex, extractStreamingAssistantText, shouldReplaceLiveAssistantText, extractStreamingReasoningText, extractTextContent } from './message-view/liveStream'
 import { withProviderQuery, isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline, buildPendingMessageBaseline, retargetPendingMessageBaseline, threadedMessageKey, threadedMessageEqual } from './message-view/threadedCompare'
 import { observeTimelineRowResize, readResizeObserverHeight, estimateTimelineRowHeight, timelineEstimateBucket, calibratedTimelineRowHeight } from './message-view/heightEstimate'
 import { timelineRowMatchesTranscriptFilters, timelineRowSearchText, groupAgentsToolRows, decorateStreamTurnLandmarks, resolveTimelineTargetMessageId, rowContainsMessage } from './message-view/timelineRows'
 import { TimelineMessageRow } from './message-view/TimelineMessageRow'
+import { OpenCodeTodosBanner } from './message-view/OpenCodeTodosBanner'
 
 const PluginSurfaceHost = dynamic(() => import('./shell/PluginSurfaceHost'), { ssr: false })
 // Feature plugins that put a button on the session toolbar.
@@ -464,126 +465,6 @@ function getWebComposerQueueStore() {
     (entry) => entry.id,
   )
   return webComposerQueueStore
-}
-
-// Pinned todo list — mirrors opencode-web's session-level todos widget.
-// Renders status icons and counts inline so users see live progress as
-// the agent flips each item from `pending` → `in_progress` → `completed`.
-const OpenCodeTodosBanner = memo(function OpenCodeTodosBanner({ todos }: { todos: OpenCodeTodo[] }) {
-  const [collapsed, setCollapsed] = useState(false)
-  const completedCount = todos.filter((todo) => todo.status === 'completed').length
-  const inProgress = todos.find((todo) => todo.status === 'in_progress')
-
-  return (
-    <div
-      style={{
-        borderBottom: '1px solid var(--border)',
-        background: 'rgba(56,217,245,0.04)',
-        padding: '8px 28px',
-        flexShrink: 0,
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11,
-      }}
-    >
-      <button
-        type="button"
-        className="av-hover-control"
-        onClick={() => setCollapsed((value) => !value)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          background: 'transparent',
-          border: 0,
-          padding: 0,
-          color: 'var(--text-2)',
-          cursor: 'pointer',
-          width: '100%',
-          textAlign: 'left',
-        }}
-      >
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
-            borderRadius: 4,
-            background: 'rgba(56,217,245,0.12)',
-            color: 'var(--cyan)',
-            fontSize: 10,
-            letterSpacing: '0.06em',
-          }}
-          aria-hidden="true"
-        >
-          {collapsed ? '+' : '−'}
-        </span>
-        <span style={{ fontWeight: 600, letterSpacing: '0.08em', color: 'var(--cyan)' }}>TODOS</span>
-        <span style={{ color: 'var(--text-3)' }}>
-          {completedCount}/{todos.length}
-          {inProgress ? ` · ${inProgress.content}` : ''}
-        </span>
-      </button>
-      {!collapsed && (
-        <ul style={{ listStyle: 'none', margin: '8px 0 0 28px', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {todos.map((todo) => (
-            <li
-              key={todo.id}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 8,
-                color: todo.status === 'completed' ? 'var(--text-3)' : 'var(--text)',
-                textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
-                opacity: todo.status === 'cancelled' ? 0.6 : 1,
-              }}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  flexShrink: 0,
-                  width: 12,
-                  marginTop: 1,
-                  color: todoStatusColor(todo.status),
-                }}
-              >
-                {todoStatusGlyph(todo.status)}
-              </span>
-              <span style={{ flex: 1 }}>{todo.content}</span>
-              {todo.priority && todo.priority !== 'medium' && (
-                <span
-                  style={{
-                    fontSize: 11,
-                    letterSpacing: '0.02em',
-                    color: 'var(--text-3)',
-                    textTransform: 'capitalize',
-                    flexShrink: 0,
-                  }}
-                >
-                  {todo.priority}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-})
-
-function todoStatusGlyph(status: string): string {
-  if (status === 'completed') return '✓'
-  if (status === 'in_progress') return '●'
-  if (status === 'cancelled') return '✗'
-  return '○'
-}
-
-function todoStatusColor(status: string): string {
-  if (status === 'completed') return 'var(--green)'
-  if (status === 'in_progress') return 'var(--cyan)'
-  if (status === 'cancelled') return 'var(--text-3)'
-  return 'var(--text-3)'
 }
 
 const VirtualTimelineRow = memo(function VirtualTimelineRow({
