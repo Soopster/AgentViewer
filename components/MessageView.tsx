@@ -129,7 +129,7 @@ import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
-import { runSearchClaudeHookEvents } from './message-view/actions/claude'
+import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode } from './message-view/actions/claude'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2289,33 +2289,9 @@ function MessageViewInner({
     session, setClaudeMcpBusy, setSessionActionError, setSessionActionNotice, refreshDiagnostics,
   }, action, extra, busyKey, successNotice), [refreshDiagnostics, session])
 
-  const applyClaudeMcpPermissionMode = useCallback(async (
-    serverName: string,
-    permissionModeKey: string,
-    mode: 'default' | 'auto' | null,
-    previous: 'default' | 'auto' | undefined,
-  ) => {
-    setClaudeMcpPermissionModes((current) => {
-      const next = { ...current }
-      if (mode === null) delete next[permissionModeKey]
-      else next[permissionModeKey] = mode
-      return next
-    })
-    const result = await runClaudeSessionAction(
-      'setMcpPermissionModeOverride',
-      { serverName, mode },
-      `mcp:permission:${serverName}`,
-      mode === null ? `${serverName} MCP policy cleared.` : `${serverName} MCP policy set to ${mode}.`,
-    )
-    if (!result) {
-      setClaudeMcpPermissionModes((current) => {
-        const next = { ...current }
-        if (previous) next[permissionModeKey] = previous
-        else delete next[permissionModeKey]
-        return next
-      })
-    }
-  }, [runClaudeSessionAction])
+  const applyClaudeMcpPermissionMode = useCallback(async (serverName: string, permissionModeKey: string, mode: 'default' | 'auto' | null, previous: 'default' | 'auto' | undefined) => runApplyClaudeMcpPermissionMode({
+    setClaudeMcpPermissionModes, runClaudeSessionAction,
+  }, serverName, permissionModeKey, mode, previous), [runClaudeSessionAction])
 
   const addClaudeMcpServer = useCallback(async () => {
     const serverName = window.prompt('MCP server name')?.trim()

@@ -45,3 +45,34 @@ export async function runSearchClaudeHookEvents(ctx: SearchClaudeHookEventsConte
     setClaudeHookSearching(false)
   }
 }
+
+export type ApplyClaudeMcpPermissionModeContext = {
+  setClaudeMcpPermissionModes: Dispatch<SetStateAction<Record<string, 'default' | 'auto'>>>
+  runClaudeSessionAction: (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => Promise<Record<string, unknown> | null>
+}
+
+export async function runApplyClaudeMcpPermissionMode(ctx: ApplyClaudeMcpPermissionModeContext, serverName: string, permissionModeKey: string, mode: 'default' | 'auto' | null, previous: 'default' | 'auto' | undefined) {
+  const {
+    setClaudeMcpPermissionModes, runClaudeSessionAction,
+  } = ctx
+  setClaudeMcpPermissionModes((current) => {
+    const next = { ...current }
+    if (mode === null) delete next[permissionModeKey]
+    else next[permissionModeKey] = mode
+    return next
+  })
+  const result = await runClaudeSessionAction(
+    'setMcpPermissionModeOverride',
+    { serverName, mode },
+    `mcp:permission:${serverName}`,
+    mode === null ? `${serverName} MCP policy cleared.` : `${serverName} MCP policy set to ${mode}.`,
+  )
+  if (!result) {
+    setClaudeMcpPermissionModes((current) => {
+      const next = { ...current }
+      if (previous) next[permissionModeKey] = previous
+      else delete next[permissionModeKey]
+      return next
+    })
+  }
+}
