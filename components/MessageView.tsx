@@ -128,6 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
+import { runHandleExport } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2054,45 +2055,9 @@ function MessageViewInner({
     draftBeforeHistoryRef, setHistoryIndex, setAttachments, setInputText, resizeComposer,
   }, e), [backgroundClaudeTasks, session?.provider, sendState, reattachedRunning, sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand, inputTextRef, textareaRef, setInputText, setAttachments])
 
-  const handleExport = useCallback(async () => {
-    if (!session) return
-    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (pathBasename(session.cwd) || session.sessionId)
-    const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
-    const filename = `${safeName}_${session.sessionId.slice(0, 8)}.html`
-
-    if (typeof Worker === 'undefined') {
-      setExporting(true)
-      try {
-        const { exportSessionToHtml } = await import('@/lib/export')
-        const html = exportSessionToHtml(session, messages)
-        downloadHtml(html, filename)
-      } catch (error) {
-        setSessionActionError(error instanceof Error ? error.message : 'Failed to export session')
-      } finally {
-        setExporting(false)
-      }
-      return
-    }
-
-    setExporting(true)
-    const worker = new Worker(new URL('../workers/exportWorker.ts', import.meta.url), { type: 'module' })
-    worker.onmessage = (event: MessageEvent<{ html?: string; error?: string }>) => {
-      const { html, error } = event.data ?? {}
-      if (html) {
-        downloadHtml(html, filename)
-      } else if (error) {
-        setSessionActionError(error)
-      }
-      setExporting(false)
-      worker.terminate()
-    }
-    worker.onerror = () => {
-      setExporting(false)
-      setSessionActionError('Failed to export session')
-      worker.terminate()
-    }
-    worker.postMessage({ session, messages })
-  }, [session, messages])
+  const handleExport = useCallback(async () => runHandleExport({
+    session, setExporting, messages, setSessionActionError,
+  }), [session, messages])
 
   const addAttachment = useCallback(() => {
     const path = attachmentPath.trim()
