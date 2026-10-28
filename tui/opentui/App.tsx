@@ -1972,9 +1972,19 @@ function OpenTuiWorkspace() {
     ...splitPinnedSessions.slice(0, splitPaneCount).map((session) => describeCoordinatorWindow(windowSessionTarget(session, !splitPaneSessions.some((visible) => sessionKey(visible) === sessionKey(session))))),
     ...windowSurfaces.map((surface) => ({ key: surfaceWindowKey(surface), title: surfaceTitle(surface), detail: `${gitRepoCwd || process.cwd()} · surface${visibleWindowSurfaces.includes(surface) ? '' : ' · hidden'}`, hidden: !visibleWindowSurfaces.includes(surface), surface })),
   ]
+  // The overview includes every session owned by this workspace, including
+  // overflowed sessions that have not made it into the currently pinned panes.
+  // Keep those entries pickable so choosing one can swap it into the layout.
+  for (const session of [...openTabSessions, ...(workspaceReaderSession ? [workspaceReaderSession] : [])]) {
+    const key = sessionKey(session)
+    if (!windowTargets.some((target) => target.key === key)) {
+      windowTargets.push(describeCoordinatorWindow(windowSessionTarget(session, true)))
+    }
+  }
   for (const id of popoverTabs) windowTargets.push({ key: surfaceWindowKey(id), title: surfaceTitle(id), detail: 'workspace tab', surface: id, hidden: shownPopoverTab !== id })
   // Background tabs and the floating window are windows too, for the switcher.
   for (const key of parkedWindowKeysRef.current) {
+    if (windowTargets.some((target) => target.key === key)) continue
     const item = windowItemFor(key)
     if (item.kind === 'session' && !item.session) continue
     windowTargets.push(item.kind === 'session'
@@ -2497,8 +2507,8 @@ function OpenTuiWorkspace() {
     const key = sessionKey(session)
     setComposerPaneTargetKey(key)
     const existing = windowItems.findIndex(item => windowItemKey(item) === key)
-    if (existing >= 0) { focusSplitPane(existing); return }
-    if (floatingKey === key) { focusSplitPane(FLOATING_PANE_INDEX); return }
+    if (existing >= 0) { setSelectedSessionKey(key); focusSplitPane(existing); return }
+    if (floatingKey === key) { setSelectedSessionKey(key); focusSplitPane(FLOATING_PANE_INDEX); return }
     if (windowStackFor(key)) { activateWindowTab(key); setOverviewPendingTarget(key); return }
     setWorkspaceHasSession(true); setWorkspaceLaunched(true)
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
@@ -5209,7 +5219,7 @@ function OpenTuiWorkspace() {
     if (windowPresentation && windowTargets.some(target => target.key === key)) setWindowPresentation({ ...windowPresentation, target: key })
     runPickWindowTarget({
     windowTargets, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
-    setSplitFocusIndex, parkedWindowKeysRef, activateWindowTab, pendingSurfaceFocusRef,
+    setSplitFocusIndex, parkedWindowKeysRef, windowStackFor, activateWindowTab, pendingSurfaceFocusRef,
     popoverTabs, showPopoverTab, setWindowZoom: windowPresentation ? () => {} : setWindowZoom, setWindowSurfacePeek, setSurfacePanelFocused,
     windowItems, focusSplitPane, splitPinnedKeys, watchedCoordinator, splitPaneSessions,
     selectedSessionKey, checkpointWindowLayout, setSplitPinnedKeys, setWindowOrder,
@@ -5315,6 +5325,10 @@ function OpenTuiWorkspace() {
       if (node.shelved) {
         try { restoreShelvedWorkspaceWindow(workspaceContext.controller, workspace.id, node.target) }
         catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
+      } else if (workspace.id === workspaceId) {
+        // Resolve same-workspace picks immediately. The pending-target effect is
+        // for workspace switches, where the destination's window tree must mount first.
+        pickWindowTarget(node.target)
       } else workspaceContext.controller.runtime(workspace).set('windowOverviewPendingTarget', node.target)
     }
     workspaceContext.controller.activate(node.spaceId, node.workspaceId)

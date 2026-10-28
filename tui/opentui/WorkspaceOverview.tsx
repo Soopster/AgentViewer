@@ -7,6 +7,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import { fitText } from './textLayout'
 
 type Key = { name: string; sequence: string; ctrl: boolean; shift: boolean }
+const overviewSelectionKey = (node: OverviewNode) => `${node.workspaceId ?? ''}\u0000${node.target ?? ''}`
 export function WorkspaceOverview({ controller, theme, width, height, onClose, onPick, onMove, onShelf, onShelfMany, onRestoreMany, onBatchAction, recent, onKeyHandlerReady }: {
   recent?: Array<{ workspaceId: string; target: string }>; controller: SpacesController; theme: TuiThemePalette; width: number; height: number
   onMove?: (node: OverviewNode) => void; onShelf?: (node: OverviewNode) => void; onShelfMany?: (nodes: OverviewNode[]) => void
@@ -42,7 +43,7 @@ export function WorkspaceOverview({ controller, theme, width, height, onClose, o
   }, [nodes, collapsed, query, recent])
   const allTargets = useMemo(() => {
     const found = new Map<string, OverviewNode>()
-    const visit = (items: OverviewNode[]) => items.forEach(item => { if (item.target && !item.shelved) found.set(item.target, item); visit(item.children) })
+    const visit = (items: OverviewNode[]) => items.forEach(item => { if (item.target && !item.shelved) found.set(overviewSelectionKey(item), item); visit(item.children) })
     visit(nodes)
     return found
   }, [nodes])
@@ -100,7 +101,8 @@ export function WorkspaceOverview({ controller, theme, width, height, onClose, o
     if (key.name === 'escape') { onClose(); return true }
     if (key.sequence === '/') { setSearchFocused(true); return true }
     if ((key.name === 'space' || key.sequence === ' ') && row?.target && !row.shelved) {
-      setSelectedTargets(previous => { const next = new Set(previous); if (next.has(row.target!)) next.delete(row.target!); else next.add(row.target!); return next })
+      const selectionKey = overviewSelectionKey(row)
+      setSelectedTargets(previous => { const next = new Set(previous); if (next.has(selectionKey)) next.delete(selectionKey); else next.add(selectionKey); return next })
       return true
     }
     if (sequence === 'u') {
@@ -126,9 +128,9 @@ export function WorkspaceOverview({ controller, theme, width, height, onClose, o
       return true
     }
     if (sequence === 'a' || sequence === 'm') {
-      const targets = selectedTargets.size ? [...selectedTargets] : row?.target && !row.shelved ? [row.target] : (() => {
+      const targets = selectedTargets.size ? [...selectedTargets] : row?.target && !row.shelved ? [overviewSelectionKey(row)] : (() => {
         const found: string[] = []
-        const visit = (node: OverviewNode) => { if (node.target && !node.shelved && (!row?.workspaceId || node.workspaceId === row.workspaceId)) found.push(node.target); node.children.forEach(visit) }
+        const visit = (node: OverviewNode) => { if (node.target && !node.shelved && (!row?.workspaceId || node.workspaceId === row.workspaceId)) found.push(overviewSelectionKey(node)); node.children.forEach(visit) }
         if (row) visit(row)
         return found
       })()
@@ -165,7 +167,7 @@ export function WorkspaceOverview({ controller, theme, width, height, onClose, o
     {menuStep === 'closed' ? <box flexGrow={1} overflow="hidden" flexDirection="column" onMouseScroll={event => { event.stopPropagation(); setCursor(Math.max(0, Math.min(rows.length - 1, index + (event.scroll?.direction === 'up' ? -1 : 1)))) }}>
       {rows.length === 0 ? <text fg={theme.dim}>No matching windows</text> : rows.slice(start, start + capacity).map((row, offset) => <box key={row.id} id={`overview-node:${row.id}`} height={1} flexShrink={0} flexDirection="row" backgroundColor={index === start + offset ? theme.surface3 : undefined}
         onMouseDown={event => { if (event.button === 2 && row.target) { event.stopPropagation(); if (row.shelved) onPick(row); else onMove?.(row); return } if (event.button !== 0) return; event.stopPropagation(); if (row.children.length && event.x < Math.floor((width - popWidth) / 2) + 5 + row.depth * 2) toggle(row.id, !collapsed.has(row.id)); else onPick(row) }}>
-        <text fg={selectedTargets.has(row.target ?? '') ? theme.amber : index === start + offset ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(`${selectedTargets.has(row.target ?? '') ? '[x]' : '   '}${'  '.repeat(row.depth)}${row.children.length ? (!query && collapsed.has(row.id) ? '▸' : '▾') : '·'} ${row.title} · ${row.detail}`, popWidth - 4)}</text>
+        <text fg={selectedTargets.has(overviewSelectionKey(row)) ? theme.amber : index === start + offset ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(`${selectedTargets.has(overviewSelectionKey(row)) ? '[x]' : '   '}${'  '.repeat(row.depth)}${row.children.length ? (!query && collapsed.has(row.id) ? '▸' : '▾') : '·'} ${row.title} · ${row.detail}`, popWidth - 4)}</text>
       </box>)}
     </box> : <box flexGrow={1} flexDirection="column" paddingY={1}>
       {menuStep === 'actions' ? actions.map((action, i) => <text key={action} fg={i === actionCursor ? theme.cyan : theme.text}>{`${i === actionCursor ? '›' : ' '} ${action}`}</text>) : null}

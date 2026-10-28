@@ -77,6 +77,7 @@ export type PickWindowTargetContext = {
   setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
   setSplitFocusIndex: React.Dispatch<React.SetStateAction<number | null>>
   parkedWindowKeysRef: React.RefObject<Set<string>>
+  windowStackFor: (key: string) => WindowStack | null
   activateWindowTab: (key: string) => void
   pendingSurfaceFocusRef: React.RefObject<string | null>
   popoverTabs: string[]
@@ -102,7 +103,7 @@ export type PickWindowTargetContext = {
 export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
   const {
     windowTargets, showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
-    setSplitFocusIndex, parkedWindowKeysRef, activateWindowTab, pendingSurfaceFocusRef,
+    setSplitFocusIndex, parkedWindowKeysRef, windowStackFor, activateWindowTab, pendingSurfaceFocusRef,
     popoverTabs, showPopoverTab, setWindowZoom, setWindowSurfacePeek, setSurfacePanelFocused,
     windowItems, focusSplitPane, splitPinnedKeys, watchedCoordinator, splitPaneSessions,
     selectedSessionKey, checkpointWindowLayout, setSplitPinnedKeys, setWindowOrder,
@@ -110,8 +111,13 @@ export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
   } = ctx
   const target = windowTargets.find((entry) => entry.key === key)
   if (!target) { showNotice('info', 'That window is no longer open'); return }
-  if (key === floatingKey) { setWindowSwitcherOpen(false); setFocusedPane('messages'); setSplitFocusIndex(FLOATING_PANE_INDEX); return }
-  if (parkedWindowKeysRef.current.has(key)) {
+  if (key === floatingKey) {
+    setWindowSwitcherOpen(false)
+    if (target.session) selectTabSession(target.session)
+    else { setFocusedPane('messages'); setSplitFocusIndex(FLOATING_PANE_INDEX) }
+    return
+  }
+  if (parkedWindowKeysRef.current.has(key) && windowStackFor(key)) {
     setWindowSwitcherOpen(false)
     activateWindowTab(key)
     if (isSurfaceWindowKey(key)) pendingSurfaceFocusRef.current = surfaceIdOfKey(key)
@@ -125,7 +131,7 @@ export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
   setFocusedPane('messages')
   if (target.session) {
     const pane = windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === key)
-    if (pane >= 0) focusSplitPane(pane)
+    if (pane >= 0) selectTabSession(target.session)
     else {
       // A watched run keeps its lead's window (the first): a hidden teammate
       // trades places with the first teammate shown.
@@ -137,7 +143,7 @@ export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
         const swap = (keys: string[]) => keys.map(entry => entry === key ? first : entry === first ? key : entry)
         setSplitPinnedKeys(swap)
         setWindowOrder(swap)
-        focusSplitPane(windowItems.findIndex((item) => item.kind === 'session' && sessionKey(item.session) === first))
+        selectTabSession(target.session)
         return
       }
       if (key !== selectedSessionKey) {
