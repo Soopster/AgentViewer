@@ -12,6 +12,9 @@ import { type WebComposerQueueDurability } from '@/lib/webComposerQueue'
 import { type QueuedWebSend } from '../types'
 import { getWebComposerQueueStore } from '../composerStorage'
 import { type TimelineScrollAnchor } from '@/lib/timelineVirtualizer'
+import { type SessionComposerOptions } from '@/lib/types'
+import { withProviderQuery } from '../threadedCompare'
+import { normalizeSelectValue } from '../composerUi'
 
 export type MentionSearchEffectContext = {
   mentionQuery: { start: number; query: string; } | null
@@ -253,4 +256,55 @@ return () => {
   activeTimelineScrollAnchorRef.current = null
   pendingTimelineAnchorRestoreRef.current = false
 }
+}
+
+export type ComposerOptionsEffectContext = {
+  session: Session | null
+  setComposerOptions: Dispatch<SetStateAction<SessionComposerOptions>>
+  setSelectedAgent: Dispatch<SetStateAction<string>>
+  setSelectedCopilotMode: Dispatch<SetStateAction<string>>
+}
+
+export function runComposerOptionsEffect(ctx: ComposerOptionsEffectContext) {
+  const {
+    session, setComposerOptions, setSelectedAgent, setSelectedCopilotMode,
+  } = ctx
+  if (!session) {
+    setComposerOptions({})
+    setSelectedAgent('')
+    setSelectedCopilotMode('interactive')
+    return
+  }
+
+  const controller = new AbortController()
+  fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider, session.providerInstanceId), { signal: controller.signal })
+    .then((res) => res.ok ? res.json() : null)
+    .then((data: SessionComposerOptions | null) => {
+      if (controller.signal.aborted || !data) return
+      setComposerOptions(data)
+      if (session.provider === 'opencode') {
+        const agents = data.agents ?? []
+        const current = normalizeSelectValue(data.currentAgent)
+        setSelectedAgent(
+          current && agents.some((agent) => normalizeSelectValue(agent.value) === current)
+            ? current
+            : normalizeSelectValue(agents[0]?.value) ?? '',
+        )
+      } else {
+        setSelectedAgent('')
+      }
+      if (session.provider === 'copilot') {
+        const modes = data.modes ?? []
+        const current = normalizeSelectValue(data.currentMode) ?? 'interactive'
+        setSelectedCopilotMode(
+          modes.some((mode) => normalizeSelectValue(mode.value) === current)
+            ? current
+            : normalizeSelectValue(modes[0]?.value) ?? 'interactive',
+        )
+      } else {
+        setSelectedCopilotMode('interactive')
+      }
+    })
+    .catch(() => { /* ignore; provider defaults still apply on send */ })
+  return () => controller.abort()
 }

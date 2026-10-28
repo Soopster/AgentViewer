@@ -131,7 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
-import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect } from './message-view/effects/composer'
+import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect } from './message-view/effects/composer'
 import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
@@ -1066,46 +1066,9 @@ function MessageViewInner({
     }
   }, [session?.provider, session?.sessionId, messages])
 
-  useEffect(() => {
-    if (!session) {
-      setComposerOptions({})
-      setSelectedAgent('')
-      setSelectedCopilotMode('interactive')
-      return
-    }
-
-    const controller = new AbortController()
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider, session.providerInstanceId), { signal: controller.signal })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data: SessionComposerOptions | null) => {
-        if (controller.signal.aborted || !data) return
-        setComposerOptions(data)
-        if (session.provider === 'opencode') {
-          const agents = data.agents ?? []
-          const current = normalizeSelectValue(data.currentAgent)
-          setSelectedAgent(
-            current && agents.some((agent) => normalizeSelectValue(agent.value) === current)
-              ? current
-              : normalizeSelectValue(agents[0]?.value) ?? '',
-          )
-        } else {
-          setSelectedAgent('')
-        }
-        if (session.provider === 'copilot') {
-          const modes = data.modes ?? []
-          const current = normalizeSelectValue(data.currentMode) ?? 'interactive'
-          setSelectedCopilotMode(
-            modes.some((mode) => normalizeSelectValue(mode.value) === current)
-              ? current
-              : normalizeSelectValue(modes[0]?.value) ?? 'interactive',
-          )
-        } else {
-          setSelectedCopilotMode('interactive')
-        }
-      })
-      .catch(() => { /* ignore; provider defaults still apply on send */ })
-    return () => controller.abort()
-  }, [session?.provider, session?.sessionId])
+  useEffect(() => runComposerOptionsEffect({
+    session, setComposerOptions, setSelectedAgent, setSelectedCopilotMode,
+  }), [session?.provider, session?.sessionId])
 
   useEffect(() => {
     if (selectedEffort === 'auto') return
