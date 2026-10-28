@@ -129,7 +129,7 @@ import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
-import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode } from './message-view/actions/claude'
+import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks } from './message-view/actions/claude'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1668,28 +1668,10 @@ function MessageViewInner({
     liveToolInputJsonRef,
   }), [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, transientRetryCountRef, transientRetryTimerRef, pendingMessageBaselineRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setAttachments, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
 
-  const backgroundClaudeTasks = useCallback(async () => {
-    if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
-    setBackgroundingTasks(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'claude', action: 'backgroundTasks' }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
-      const backgrounded = data.result?.backgrounded === true
-      setSessionActionNotice(backgrounded ? 'Claude task moved to background.' : 'No foreground Claude task to background.')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to background Claude task')
-    } finally {
-      setBackgroundingTasks(false)
-      textareaRef.current?.focus()
-    }
-  }, [backgroundingTasks, session, textareaRef])
+  const backgroundClaudeTasks = useCallback(async () => runBackgroundClaudeTasks({
+    session, backgroundingTasks, setBackgroundingTasks, setSessionActionError,
+    setSessionActionNotice, textareaRef,
+  }), [backgroundingTasks, session, textareaRef])
 
   // Cancel a running Claude SDK background task via query.stopTask(). Routes at
   // the live warm pool entry server-side, so it only works while the session is
