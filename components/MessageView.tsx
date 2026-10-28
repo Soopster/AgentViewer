@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2144,29 +2144,10 @@ function MessageViewInner({
     })
   }, [failedSend, resizeComposer, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, textareaRef, setInputText, setSendError, setAttachments, setFailedSend])
 
-  const handleDeleteSession = useCallback(async () => {
-    if (!session || deleting || !sessionCapabilities?.deleteSession) return
-    const confirmed = window.confirm('Delete this session? This cannot be undone from Agent Viewer.')
-    if (!confirmed) return
-    setDeleting(true)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId), {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
-      onDelete?.(session.sessionId, session.provider)
-      setSessionActionNotice('Session deleted.')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to delete session')
-    } finally {
-      setDeleting(false)
-    }
-  }, [deleting, onDelete, session, sessionCapabilities?.deleteSession])
+  const handleDeleteSession = useCallback(async () => runHandleDeleteSession({
+    session, deleting, sessionCapabilities, setDeleting, setSessionActionError,
+    setSessionActionNotice, onDelete,
+  }), [deleting, onDelete, session, sessionCapabilities?.deleteSession])
 
   const runSessionAction = useCallback(async (action: string) => {
     if (!session || sessionActionLoading) return
