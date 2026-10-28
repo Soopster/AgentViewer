@@ -130,6 +130,7 @@ import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmCo
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
+import { runBridgePersistEffect } from './message-view/effects/bridge'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2504,42 +2505,9 @@ function MessageViewInner({
   }, [canUseChannelBridge, session?.provider, session?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
-  useEffect(() => {
-    if (!canUseChannelBridge || !session) return
-    const newCount = bridgeTranscriptEntries.length
-    const persistedCount = persistedBridgeCountRef.current
-    if (newCount <= persistedCount) return
-
-    // Persist only the new entries
-    const newEntries = bridgeTranscriptEntries.slice(persistedCount)
-    let cancelled = false
-    ;(async () => {
-      for (const entry of newEntries) {
-        if (cancelled) return
-        try {
-          const res = await fetch('/api/bridge-messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              provider: session.provider,
-              providerInstanceId: session.providerInstanceId,
-              sessionId: session.sessionId,
-              kind: entry.kind,
-              text: entry.text,
-              timestamp: entry.timestamp,
-            }),
-          })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        } catch (err) {
-          console.error('[bridge-messages] Failed to save:', err)
-        }
-      }
-      if (!cancelled) {
-        persistedBridgeCountRef.current = newCount
-      }
-    })()
-    return () => { cancelled = true }
-  }, [canUseChannelBridge, session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
+  useEffect(() => runBridgePersistEffect({
+    canUseChannelBridge, session, bridgeTranscriptEntries, persistedBridgeCountRef,
+  }), [canUseChannelBridge, session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
