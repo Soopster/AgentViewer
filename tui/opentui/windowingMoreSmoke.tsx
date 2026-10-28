@@ -206,6 +206,12 @@ const chordKey = async (key: string) => {
   await act(async () => { setup.mockInput.pressKey(/^[0-8]$/.test(key) ? String(Number(key) + 1) : key) })
   await settle(200)
 }
+const typeKeys = async (value: string) => {
+  for (const char of value) {
+    await act(async () => { setup.mockInput.pressKey(char) })
+    await settle(20)
+  }
+}
 const arrowChord = async (direction: 'up' | 'down' | 'left' | 'right', shift = false) => {
   await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) })
   await settle(60)
@@ -455,14 +461,16 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await settle(300)
   await chordKey('p')
   await waitFor('the quick window switcher', () => !!frame('window-switcher'))
-  await act(async () => { await setup.mockInput.pasteBracketedText('claude charlie') })
+  await act(async () => { setup.mockInput.pressKey('/') })
+  await typeKeys('claude charlie')
   await settle(100)
   check(setup.captureCharFrame().includes('hidden'), 'the hidden match is not identified')
   await act(async () => { setup.mockInput.pressEnter() })
   await waitFor('the hidden session opened in the reader', () => readerShows('charlie') && !frame('window-switcher'))
   await chordKey('p')
   await waitFor('the switcher again', () => !!frame('window-switcher'))
-  await act(async () => { await setup.mockInput.typeText('alpha') })
+  await act(async () => { setup.mockInput.pressKey('/') })
+  await typeKeys('alpha')
   await act(async () => { setup.mockInput.pressEnter() })
   await waitFor('the original reader restored', () => readerShows('alpha'))
   await act(async () => { setup.resize(220, 46) })
@@ -644,7 +652,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await settle(300)
   await chordKey('p')
   await waitFor('the switcher for a hidden surface', () => !!frame('window-switcher'))
-  await act(async () => { await setup.mockInput.typeText('terminal') })
+  await act(async () => { setup.mockInput.pressKey('/') })
+  await typeKeys('terminal')
   await act(async () => { setup.mockInput.pressEnter() })
   const peekVisible = () => (setup.renderer.root.findDescendantById('surface-frame:terminal') as unknown as { visible?: boolean } | null)?.visible !== false
   await waitFor('the hidden terminal peek', () => peekVisible() && setup.captureCharFrame().includes('from-a-window'))

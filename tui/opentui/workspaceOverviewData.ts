@@ -5,12 +5,13 @@ import { orderWindows, isSurfaceWindowKey, surfaceIdOfKey } from './windowOrder'
 import { surfaceTitle, surfaceKindOf, WINDOW_SURFACE_TITLES } from './windowSurfaceNames'
 import { liveStacks } from './windowTabs'
 import type { WorkspaceRuntime, SpacesController } from './spacesStore'
+import type { ShelvedWindow } from './workspaceWindowShelf'
 
 export type OverviewWindow = { key: string; title: string; detail: string; hidden: boolean; badge?: string; tabs?: OverviewWindow[] }
-export type OverviewNode = { id: string; title: string; detail: string; spaceId: string; workspaceId?: string; target?: string; children: OverviewNode[] }
+export type OverviewNode = { id: string; title: string; detail: string; spaceId: string; workspaceId?: string; target?: string; shelved?: boolean; children: OverviewNode[] }
 export type OverviewRow = OverviewNode & { depth: number; parent?: string; matched: boolean }
 
-const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'windowSurfaceMeta', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'workspaceHasSession', 'windowZoom'] as const
+const OVERVIEW_FIELDS = ['windowOverviewWindows', 'windowAttention', 'windowSurfaceMeta', 'openTabSessions', 'readerSession', 'splitPinnedKeys', 'splitPaneCount', 'windowSurfaces', 'windowOrder', 'windowStacks', 'floatingWindow', 'popoverTabs', 'activePopoverTab', 'selectedSessionKey', 'workspaceHasSession', 'windowZoom', 'shelvedWindowKeys'] as const
 export function subscribeWorkspaceOverview(controller: SpacesController, listener: () => void): () => void {
   let active = true, queued = false
   const changed = () => {
@@ -32,8 +33,13 @@ export function workspaceWindowOverview(runtime: WorkspaceRuntime): OverviewWind
     cached.set(window.key, window)
     for (const tab of window.tabs ?? []) cached.set(tab.key, tab)
   }
-  const keys = orderWindows((values.windowOrder ?? []) as string[], ((values.splitPinnedKeys ?? []) as string[]).slice(0, Number(values.splitPaneCount ?? 0)), (values.windowSurfaces ?? []) as string[])
+  // `splitPinnedKeys` contains only the panes that fit the current terminal.
+  // The overview must also include open sessions that overflow the layout.
+  const pinnedKeys = ((values.splitPinnedKeys ?? []) as string[]).slice(0, Number(values.splitPaneCount ?? 0))
   const rawStacks = (values.windowStacks ?? []) as string[][]
+  const stackedTabs = new Set(rawStacks.flatMap(stack => stack.slice(1)))
+  const sessionKeys = [...new Set([...pinnedKeys, ...sessions.map(sessionIdentityKey).filter(key => !stackedTabs.has(key))])]
+  const keys = orderWindows((values.windowOrder ?? []) as string[], sessionKeys, (values.windowSurfaces ?? []) as string[])
   const stripIds = [...new Set((values.popoverTabs ?? []) as string[])]
   const activeStrip = stripIds.includes(String(values.activePopoverTab)) ? values.activePopoverTab as string : null
   const floating = values.floatingWindow as { key?: string } | undefined
@@ -71,14 +77,31 @@ export function workspaceOverview(controller: SpacesController): OverviewNode[] 
     children: space.workspaces.map(workspace => {
       const runtime = controller.runtime(workspace)
       const windows = workspaceWindowOverview(runtime)
+      const shelvedKeys = [...new Map((runtime.get('shelvedWindowKeys', [] as ShelvedWindow[], true) as ShelvedWindow[]).map(item => [item.key, item])).values()]
       const node = (window: OverviewWindow, tab = false): OverviewNode => ({
         id: `${workspace.id}:${tab ? 'tab' : 'window'}:${window.key}`, title: `${window.badge ? `${window.badge} ` : ''}${window.title}`,
         detail: `${window.detail}${window.hidden ? ' · hidden' : ''}`, spaceId: space.id, workspaceId: workspace.id, target: window.key,
         children: tab ? [] : (window.tabs ?? []).map(tab => node(tab, true)),
       })
-      return { id: `workspace:${workspace.id}`, title: `${controller.getAttention(workspace.id) || ''} ${workspace.name}`.trim(), detail: `${windows.length} windows`, spaceId: space.id, workspaceId: workspace.id, children: windows.map(window => node(window)) }
+      const shelf: OverviewNode | null = shelvedKeys.length ? {
+        id: `shelf:${workspace.id}`, title: 'Shelf', detail: `${shelvedKeys.length} parked windows`, spaceId: space.id, workspaceId: workspace.id,
+        children: shelvedKeys.map(item => ({
+          id: `${workspace.id}:shelf:${item.key}`, title: `↥ ${item.key.startsWith('surface:') ? surfaceTitle(surfaceIdOfKey(item.key)) : sessionByShelfTitle(runtime, item.key)}`,
+          detail: 'shelved · Enter to restore', spaceId: space.id, workspaceId: workspace.id, target: item.key, shelved: true, children: [],
+        })),
+      } : null
+      return { id: `workspace:${workspace.id}`, title: `${controller.getAttention(workspace.id) || ''} ${workspace.name}`, detail: `${windows.length} windows${shelvedKeys.length ? ` · ${shelvedKeys.length} shelved` : ''}`, spaceId: space.id, workspaceId: workspace.id, children: [...windows.map(window => node(window)), ...(shelf ? [shelf] : [])] }
     }),
   }))
+}
+
+function sessionByShelfTitle(runtime: WorkspaceRuntime, key: string): string {
+  const sessions = [
+    ...runtime.get('openTabSessions', [] as Session[], true),
+    ...(runtime.get('readerSession', null as Session | null, true) ? [runtime.get('readerSession', null as Session | null, true)!] : []),
+  ]
+  const session = sessions.find(candidate => sessionIdentityKey(candidate) === key)
+  return session ? formatSessionTitle(session) : key
 }
 
 export function overviewRows(nodes: OverviewNode[], collapsed: ReadonlySet<string>, query: string): OverviewRow[] {

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 // TUI entry for the Task list plugin: loaded on first open, never at boot.
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import type { ThreadedMessage } from '../../../lib/threading'
 import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
@@ -21,8 +21,16 @@ function TasksSurface({ services, theme, width, height, placement, registerKeys,
   const transcript = services['session-transcript']
   const live = services['live-transcript']?.messages ?? NO_MESSAGES
   const control = services['task-control']
+  const targetSession = services.session?.session ?? null
   const persisted = transcript?.detail?.threadedMessages ?? NO_MESSAGES
   const messages = useMemo(() => withLiveMessages(persisted, live), [persisted, live])
+  const onStopTask = useCallback((taskId: string) => {
+    if (control?.stop && targetSession) void control.stop(targetSession, taskId)
+  }, [control, targetSession])
+  const onReadTaskOutput = useCallback((taskId: string) => {
+    if (!control?.readOutput || !targetSession) return Promise.resolve({ available: false, output: '', totalBytes: 0, truncated: false })
+    return control.readOutput(targetSession, taskId)
+  }, [control, targetSession])
   const overlay = placement === 'overlay'
   if (!overlay && transcript?.status === 'gone') return <text fg={theme.dim}>  That session is no longer available.</text>
   if (!overlay && !transcript?.detail) return <text fg={theme.dim}>{transcript?.status === 'error' ? '  Could not read the session.' : '  Loading…'}</text>
@@ -38,7 +46,8 @@ function TasksSurface({ services, theme, width, height, placement, registerKeys,
       onSelectTask={overlay && control ? control.jumpTo : IGNORE}
       onKeyHandlerReady={registerKeys}
       onDetach={detach}
-      onStopTask={overlay ? control?.stop : undefined}
+      onStopTask={control?.stop && targetSession ? onStopTask : undefined}
+      onReadTaskOutput={control?.readOutput && targetSession ? onReadTaskOutput : undefined}
     />
   )
 }

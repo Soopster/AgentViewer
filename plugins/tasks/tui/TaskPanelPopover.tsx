@@ -26,6 +26,8 @@ type Props = {
   /** Cancel a running SDK background task via query.stopTask(). Absent when the
    *  viewed provider/session can't stop tasks (only Claude warm sessions can). */
   onStopTask?: (taskId: string) => void
+  /** Read a Claude shell/Monitor output tail from the session's warm Query. */
+  onReadTaskOutput?: (taskId: string) => Promise<{ available: boolean; output: string; totalBytes: number; truncated: boolean }>
   /** Fill the given box inside a window, with no frame of its own. */
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
@@ -196,6 +198,7 @@ export function TaskPanelPopover({
   onSelectTask,
   onKeyHandlerReady,
   onStopTask,
+  onReadTaskOutput,
   docked = false,
   onDetach,
 }: Props) {
@@ -214,15 +217,21 @@ export function TaskPanelPopover({
 
   const [detailId, setDetailId] = useState<string | null>(null)
   const detailTask = detailId ? registry.get(detailId) : undefined
-  const [shellOutput, setShellOutput] = useState('')
+  const [shellOutput, setShellOutput] = useState<{ output: string; totalBytes: number; truncated: boolean } | null>(null)
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
-    setShellOutput('')
+    setShellOutput(null)
     if (!detailTask) return
     let cancelled = false
     const refresh = async () => {
       let file
       try {
+        const canReadClaudeTask = detailTask.taskType === 'local_bash' || detailTask.taskType === 'shell' || detailTask.taskType === 'monitor'
+        if (canReadClaudeTask && onReadTaskOutput) {
+          const result = await onReadTaskOutput(detailTask.id)
+          if (!cancelled && result.available) setShellOutput(result)
+          if (result.available) return
+        }
         if (detailTask.outputFile) {
           file = await open(detailTask.outputFile, 'r')
           const stat = await file.stat()
@@ -230,7 +239,7 @@ export function TaskPanelPopover({
           const size = Math.min(stat.size, 32_768)
           const buffer = Buffer.alloc(size)
           const { bytesRead } = await file.read(buffer, 0, size, Math.max(0, stat.size - size))
-          if (!cancelled) setShellOutput(buffer.subarray(0, bytesRead).toString('utf8'))
+          if (!cancelled) setShellOutput({ output: buffer.subarray(0, bytesRead).toString('utf8'), totalBytes: stat.size, truncated: stat.size > size })
         }
       } catch {
         // The SDK may not have created the output file yet.
@@ -240,9 +249,10 @@ export function TaskPanelPopover({
       }
     }
     void refresh()
-    const timer = setInterval(() => { void refresh() }, 1000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [detailId, detailTask?.outputFile])
+    const shouldPoll = detailTask.status === 'in_progress' || detailTask.status === 'paused'
+    const timer = shouldPoll ? setInterval(() => { void refresh() }, 1000) : undefined
+    return () => { cancelled = true; if (timer) clearInterval(timer) }
+  }, [detailId, detailTask?.outputFile, detailTask?.id, detailTask?.taskType, detailTask?.status, onReadTaskOutput])
 
   const [selectedTaskIdx, setSelectedTaskIdx] = useState(0)
   const clampedSelected = Math.min(Math.max(selectedTaskIdx, 0), Math.max(taskRowIndexes.length - 1, 0))
@@ -386,8 +396,8 @@ export function TaskPanelPopover({
             <text fg={theme.text}>{`Runtime: ${detailTask.durationMs != null ? formatDuration(detailTask.durationMs) : detailTask.firstSeenAt ? formatDuration(Math.max(0, (detailTask.status === 'in_progress' ? now : Date.parse(detailTask.lastUpdatedAt ?? detailTask.firstSeenAt)) - Date.parse(detailTask.firstSeenAt))) : 'unknown'}`}</text>
             <text fg={theme.text} wrapMode="word">{`Command: ${detailTask.command ?? detailTask.subject}`}</text>
             <box marginTop={1} flexDirection="column">
-              <text fg={theme.muted}>Output:</text>
-              <text fg={theme.text} wrapMode="word">{shellOutput || detailTask.output || 'No output available'}</text>
+              <text fg={theme.muted}>{`Output:${shellOutput ? ` ${shellOutput.totalBytes.toLocaleString()} bytes${shellOutput.truncated ? ' · showing tail' : ''}` : ''}`}</text>
+              <text fg={theme.text} wrapMode="word">{shellOutput?.output ?? detailTask.output ?? 'No output available'}</text>
             </box>
           </box>
         ) : rows.length === 0 ? (

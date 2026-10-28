@@ -80,8 +80,10 @@ export type TuiPluginServices = {
   'task-control'?: {
     /** Bring a task's most recent card into view in the reader. */
     readonly jumpTo: (eventUuid: string) => void
-    /** Stop a running background task; absent when the composer's session cannot. */
-    readonly stop?: (taskId: string) => void
+    /** Read a shell/Monitor tail from a warm Claude Query. */
+    readonly readOutput?: (session: Session, taskId: string) => Promise<{ available: boolean; output: string; totalBytes: number; truncated: boolean }>
+    /** Stop a running background task in the viewed session. */
+    readonly stop?: (session: Session, taskId: string) => void | Promise<void>
   }
   'session-diagnostics'?: {
     readonly read: (session: Session) => Promise<SessionDiagnosticSection[]>

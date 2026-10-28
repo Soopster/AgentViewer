@@ -806,6 +806,29 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
             await warm.query.stopTask(taskId);
             return { ok: true, applied: 'live', stopped: true };
         }
+        if (action === 'getTaskOutput') {
+            const taskId = typeof body.taskId === 'string' ? body.taskId.trim() : '';
+            if (!taskId)
+                throw new Error('taskId is required');
+            // The task output belongs to the same live Query that started it.
+            // Do not start a fresh Claude process just to read a tail.
+            const warm = claudePoolModule().peekClaudeSession(sessionId);
+            if (!warm)
+                return { ok: true, applied: 'cold', available: false, output: '', totalBytes: 0, truncated: false };
+            // The installed SDK runtime exposes this control helper, although
+            // its Query declaration currently omits it.
+            const result = await (warm.query as unknown as {
+                getTaskOutput: (id: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>;
+            }).getTaskOutput(taskId);
+            return {
+                ok: true,
+                applied: 'live',
+                available: true,
+                output: result.output,
+                totalBytes: result.total_bytes,
+                truncated: result.truncated,
+            };
+        }
         if (action === 'reconnectMcpServer') {
             const serverName = typeof body.serverName === 'string' ? body.serverName : '';
             if (!serverName)

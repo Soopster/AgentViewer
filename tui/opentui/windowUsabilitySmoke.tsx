@@ -239,7 +239,9 @@ check(setup.captureCharFrame().includes('Win alpha'), 'recent windows lost the o
 await escape()
 // The overview also exposes moving an individual background tab.
 await portable('o')
-await act(async () => { await setup.mockInput.typeText(`Win ${movingName}`) }); await settle(150)
+await key('/')
+for (const char of `Win ${movingName}`) await key(char)
+await settle(150)
 await act(async () => { setup.mockInput.pressArrow('down') }); await settle(80)
 // Search includes its ancestors; navigate to the matching tab row explicitly.
 const nodes = (await import('./workspaceOverviewData')).overviewRows((await import('./workspaceOverviewData')).workspaceOverview(controller!), new Set(), `Win ${movingName}`)

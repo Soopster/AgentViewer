@@ -31,6 +31,7 @@ export function useWindowPanesState() {
   const [splitArrangement, setSplitArrangement] = useWorkspaceState<WindowArrangement>('splitArrangement', 'split')
   const [splitReaderLast, setSplitReaderLast] = useWorkspaceState('splitReaderLast', false)
   const [windowSplitTree, setWindowSplitTree] = useWorkspaceState<WindowSplitTree | null>('windowSplitTree', null)
+  const [shelvedWindowKeys, setShelvedWindowKeys] = useWorkspaceState<Array<{ key: string; placement: 'window' | 'tab' | 'floating' | 'popover'; anchor?: string }>>('shelvedWindowKeys', [])
   const [treeDividerDrag, setTreeDividerDrag] = useState<string | null>(null)
   const treeDividerCheckpointedRef = useRef(false)
   const treeDividerActivePathRef = useRef<string | null>(null)
@@ -43,6 +44,7 @@ export function useWindowPanesState() {
     splitPaneCount, setSplitPaneCount, splitPinnedKeys, setSplitPinnedKeys, splitOrientation,
     setSplitOrientation, splitReaderShare, setSplitReaderShare, splitArrangement,
     setSplitArrangement, splitReaderLast, setSplitReaderLast, windowSplitTree, setWindowSplitTree,
+    shelvedWindowKeys, setShelvedWindowKeys,
     treeDividerDrag, setTreeDividerDrag, treeDividerCheckpointedRef, treeDividerActivePathRef,
     coordinatorWorkspace, setCoordinatorWorkspace, coordinatorWorkspaceRunId,
     setCoordinatorWorkspaceRunId, watchedRosterRef,

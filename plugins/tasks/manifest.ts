@@ -18,7 +18,7 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window'],
     windowLabel: 'Task list in a window',
-    services: ['session-transcript'],
+    services: ['session-transcript', 'session'],
     optionalServices: ['live-transcript', 'task-control'],
   }],
   commands: [{

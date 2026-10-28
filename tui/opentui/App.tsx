@@ -50,6 +50,7 @@ import { WINDOW_SURFACE_TITLES, surfaceKindOf, surfaceTitle, type WindowSurfaceK
 import { copySurfaceViewState, migratePanelViewState, surfaceViewNamespace } from './windowViewState'
 import { WorkspaceOverview } from './WorkspaceOverview'
 import { moveWorkspaceWindow } from './workspaceWindowMove'
+import { applyWorkspaceWindowAction, restoreShelvedWorkspaceWindow, shelveWorkspaceWindow } from './workspaceWindowShelf'
 import { reassignShell } from './shellStore'
 import { reassignProcess } from './processStore'
 import type { OverviewNode, OverviewWindow } from './workspaceOverviewData'
@@ -483,7 +484,7 @@ function OpenTuiWorkspace() {
     tabsEnabled, setTabsEnabled, tabOrientation, setTabOrientation, splitPaneCount,
     setSplitPaneCount, splitPinnedKeys, setSplitPinnedKeys, splitOrientation, setSplitOrientation,
     splitReaderShare, setSplitReaderShare, splitArrangement, setSplitArrangement, splitReaderLast,
-    setSplitReaderLast, windowSplitTree, setWindowSplitTree, treeDividerDrag, setTreeDividerDrag,
+    setSplitReaderLast, windowSplitTree, setWindowSplitTree, shelvedWindowKeys, setShelvedWindowKeys, treeDividerDrag, setTreeDividerDrag,
     treeDividerCheckpointedRef, treeDividerActivePathRef, coordinatorWorkspace,
     setCoordinatorWorkspace, coordinatorWorkspaceRunId, setCoordinatorWorkspaceRunId,
     watchedRosterRef, watchedCoordinator, coordinatorBadges, windowPickerOpen, setWindowPickerOpen,
@@ -1882,6 +1883,7 @@ function OpenTuiWorkspace() {
   parkedWindowKeysRef.current = new Set([
     ...liveWindowStacks.flat().filter((key) => !laidOutWindowKeys.has(key)),
     ...(floatingKey ? [floatingKey] : []),
+    ...shelvedWindowKeys.map(item => item.key),
   ])
   const {
     floatingItem, windowStackFor, windowItemKey, pinIndexOfWindow, splitPaneSessions,
@@ -2579,8 +2581,7 @@ function OpenTuiWorkspace() {
   // the live warm pool entry (a fresh control query wouldn't know the task), so
   // it only works while the session is warm — the backend reports stopped:false
   // otherwise.
-  const stopComposerTask = useStableEvent(async (taskId: string) => {
-    const target = composerTargetSession
+  const stopTaskInSession = useStableEvent(async (target: Session, taskId: string) => {
     if (!target || target.provider !== 'claude' || target.isPending) return
     try {
       const result = await runTuiSessionAction(target, { action: 'stopTask', taskId, provider: 'claude' })
@@ -2588,6 +2589,18 @@ function OpenTuiWorkspace() {
       showNotice(stopped ? 'info' : 'error', stopped ? `Stopped task #${taskId}` : 'No running task to stop (session not warm)', 3500)
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to stop task')
+    }
+  })
+  const readTaskOutput = useStableEvent(async (target: Session, taskId: string) => {
+    if (target.provider !== 'claude' || target.isPending) {
+      return { available: false, output: '', totalBytes: 0, truncated: false }
+    }
+    const result = await runTuiSessionAction(target, { action: 'getTaskOutput', taskId, provider: 'claude' })
+    return {
+      available: result.available === true,
+      output: typeof result.output === 'string' ? result.output : '',
+      totalBytes: typeof result.totalBytes === 'number' ? result.totalBytes : 0,
+      truncated: result.truncated === true,
     }
   })
 
@@ -4381,7 +4394,6 @@ function OpenTuiWorkspace() {
     if (idx >= 0) jumpToTranscriptIndex(idx)
   })
   // Only a warm Claude session can stop its background tasks (query.stopTask()).
-  const composerCanStopTasks = composerTargetSession?.provider === 'claude'
   // What the root offers plugin views. Each surface receives only the services it declares.
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     ...(subagentTranscriptSelection ? { 'subagent-transcript': {
@@ -4426,7 +4438,8 @@ function OpenTuiWorkspace() {
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     'task-control': {
       jumpTo: jumpToTaskCard,
-      ...(composerCanStopTasks ? { stop: (taskId: string) => { void stopComposerTask(taskId) } } : {}),
+      readOutput: (session: Session, taskId: string) => readTaskOutput(session, taskId),
+      stop: (session: Session, taskId: string) => stopTaskInSession(session, taskId),
     },
     'session-diagnostics': {
       read: async (session: Session) => (await readTuiSessionDiagnostics(session)).sections ?? [],
@@ -4438,7 +4451,7 @@ function OpenTuiWorkspace() {
     ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), composerCanStopTasks, canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode])
+  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode])
   // The session fleet changes on every poll, so only a view that asks for it is
   // handed a bag holding it; the rest keep the stable one above.
   const fleetDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
@@ -5298,8 +5311,54 @@ function OpenTuiWorkspace() {
     setWindowSwitcherOpen(false)
     const space = workspaceContext.controller.getSnapshot().spaces.find(space => space.id === node.spaceId)
     const workspace = space?.workspaces.find(workspace => workspace.id === node.workspaceId)
-    if (workspace && node.target) workspaceContext.controller.runtime(workspace).set('windowOverviewPendingTarget', node.target)
+    if (workspace && node.target) {
+      if (node.shelved) {
+        try { restoreShelvedWorkspaceWindow(workspaceContext.controller, workspace.id, node.target) }
+        catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
+      } else workspaceContext.controller.runtime(workspace).set('windowOverviewPendingTarget', node.target)
+    }
     workspaceContext.controller.activate(node.spaceId, node.workspaceId)
+  })
+  const shelfOverviewWindow = useStableEvent((node: OverviewNode) => {
+    if (!node.workspaceId || !node.target) return
+    try {
+      shelveWorkspaceWindow(workspaceContext.controller, node.workspaceId, node.target)
+      showNotice('info', `${node.title} · moved to shelf`)
+    } catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
+  })
+  const shelfOverviewWindows = useStableEvent((nodes: OverviewNode[]) => {
+    try {
+      const targets = nodes.filter(node => node.workspaceId && node.target && !node.shelved)
+      for (const node of targets) shelveWorkspaceWindow(workspaceContext.controller, node.workspaceId!, node.target!)
+      if (targets.length) showNotice('info', `${targets.length} windows · moved to shelf`)
+    } catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
+  })
+  const restoreOverviewWindows = useStableEvent((nodes: OverviewNode[]) => {
+    try {
+      const targets = nodes.filter(node => node.workspaceId && node.target && node.shelved)
+      for (const node of targets) restoreShelvedWorkspaceWindow(workspaceContext.controller, node.workspaceId!, node.target!)
+      if (targets.length) showNotice('info', `${targets.length} windows · restored from shelf`)
+    } catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
+  })
+  const applyOverviewWindowAction = useStableEvent((action: 'tab' | 'float' | 'close' | 'move', nodes: OverviewNode[], destinationWorkspaceId?: string) => {
+    const sourceId = nodes[0]?.workspaceId
+    const targets = [...new Set(nodes.flatMap(node => node.target ? [node.target] : []))]
+    if (!sourceId || targets.length === 0) return
+    try {
+      if (action === 'move') {
+        if (!destinationWorkspaceId) throw new Error('Choose a destination workspace')
+        for (const target of targets) {
+          const result = moveWorkspaceWindow(workspaceContext.controller, sourceId, destinationWorkspaceId, target, true)
+          for (const id of result.resourceIds) { reassignShell(id, sourceId, destinationWorkspaceId); reassignProcess(id, sourceId, destinationWorkspaceId) }
+        }
+      } else {
+        applyWorkspaceWindowAction(workspaceContext.controller, sourceId, targets, action)
+      }
+      const destination = action === 'move' ? destinationWorkspaceId! : sourceId
+      const space = workspaceContext.controller.getSnapshot().spaces.find(group => group.workspaces.some(item => item.id === destination))
+      workspaceContext.controller.activate(space?.id ?? workspaceContext.space.id, destination)
+      showNotice('info', `${targets.length} windows · ${action === 'move' ? 'moved together' : action === 'tab' ? 'grouped as tabs' : action === 'float' ? 'floated' : 'closed'}`)
+    } catch (error) { showNotice('error', error instanceof Error ? error.message : String(error)) }
   })
   useEffect(() => {
     if (!overviewPendingTarget) return
@@ -6556,6 +6615,10 @@ function OpenTuiWorkspace() {
       {windowSwitcherOpen ? (
         <WorkspaceOverview recent={recentWindowsOnly ? recentWindowVisits : undefined} controller={workspaceContext.controller} theme={theme} width={width} height={height}
           onMove={node => { if (node.workspaceId && node.target) openMoveWorkspaceMenu(node.workspaceId, node.target, node.id.includes(':tab:')) }}
+          onShelf={shelfOverviewWindow}
+          onShelfMany={shelfOverviewWindows}
+          onRestoreMany={restoreOverviewWindows}
+          onBatchAction={applyOverviewWindowAction}
           onPick={pickOverviewNode} onClose={() => setWindowSwitcherOpen(false)}
           onKeyHandlerReady={(handler) => { windowSwitcherKeyRef.current = handler }} />
       ) : null}
