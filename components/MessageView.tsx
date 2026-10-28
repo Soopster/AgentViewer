@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2244,27 +2244,10 @@ function MessageViewInner({
     }
   }, [session, forking, onFork])
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
-    if (!session || forkingMessageId || !sessionCapabilities?.messageFork) return
-    setForkingMessageId(messageId)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      onFork?.(data.sessionId)
-      setSessionActionNotice('Forked a new session from that point.')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to fork from message')
-    } finally {
-      setForkingMessageId(null)
-    }
-  }, [forkingMessageId, onFork, session, sessionCapabilities?.messageFork])
+  const handleForkFromMessage = useCallback(async (messageId: string) => runHandleForkFromMessage({
+    session, forkingMessageId, sessionCapabilities, setForkingMessageId, setSessionActionError,
+    setSessionActionNotice, onFork,
+  }, messageId), [forkingMessageId, onFork, session, sessionCapabilities?.messageFork])
 
   const toggleResumeFromMessage = useCallback((messageId: string) => {
     if (!sessionCapabilities?.resumeAtMessage) return

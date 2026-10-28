@@ -7,6 +7,7 @@ import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { type RewindPreview } from '../types'
 import { type RollbackPreview } from '../types'
+import { type SessionCapabilities } from '../../../lib/types'
 
 export type HandleExportContext = {
   session: Session | null
@@ -230,5 +231,41 @@ export async function runHandleApplyRollback(ctx: HandleApplyRollbackContext) {
     setSessionActionError(err instanceof Error ? err.message : 'Failed to roll back thread')
   } finally {
     setApplyingRewind(false)
+  }
+}
+
+export type HandleForkFromMessageContext = {
+  session: Session | null
+  forkingMessageId: string | null
+  sessionCapabilities: SessionCapabilities | undefined
+  setForkingMessageId: Dispatch<SetStateAction<string | null>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  onFork: ((newSessionId: string, sourceSession?: Session) => void) | undefined
+}
+
+export async function runHandleForkFromMessage(ctx: HandleForkFromMessageContext, messageId: string) {
+  const {
+    session, forkingMessageId, sessionCapabilities, setForkingMessageId, setSessionActionError,
+    setSessionActionNotice, onFork,
+  } = ctx
+  if (!session || forkingMessageId || !sessionCapabilities?.messageFork) return
+  setForkingMessageId(messageId)
+  setSessionActionError(null)
+  setSessionActionNotice(null)
+  try {
+    const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upToMessageId: messageId, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+    })
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+    onFork?.(data.sessionId)
+    setSessionActionNotice('Forked a new session from that point.')
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Failed to fork from message')
+  } finally {
+    setForkingMessageId(null)
   }
 }
