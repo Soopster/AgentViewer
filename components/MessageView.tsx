@@ -143,6 +143,7 @@ import { useFlushLiveAssistantTextGroup } from './message-view/slices/flushLiveA
 import { useAutoFollowRefGroup } from './message-view/slices/autoFollowRef'
 import { useScrollRafRefGroup } from './message-view/slices/scrollRafRef'
 import { useTurnProducedOutputRefGroup } from './message-view/slices/turnProducedOutputRef'
+import { useBridgeTranscriptEntriesGroup } from './message-view/slices/bridgeTranscriptEntries'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -535,28 +536,16 @@ function MessageViewInner({
   useLayoutEffect(() => {
     ideBridgeRef.current = ideBridge
   }, [ideBridge])
-  // Track bridge entries (sent + replies) with timestamps for inline transcript display
-  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
-    Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
-  >([])
-  const persistedBridgeCountRef = useRef(0)
-  const [slashOpen, setSlashOpen] = useState(false)
-  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
-  const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
-  const textareaRef = composerSessions.ref<ContextComposerHandle | null>(composerOwnerKey, 'textareaRef', null)
-  const composerPrewarmInFlightRef = useRef(new Set<string>())
-  const isComposingRef = useRef(false)
-  const timelineRef = useRef<HTMLDivElement>(null)
-  const timelineContentRef = useRef<HTMLDivElement | null>(null)
-  const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
-  const abortControllerRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'abortControllerRef', null)
-  const activeTurnRequestIdRef = composerSessions.ref<string | null>(composerOwnerKey, 'activeTurnRequestIdRef', null)
-  const inputTextRef = composerSessions.ref(composerOwnerKey, 'inputTextRef', inputText)
-  const suppressDraftSaveRef = useRef(false)
-  const sendInFlightRef = composerSessions.ref(composerOwnerKey, 'sendInFlightRef', false)
-  const awaitingPersistedTurnRef = composerSessions.ref(composerOwnerKey, 'awaitingPersistedTurnRef', false)
-  const pushedCopilotAttachmentsRef = composerSessions.ref<SendAttachment[]>(composerOwnerKey, 'pushedCopilotAttachmentsRef', [])
+  const {
+    bridgeTranscriptEntries, setBridgeTranscriptEntries, persistedBridgeCountRef, slashOpen,
+    setSlashOpen, slashActiveIndex, setSlashActiveIndex, slashItemRefs, liveSlashCommands,
+    setLiveSlashCommands, textareaRef, composerPrewarmInFlightRef, isComposingRef, timelineRef,
+    timelineContentRef, lastTimelineRowRef, abortControllerRef, activeTurnRequestIdRef,
+    inputTextRef, suppressDraftSaveRef, sendInFlightRef, awaitingPersistedTurnRef,
+    pushedCopilotAttachmentsRef,
+  } = useBridgeTranscriptEntriesGroup({
+    composerSessions, composerOwnerKey, inputText,
+  })
   const {
     turnProducedOutputRef, transientRetryCountRef, transientRetryTimerRef,
     pendingSendOnModelsReadyRef, pendingMessageBaselineRef, liveTurnSessionHandoffRef,
