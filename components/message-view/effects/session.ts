@@ -14,6 +14,10 @@ import { type SendState, type ContextUsage, type SessionComposerOptions, type Se
 import { type IncrementalThreadingCache } from '@/lib/threading'
 import { type TimelineScrollAnchor } from '@/lib/timelineVirtualizer'
 import { type TimelineEstimateBucket, type TimelineEstimateCalibration, type FailedSend, type RewindPreview, type RollbackPreview, type TimelineEstimateSample } from '../types'
+import { readJsonResponse } from '@/lib/httpResponse'
+import { type GitSummary } from '@/lib/gitProvider'
+import { COMPOSER_GIT_SUMMARY_POLL_MS } from '../constants'
+import { gitSummariesMatch } from '../composerUi'
 
 export type ReattachRunningEffectContext = {
   session: Session | null
@@ -341,4 +345,49 @@ export function runSessionResetEffect(ctx: SessionResetEffectContext) {
     liveToolInputJsonRef.current.clear()
   }
   initialScrollDoneRef.current = false
+}
+
+export type GitSummaryEffectContext = {
+  composerWorkingDirectory: string | null
+  setComposerGitSummary: Dispatch<SetStateAction<GitSummary | null>>
+}
+
+export function runGitSummaryEffect(ctx: GitSummaryEffectContext) {
+  const {
+    composerWorkingDirectory, setComposerGitSummary,
+  } = ctx
+  if (!composerWorkingDirectory) {
+    setComposerGitSummary(null)
+    return
+  }
+
+  let cancelled = false
+  let timer: number | null = null
+  const controller = new AbortController()
+  setComposerGitSummary(null)
+
+  const refresh = async () => {
+    try {
+      const response = await fetch(`/api/git?action=summary&cwd=${encodeURIComponent(composerWorkingDirectory)}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      const data = await readJsonResponse(response) as { summary?: GitSummary | null }
+      if (!cancelled) {
+        const next = data.summary ?? null
+        setComposerGitSummary((current) => gitSummariesMatch(current, next) ? current : next)
+      }
+    } catch {
+      // Best-effort: session metadata remains the branch fallback.
+    } finally {
+      if (!cancelled) timer = window.setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
+    }
+  }
+
+  void refresh()
+  return () => {
+    cancelled = true
+    controller.abort()
+    if (timer !== null) window.clearTimeout(timer)
+  }
 }

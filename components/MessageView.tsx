@@ -132,7 +132,7 @@ import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleAp
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect } from './message-view/effects/composer'
-import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect } from './message-view/effects/session'
+import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect } from './message-view/effects/session'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -913,42 +913,9 @@ function MessageViewInner({
     setSessionInfo((current) => current ? { ...current, gitBranch: summary.branch } : current)
   }, [setSessionInfo])
 
-  useEffect(() => {
-    if (!composerWorkingDirectory) {
-      setComposerGitSummary(null)
-      return
-    }
-
-    let cancelled = false
-    let timer: number | null = null
-    const controller = new AbortController()
-    setComposerGitSummary(null)
-
-    const refresh = async () => {
-      try {
-        const response = await fetch(`/api/git?action=summary&cwd=${encodeURIComponent(composerWorkingDirectory)}`, {
-          cache: 'no-store',
-          signal: controller.signal,
-        })
-        const data = await readJsonResponse(response) as { summary?: GitSummary | null }
-        if (!cancelled) {
-          const next = data.summary ?? null
-          setComposerGitSummary((current) => gitSummariesMatch(current, next) ? current : next)
-        }
-      } catch {
-        // Best-effort: session metadata remains the branch fallback.
-      } finally {
-        if (!cancelled) timer = window.setTimeout(() => { void refresh() }, COMPOSER_GIT_SUMMARY_POLL_MS)
-      }
-    }
-
-    void refresh()
-    return () => {
-      cancelled = true
-      controller.abort()
-      if (timer !== null) window.clearTimeout(timer)
-    }
-  }, [composerWorkingDirectory])
+  useEffect(() => runGitSummaryEffect({
+    composerWorkingDirectory, setComposerGitSummary,
+  }), [composerWorkingDirectory])
 
   const prewarmComposer = useCallback(() => runPrewarmComposer({
     session, selectedEffort, selectedModel, composerPrewarmInFlightRef,
