@@ -130,7 +130,7 @@ import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmCo
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
-import { runBridgePersistEffect, runBridgeLoadEffect } from './message-view/effects/bridge'
+import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect } from './message-view/effects/bridge'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2421,24 +2421,9 @@ function MessageViewInner({
   }, [channelBridge.entries.length])
 
   // Sync bridge permission requests into the permission composer
-  useEffect(() => {
-    const permissionEntries = channelBridge.entries.filter(
-      (e): e is Extract<typeof e, { kind: 'permission' }> => e.kind === 'permission'
-    )
-    setPendingPermissions((prev) => {
-      const newPerms = permissionEntries
-        .filter((entry) => !prev.some((p) => p.id === entry.id))
-        .map((entry) => ({
-          id: entry.id,
-          title: entry.request.tool_name || 'CLI bridge permission',
-          detail: entry.request.description,
-          toolName: entry.request.tool_name,
-          reason: entry.request.input_preview,
-        }))
-      if (newPerms.length === 0) return prev
-      return [...prev, ...newPerms]
-    })
-  }, [channelBridge.entries.length])
+  useEffect(() => runBridgePermissionsEffect({
+    channelBridge, setPendingPermissions,
+  }), [channelBridge.entries.length])
 
   // The command palette toggles composer routing via a request counter (it lives
   // outside this component); flip the persisted binding when it bumps.

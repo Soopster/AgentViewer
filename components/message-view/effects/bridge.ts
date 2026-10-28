@@ -1,6 +1,8 @@
 import type { Session } from '../../../lib/types'
 import type { RefObject } from 'react'
 import { type Dispatch, type SetStateAction } from 'react'
+import { type ChannelBridge } from '../../useChannelBridge'
+import { type PendingPermission } from '@/lib/permissions'
 
 export type BridgePersistEffectContext = {
   canUseChannelBridge: boolean
@@ -80,4 +82,31 @@ export function runBridgeLoadEffect(ctx: BridgeLoadEffectContext) {
     }
   })()
   return () => { isMounted = false }
+}
+
+export type BridgePermissionsEffectContext = {
+  channelBridge: ChannelBridge
+  setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
+}
+
+export function runBridgePermissionsEffect(ctx: BridgePermissionsEffectContext) {
+  const {
+    channelBridge, setPendingPermissions,
+  } = ctx
+  const permissionEntries = channelBridge.entries.filter(
+    (e): e is Extract<typeof e, { kind: 'permission' }> => e.kind === 'permission'
+  )
+  setPendingPermissions((prev) => {
+    const newPerms = permissionEntries
+      .filter((entry) => !prev.some((p) => p.id === entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.request.tool_name || 'CLI bridge permission',
+        detail: entry.request.description,
+        toolName: entry.request.tool_name,
+        reason: entry.request.input_preview,
+      }))
+    if (newPerms.length === 0) return prev
+    return [...prev, ...newPerms]
+  })
 }
