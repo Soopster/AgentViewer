@@ -518,3 +518,36 @@ export function runInsertMention(ctx: InsertMentionContext, entry: MentionResult
     resizeComposer()
   })
 }
+
+export type InsertPromptTextContext = {
+  textareaRef: MutableRefObject<ContextComposerHandle | null>
+  inputTextRef: MutableRefObject<string>
+  setInputText: Dispatch<SetStateAction<string>>
+  resizeComposer: () => void
+}
+
+export function runInsertPromptText(ctx: InsertPromptTextContext, text: string) {
+  const {
+    textareaRef, inputTextRef, setInputText, resizeComposer,
+  } = ctx
+  const trimmed = text.trim()
+  if (!trimmed) return
+  const textarea = textareaRef.current
+  const value = textarea?.value ?? inputTextRef.current
+  const start = textarea?.selectionStart ?? value.length
+  const end = textarea?.selectionEnd ?? value.length
+  const before = value.slice(0, start)
+  const after = value.slice(end)
+  const insertion = before.length > 0 && !before.endsWith('\n') ? `\n${trimmed}` : trimmed
+  const next = `${before}${insertion}${after}`
+  setInputText(next)
+  inputTextRef.current = next
+  window.requestAnimationFrame(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const caret = before.length + insertion.length
+    ta.setSelectionRange(caret, caret)
+    ta.focus()
+    resizeComposer()
+  })
+}
