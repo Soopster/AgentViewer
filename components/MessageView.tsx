@@ -148,6 +148,7 @@ import { useIdeBridgeOpenGroup } from './message-view/slices/ideBridgeOpen'
 import { useHistoryIndexGroup } from './message-view/slices/historyIndex'
 import { useLiveAssistantTextGroup } from './message-view/slices/liveAssistantText'
 import { usePluginOverlayGroup } from './message-view/slices/pluginOverlay'
+import { useActiveQueuedSendsGroup } from './message-view/slices/activeQueuedSends'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -273,30 +274,18 @@ function MessageViewInner({
   useLayoutEffect(() => {
     composerQueueTargetKeyRef.current = composerQueueTargetKey
   }, [composerQueueTargetKey])
-  const activeQueuedSends = useMemo(
-    () => selectComposerQueueTarget(queuedSends, composerQueueTargetKey),
-    [composerQueueTargetKey, queuedSends],
-  )
-  // Last message delivered INTO the running turn via native steering — shown
-  // in the composer status line while the turn is still streaming.
-  const [steeredNotice, setSteeredNotice] = useComposerSessionState<string | null>(composerSessions, composerOwnerKey, 'steeredNotice', null)
-  const [attachments, setAttachments] = useComposerSessionState<SendAttachment[]>(composerSessions, composerOwnerKey, 'attachments', [])
-  const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
-  const [attachmentPath, setAttachmentPath] = useState('')
-  const [attachmentPanelOpen, setAttachmentPanelOpen] = useState(false)
-  const [failedSend, setFailedSend] = useComposerSessionState<FailedSend | null>(composerSessions, composerOwnerKey, 'failedSend', null)
-  const [rewindTargetId, setRewindTargetId] = useState('')
-  const [rollbackTurns, setRollbackTurns] = useState(1)
-  const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
-  const [previewingRewind, setPreviewingRewind] = useState(false)
-  const [applyingRewind, setApplyingRewind] = useState(false)
-  const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null)
-  const [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(null)
-  const [forking, setForking] = useState(false)
-  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
-  const [showDiagnostics, setShowDiagnostics] = useState(false)
-  const [preferencesHydrated, setPreferencesHydrated] = useState(false)
-  const [showVisualizer, setShowVisualizer] = useState(false)
+  const {
+    activeQueuedSends, steeredNotice, setSteeredNotice, attachments, setAttachments,
+    attachmentType, setAttachmentType, attachmentPath, setAttachmentPath, attachmentPanelOpen,
+    setAttachmentPanelOpen, failedSend, setFailedSend, rewindTargetId, setRewindTargetId,
+    rollbackTurns, setRollbackTurns, resumeFromMessageId, setResumeFromMessageId, previewingRewind,
+    setPreviewingRewind, applyingRewind, setApplyingRewind, rewindPreview, setRewindPreview,
+    rollbackPreview, setRollbackPreview, forking, setForking, forkingMessageId,
+    setForkingMessageId, showDiagnostics, setShowDiagnostics, preferencesHydrated,
+    setPreferencesHydrated, showVisualizer, setShowVisualizer,
+  } = useActiveQueuedSendsGroup({
+    queuedSends, composerQueueTargetKey, composerSessions, composerOwnerKey,
+  })
   useEffect(() => {
     if (!preferencesHydrated) return
     writeLocalStorageValue('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
