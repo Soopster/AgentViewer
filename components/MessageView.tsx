@@ -110,7 +110,7 @@ import {
   type TimelineScrollAnchor,
 } from '@/lib/timelineVirtualizer'
 import type { ComposerDraft, QueuedWebSend, PendingMessageBaseline, TimelineRow, TimelineEstimateBucket, TimelineEstimateCalibration, ActiveTranscriptFilter, Props, CopilotContextTier, FailedSend, RewindPreview, RollbackPreview, SteeredSendEntry, LiveToolActivity, MentionResult, TimelineEstimateSample } from './message-view/types'
-import { SPINNER_FRAMES, COMPOSER_DRAFT_STORAGE_PREFIX, SEND_ATTACHMENT_TYPES, COMPOSER_QUEUE_LOCAL_INLINE_LIMIT, writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, TIMELINE_BOTTOM_GUTTER_PX, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
+import { COMPOSER_DRAFT_STORAGE_PREFIX, SEND_ATTACHMENT_TYPES, COMPOSER_QUEUE_LOCAL_INLINE_LIMIT, writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, TIMELINE_BOTTOM_GUTTER_PX, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
 import { assistantDisplayName, extractSseFrames, extractLiveToolStart, upsertThreadedMessage, updateLiveToolThreadInput, extractCompletedToolKey, completeLiveToolThread, extractLiveToolStopIndex, extractStreamingAssistantText, shouldReplaceLiveAssistantText, extractStreamingReasoningText, extractTextContent } from './message-view/liveStream'
 import { withProviderQuery, isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline, buildPendingMessageBaseline, retargetPendingMessageBaseline, threadedMessageKey, threadedMessageEqual } from './message-view/threadedCompare'
 import { estimateTimelineRowHeight, timelineEstimateBucket, calibratedTimelineRowHeight } from './message-view/heightEstimate'
@@ -119,6 +119,7 @@ import { OpenCodeTodosBanner } from './message-view/OpenCodeTodosBanner'
 import { VirtualTimelineRow } from './message-view/VirtualTimelineRow'
 import { PlanApprovalCard } from './message-view/PlanApprovalCard'
 import { AskUserQuestionPicker } from './message-view/AskUserQuestionPicker'
+import { normalizeSelectValue, gitSummariesMatch, detectMentionAtCursor, LiveSpinner, ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopoverHintStyle, composerPopoverItemStyle, ComposerContextUsageRing } from './message-view/composerUi'
 
 const PluginSurfaceHost = dynamic(() => import('./shell/PluginSurfaceHost'), { ssr: false })
 // Feature plugins that put a button on the session toolbar.
@@ -182,167 +183,6 @@ function formatLiveThinkingTokens(tokens: number): string {
 function useLazyRef<T>(create: () => T): { current: T } {
   const [ref] = useState(() => ({ current: create() }))
   return ref
-}
-
-function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
-  if (cursor === 0) return null
-  let i = cursor - 1
-  while (i >= 0) {
-    const ch = text[i]
-    if (ch === '@') break
-    if (!ch || /\s/.test(ch)) return null
-    i -= 1
-  }
-  if (i < 0 || text[i] !== '@') return null
-  if (i > 0 && !/\s/.test(text[i - 1] ?? '')) return null
-  const query = text.slice(i + 1, cursor)
-  if (query.length > 60) return null
-  return { start: i, query }
-}
-
-
-const composerPopoverStyle: React.CSSProperties = {
-  position: 'absolute',
-  bottom: 'calc(100% + 6px)',
-  left: 0,
-  right: 60,
-  maxHeight: 240,
-  overflowY: 'auto',
-  background: 'var(--surface)',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  boxShadow: '0 18px 40px rgba(0,0,0,0.34)',
-  zIndex: 30,
-  padding: 4,
-  display: 'flex',
-  flexDirection: 'column',
-}
-const composerPopoverHintStyle: React.CSSProperties = {
-  padding: '4px 8px 6px',
-  fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 11,
-  color: 'var(--text-3)',
-  letterSpacing: '0.06em',
-  borderBottom: '1px solid var(--border)',
-  marginBottom: 4,
-}
-const composerPopoverItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  textAlign: 'left',
-  background: 'transparent',
-  border: 'none',
-  borderRadius: 5,
-  padding: '5px 8px',
-  fontFamily: "'IBM Plex Sans', sans-serif",
-  fontSize: 12,
-  color: 'var(--text)',
-  cursor: 'pointer',
-}
-
-function normalizeSelectValue(value: string | null | undefined): string | null {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : null
-}
-
-function effortLabel(level: ReasoningEffortLevel): string {
-  if (level === 'xhigh') return 'Extra high'
-  return level.charAt(0).toUpperCase() + level.slice(1)
-}
-
-function gitSummariesMatch(left: GitSummary | null, right: GitSummary | null): boolean {
-  return left?.branch === right?.branch
-    && left?.modified === right?.modified
-    && left?.untracked === right?.untracked
-    && left?.stashes === right?.stashes
-}
-
-function ComposerContextUsageRing({ usage }: { usage: ContextUsage | null }) {
-  const percentage = usage ? Math.max(0, Math.min(usage.percentage, 100)) : 0
-  const ringColor = usage?.percentage && usage.percentage > 80
-    ? 'var(--red, #f87171)'
-    : usage?.percentage && usage.percentage > 60
-    ? 'var(--yellow, #fbbf24)'
-    : 'var(--violet)'
-  const label = usage
-    ? `Context usage: ${usage.totalTokens.toLocaleString()} of ${usage.maxTokens.toLocaleString()} tokens, ${Math.round(usage.percentage)}%`
-    : 'Context usage unavailable until the provider reports it'
-
-  return (
-    <span
-      className="av-web-composer-context-ring"
-      role="img"
-      aria-label={label}
-      title={label}
-      data-available={usage ? 'true' : 'false'}
-      style={{
-        '--av-context-progress': `${percentage * 3.6}deg`,
-        '--av-context-color': ringColor,
-      } as React.CSSProperties}
-    />
-  )
-}
-
-function ComposerStatusBanner({
-  tone,
-  icon,
-  children,
-  action,
-}: {
-  tone: 'info' | 'success' | 'warning' | 'error'
-  icon: React.ReactNode
-  children: React.ReactNode
-  action?: React.ReactNode
-}) {
-  return (
-    <div
-      className="av-web-composer-banner"
-      data-tone={tone}
-      role={tone === 'error' ? 'alert' : 'status'}
-    >
-      <span className="av-web-composer-banner-icon" aria-hidden="true">{icon}</span>
-      <span className="av-web-composer-banner-message">{children}</span>
-      {action ? <span className="av-web-composer-banner-action">{action}</span> : null}
-    </div>
-  )
-}
-
-function LiveSpinner({ label }: { label: string }) {
-  const [frame, setFrame] = useState(0)
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setFrame((current) => (current + 1) % SPINNER_FRAMES.length)
-    }, 80)
-
-    return () => window.clearInterval(timer)
-  }, [])
-
-  return (
-    <span
-      aria-label={label}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11,
-        letterSpacing: '0.08em',
-        color: 'var(--violet)',
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          color: 'var(--cyan)',
-          filter: 'drop-shadow(0 0 5px var(--cyan))',
-        }}
-      >
-        {SPINNER_FRAMES[frame]}
-      </span>
-      <span>{label}</span>
-    </span>
-  )
 }
 
 function attachmentImagePreviewSrc(attachment: SendAttachment): string | null {
