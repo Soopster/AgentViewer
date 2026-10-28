@@ -131,7 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
-import { runMentionSearchEffect, runSlashCommandsEffect } from './message-view/effects/composer'
+import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect } from './message-view/effects/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1726,60 +1726,14 @@ function MessageViewInner({
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
-  useEffect(() => {
-    if (activeQueuedSends.length === 0) return
-    if (!composerQueueStorageReady || runningProbeReadyKey !== composerQueueTargetKey) return
-    if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
-    if (!composerQueueTargetKey) return
-    // A turn we reattached to is still running server-side — flushing now would
-    // start a second concurrent turn. Wait for the /running poll to clear.
-    if (reattachedRunning) return
-    // Gate on strict idle: flushing while sendState is 'error' would auto-fire
-    // a queued send after a failed turn (and clobber the restored draft).
-    if (sendState !== 'idle' || awaitingPersistedTurn) return
-    const next = activeQueuedSends[0]!
-    if (composerQueueClaimInFlightRef.current.has(next.id)) return
-    composerQueueClaimInFlightRef.current.add(next.id)
-    // Claim across browser tabs and persist the dequeue before provider I/O.
-    // A stale tab that loses the claim updates to the authoritative queue and
-    // never sends the same follow-up a second time.
-    const claimedTargetKey = composerQueueTargetKey
-    const store = getWebComposerQueueStore()
-    void store.claim(claimedTargetKey, next.id).then((claim) => {
-      composerQueueCommitCounterRef.current += 1
-      queuedSendsRef.current = claim.entries
-      if (composerQueueMountedRef.current) {
-        setQueuedSends(claim.entries)
-        setComposerQueueDurability(claim.durability)
-      }
-      if (!claim.claimed) return
-      if (!composerQueueMountedRef.current || composerQueueTargetKeyRef.current !== claimedTargetKey) {
-        // Navigation/session changes can occur while waiting for another tab's
-        // lock. Put the unconsumed entry back instead of sending it through a
-        // composer that now targets a different session.
-        const restoredQueue = [next, ...claim.entries.filter((entry) => entry.id !== next.id)]
-        if (composerQueueMountedRef.current) commitQueuedSends(restoredQueue)
-        else store.commit(restoredQueue)
-        return
-      }
-      setInputText(next.text)
-      inputTextRef.current = next.text
-      setAttachments(next.attachments)
-      window.requestAnimationFrame(() => {
-        const ta = textareaRef.current
-        if (ta) {
-          ta.value = next.text
-          ta.setSelectionRange(next.text.length, next.text.length)
-        }
-        resizeComposer()
-        void sendMessage()
-      })
-    }).catch(() => {
-      if (composerQueueMountedRef.current) setComposerQueueDurability('memory-only')
-    }).finally(() => {
-      composerQueueClaimInFlightRef.current.delete(next.id)
-    })
-  }, [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
+  useEffect(() => runQueuedSendsEffect({
+    activeQueuedSends, composerQueueStorageReady, runningProbeReadyKey, composerQueueTargetKey,
+    sendInFlightRef, awaitingPersistedTurnRef, reattachedRunning, sendState, awaitingPersistedTurn,
+    composerQueueClaimInFlightRef, composerQueueCommitCounterRef, queuedSendsRef,
+    composerQueueMountedRef, setQueuedSends, setComposerQueueDurability, composerQueueTargetKeyRef,
+    commitQueuedSends, setInputText, inputTextRef, setAttachments, textareaRef, resizeComposer,
+    sendMessage,
+  }), [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
 
   // A send blocked on the model list (cold LM Studio / custom-endpoint
   // connection) re-fires automatically once the fetch settles, rather than
