@@ -131,7 +131,7 @@ import { runRespondToPermission, runRespondToQuestion } from './message-view/act
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
-import { runMentionSearchEffect } from './message-view/effects/composer'
+import { runMentionSearchEffect, runSlashCommandsEffect } from './message-view/effects/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -1853,26 +1853,9 @@ function MessageViewInner({
   const commandSessionId = session?.sessionId
   const commandSessionProvider = session?.provider
 
-  useEffect(() => {
-    if (!commandSessionId) {
-      setLiveSlashCommands([])
-      return
-    }
-    const controller = new AbortController()
-    const url = `/api/sessions/${commandSessionId}/commands?provider=${encodeURIComponent(commandSessionProvider ?? 'claude')}`
-    void fetch(url, { signal: controller.signal })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
-        setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string }) => ({
-          command: entry.command,
-          description: entry.description ?? '',
-          argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
-        })))
-      })
-      .catch(() => { /* ignore */ })
-    return () => controller.abort()
-  }, [commandSessionId, commandSessionProvider])
+  useEffect(() => runSlashCommandsEffect({
+    commandSessionId, setLiveSlashCommands, commandSessionProvider,
+  }), [commandSessionId, commandSessionProvider])
 
   useEffect(() => runMentionSearchEffect({
     mentionQuery, mentionAbortRef, setMentionResults, activeProvider, composerMentionAgentOptions,

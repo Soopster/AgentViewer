@@ -4,6 +4,7 @@ import type { SetStateAction } from 'react'
 import type { SessionComposerAgentOption } from '../../../lib/types'
 import type { Session } from '../../../lib/types'
 import { type MentionResult } from '../types'
+import { type SlashCommandSuggestion } from '@/lib/slashCommands'
 
 export type MentionSearchEffectContext = {
   mentionQuery: { start: number; query: string; } | null
@@ -70,4 +71,34 @@ export function runMentionSearchEffect(ctx: MentionSearchEffectContext) {
     window.clearTimeout(handle)
     controller.abort()
   }
+}
+
+export type SlashCommandsEffectContext = {
+  commandSessionId: string | undefined
+  setLiveSlashCommands: Dispatch<SetStateAction<SlashCommandSuggestion[]>>
+  commandSessionProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
+}
+
+export function runSlashCommandsEffect(ctx: SlashCommandsEffectContext) {
+  const {
+    commandSessionId, setLiveSlashCommands, commandSessionProvider,
+  } = ctx
+  if (!commandSessionId) {
+    setLiveSlashCommands([])
+    return
+  }
+  const controller = new AbortController()
+  const url = `/api/sessions/${commandSessionId}/commands?provider=${encodeURIComponent(commandSessionProvider ?? 'claude')}`
+  void fetch(url, { signal: controller.signal })
+    .then((res) => res.ok ? res.json() : null)
+    .then((data) => {
+      if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
+      setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string }) => ({
+        command: entry.command,
+        description: entry.description ?? '',
+        argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+      })))
+    })
+    .catch(() => { /* ignore */ })
+  return () => controller.abort()
 }
