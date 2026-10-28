@@ -468,3 +468,53 @@ export function runPrewarmComposer(ctx: PrewarmComposerContext) {
     .catch(() => { /* best-effort: send pays the usual cold cost */ })
     .finally(() => { composerPrewarmInFlightRef.current.delete(key); finishLoading() })
 }
+
+export type InsertMentionContext = {
+  mentionQuery: { start: number; query: string; } | null
+  textareaRef: MutableRefObject<ContextComposerHandle | null>
+  inputTextRef: MutableRefObject<string>
+  insertContextAttachments: (incoming: SendAttachment[]) => void
+  setMentionQuery: Dispatch<SetStateAction<{ start: number; query: string; } | null>>
+  setMentionResults: Dispatch<SetStateAction<MentionResult[]>>
+  setInputText: Dispatch<SetStateAction<string>>
+  setAttachments: Dispatch<SetStateAction<SendAttachment[]>>
+  resizeComposer: () => void
+}
+
+export function runInsertMention(ctx: InsertMentionContext, entry: MentionResult) {
+  const {
+    mentionQuery, textareaRef, inputTextRef, insertContextAttachments, setMentionQuery,
+    setMentionResults, setInputText, setAttachments, resizeComposer,
+  } = ctx
+  const mention = mentionQuery
+  if (!mention) return
+  if (entry.kind === 'file') {
+    textareaRef.current?.setSelectionRange(mention.start, textareaRef.current?.selectionStart ?? inputTextRef.current.length)
+    insertContextAttachments([{ ...createContextAttachment('file', entry.basename, undefined, entry.path), type: 'mention' }])
+    setMentionQuery(null)
+    setMentionResults([])
+    return
+  }
+  const textarea = textareaRef.current
+  const value = textarea?.value ?? inputTextRef.current
+  const cursor = textarea?.selectionStart ?? value.length
+  const before = value.slice(0, mention.start)
+  const after = value.slice(cursor)
+  const insertion = `@${entry.name} `
+  const next = `${before}${insertion}${after}`
+  setInputText(next)
+  inputTextRef.current = next
+  setMentionQuery(null)
+  setMentionResults([])
+  setAttachments(prev => prev.some(a => a.type === 'agent' && a.displayName === entry.name) ? prev : [...prev, {
+    id: crypto.randomUUID(), type: 'agent', displayName: entry.name, text: `@${entry.name}`,
+  }])
+  window.requestAnimationFrame(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const caret = before.length + insertion.length
+    ta.setSelectionRange(caret, caret)
+    ta.focus()
+    resizeComposer()
+  })
+}

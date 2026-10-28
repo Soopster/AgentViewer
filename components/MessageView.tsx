@@ -126,7 +126,7 @@ import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
-import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer } from './message-view/actions/composer'
+import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention } from './message-view/actions/composer'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2006,39 +2006,10 @@ function MessageViewInner({
     return () => window.removeEventListener('agent-viewer:insert-context', receive)
   }, [insertContextAttachments, session, projectView])
 
-  const insertMention = useCallback((entry: MentionResult) => {
-    const mention = mentionQuery
-    if (!mention) return
-    if (entry.kind === 'file') {
-      textareaRef.current?.setSelectionRange(mention.start, textareaRef.current?.selectionStart ?? inputTextRef.current.length)
-      insertContextAttachments([{ ...createContextAttachment('file', entry.basename, undefined, entry.path), type: 'mention' }])
-      setMentionQuery(null)
-      setMentionResults([])
-      return
-    }
-    const textarea = textareaRef.current
-    const value = textarea?.value ?? inputTextRef.current
-    const cursor = textarea?.selectionStart ?? value.length
-    const before = value.slice(0, mention.start)
-    const after = value.slice(cursor)
-    const insertion = `@${entry.name} `
-    const next = `${before}${insertion}${after}`
-    setInputText(next)
-    inputTextRef.current = next
-    setMentionQuery(null)
-    setMentionResults([])
-    setAttachments(prev => prev.some(a => a.type === 'agent' && a.displayName === entry.name) ? prev : [...prev, {
-      id: crypto.randomUUID(), type: 'agent', displayName: entry.name, text: `@${entry.name}`,
-    }])
-    window.requestAnimationFrame(() => {
-      const ta = textareaRef.current
-      if (!ta) return
-      const caret = before.length + insertion.length
-      ta.setSelectionRange(caret, caret)
-      ta.focus()
-      resizeComposer()
-    })
-  }, [mentionQuery, resizeComposer, insertContextAttachments, inputTextRef, textareaRef, setInputText, setAttachments])
+  const insertMention = useCallback((entry: MentionResult) => runInsertMention({
+    mentionQuery, textareaRef, inputTextRef, insertContextAttachments, setMentionQuery,
+    setMentionResults, setInputText, setAttachments, resizeComposer,
+  }, entry), [mentionQuery, resizeComposer, insertContextAttachments, inputTextRef, textareaRef, setInputText, setAttachments])
 
   const insertPromptText = useCallback((text: string) => {
     const trimmed = text.trim()
