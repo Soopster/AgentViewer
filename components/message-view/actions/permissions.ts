@@ -6,6 +6,7 @@ import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '@/lib/pending
 import { type PendingPermission } from '@/lib/permissions'
 import { respondToChannelPermission, readBridgeConfigFromEnv } from '@/lib/channelBridge'
 import { permissionDenialReason } from '../composerStorage'
+import { type PendingQuestionAnswers } from '@/lib/permissions'
 
 export type RespondToPermissionContext = {
   setSessionActionLoading: Dispatch<SetStateAction<string | null>>
@@ -70,6 +71,54 @@ export async function runRespondToPermission(ctx: RespondToPermissionContext, pe
       setSessionActionError(PENDING_REQUEST_GONE_NOTICE)
     } else {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+    }
+  } finally {
+    setSessionActionLoading(null)
+  }
+}
+
+export type RespondToQuestionContext = {
+  session: Session | null
+  sessionActionLoading: string | null
+  setSessionActionLoading: Dispatch<SetStateAction<string | null>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
+}
+
+export async function runRespondToQuestion(ctx: RespondToQuestionContext, permission: PendingPermission, answers: PendingQuestionAnswers) {
+  const {
+    session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
+    setPendingPermissions,
+  } = ctx
+  if (!session || sessionActionLoading) return
+  setSessionActionLoading(`permission:${permission.id}`)
+  setSessionActionError(null)
+  try {
+    const targetSessionId = permission.sessionId ?? session.sessionId
+    const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'respondQuestion',
+        permissionId: permission.id,
+        answers,
+        provider: session.provider,
+        providerInstanceId: session.providerInstanceId,
+      }),
+    })
+    const data = await readOptionalJsonResponse(res, {})
+    if (data.error) throw Object.assign(new Error(data.error), { code: (data as { code?: string }).code })
+    setPendingPermissions((prev) => prev.filter((entry) =>
+      entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+    ))
+  } catch (err) {
+    if (isPendingRequestGone(err)) {
+      setPendingPermissions((prev) => prev.filter((entry) =>
+        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+      ))
+      setSessionActionError(PENDING_REQUEST_GONE_NOTICE)
+    } else {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to submit answer')
     }
   } finally {
     setSessionActionLoading(null)
