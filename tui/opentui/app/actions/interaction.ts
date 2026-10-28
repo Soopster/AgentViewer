@@ -1,3 +1,4 @@
+import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -358,7 +359,7 @@ export type ConfirmExitContext = {
   activeComposerTurnRequestIdRef: React.MutableRefObject<string | null>
   composerTargetSessionRef: React.RefObject<Session | null>
   runningSessionsRef: React.RefObject<RunningSessionRef[]>
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   persistTheme: () => void
   renderer: CliRenderer
 }

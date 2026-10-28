@@ -1,3 +1,6 @@
+import { prepareComposerTurnRequest } from '../../../../lib/composerSubmission'
+import { planComposerRetry } from '../../../../lib/composerRetry'
+import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
 import type { RefObject } from 'react'
 import type { SetStateAction } from 'react'
@@ -27,7 +30,7 @@ import { type ContextUsage, type ProviderSelection, type RunningSessionRef, type
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../../../lib/composerCommands'
 import { deliverComposerSteer } from '../../../../lib/composerSteering'
 import { parseClaudeCommandLifecycle } from '../../../../lib/claudeCommandLifecycle'
-import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '../../../../lib/transientError'
+import { TransientAwareSendError, type UsageLimitKind } from '../../../../lib/transientError'
 import { normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../../../lib/slashCommands'
 import { parseCrossSessionComposerCommand } from '../../../../lib/crossSessionCommands'
 import { extractPendingPermission, extractPermissionReply, type PendingPermission } from '../../../../lib/permissions'
@@ -44,7 +47,7 @@ import { CODEX_LIVE_ASSISTANT_UUID, CLAUDE_LIVE_ASSISTANT_UUID_PREFIX } from '..
 export type SendComposerMessageContext = {
   composerTargetSessionRef: React.RefObject<Session | null>
   composerTargetSession: Session | null
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   composerViewActions: { setComposerDraft: (action: React.SetStateAction<string>) => void; setComposerMentionAttachments: React.Dispatch<React.SetStateAction<SendAttachment[]>>; setComposerPromptParts: React.Dispatch<React.SetStateAction<ComposerPromptPart[]>>; setComposerMention: React.Dispatch<React.SetStateAction<{ start: number; query: string; } | null>>; setComposerMentionResults: React.Dispatch<React.SetStateAction<TuiMentionResult[]>>; setComposerMentionDismissedStart: React.Dispatch<React.SetStateAction<number | null>>; setComposerSlashIndex: React.Dispatch<React.SetStateAction<number>>; setComposerSlashDismissed: React.Dispatch<React.SetStateAction<boolean>>; setComposerHistoryIndex: React.Dispatch<React.SetStateAction<number>>; setComposerHistoryOpen: React.Dispatch<React.SetStateAction<boolean>>; setDraftBeforeHistory: React.Dispatch<React.SetStateAction<ComposerDraftSnapshot>>; setFollowTail: React.Dispatch<React.SetStateAction<boolean>>; setPendingNewCount: React.Dispatch<React.SetStateAction<number>>; setUnreadBoundaryKey: React.Dispatch<React.SetStateAction<string | null>>; setHistoryIndex: React.Dispatch<React.SetStateAction<number>>; setPermissionOptionIndex: React.Dispatch<React.SetStateAction<number>>; setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>; setSessionDetail: React.Dispatch<React.SetStateAction<TuiSessionDetail | null>>; setTuiCopilotMode: React.Dispatch<React.SetStateAction<'interactive' | 'plan' | 'autopilot' | 'shell'>>; }
   composerViewRefs: { textarea: React.RefObject<TextareaRenderable | null>; storage: React.RefObject<string | null>; attachments: React.RefObject<SendAttachment[]>; parts: React.RefObject<ComposerPromptPart[]>; }
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
@@ -571,47 +574,27 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
     const res = await streamTuiSessionTurn(
       targetSession,
       {
-        message: trimmed,
-        provider: targetSession.provider,
-        taskBudgetTokens: taskBudgetTokens ?? undefined,
-        enableWorkflow: targetSession.provider === 'claude' && composerEnableWorkflow ? true : undefined,
-        isPendingSession: targetSession.isPending === true ? true : undefined,
-        cwd: targetSession.cwd ?? undefined,
-        attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
-        model: overrideModel || undefined,
-        agent: targetSession.provider === 'opencode' && tuiOpenCodeAgent
-          ? tuiOpenCodeAgent
-          : undefined,
-        effort: tuiEffort === 'auto' ? undefined : tuiEffort,
-        mode: targetSession.provider === 'copilot'
-          ? tuiCopilotMode
-          : undefined,
-        contextTier: targetSession.provider === 'copilot' && composerCopilotContextTier !== 'default'
-          ? composerCopilotContextTier
-          : undefined,
-        permissionMode: targetSession.provider === 'claude'
-          ? composerPermissionMode
-          : targetSession.provider === 'copilot'
-            ? composerCopilotPermissionMode
-            : undefined,
+        ...prepareComposerTurnRequest(targetSession, {
+          message: trimmed,
+          attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
+        }, {
+          turnRequestId,
+          model: overrideModel,
+          effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+          agent: tuiOpenCodeAgent,
+          mode: tuiCopilotMode,
+          contextTier: composerCopilotContextTier !== 'default' ? composerCopilotContextTier : undefined,
+          permissionMode: targetSession.provider === 'copilot' ? composerCopilotPermissionMode : composerPermissionMode,
+          approvalPolicy: composerCodexApproval,
+          taskBudgetTokens,
+          enableWorkflow: composerEnableWorkflow,
+        }),
         additionalDirectories: targetSession.provider === 'claude'
           ? tuiAddedDirsByKeyRef.current[sessionKey(targetSession)]
           : undefined,
         collaborationMode: targetSession.provider === 'codex'
           ? tuiCodexModeByKeyRef.current[sessionKey(targetSession)]
           : undefined,
-        approvalPolicy: targetSession.provider === 'codex' && composerCodexApproval !== 'auto'
-          ? composerCodexApproval
-          : undefined,
-        // Claude/Copilot only emit interactive tool-approval prompts when the
-        // client opts in. OpenCode/Codex surface them automatically.
-        // bypass/plan handle all tool decisions via permissionMode — no bridge.
-        manualPermissions: targetSession.provider === 'copilot'
-          || (targetSession.provider === 'claude' && composerPermissionMode !== 'bypassPermissions' && composerPermissionMode !== 'plan')
-          ? true : undefined,
-        nativeCommands: targetSession.provider === 'copilot' ? true : undefined,
-        detachOnClientAbort: true,
-        turnRequestId,
       },
       controller.signal,
     )
@@ -1349,18 +1332,14 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       return
     }
     const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
-    const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
-    const usageLimitKind = err instanceof TransientAwareSendError ? err.usageLimitKind : undefined
     // Visible auto-retry: ride out a transient API/network blip when the turn
     // produced no output yet (mirrors the web composer + Pi's native retry).
     // Keep the turn 'sending' with a 'retrying' status across the backoff,
     // then re-fire the same draft. The finally below preserves liveStatus
     // while a retry timer is armed (see the guarded setLiveStatus there).
-    if (isTransientSendError(errorMessage, apiErrorStatus, usageLimitKind)
-      && !composerTurnProducedOutputRef.current
-      && composerRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES) {
-      composerRetryCountRef.current += 1
-      const attempt = composerRetryCountRef.current
+    const retry = planComposerRetry(err, { producedOutput: composerTurnProducedOutputRef.current, attempts: composerRetryCountRef.current })
+    if (retry) {
+      composerRetryCountRef.current = retry.attempt
       const retryDraft = submission.visibleText
       const retryAttachments = sendAttachments
       setLiveStatus('retrying')
@@ -1374,7 +1353,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       composerRetryTimerRef.current = setTimeout(() => {
         composerRetryTimerRef.current = null
         void runSendComposerMessage(ctx, retryDraft, retryAttachments, true, submission.promptParts, turnRequestId)
-      }, transientRetryBackoffMs(attempt))
+      }, retry.delayMs)
       return
     }
     // The stream died but the turn survived in the running registry — hand

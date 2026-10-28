@@ -1,6 +1,5 @@
+import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
-import type { SetStateAction } from 'react'
-import type { MutableRefObject } from 'react'
 import type { WorkspaceContextValue } from '../../workspaceContext'
 import { useComposerSessionState } from '../../../../lib/composerSessions'
 import React, { useRef, useState } from 'react'
@@ -11,7 +10,7 @@ import { type QueuedComposerSend } from '../types'
 import { isQueuedComposerSend } from '../composerInput'
 
 export type UseQuestionPickerStateContext = {
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   composerOwnerKey: string
   workspaceContext: WorkspaceContextValue
 }

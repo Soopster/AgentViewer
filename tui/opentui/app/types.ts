@@ -68,10 +68,7 @@ export type ComposerSubmission = {
   attachments: SendAttachment[]
   promptParts: ComposerPromptPart[]
 }
-export type SseFrame = {
-  event: string
-  data: string
-}
+export type { SseFrame } from '../../../lib/composerStream'
 export type TuiLiveToolActivity = {
   key: string
   label: string

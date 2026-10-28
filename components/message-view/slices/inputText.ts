@@ -1,5 +1,4 @@
-import type { SetStateAction } from 'react'
-import type { MutableRefObject } from 'react'
+import type { ComposerSessions } from '../../../lib/composerSessions'
 import { useState, useRef, useCallback } from 'react'
 import { type SendState, type ContextUsage, type SessionInfo, type SessionModelInfo, type SessionComposerOptions, type ReasoningEffortLevel } from '@/lib/types'
 import { useComposerSessionState } from '@/lib/composerSessions'
@@ -9,7 +8,7 @@ import { type QueuedWebSend, type CopilotContextTier } from '../types'
 import { getWebComposerQueueStore } from '../composerStorage'
 
 export type UseInputTextGroupContext = {
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): MutableRefObject<T>; peekRef<T>(key: string, name: string): MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   composerOwnerKey: string
 }
 

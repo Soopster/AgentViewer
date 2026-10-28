@@ -52,10 +52,7 @@ export type OpenCodeTodo = {
   status: string
   priority: string
 }
-export type SseFrame = {
-  event: string
-  data: string
-}
+export type { SseFrame } from '../../lib/composerStream'
 export type LiveToolActivity = {
   key: string
   label: string

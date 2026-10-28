@@ -1,3 +1,4 @@
+import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -160,7 +161,7 @@ export type ComposerDraftPersistEffectContext = {
   setComposerDraft: (action: React.SetStateAction<string>) => void
   surfacePluginKeyCaptureRef: React.RefObject<TuiPluginCapture>
   windowSurfaceCaptureRef: React.RefObject<Map<string, boolean | 'input' | 'terminal' | 'none'>>
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: React.SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): React.MutableRefObject<T>; peekRef<T>(key: string, name: string): React.MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   workspaceContext: WorkspaceContextValue
 }
 

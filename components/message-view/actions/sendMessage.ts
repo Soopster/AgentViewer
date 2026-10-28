@@ -1,3 +1,6 @@
+import { prepareComposerTurnRequest } from '@/lib/composerSubmission'
+import { planComposerRetry } from '@/lib/composerRetry'
+import type { ComposerSessions } from '../../../lib/composerSessions'
 import type { Session } from '../../../lib/types'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -16,7 +19,7 @@ import { normalizeCodexStreamArtifactMessage } from '@/lib/codexMapper'
 import { normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { parseClaudeCommandLifecycle } from '@/lib/claudeCommandLifecycle'
-import { isResumeDropsTurnRefusal, isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
+import { isResumeDropsTurnRefusal, TransientAwareSendError, type UsageLimitKind } from '@/lib/transientError'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
 import { deliverComposerSteer } from '@/lib/composerSteering'
@@ -90,7 +93,7 @@ export type SendMessageContext = {
   selectedCodexApproval: 'auto' | 'untrusted' | 'on-request' | 'never'
   setContextUsage: Dispatch<SetStateAction<ContextUsage | null>>
   liveTurnSessionHandoffRef: MutableRefObject<string | null>
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): MutableRefObject<T>; peekRef<T>(key: string, name: string): MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   composerOwnerKey: string
   onFork: ((newSessionId: string, sourceSession?: Session) => void) | undefined
   setSessionActionNotice: Dispatch<SetStateAction<string | null>>
@@ -355,10 +358,18 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message: text,
-        model: selectedModel || undefined,
-        effort,
-        attachments: sendAttachments,
+        ...prepareComposerTurnRequest(session, { message: text, attachments: sendAttachments }, {
+          turnRequestId,
+          model: selectedModel,
+          effort,
+          agent: selectedAgent,
+          mode: selectedCopilotMode,
+          contextTier: selectedCopilotContextTier ?? undefined,
+          permissionMode: session.provider === 'claude' ? selectedPermissionMode : undefined,
+          approvalPolicy: selectedCodexApproval,
+          taskBudgetTokens,
+          enableWorkflow,
+        }),
         resumeSessionAt: resumeFromMessageId ?? undefined,
         // Same message: it's both the fork point and the prompt UUID of the
         // turn being discarded from the UI's perspective (see resumeDropsTurn
@@ -366,27 +377,7 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
         // or structured_output would be left in the discarded range.
         resumeDropsTurn: resumeFromMessageId ?? undefined,
         forkSession: Boolean(resumeFromMessageId),
-        provider: session.provider,
         providerInstanceId: session.providerInstanceId,
-        agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
-        mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
-        contextTier: session.provider === 'copilot'
-          ? selectedCopilotContextTier ?? undefined
-          : undefined,
-        manualPermissions: session.provider === 'copilot'
-          || (session.provider === 'claude' && selectedPermissionMode !== 'bypassPermissions' && selectedPermissionMode !== 'plan')
-          ? true : undefined,
-        nativeCommands: session.provider === 'copilot' ? true : undefined,
-        detachOnClientAbort: true,
-        turnRequestId,
-        taskBudgetTokens: taskBudgetTokens ?? undefined,
-        enableWorkflow: session.provider === 'claude' && enableWorkflow ? true : undefined,
-        isPendingSession: session.isPending === true ? true : undefined,
-        cwd: session.cwd ?? undefined,
-        permissionMode: session.provider === 'claude' ? selectedPermissionMode : undefined,
-        approvalPolicy: session.provider === 'codex' && selectedCodexApproval !== 'auto'
-          ? selectedCodexApproval
-          : undefined,
       }),
       signal: controller.signal,
     })
@@ -836,8 +827,6 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
       return
     }
     const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
-    const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
-    const usageLimitKind = err instanceof TransientAwareSendError ? err.usageLimitKind : undefined
     // The fork point straddled the discarded turn's own payload (a
     // tool_result carrier or structured_output attachment) — the CLI
     // refuses deterministically, so retrying the same fork target would
@@ -852,12 +841,9 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
     // streamed no output (so a retry can't duplicate a tool call or partial
     // reply) AND we're under the retry budget. Show a "Retrying…" badge so a
     // multi-second wait reads as recovery, not a hang.
-    const canRetry = isTransientSendError(errorMessage, apiErrorStatus, usageLimitKind)
-      && !turnProducedOutputRef.current
-      && transientRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES
-    if (canRetry) {
-      transientRetryCountRef.current += 1
-      const attempt = transientRetryCountRef.current
+    const retry = planComposerRetry(err, { producedOutput: turnProducedOutputRef.current, attempts: transientRetryCountRef.current })
+    if (retry) {
+      transientRetryCountRef.current = retry.attempt
       // Keep the turn visually "sending" with a retry status; clear only the
       // (empty) live overlay. sendState stays 'sending' across the backoff.
       setLiveStatus('retrying')
@@ -871,7 +857,7 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
       transientRetryTimerRef.current = setTimeout(() => {
         transientRetryTimerRef.current = null
         void runSendMessage(ctx, { text, attachments: sendAttachments, turnRequestId })
-      }, transientRetryBackoffMs(attempt))
+      }, retry.delayMs)
       return
     }
     setSendState('error')

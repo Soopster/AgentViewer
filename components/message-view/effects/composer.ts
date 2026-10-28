@@ -1,3 +1,4 @@
+import type { ComposerSessions } from '../../../lib/composerSessions'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -203,7 +204,7 @@ export function runQueuedSendsEffect(ctx: QueuedSendsEffectContext) {
 }
 
 export type DraftFlushEffectContext = {
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): MutableRefObject<T>; peekRef<T>(key: string, name: string): MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   measurementFrameRef: RefObject<number | null>
   scrollRafRef: RefObject<number | null>
   liveAssistantFlushFrameRef: MutableRefObject<number | null>

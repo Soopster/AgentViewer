@@ -1,9 +1,8 @@
-import type { SetStateAction } from 'react'
-import type { MutableRefObject } from 'react'
+import type { ComposerSessions } from '../../../lib/composerSessions'
 import { type PendingMessageBaseline } from '../types'
 
 export type UseTurnProducedOutputRefGroupContext = {
-  composerSessions: { get<T>(key: string, name: string, initial: T | (() => T)): T; set<T>(key: string, name: string, initial: T | (() => T), action: SetStateAction<T>): void; subscribe(key: string, name: string, listener: () => void): () => void; ref<T>(key: string, name: string, initial: T): MutableRefObject<T>; peekRef<T>(key: string, name: string): MutableRefObject<T> | undefined; same(a: string, b: string): boolean; rekey(from: string, to: string): void; keys(): string[]; }
+  composerSessions: ComposerSessions
   composerOwnerKey: string
 }
 

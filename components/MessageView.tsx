@@ -148,6 +148,9 @@ import { useIdeBridgeOpenGroup } from './message-view/slices/ideBridgeOpen'
 import { useHistoryIndexGroup } from './message-view/slices/historyIndex'
 import { useLiveAssistantTextGroup } from './message-view/slices/liveAssistantText'
 import { usePluginOverlayGroup } from './message-view/slices/pluginOverlay'
+import { useComposerAttachments } from './message-view/slices/useComposerAttachments'
+import { useSessionHistoryActions } from './message-view/slices/useSessionHistoryActions'
+import { useMessageViewPanels } from './message-view/slices/useMessageViewPanels'
 import { useActiveQueuedSendsGroup } from './message-view/slices/activeQueuedSends'
 import { useInputTextGroup } from './message-view/slices/inputText'
 import { useTeamAttentionGroup } from './message-view/slices/teamAttention'
@@ -224,18 +227,23 @@ function MessageViewInner({
   useLayoutEffect(() => {
     composerQueueTargetKeyRef.current = composerQueueTargetKey
   }, [composerQueueTargetKey])
-  const {
-    activeQueuedSends, steeredNotice, setSteeredNotice, attachments, setAttachments,
-    attachmentType, setAttachmentType, attachmentPath, setAttachmentPath, attachmentPanelOpen,
-    setAttachmentPanelOpen, failedSend, setFailedSend, rewindTargetId, setRewindTargetId,
-    rollbackTurns, setRollbackTurns, resumeFromMessageId, setResumeFromMessageId, previewingRewind,
-    setPreviewingRewind, applyingRewind, setApplyingRewind, rewindPreview, setRewindPreview,
-    rollbackPreview, setRollbackPreview, forking, setForking, forkingMessageId,
-    setForkingMessageId, showDiagnostics, setShowDiagnostics, preferencesHydrated,
-    setPreferencesHydrated, showVisualizer, setShowVisualizer,
-  } = useActiveQueuedSendsGroup({
+  const { activeQueuedSends, steeredNotice, setSteeredNotice, failedSend, setFailedSend } = useActiveQueuedSendsGroup({
     queuedSends, composerQueueTargetKey, composerSessions, composerOwnerKey,
   })
+  const {
+    attachments, setAttachments, attachmentType, setAttachmentType, attachmentPath, setAttachmentPath,
+    attachmentPanelOpen, setAttachmentPanelOpen,
+  } = useComposerAttachments(composerSessions, composerOwnerKey)
+  const {
+    rewindTargetId, setRewindTargetId, rollbackTurns, setRollbackTurns, resumeFromMessageId,
+    setResumeFromMessageId, previewingRewind, setPreviewingRewind, applyingRewind, setApplyingRewind,
+    rewindPreview, setRewindPreview, rollbackPreview, setRollbackPreview, forking, setForking,
+    forkingMessageId, setForkingMessageId,
+  } = useSessionHistoryActions()
+  const {
+    showDiagnostics, setShowDiagnostics, preferencesHydrated, setPreferencesHydrated, showVisualizer,
+    setShowVisualizer,
+  } = useMessageViewPanels()
   useEffect(() => {
     if (!preferencesHydrated) return
     writeLocalStorageValue('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
