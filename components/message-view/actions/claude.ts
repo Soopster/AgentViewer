@@ -6,6 +6,8 @@ import { type MutableRefObject } from 'react'
 import { type ContextComposerHandle } from '../../ContextComposer'
 import { readOptionalJsonResponse } from '@/lib/httpResponse'
 import dynamic from 'next/dynamic'
+import { withProviderQuery } from '../threadedCompare'
+import { normalizeSelectValue } from '../composerUi'
 
 export type SearchClaudeHookEventsContext = {
   session: Session | null
@@ -143,5 +145,44 @@ export async function runAddClaudeMcpServer(ctx: AddClaudeMcpServerContext) {
     )
   } catch (err) {
     setSessionActionError(err instanceof Error ? err.message : 'Invalid MCP configuration JSON')
+  }
+}
+
+export type ToggleDiagnosticsContext = {
+  session: Session | null
+  showDiagnostics: boolean
+  setShowDiagnostics: Dispatch<SetStateAction<boolean>>
+  diagnosticSections: SessionDiagnosticSection[]
+  diagnosticsLoading: boolean
+  setDiagnosticsLoading: Dispatch<SetStateAction<boolean>>
+  setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>
+  selectedModelValue: string | null
+  setSelectedModel: Dispatch<SetStateAction<string>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+}
+
+export async function runToggleDiagnostics(ctx: ToggleDiagnosticsContext) {
+  const {
+    session, showDiagnostics, setShowDiagnostics, diagnosticSections, diagnosticsLoading,
+    setDiagnosticsLoading, setDiagnosticSections, selectedModelValue, setSelectedModel,
+    setSessionActionError,
+  } = ctx
+  if (!session) return
+  const nextOpen = !showDiagnostics
+  setShowDiagnostics(nextOpen)
+  if (!nextOpen || diagnosticSections.length > 0 || diagnosticsLoading) return
+
+  setDiagnosticsLoading(true)
+  try {
+    const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
+    const data = await res.json()
+    if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+    setDiagnosticSections(data.sections ?? [])
+    const diagnosticsModel = normalizeSelectValue(data.currentModel)
+    if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
+  } finally {
+    setDiagnosticsLoading(false)
   }
 }

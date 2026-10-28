@@ -129,7 +129,7 @@ import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
 import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
-import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer } from './message-view/actions/claude'
+import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2284,26 +2284,11 @@ function MessageViewInner({
     setSessionActionNotice,
   }), [claudeHookQuery, session])
 
-  const toggleDiagnostics = useCallback(async () => {
-    if (!session) return
-    const nextOpen = !showDiagnostics
-    setShowDiagnostics(nextOpen)
-    if (!nextOpen || diagnosticSections.length > 0 || diagnosticsLoading) return
-
-    setDiagnosticsLoading(true)
-    try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setDiagnosticSections(data.sections ?? [])
-      const diagnosticsModel = normalizeSelectValue(data.currentModel)
-      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
-    } finally {
-      setDiagnosticsLoading(false)
-    }
-  }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics, setSelectedModel])
+  const toggleDiagnostics = useCallback(async () => runToggleDiagnostics({
+    session, showDiagnostics, setShowDiagnostics, diagnosticSections, diagnosticsLoading,
+    setDiagnosticsLoading, setDiagnosticSections, selectedModelValue, setSelectedModel,
+    setSessionActionError,
+  }), [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics, setSelectedModel])
 
   const threadedFull = useMemo(() => measureSync('threading.build', () => {
     const prev = prevThreadingRef.current
