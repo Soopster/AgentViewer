@@ -10,6 +10,7 @@ import { type RollbackPreview } from '../types'
 import { type SessionCapabilities } from '../../../lib/types'
 import { readOptionalJsonResponse } from '@/lib/httpResponse'
 import { withProviderQuery } from '../threadedCompare'
+import { type SessionDiagnosticSection } from '@/lib/types'
 
 export type HandleExportContext = {
   session: Session | null
@@ -307,5 +308,45 @@ export async function runHandleDeleteSession(ctx: HandleDeleteSessionContext) {
     setSessionActionError(err instanceof Error ? err.message : 'Failed to delete session')
   } finally {
     setDeleting(false)
+  }
+}
+
+export type RunSessionActionContext = {
+  session: Session | null
+  sessionActionLoading: string | null
+  setSessionActionLoading: Dispatch<SetStateAction<string | null>>
+  setSessionActionError: Dispatch<SetStateAction<string | null>>
+  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
+  setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>
+}
+
+export async function runRunSessionAction(ctx: RunSessionActionContext, action: string) {
+  const {
+    session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
+    setSessionActionNotice, setDiagnosticSections,
+  } = ctx
+  if (!session || sessionActionLoading) return
+  setSessionActionLoading(action)
+  setSessionActionError(null)
+  setSessionActionNotice(null)
+  try {
+    const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
+    })
+    const data = await readOptionalJsonResponse(res, {})
+    if (data.error) throw new Error(data.error)
+    const shareUrl = data.result?.session?.share?.url
+    setSessionActionNotice(
+      action === 'share' && shareUrl
+        ? `Shared: ${shareUrl}`
+        : `${action.toUpperCase()} complete.`
+    )
+    setDiagnosticSections([])
+  } catch (err) {
+    setSessionActionError(err instanceof Error ? err.message : `Failed to run ${action}`)
+  } finally {
+    setSessionActionLoading(null)
   }
 }

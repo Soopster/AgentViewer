@@ -128,7 +128,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction } from './message-view/actions/sessionActions'
 
 // Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
 function formatLiveThinkingTokens(tokens: number): string {
@@ -2149,32 +2149,10 @@ function MessageViewInner({
     setSessionActionNotice, onDelete,
   }), [deleting, onDelete, session, sessionCapabilities?.deleteSession])
 
-  const runSessionAction = useCallback(async (action: string) => {
-    if (!session || sessionActionLoading) return
-    setSessionActionLoading(action)
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, provider: session.provider, providerInstanceId: session.providerInstanceId }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
-      const shareUrl = data.result?.session?.share?.url
-      setSessionActionNotice(
-        action === 'share' && shareUrl
-          ? `Shared: ${shareUrl}`
-          : `${action.toUpperCase()} complete.`
-      )
-      setDiagnosticSections([])
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : `Failed to run ${action}`)
-    } finally {
-      setSessionActionLoading(null)
-    }
-  }, [session, sessionActionLoading])
+  const runSessionAction = useCallback(async (action: string) => runRunSessionAction({
+    session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
+    setSessionActionNotice, setDiagnosticSections,
+  }, action), [session, sessionActionLoading])
 
   const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => runRespondToPermission({
     setSessionActionLoading, setSessionActionError, setPendingPermissions, session,
