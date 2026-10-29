@@ -1212,8 +1212,11 @@ export async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promis
     // Bash mode (`!command`) defers its pushes until the command has run — see
     // the bang branch inside start() below.
     const { pushUserMessage, endInput, iterable } = claudePoolModule().createInputStream();
+    let userMessageUuid: string | undefined;
     if (bangShell == null) {
-        pushUserMessage(await buildClaudeUserMessage(userMessage, attachments, cwdOverride));
+        const message = await buildClaudeUserMessage(userMessage, attachments, cwdOverride);
+        userMessageUuid = claudeUserMessageUuid(message);
+        pushUserMessage(message);
     }
     const encoder = new TextEncoder();
     const abortController = new AbortController();
@@ -1396,7 +1399,7 @@ export async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promis
                 if (turnAccepted)
                     return;
                 turnAccepted = true;
-                safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId: acceptedSessionId, provider: 'claude' })}\n\n`);
+                safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId: acceptedSessionId, provider: 'claude', messageUuid: userMessageUuid })}\n\n`);
             };
             let broadcastSessionId: string | undefined;
             let broadcastTurnStarted = false;
@@ -1864,7 +1867,7 @@ export async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Pr
                             const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>);
                             if (!turnAccepted && !resultError) {
                                 turnAccepted = true;
-                                controller.enqueue(encoder.encode(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'claude' })}\n\n`));
+                                controller.enqueue(encoder.encode(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'claude', messageUuid: pushMessage ? claudeUserMessageUuid(pushMessage) : undefined })}\n\n`));
                             }
                             poolDeltaCoalescer.emit(msg);
                             if (resultError) {

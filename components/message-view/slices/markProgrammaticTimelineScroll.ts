@@ -14,7 +14,6 @@ export type UseMarkProgrammaticTimelineScrollGroupContext = {
   commitTimelineScrollTop: (value: number) => void
   autoFollow: boolean
   setAutoFollow: Dispatch<SetStateAction<boolean>>
-  lastTimelineRowRef: RefObject<HTMLDivElement | null>
   markTimelineUserScrolling: () => void
   pendingMountedAnchorCaptureRef: RefObject<boolean>
   scrollRafRef: RefObject<number | null>
@@ -29,7 +28,7 @@ export function useMarkProgrammaticTimelineScrollGroup(ctx: UseMarkProgrammaticT
   const {
     programmaticScrollUntilRef, timelineRef, activeTimelineScrollAnchorRef, rowLayoutRef,
     suppressFollowEvalUntilRef, commitTimelineScrollTop, autoFollow, setAutoFollow,
-    lastTimelineRowRef, markTimelineUserScrolling, pendingMountedAnchorCaptureRef, scrollRafRef,
+    markTimelineUserScrolling, pendingMountedAnchorCaptureRef, scrollRafRef,
     scheduleTimelineMeasurementFlushRef, scrollVelocitySampleRef, setFastScrollingMode,
     commitTimelineScrollTopIfDrifted, autoFollowRef,
   } = ctx
@@ -61,7 +60,7 @@ export function useMarkProgrammaticTimelineScrollGroup(ctx: UseMarkProgrammaticT
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
-    const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+    const targetTop = Math.max(node.scrollHeight - node.clientHeight, 0)
     commitTimelineScrollTop(targetTop)
     suppressFollowEvalUntilRef.current = performance.now() + 200
     markProgrammaticTimelineScroll(behavior === 'smooth' ? 700 : undefined)
@@ -75,19 +74,6 @@ export function useMarkProgrammaticTimelineScrollGroup(ctx: UseMarkProgrammaticT
       window.requestAnimationFrame(() => scrollTimelineToBottom())
     }
   }, [autoFollow, scrollTimelineToBottom])
-
-  const alignLastTimelineRowToViewportBottom = useCallback(() => {
-    const node = timelineRef.current
-    const lastRow = lastTimelineRowRef.current
-    if (!node || !lastRow) return
-    const nodeRect = node.getBoundingClientRect()
-    const rowRect = lastRow.getBoundingClientRect()
-    const targetTop = Math.max(node.scrollTop + (rowRect.bottom - nodeRect.bottom), 0)
-    suppressFollowEvalUntilRef.current = performance.now() + 200
-    markProgrammaticTimelineScroll()
-    node.scrollTop = targetTop
-    commitTimelineScrollTop(targetTop)
-  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const handleTimelineScroll = useCallback(() => {
     const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
@@ -154,7 +140,7 @@ export function useMarkProgrammaticTimelineScrollGroup(ctx: UseMarkProgrammaticT
 
   return {
     markProgrammaticTimelineScroll, restoreTimelineScrollAnchor, scrollTimelineToBottom,
-    toggleLiveFollow, alignLastTimelineRowToViewportBottom, handleTimelineScroll,
+    toggleLiveFollow, handleTimelineScroll,
     scrollMountedTimelineRowIntoView,
   }
 }

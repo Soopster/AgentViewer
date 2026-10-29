@@ -29,7 +29,6 @@ export function useBridgeTranscriptEntriesGroup(ctx: UseBridgeTranscriptEntriesG
   const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
-  const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = composerSessions.ref<AbortController | null>(composerOwnerKey, 'abortControllerRef', null)
   const activeTurnRequestIdRef = composerSessions.ref<string | null>(composerOwnerKey, 'activeTurnRequestIdRef', null)
   const inputTextRef = composerSessions.ref(composerOwnerKey, 'inputTextRef', inputText)
@@ -42,7 +41,7 @@ export function useBridgeTranscriptEntriesGroup(ctx: UseBridgeTranscriptEntriesG
     bridgeTranscriptEntries, setBridgeTranscriptEntries, persistedBridgeCountRef, slashOpen,
     setSlashOpen, slashActiveIndex, setSlashActiveIndex, slashItemRefs, liveSlashCommands,
     setLiveSlashCommands, textareaRef, composerPrewarmInFlightRef, isComposingRef, timelineRef,
-    timelineContentRef, lastTimelineRowRef, abortControllerRef, activeTurnRequestIdRef,
+    timelineContentRef, abortControllerRef, activeTurnRequestIdRef,
     inputTextRef, suppressDraftSaveRef, sendInFlightRef, awaitingPersistedTurnRef,
     pushedCopilotAttachmentsRef,
   }

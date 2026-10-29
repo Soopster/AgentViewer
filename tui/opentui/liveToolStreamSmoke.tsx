@@ -83,6 +83,9 @@ mock.module('../../lib/tui/service', () => ({
   streamTuiSessionTurn: async () => new Response(streamBody, {
     headers: { 'Content-Type': 'text/event-stream' },
   }),
+  runTuiSessionAction: async (target: Parameters<typeof service.runTuiSessionAction>[0], body: Parameters<typeof service.runTuiSessionAction>[1]) => body.action === 'steer'
+    ? { delivered: true, messageUuid: 'claude-steered-prompt' }
+    : service.runTuiSessionAction(target, body),
 }))
 
 const { extractClaudeStreamToolResults } = await import('../../lib/claudeMapper')
@@ -136,6 +139,17 @@ try {
   await act(async () => { await setup.mockInput.typeText('run git status') })
   act(() => { setup.mockInput.pressEnter() })
   await settle(400)
+
+  await emitEvent('turn-accepted', { sessionId: SESSION_ID, provider: 'claude', messageUuid: 'claude-first-prompt' })
+  if (!setup.renderer.root.findDescendantById('card:claude-first-prompt')) {
+    throw new Error(`Claude send echo did not adopt the provider message ID:\n${setup.captureCharFrame()}`)
+  }
+  await act(async () => { await setup.mockInput.typeText('Check the second file too') })
+  act(() => { setup.mockInput.pressEnter() })
+  await settle(300)
+  if (!setup.renderer.root.findDescendantById('card:claude-steered-prompt')) {
+    throw new Error(`Claude steer echo did not use its receipt ID:\n${setup.captureCharFrame()}`)
+  }
 
   const dock = setup.renderer.root.findDescendantById('composer-dock') as unknown as { y: number } | null
   const turnStatus = setup.renderer.root.findDescendantById('composer-dock-turn-status') as unknown as { y: number; height: number } | null

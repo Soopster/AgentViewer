@@ -5,11 +5,10 @@ import { TimelineMessageRow } from './TimelineMessageRow'
 import type { TimelineRow } from './types'
 
 export const VirtualTimelineRow = memo(function VirtualTimelineRow({
-  row, top, isLast, highlighted, forking, resumeTarget, bookmarked, streamMode, placeholder, placeholderHeight, onMeasure, onLastRowRef, onForkFromMessage, onToggleResume, onToggleBookmark, onReusePrompt, onQuoteMessage, onReplyMessage, onEditFromMessage,
+  row, top, highlighted, forking, resumeTarget, bookmarked, streamMode, placeholder, placeholderHeight, onMeasure, onForkFromMessage, onToggleResume, onToggleBookmark, onReusePrompt, onQuoteMessage, onReplyMessage, onEditFromMessage,
 }: {
   row: TimelineRow
   top: number
-  isLast: boolean
   highlighted: boolean
   forking: boolean
   resumeTarget: boolean
@@ -22,7 +21,6 @@ export const VirtualTimelineRow = memo(function VirtualTimelineRow({
   placeholder: boolean
   placeholderHeight: number
   onMeasure: (key: string, height: number) => void
-  onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
   onToggleBookmark: (messageId: string) => void
@@ -44,12 +42,6 @@ export const VirtualTimelineRow = memo(function VirtualTimelineRow({
       onMeasure(row.key, readResizeObserverHeight(entry, node))
     })
   }, [onMeasure, placeholder, row.key])
-
-  useEffect(() => {
-    if (!isLast) return
-    onLastRowRef(rowRef.current)
-    return () => onLastRowRef(null)
-  }, [isLast, onLastRowRef, row.key])
 
   return (
     <div

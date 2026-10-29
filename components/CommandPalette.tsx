@@ -1,7 +1,13 @@
 'use client'
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, GitBranch, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { useIndexedMessageSearch } from './command-palette/useIndexedMessageSearch'
+
+import { type CommandPaletteProps, type PaletteItem, type IndexedMessageItem } from './command-palette/types'
+import { MESSAGE_SEARCH_RESULT_LIMIT, sessionTabKey, getSessionTitle, getSessionKeywords, getSessionSortMs, sessionFromPersistedRecord, bestScore, highlightTermsForQuery, highlightedSnippetParts } from './command-palette/searchModel'
+import { providerStyle, providerIconLabel, messageTypeLabel, formatMessageMatchTime } from './command-palette/presentation'
+
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -10,229 +16,9 @@ import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META }
 import { listPluginCommands } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
-import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
-import type { AgentProvider, ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
-import {
-  RIGHT_PANEL_SURFACE_KINDS,
-  surfaceKindDescription,
-  surfaceKindLabel,
-  surfaceKindShortcut,
-  type RightPanelSurfaceKind,
-} from '@/lib/rightPanel'
 
-type ProjectSelection = {
-  key: string
-  dir: string
-  sessions: Session[]
-}
-
-type CommandPaletteProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  sessions: Session[]
-  selectedSession: Session | null
-  selectedProject: ProjectSelection | null
-  provider: ProviderSelection
-  providerInstanceId: string
-  providerInstances: ProviderInstanceSummary[]
-  scopeMode: 'all' | 'project'
-  scopeProjectName: string | null
-  includeWorktrees: boolean
-  messagePaneCollapsed: boolean
-  messageViewMaximized: boolean
-  messageViewFullscreen: boolean
-  canMaximizeMessageView: boolean
-  canOpenGit: boolean
-  canOpenTasks: boolean
-  canOpenPromptLibrary: boolean
-  canOpenChannelBridge: boolean
-  channelBridgeRouting: boolean
-  canOpenIdeBridge: boolean
-  ideBridgeRouting: boolean
-  onSelectSession: (session: Session, targetMessageId?: string) => void
-  onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
-  onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
-  onChangeScope: (mode: 'all' | 'project') => void
-  onToggleWorktrees: (include: boolean) => void
-  onToggleMessagePane: () => void
-  rightPanelOpen: boolean
-  rightPanelAvailability: Readonly<Record<RightPanelSurfaceKind, boolean>>
-  onToggleRightPanel: () => void
-  onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
-  onToggleMessageViewMaximized: () => void
-  onEnterMessageViewFullscreen: () => void
-  onOpenCrossSessionMessaging: () => void
-  onOpenTasks: () => void
-  onOpenPromptLibrary: () => void
-  onOpenChannelBridge: () => void
-  onToggleChannelBridgeRoute: () => void
-  onOpenIdeBridge: () => void
-  onToggleIdeBridgeRoute: () => void
-  onOpenBookmarks: () => void
-  onOpenProvenance: () => void
-  onOpenRemoteAccess: () => void
-  onOpenPlugins: () => void
-}
-
-type PaletteItem = {
-  id: string
-  label: string
-  description: string
-  icon: React.ReactNode
-  shortcut?: string
-  active?: boolean
-  group: 'actions' | 'projects' | 'sessions' | 'messages' | 'themes'
-  keywords: string[]
-  score: number
-  closeOnRun?: boolean
-  run: () => void | Promise<void>
-}
-
-type IndexedSearchResponse = {
-  query: string
-  total: number
-  results: PersistedSearchResult[]
-}
-
-type IndexRebuildResponse = {
-  sessions: number
-  messages: number
-  errors: Array<{ provider: AgentProvider; sessionId?: string; message: string }>
-}
-
-type IndexRebuildState = {
-  status: 'idle' | 'running' | 'done' | 'error'
-  message?: string
-}
-
-type HighlightPart = {
-  text: string
-  highlight: boolean
-}
-
-type IndexedMessageItem = PaletteItem & {
-  provider: AgentProvider
-  meta: string
-  matchCount: number
-  snippetParts: HighlightPart[]
-  timestampMs: number | null
-}
-
-const MESSAGE_SEARCH_SESSION_LIMIT = 32
-const MESSAGE_SEARCH_RESULT_LIMIT = 12
-
-function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
-  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
-}
-
-function getSessionTitle(session: Session): string {
-  return (
-    session.customTitle ??
-    session.summary ??
-    (typeof session.firstPrompt === 'string' ? session.firstPrompt.slice(0, 56) : undefined) ??
-    session.sessionId.slice(-8)
-  ) || 'Untitled'
-}
-
-function getSessionKeywords(session: Session): string[] {
-  return [
-    getSessionTitle(session),
-    session.summary ?? '',
-    session.customTitle ?? '',
-    session.firstPrompt ?? '',
-    session.cwd ?? '',
-    session.tag ?? '',
-    session.provider ?? '',
-    session.sessionId,
-  ]
-}
-
-function getSessionSortMs(session: Session): number {
-  const value = session.lastModified ?? session.createdAt
-  if (value == null) return 0
-  const ms = new Date(value).getTime()
-  return Number.isNaN(ms) ? 0 : ms
-}
-
-function sessionFromPersistedRecord(record: PersistedSessionRecord): Session {
-  return {
-    sessionId: record.sessionId,
-    provider: record.provider,
-    summary: record.summary ?? record.title,
-    customTitle: record.customTitle,
-    firstPrompt: record.firstPrompt,
-    cwd: record.cwd,
-    tag: record.tag,
-    createdAt: record.createdAt,
-    lastModified: record.lastModified,
-  }
-}
-
-function scoreMatch(text: string, query: string): number {
-  if (!query) return 0
-  const normalizedText = text.toLowerCase()
-  if (normalizedText === query) return 300
-  if (normalizedText.startsWith(query)) return 220 - normalizedText.length / 100
-  const index = normalizedText.indexOf(query)
-  if (index >= 0) return 160 - index
-  const pieces = query.split(/\s+/).filter(Boolean)
-  if (pieces.length > 1 && pieces.every((piece) => normalizedText.includes(piece))) return 120
-  return -1
-}
-
-function bestScore(fields: string[], query: string): number {
-  if (!query) return 0
-  let best = -1
-  for (const field of fields) {
-    const score = scoreMatch(field, query)
-    if (score > best) best = score
-  }
-  return best
-}
-
-function providerStyle(provider: AgentProvider): { color: string; background: string; border: string } {
-  if (provider === 'codex') {
-    return { color: 'var(--cyan)', background: 'rgba(56,217,245,0.10)', border: 'rgba(56,217,245,0.22)' }
-  }
-  if (provider === 'opencode') {
-    return { color: 'var(--green)', background: 'rgba(45,212,160,0.10)', border: 'rgba(45,212,160,0.22)' }
-  }
-  if (provider === 'copilot') {
-    return { color: 'var(--amber)', background: 'rgba(234,170,64,0.10)', border: 'rgba(234,170,64,0.22)' }
-  }
-  if (provider === 'pi') {
-    return { color: 'var(--red)', background: 'rgba(240,80,80,0.10)', border: 'rgba(240,80,80,0.22)' }
-  }
-  if (provider === 'lmstudio') {
-    return { color: 'var(--teal, #2dd4a7)', background: 'rgba(45,212,167,0.10)', border: 'rgba(45,212,167,0.22)' }
-  }
-  return { color: 'var(--violet)', background: 'rgba(139,128,240,0.10)', border: 'rgba(139,128,240,0.22)' }
-}
-
-function providerIconLabel(provider: AgentProvider): string {
-  switch (provider) {
-    case 'codex':
-      return 'Cx'
-    case 'claude':
-      return 'Cl'
-    case 'opencode':
-      return 'Oc'
-    case 'copilot':
-      return 'Cp'
-    case 'pi':
-      return 'Pi'
-    case 'lmstudio':
-      return 'Lm'
-    case 'claude-acp':
-      return 'Cl'
-    case 'codex-acp':
-      return 'Cx'
-    case 'acp':
-      return 'Ac'
-    default:
-      return 'Ai'
-  }
-}
+import type { ProviderSelection, Session } from '@/lib/types'
+import { RIGHT_PANEL_SURFACE_KINDS, surfaceKindDescription, surfaceKindLabel, surfaceKindShortcut } from '@/lib/rightPanel'
 
 function ActiveDot() {
   return (
@@ -263,65 +49,6 @@ function ShortcutChip({ value }: { value: string }) {
     .replace(/^On$/i, 'On')
     .replace(/^Off$/i, 'Off')
   return <PaletteMetaChip title={value}>{compact}</PaletteMetaChip>
-}
-
-function messageTypeLabel(type: PersistedSearchMatch['type']): string {
-  return type.charAt(0).toUpperCase() + type.slice(1)
-}
-
-function formatMessageMatchTime(timestampMs: number | null): string | null {
-  if (timestampMs == null) return null
-  const date = new Date(timestampMs)
-  if (Number.isNaN(date.getTime())) return null
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
-}
-
-function highlightTermsForQuery(query: string): string[] {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return []
-  const terms = [
-    normalized,
-    ...normalized.split(/[^a-z0-9_./-]+/),
-  ]
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 2)
-
-  return [...new Set(terms)].sort((a, b) => b.length - a.length || a.localeCompare(b))
-}
-
-function highlightedSnippetParts(snippet: string, terms: string[]): HighlightPart[] {
-  if (terms.length === 0 || !snippet) return [{ text: snippet, highlight: false }]
-
-  const lowerSnippet = snippet.toLowerCase()
-  const parts: HighlightPart[] = []
-  let cursor = 0
-
-  while (cursor < snippet.length) {
-    let matchIndex = -1
-    let matchTerm = ''
-
-    for (const term of terms) {
-      const index = lowerSnippet.indexOf(term, cursor)
-      if (index < 0) continue
-      if (matchIndex < 0 || index < matchIndex || (index === matchIndex && term.length > matchTerm.length)) {
-        matchIndex = index
-        matchTerm = term
-      }
-    }
-
-    if (matchIndex < 0) break
-    if (matchIndex > cursor) parts.push({ text: snippet.slice(cursor, matchIndex), highlight: false })
-    parts.push({ text: snippet.slice(matchIndex, matchIndex + matchTerm.length), highlight: true })
-    cursor = matchIndex + matchTerm.length
-  }
-
-  if (cursor < snippet.length) parts.push({ text: snippet.slice(cursor), highlight: false })
-  return parts.length > 0 ? parts : [{ text: snippet, highlight: false }]
 }
 
 export default function CommandPalette({
@@ -384,53 +111,10 @@ export default function CommandPalette({
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLowerCase()
-  const [indexedResults, setIndexedResults] = useState<PersistedSearchResult[]>([])
-  const [indexedLoading, setIndexedLoading] = useState(false)
-  const [indexRebuild, setIndexRebuild] = useState<IndexRebuildState>({ status: 'idle' })
-
-  useEffect(() => {
-    if (!open || normalizedQuery.length < 2) {
-      setIndexedResults([])
-      setIndexedLoading(false)
-      return
-    }
-
-    const controller = new AbortController()
-    setIndexedLoading(true)
-    setIndexedResults([])
-    const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams()
-      params.set('q', deferredQuery.trim())
-      params.set('limit', String(MESSAGE_SEARCH_SESSION_LIMIT))
-      params.set('provider', 'all')
-      params.set('includeWorktrees', String(includeWorktrees))
-      params.set('messagesOnly', '1')
-      const searchDir = scopeMode === 'project'
-        ? selectedProject?.dir ?? selectedSession?.cwd
-        : undefined
-      if (searchDir) params.set('dir', searchDir)
-
-      try {
-        const response = await fetch(`/api/session-index/search?${params.toString()}`, {
-          signal: controller.signal,
-        })
-        const data = await response.json() as IndexedSearchResponse & { error?: string }
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-        setIndexedResults(data.results ?? [])
-      } catch (err) {
-        if (!(err instanceof DOMException && err.name === 'AbortError')) {
-          setIndexedResults([])
-        }
-      } finally {
-        if (!controller.signal.aborted) setIndexedLoading(false)
-      }
-    }, 160)
-
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-  }, [deferredQuery, includeWorktrees, normalizedQuery.length, open, scopeMode, selectedProject?.dir, selectedSession?.cwd])
+  const { indexedResults, indexedLoading, indexRebuild, rebuildSearchIndex } = useIndexedMessageSearch({
+    open, query: deferredQuery, includeWorktrees, scopeMode,
+    selectedProjectDir: selectedProject?.dir, selectedSessionCwd: selectedSession?.cwd,
+  })
 
   useEffect(() => {
     if (!open) return
@@ -451,31 +135,6 @@ export default function CommandPalette({
         description: 'Show the session list',
         icon: <SidebarGlyph size={16} />,
       }
-
-  const rebuildSearchIndex = useCallback(async () => {
-    if (indexRebuild.status === 'running') return
-    setIndexRebuild({ status: 'running', message: 'Scanning all providers...' })
-    try {
-      const response = await fetch('/api/session-index/rebuild', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'all', includeWorktrees: true }),
-      })
-      const data = await response.json() as IndexRebuildResponse & { error?: string }
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-      const errorCount = data.errors?.length ?? 0
-      setIndexedResults([])
-      setIndexRebuild({
-        status: errorCount > 0 ? 'error' : 'done',
-        message: `${data.sessions} sessions · ${data.messages} messages${errorCount > 0 ? ` · ${errorCount} errors` : ''}`,
-      })
-    } catch (err) {
-      setIndexRebuild({
-        status: 'error',
-        message: err instanceof Error ? err.message : 'Failed to rebuild index',
-      })
-    }
-  }, [indexRebuild.status])
 
   const actions = useMemo(() => {
     const items: PaletteItem[] = [

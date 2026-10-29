@@ -1,5 +1,5 @@
 import type { ThreadedMessage } from './threading'
-import { sessionIdentityKey } from './sessionIdentity'
+import { sessionIdentityKey, type SessionIdentity } from './sessionIdentity'
 
 export function messageOwner(message: ThreadedMessage): string | null {
   return message.sessionId ? sessionIdentityKey({ ...message, sessionId: message.sessionId }) : null
@@ -18,6 +18,18 @@ export function upsertComposerMessage(messages: ThreadedMessage[], next: Threade
   const echo = next.uuid !== 'live-user' ? messages.findIndex(message => message.uuid === 'live-user' && sameUserMessage(message, next)) : -1
   if (echo >= 0) return messages.map((message, at) => at === echo ? next : message)
   return [...messages, next]
+}
+
+/** Bind an optimistic row to its SDK message ID before persisted content lands.
+ * Provider-added context can change the prompt text, so receipts use identity. */
+export function acknowledgeComposerMessage(messages: ThreadedMessage[], owner: SessionIdentity, messageUuid: string, echoUuid = 'live-user'): ThreadedMessage[] {
+  const key = sessionIdentityKey(owner)
+  const echo = messages.findIndex(message => message.role === 'user' && message.uuid === echoUuid && messageOwner(message) === key)
+  if (echo < 0 || echoUuid === messageUuid) return messages
+  if (messages.some(message => message.uuid === messageUuid && messageOwner(message) === key)) {
+    return messages.filter((_, index) => index !== echo)
+  }
+  return messages.map((message, index) => index === echo ? { ...message, uuid: messageUuid } : message)
 }
 /** Persisted rows replace their live counterparts synchronously in the render snapshot. */
 export function indexComposerMessages(persisted: readonly ThreadedMessage[], recentUserIds: ReadonlySet<string> = new Set()) {

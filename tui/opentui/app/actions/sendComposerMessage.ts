@@ -1,4 +1,5 @@
 import { prepareComposerTurnRequest } from '../../../../lib/composerSubmission'
+import { acknowledgeComposerMessage } from '../../../../lib/composerTranscript'
 import { planComposerRetry } from '../../../../lib/composerRetry'
 import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
@@ -431,7 +432,8 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
           // native CLI. The persisted reconcile replaces this echo when the
           // turn lands.
           steeredEchoCounterRef.current += 1
-          const liveMessageUuid = `live-user-steer-${steeredEchoCounterRef.current}`
+          const liveMessageUuid = typeof result.messageUuid === 'string' && result.messageUuid
+            ? result.messageUuid : `live-user-steer-${steeredEchoCounterRef.current}`
           if (typeof result.messageUuid === 'string') {
             steeredComposerSendsRef.current = [
               ...steeredComposerSendsRef.current,
@@ -629,13 +631,21 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
     const handleFrame = (frame: SseFrame) => {
       // Liveness pulse only — receiving it already reset the stall race.
       if (frame.event === 'heartbeat') return
-      // Transport-only receipt consumed by cross-session senders.
-      if (frame.event === 'turn-accepted') return
       let parsed: unknown = null
       try {
         parsed = JSON.parse(frame.data)
       } catch {
         parsed = null
+      }
+      if (frame.event === 'turn-accepted') {
+        const receipt = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+        const messageUuid = receipt?.messageUuid
+        if (targetSession.provider === 'claude' && typeof messageUuid === 'string' && messageUuid) {
+          const owner = typeof receipt?.sessionId === 'string' && receipt.sessionId
+            ? { ...targetSession, sessionId: receipt.sessionId } : targetSession
+          setLiveTranscriptMessages(previous => acknowledgeComposerMessage(previous, owner, messageUuid))
+        }
+        return
       }
       if (frame.event === 'error') {
         const record = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined

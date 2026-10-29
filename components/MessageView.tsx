@@ -109,7 +109,7 @@ import {
   type TimelineScrollAnchor,
 } from '@/lib/timelineVirtualizer'
 import type { ComposerDraft, QueuedWebSend, PendingMessageBaseline, TimelineRow, TimelineEstimateBucket, TimelineEstimateCalibration, ActiveTranscriptFilter, Props, CopilotContextTier, FailedSend, RewindPreview, RollbackPreview, SteeredSendEntry, LiveToolActivity, MentionResult, TimelineEstimateSample } from './message-view/types'
-import { writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, TIMELINE_BOTTOM_GUTTER_PX, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
+import { writeLocalStorageValue, readLocalStorageValue, TIMELINE_SCROLL_COMMIT_PX, readPersistedSentHistory, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS, SCROLL_IDLE_MS, WHEEL_SCROLL_COMPENSATION_MS, PROGRAMMATIC_SCROLL_SUPPRESSION_MS, FAST_SCROLL_ENTER_PX_PER_S, FAST_SCROLL_EXIT_PX_PER_S, TIMELINE_TARGET_TOP_GUTTER_PX, AWAITING_PERSISTED_TURN_TIMEOUT_MS, REATTACH_POLL_MS, SENT_HISTORY_MAX, writePersistedSentHistory, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, TIMELINE_OVERSCAN_PX, TRANSCRIPT_FILTERS, TRANSCRIPT_FILTER_LABELS } from './message-view/constants'
 import { assistantDisplayName, extractSseFrames, extractLiveToolStart, upsertThreadedMessage, updateLiveToolThreadInput, extractCompletedToolKey, completeLiveToolThread, extractLiveToolStopIndex, extractStreamingAssistantText, shouldReplaceLiveAssistantText, extractStreamingReasoningText, extractTextContent } from './message-view/liveStream'
 import { withProviderQuery, isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline, buildPendingMessageBaseline, retargetPendingMessageBaseline, threadedMessageKey, threadedMessageEqual } from './message-view/threadedCompare'
 import { estimateTimelineRowHeight, timelineEstimateBucket, calibratedTimelineRowHeight } from './message-view/heightEstimate'
@@ -412,7 +412,7 @@ function MessageViewInner({
     bridgeTranscriptEntries, setBridgeTranscriptEntries, persistedBridgeCountRef, slashOpen,
     setSlashOpen, slashActiveIndex, setSlashActiveIndex, slashItemRefs, liveSlashCommands,
     setLiveSlashCommands, textareaRef, composerPrewarmInFlightRef, isComposingRef, timelineRef,
-    timelineContentRef, lastTimelineRowRef, abortControllerRef, activeTurnRequestIdRef,
+    timelineContentRef, abortControllerRef, activeTurnRequestIdRef,
     inputTextRef, suppressDraftSaveRef, sendInFlightRef, awaitingPersistedTurnRef,
     pushedCopilotAttachmentsRef,
   } = useBridgeTranscriptEntriesGroup({
@@ -891,12 +891,12 @@ function MessageViewInner({
   }, [rewindPreview, rewindTargetId])
   const {
     markProgrammaticTimelineScroll, restoreTimelineScrollAnchor, scrollTimelineToBottom,
-    toggleLiveFollow, alignLastTimelineRowToViewportBottom, handleTimelineScroll,
+    toggleLiveFollow, handleTimelineScroll,
     scrollMountedTimelineRowIntoView,
   } = useMarkProgrammaticTimelineScrollGroup({
     programmaticScrollUntilRef, timelineRef, activeTimelineScrollAnchorRef, rowLayoutRef,
     suppressFollowEvalUntilRef, commitTimelineScrollTop, autoFollow, setAutoFollow,
-    lastTimelineRowRef, markTimelineUserScrolling, pendingMountedAnchorCaptureRef, scrollRafRef,
+    markTimelineUserScrolling, pendingMountedAnchorCaptureRef, scrollRafRef,
     scheduleTimelineMeasurementFlushRef, scrollVelocitySampleRef, setFastScrollingMode,
     commitTimelineScrollTopIfDrifted, autoFollowRef,
   })
@@ -1521,13 +1521,12 @@ function MessageViewInner({
 
     const node = timelineRef.current
     if (node) {
-      const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      const targetTop = Math.max(node.scrollHeight - node.clientHeight, 0)
       suppressFollowEvalUntilRef.current = performance.now() + 200
       markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
       commitTimelineScrollTop(targetTop)
     }
-    alignLastTimelineRowToViewportBottom()
 
     let cancelled = false
     let frameId: number | null = null
@@ -1537,7 +1536,6 @@ function MessageViewInner({
     const runInitialScrollPass = (pass: number) => {
       if (cancelled) return
       scrollTimelineToBottom()
-      alignLastTimelineRowToViewportBottom()
       if (pass >= 2) return
       frameId = window.requestAnimationFrame(() => runInitialScrollPass(pass + 1))
     }
@@ -1548,7 +1546,7 @@ function MessageViewInner({
       cancelled = true
       if (frameId != null) window.cancelAnimationFrame(frameId)
     }
-  }, [alignLastTimelineRowToViewportBottom, commitTimelineScrollTop, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
+  }, [commitTimelineScrollTop, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
     const activeKeys = new Set(renderedTimelineRows.map((row) => row.key))
@@ -1563,10 +1561,6 @@ function MessageViewInner({
     if (changed) setRowMeasurementVersion((version) => version + 1)
     if (persistedChanged) setPersistedMeasurementVersion((version) => version + 1)
   }, [renderedTimelineRows])
-
-  const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
-    lastTimelineRowRef.current = node
-  }, [])
 
   const flushTimelineRowMeasurements = useCallback(() => {
     measurementFrameRef.current = window.requestAnimationFrame(() => {
@@ -1682,8 +1676,7 @@ function MessageViewInner({
   useLayoutEffect(() => {
     if (!autoFollow || !hasTranscriptTimeline || loading) return
     scrollTimelineToBottom()
-    alignLastTimelineRowToViewportBottom()
-  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, renderedTimelineRows.length, rowMeasurementVersion, scrollTimelineToBottom])
+  }, [autoFollow, hasTranscriptTimeline, loading, renderedTimelineRows.length, rowMeasurementVersion, scrollTimelineToBottom])
 
   const estimateTimelineRowHeightForLayout = useCallback((row: TimelineRow) => {
     const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
@@ -1883,8 +1876,10 @@ function MessageViewInner({
 
   const timelineRenderedHeight = useMemo(() => {
     const lastVisibleIndex = virtualTimeline.endIndex - 1
+    // Viewport padding already supplies the bottom gutter. Adding it to the
+    // spacer only during a gesture makes the tail grow/shrink on scroll idle.
     const visibleBottom = lastVisibleIndex >= virtualTimeline.startIndex
-      ? rowLayout.tops[lastVisibleIndex] + rowLayout.heights[lastVisibleIndex] + TIMELINE_BOTTOM_GUTTER_PX
+      ? rowLayout.tops[lastVisibleIndex] + rowLayout.heights[lastVisibleIndex]
       : 0
     return resolveTimelineRenderedHeight({
       measuredTotalHeight: virtualTimeline.totalHeight,
@@ -1901,7 +1896,6 @@ function MessageViewInner({
   // none depends on composer state.
   const fullRenderedRowKeysRef = useLazyRef(() => new Set<string>())
   const timelineRowElements = useMemo(() => {
-    const lastRowKey = renderedTimelineRows.at(-1)?.key
     const streamMode = viewMode === 'stream' || viewMode === 'agents'
     // During fast scrolls, rows that were already rendered full keep their
     // cards (their subtrees are reused by key), but rows ENTERING the window
@@ -1922,7 +1916,6 @@ function MessageViewInner({
           key={row.key}
           row={row}
           top={top}
-          isLast={row.key === lastRowKey}
           highlighted={rowContainsMessage(row, highlightedMessageId)}
           forking={forkingMessageId === row.message.uuid}
           resumeTarget={resumeFromMessageId === row.message.uuid}
@@ -1931,7 +1924,6 @@ function MessageViewInner({
           placeholder={placeholder}
           placeholderHeight={placeholder ? height : 0}
           onMeasure={handleTimelineRowMeasure}
-          onLastRowRef={setLastTimelineRow}
           onForkFromMessage={handleForkFromMessage}
           onToggleResume={toggleResumeFromMessage}
           onToggleBookmark={toggleBookmark}
@@ -1955,7 +1947,6 @@ function MessageViewInner({
     handleTimelineRowMeasure,
     highlightedMessageId,
     resumeFromMessageId,
-    setLastTimelineRow,
     toggleBookmark,
     toggleResumeFromMessage,
     renderedTimelineRows,
@@ -1993,7 +1984,7 @@ function MessageViewInner({
     if (!node || !content) return
     const pin = () => {
       if (!autoFollowRef.current) return
-      const target = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      const target = Math.max(node.scrollHeight - node.clientHeight, 0)
       if (Math.abs(node.scrollTop - target) < 1) return
       suppressFollowEvalUntilRef.current = performance.now() + 200
       markProgrammaticTimelineScroll()
