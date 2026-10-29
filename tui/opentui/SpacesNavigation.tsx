@@ -40,18 +40,40 @@ export function WorkspaceTabs({ theme, width, onManage, under = false }: { theme
   const state = useSyncExternalStore(context.controller.subscribe, context.controller.getSnapshot, context.controller.getSnapshot)
   useSyncExternalStore(subscribeWorkspaceResources, workspaceResourceVersion, workspaceResourceVersion)
   const space = state.spaces.find(space => space.id === state.activeSpaceId)!
-  // Show the active tab and nearest neighbours; the manager exposes every tab.
+  // Keep tabs at 12 columns, keeping the active workspace visible on narrow
+  // terminals and reserving room for overflow and management controls.
   const active = Math.max(0, space.workspaces.findIndex(workspace => workspace.id === space.activeWorkspaceId))
-  const count = Math.max(1, Math.floor((width - 12) / 18))
-  const start = Math.max(0, active - count + 1)
+  const storageWarning = context.controller.persistenceError || context.controller.recoveryWarning
+  const budget = Math.max(6, width - 13 - (storageWarning ? 16 : 0))
+  const tabs = space.workspaces.map(workspace => {
+    const badge = workspaceBadge(context.controller, workspace)
+    const label = `${badge ? `${badge} ` : ''}${workspace.name}`
+    return { workspace, label, width: 12 }
+  })
+  let start = active
+  let end = active + 1
+  let used = tabs[active].width + 1
+  while (start > 0 && used + tabs[start - 1].width + 1 <= budget) used += tabs[--start].width + 1
+  while (end < tabs.length && used + tabs[end].width + 1 <= budget) used += tabs[end++].width + 1
   return <box id="workspace-tabs" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface}>
     {start > 0 ? <text fg={theme.dim} onMouseDown={() => onManage()}>‹ </text> : null}
-    {space.workspaces.slice(start, start + count).map(workspace => <box key={workspace.id} id={`workspace-tab:${workspace.id}`} width={18} height={1} flexDirection="row" backgroundColor={workspace.id === space.activeWorkspaceId ? theme.surface3 : theme.surface} onMouseDown={event => {
-      event.stopPropagation(); if (event.button === 0) context.controller.activate(space.id, workspace.id); else if (event.button === 2) onManage(workspace.id)
-    }}><text width={15} fg={workspace.id === space.activeWorkspaceId ? theme.cyan : theme.dim} wrapMode="none">{fit(` ${workspaceBadge(context.controller, workspace)} ${workspace.name}`, 15)}</text><box id={`workspace-close:${workspace.id}`} width={3} height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage(workspace.id, true) } }}><text fg={theme.dim}> × </text></box></box>)}
-    <box id="workspace-add" width={4} height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.addWorkspace(space.id) } }}><text fg={theme.cyan}> + </text></box>
-    {context.controller.persistenceError || context.controller.recoveryWarning ? <text fg={theme.red} onMouseDown={() => onManage()}> ! restore/save </text> : null}
-    <box width={6} height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={theme.dim}>menu</text></box>
+    {tabs.slice(start, end).map(({ workspace, label, width: tabWidth }) => {
+      const selected = workspace.id === space.activeWorkspaceId
+      const title = fit(label, tabWidth - 6)
+      return <box key={workspace.id} id={`workspace-tab:${workspace.id}`} width={tabWidth} height={1} marginRight={1} flexShrink={0} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface} onMouseDown={event => {
+        event.stopPropagation(); if (event.button === 0) context.controller.activate(space.id, workspace.id); else if (event.button === 2) onManage(workspace.id)
+      }}>
+        <text fg={selected ? theme.cyan : theme.border}>[</text>
+        {/* Center across the whole interior; the close control takes no layout space. */}
+        <text width={tabWidth - 2} textAlign="center" fg={selected ? theme.cyan : theme.muted} wrapMode="none">{selected ? <b>{title}</b> : title}</text>
+        <text fg={selected ? theme.cyan : theme.border}>]</text>
+        <box id={`workspace-close:${workspace.id}`} position="absolute" right={1} top={0} width={2} height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage(workspace.id, true) } }}><text fg={theme.dim}> ×</text></box>
+      </box>
+    })}
+    {end < tabs.length ? <text fg={theme.dim} onMouseDown={() => onManage()}>› </text> : null}
+    <box id="workspace-add" width={3} height={1} flexShrink={0} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.addWorkspace(space.id) } }}><text fg={theme.cyan}> + </text></box>
+    {storageWarning ? <text fg={theme.red} onMouseDown={() => onManage()}> ! restore/save </text> : null}
+    <box id="workspace-menu" width={6} height={1} flexShrink={0} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={theme.muted}>menu</text></box>
   </box>
 }
 export function WorkspaceLauncher({ theme, cwd, onOpenSession, onNewAgent, onTerminal, onLayout }: { theme: TuiThemePalette; cwd: string; onOpenSession: () => void; onNewAgent: () => void; onTerminal: () => void; onLayout: () => void }) {

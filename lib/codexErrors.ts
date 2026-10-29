@@ -3,6 +3,9 @@ export function isCodexMissingRolloutError(err: unknown): boolean {
   return (
     /no rollout found for thread id/i.test(message) ||
     /thread not found:/i.test(message) ||
+    // A fresh thread can be known to the creating app-server but not yet
+    // loaded in the transcript worker's separate app-server connection.
+    /thread not loaded:/i.test(message) ||
     /thread .+ is not materialized yet/i.test(message) ||
     /includeTurns is unavailable before first user message/i.test(message)
   )

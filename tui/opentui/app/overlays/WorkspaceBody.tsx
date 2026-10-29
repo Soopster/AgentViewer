@@ -314,7 +314,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                 height={1}
                 tabWidth={tabWidth}
                 backgroundColor={theme.bg}
-                focusedBackgroundColor={theme.surface3}
+                focusedBackgroundColor={theme.bg}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
                 selectedBackgroundColor={theme.surface}
@@ -438,7 +438,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
             ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
-            foreground={theme.cyan} background={theme.surface} />
+            foreground={theme.cyan} background={theme.surface}
+            inactiveForeground={theme.border} inactiveBackground={theme.bg} />
 
           </box>
         </box>

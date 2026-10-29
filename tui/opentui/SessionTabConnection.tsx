@@ -28,10 +28,15 @@ export function SessionTabConnection(props: {
   enabled: boolean
   foreground: string
   background: string
+  inactiveForeground: string
+  inactiveBackground: string
 }) {
   const renderer = useRenderer()
   const latest = useRef(props)
-  const colors = useMemo(() => ({ foreground: parseColor(props.foreground), background: parseColor(props.background) }), [props.foreground, props.background])
+  const colors = useMemo(() => ({
+    foreground: parseColor(props.foreground), background: parseColor(props.background),
+    inactiveForeground: parseColor(props.inactiveForeground), inactiveBackground: parseColor(props.inactiveBackground),
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -49,7 +54,19 @@ export function SessionTabConnection(props: {
       // A covering overlay must not acquire a hole in its own border/content.
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
-      const { foreground, background } = palette.current
+      const { foreground, background, inactiveForeground, inactiveBackground } = palette.current
+      // Inactive tabs keep their own muted cap and sides. Only the selected
+      // tab opens into the window border below; empty strip space stays bare.
+      const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
+      for (let index = offset; index < tabs.options.length; index++) {
+        if ((index - offset + 1) * tabs.getTabWidth() > tabs.width) break
+        if (index === tabs.getSelectedIndex()) continue
+        const inactive = tabConnectionGeometry(tabs, frame, index, offset, tabs.getTabWidth())
+        if (!inactive) continue
+        buffer.drawText('╭' + '─'.repeat(inactive.right - inactive.left - 1) + '╮', inactive.left, inactive.topY, inactiveForeground, inactiveBackground)
+        buffer.drawText('│', inactive.left, inactive.tabY, inactiveForeground, inactiveBackground)
+        buffer.drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
+      }
       buffer.drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       buffer.drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
       buffer.drawText('│', connection.left, connection.tabY, foreground, background)

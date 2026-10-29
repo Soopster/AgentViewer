@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import assert from 'node:assert/strict'
-import type { TabSelectRenderable } from '@opentui/core'
-import { tabConnectionGeometry } from './SessionTabConnection'
+import { createRef } from 'react'
+import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
+import { SessionTabConnection, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
 import { tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 
@@ -40,5 +41,47 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
     await act(async () => setup.renderer.destroy())
   }
 }
-console.log('Connected tab strip preserves close target, scrolling and row bounds at wide, medium, and narrow widths')
+for (const selected of [0, 1]) {
+  const tabs = createRef<TabSelectRenderable>()
+  const frame = createRef<BoxRenderable>()
+  const options = ['Alpha', 'Bravo'].map((label, index) => ({ name: tabStripName(label, 24), value: `tab:${index}`, description: '' }))
+  const setup = await testRender(<box flexDirection="column" width={100}>
+    <box height={2} paddingTop={1} paddingX={1} backgroundColor="#101010">
+      <tab-select ref={tabs} options={options} width={76} height={1} tabWidth={24}
+        backgroundColor="#101010" focusedBackgroundColor="#101010" textColor="#aaaaaa"
+        selectedBackgroundColor="#202020" selectedTextColor="#00aaff"
+        showDescription={false} showUnderline={false} />
+    </box>
+    <box ref={frame} width={100} height={4} border borderStyle="rounded" borderColor="#00aaff" backgroundColor="#202020" />
+    <SessionTabConnection tabs={tabs} readWindow={() => frame.current} ownerKey={`tab:${selected}`} enabled
+      foreground="#00aaff" background="#202020" inactiveForeground="#555555" inactiveBackground="#101010" />
+  </box>, { width: 100, height: 6 })
+  try {
+    await act(async () => { tabs.current!.setSelectedIndex(selected); tabs.current!.focus() })
+    await setup.flush()
+    const rows = setup.captureCharFrame().split('\n')
+    const spans = setup.captureSpans()
+    const cell = (x: number, y: number) => {
+      let column = 0
+      for (const span of spans.lines[y].spans) {
+        if (x < column + span.width) return span
+        column += span.width
+      }
+      throw new Error(`Missing cell ${x},${y}`)
+    }
+    for (const index of [0, 1]) {
+      const left = 1 + index * 24
+      assert.equal(rows[0].slice(left, left + 24), `╭${'─'.repeat(22)}╮`)
+      assert.equal(rows[1][left], '│')
+      assert.equal(rows[1][left + 23], '│')
+      assert.equal(rows[2][left], index === selected ? '╯' : '─', 'only the active tab opens into the window')
+      assert.deepEqual(cell(left, 0).fg, parseColor(index === selected ? '#00aaff' : '#555555'), 'inactive outlines stay muted')
+    }
+    assert.deepEqual(cell(60, 1).bg, parseColor('#101010'), 'focused tabs leave empty strip space at the base background')
+    assert.deepEqual(cell(2 + (1 - selected) * 24, 1).bg, parseColor('#101010'), 'inactive labels use the strip background')
+  } finally {
+    await act(async () => setup.renderer.destroy())
+  }
+}
+console.log('Tab strip passed: inactive outlines and colors, active window join, close targets, scrolling and row bounds')
 process.exit(0)
