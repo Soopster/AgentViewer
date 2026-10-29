@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AsyncQuestionCard } from '../components/AsyncQuestionCard'
+import { AskUserQuestionPicker } from '../components/message-view/AskUserQuestionPicker'
 import { McpToolArtifacts } from '../components/McpArtifacts'
 import { readAsyncQuestions, formatAsyncQuestionAnswers } from '../lib/asyncQuestions'
+import type { PendingPermission } from '../lib/permissions'
 import { normalizeCodexStreamArtifactMessage, normalizeCodexStreamThreadedMessage, mapCodexThreadToMessages } from '../lib/codexMapper'
 import { readCodexMcpApp } from '../lib/codexMcpApps'
 import { buildThreadedMessages, stripToolCallBlocks } from '../lib/threading'
@@ -55,6 +57,26 @@ assert.match(questionHtml, /Which layout/)
 assert.match(questionHtml, /Spacious/)
 assert.match(questionHtml, /Answer: Anything else/)
 assert.match(questionHtml, /Use answers in composer/)
+// Codex's blocking requestUserInput renders as the CLI's tabbed questionnaire:
+// every question gets a tab, but only the active question's options are drawn.
+const codexQuestionnaire: PendingPermission = {
+  id: 'codex-question', provider: 'codex', toolName: 'item/tool/requestUserInput', title: 'Codex asks',
+  questions: [
+    { id: 'first', header: 'First', question: 'Pick one', options: [{ label: 'Alpha' }, { label: 'Beta' }] },
+    { id: 'second', header: 'Second', question: 'Pick another', options: [{ label: 'Gamma' }] },
+  ],
+}
+const codexQuestionnaireHtml = renderToStaticMarkup(
+  <AskUserQuestionPicker permission={codexQuestionnaire} busy={false} onSubmit={() => {}} onCancel={() => {}} />,
+)
+assert.match(codexQuestionnaireHtml, /First/)
+assert.match(codexQuestionnaireHtml, /Second/)
+assert.match(codexQuestionnaireHtml, /Submit/)
+assert.match(codexQuestionnaireHtml, /Pick one/)
+assert.match(codexQuestionnaireHtml, /Alpha/)
+assert.doesNotMatch(codexQuestionnaireHtml, /Pick another/)
+assert.doesNotMatch(codexQuestionnaireHtml, /Gamma/)
+assert.match(codexQuestionnaireHtml, /Select an option to continue/)
 const tool = live(call).blocks[0]
 assert.ok(tool.type === 'tool_thread')
 assert.deepEqual(tool.toolUse.input, {}, 'host routing fields must not pollute tool arguments')

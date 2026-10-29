@@ -10,7 +10,8 @@ import { type ThreadedMessage } from '../../../../lib/threading'
 import { runTuiSessionAction } from '../../../../lib/tui/service'
 import { type Session } from '../../../../lib/types'
 import { isPendingRequestGone, PENDING_REQUEST_GONE_NOTICE } from '../../../../lib/pendingRequestGone'
-import { type PendingPermission, type PendingQuestionAnswers } from '../../../../lib/permissions'
+import { type PendingPermission } from '../../../../lib/permissions'
+import { collectQuestionAnswers } from '../../../../lib/questionnaire'
 import { type PaneFocus, type NoticeTone } from '../types'
 import { completeCodexQuestionLiveMessage } from '../liveStream'
 import { keepFiltered } from '../collections'
@@ -90,24 +91,12 @@ export async function runSubmitTuiQuestion(ctx: SubmitTuiQuestionContext, permis
   const target = composerTargetSession
   if (!target || permissionActionLoading) return
   const questions = permission.questions ?? []
-  const answers: PendingQuestionAnswers = {}
-  for (let i = 0; i < questions.length; i += 1) {
-    const question = questions[i]!
-    const selected = questionSelections[i] ?? []
-    const freeform = questionFreeformAnswers[i]?.trim()
-    const values = question.multiSelect && freeform
-      ? [...selected, freeform]
-      : freeform
-      ? [freeform]
-      : selected
-    if (values.length === 0) {
-      if (question.required === false) continue
-      // Jump focus to the first unanswered question instead of submitting.
-      setQuestionFocusIndex(i)
-      setQuestionOptionIndex(0)
-      return
-    }
-    answers[question.id ?? question.question] = values
+  const { answers, missingIndex } = collectQuestionAnswers(questions, questionSelections, questionFreeformAnswers)
+  if (missingIndex !== null) {
+    // Jump focus to the first unanswered question instead of submitting.
+    setQuestionFocusIndex(missingIndex)
+    setQuestionOptionIndex(0)
+    return
   }
   if (permission.asyncQuestion) {
     if (permission.sessionId !== target.sessionId || permission.provider !== target.provider || permission.providerInstanceId !== target.providerInstanceId) {

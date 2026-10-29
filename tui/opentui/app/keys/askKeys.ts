@@ -8,7 +8,9 @@ import { openExternalUrl } from '../../terminalBrowser'
 import { type TextareaRenderable } from '@opentui/core'
 import { type Session } from '../../../../lib/types'
 import { permissionOptionsFor, type PendingPermission, type PermissionOption, type PermissionResponse } from '../../../../lib/permissions'
+import { isCodexQuestionnaire } from '../../../../lib/questionnaire'
 import { type TuiPermissionMode } from '../types'
+import { handleCodexQuestionnaireKeys } from './codexQuestionnaireKeys'
 
 /** Returns true when one of these branches handled the key. */
 export function handleAskAndShortcutKeys({
@@ -67,6 +69,17 @@ export function handleAskAndShortcutKeys({
     if (pendingPermissions.length > 0 && !permissionActionLoading && (pendingPermissions[0]!.questions?.length ?? 0) > 0) {
       const activePermission = pendingPermissions[0]!
       const questions = activePermission.questions ?? []
+      // Codex's requestUserInput is a questionnaire, not a stacked picker: it
+      // gets one tab per question plus Submit, matching the Codex CLI.
+      if (isCodexQuestionnaire(activePermission)) {
+        return handleCodexQuestionnaireKeys({
+          permission: activePermission, questions, key, sequence, handled,
+          questionFocusIndex, questionOptionIndex, questionFreeformEditing, questionFreeformAnswers,
+          setQuestionFocusIndex, setQuestionOptionIndex, setQuestionSelections,
+          setQuestionFreeformAnswers, setQuestionFreeformEditing, toggleTuiQuestionOption,
+          submitTuiQuestion, respondToTuiPermission,
+        })
+      }
       const qi = Math.min(questionFocusIndex, questions.length - 1)
       const question = questions[qi]!
       if (question.externalUrl && key.name === 'o' && !questionFreeformEditing && !key.ctrl && !key.meta) {

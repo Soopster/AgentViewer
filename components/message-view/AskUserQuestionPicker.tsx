@@ -3,22 +3,40 @@ import { useState, useSyncExternalStore } from 'react'
 import { type ColorTreatment, subscribeColorTreatment, getCurrentColorTreatment, DEFAULT_COLOR_TREATMENT } from '../../lib/colorTreatment'
 import { type PendingPermission, type PendingQuestionAnswers, initialQuestionState } from '../../lib/permissions'
 import { getAssistantDisplayName } from '../../lib/provider'
+import { questionAnswerValues, questionIsAnswered, isCodexQuestionnaire } from '../../lib/questionnaire'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 
-export function AskUserQuestionPicker({
-  permission, busy, onSubmit, onCancel,
-}: {
+export function AskUserQuestionPicker(props: {
   permission: PendingPermission
   busy: boolean
   onSubmit: (answers: PendingQuestionAnswers) => void
   onCancel: () => void
 }) {
+  // Codex's requestUserInput gets the CLI's tabbed questionnaire (one tab per
+  // question plus Submit). Every other provider keeps the stacked picker.
+  return isCodexQuestionnaire(props.permission)
+    ? <CodexQuestionnairePicker {...props} />
+    : <StackedQuestionPicker {...props} />
+}
+
+type PickerProps = {
+  permission: PendingPermission
+  busy: boolean
+  onSubmit: (answers: PendingQuestionAnswers) => void
+  onCancel: () => void
+}
+
+function useColorTreatmentFlat() {
+  return useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
+}
+
+function StackedQuestionPicker({ permission, busy, onSubmit, onCancel }: PickerProps) {
   const questions = permission.questions ?? []
   const [selections, setSelections] = useState(() => initialQuestionState(questions).selections)
   const [freeformAnswers, setFreeformAnswers] = useState(() => initialQuestionState(questions).freeformAnswers)
   const [openPreview, setOpenPreview] = useState<string | null>(null)
-  const flat = useSyncExternalStore<ColorTreatment>(subscribeColorTreatment, getCurrentColorTreatment, () => DEFAULT_COLOR_TREATMENT) === 'flat'
+  const flat = useColorTreatmentFlat()
 
   const toggle = (qi: number, multiSelect: boolean, label: string) => {
     if (!multiSelect) {
@@ -48,13 +66,7 @@ export function AskUserQuestionPicker({
     if (!allAnswered || busy) return
     const answers: PendingQuestionAnswers = {}
     questions.forEach((q, qi) => {
-      const selected = selections[qi] ?? []
-      const freeform = freeformAnswers[qi]?.trim()
-      const values = q.multiSelect && freeform
-        ? [...selected, freeform]
-        : freeform
-          ? [freeform]
-          : selected
+      const values = questionAnswerValues(q, selections[qi], freeformAnswers[qi])
       if (values.length > 0) answers[q.id ?? q.question] = values
     })
     onSubmit(answers)
@@ -267,6 +279,359 @@ export function AskUserQuestionPicker({
         >
           {busy ? 'SENDING…' : 'SUBMIT'}
         </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Codex CLI parity: one tab per question plus a Submit tab. */
+function CodexQuestionnairePicker({ permission, busy, onSubmit, onCancel }: PickerProps) {
+  const questions = permission.questions ?? []
+  const [selections, setSelections] = useState(() => initialQuestionState(questions).selections)
+  const [freeformAnswers, setFreeformAnswers] = useState(() => initialQuestionState(questions).freeformAnswers)
+  const [tabIndex, setTabIndex] = useState(0)
+  const [openPreview, setOpenPreview] = useState<string | null>(null)
+  const flat = useColorTreatmentFlat()
+  const submitIndex = questions.length
+  const activeIndex = Math.min(Math.max(tabIndex, 0), submitIndex)
+  const submitTab = activeIndex === submitIndex
+  const activeQuestion = submitTab ? null : questions[activeIndex]
+  const advance = () => setTabIndex(Math.min(activeIndex + 1, submitIndex))
+
+  const toggle = (qi: number, multiSelect: boolean, label: string) => {
+    if (!multiSelect) {
+      setFreeformAnswers((freeform) => freeform[qi] ? { ...freeform, [qi]: '' } : freeform)
+    }
+    setSelections((prev) => {
+      const current = prev[qi] ?? []
+      let next: string[]
+      if (multiSelect) {
+        next = current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+      } else {
+        next = [label]
+      }
+      return { ...prev, [qi]: next }
+    })
+    // Single-choice selection advances to the next tab, matching the CLI.
+    if (!multiSelect) advance()
+  }
+
+  const answeredFor = (qi: number) => {
+    const question = questions[qi]
+    return !!question && questionIsAnswered(question, selections[qi], freeformAnswers[qi])
+  }
+  const allAnswered = questions.length > 0
+    && questions.every((q, qi) => q.required === false || answeredFor(qi))
+
+  const submit = () => {
+    if (!allAnswered || busy) return
+    const answers: PendingQuestionAnswers = {}
+    questions.forEach((q, qi) => {
+      const values = questionAnswerValues(q, selections[qi], freeformAnswers[qi])
+      if (values.length > 0) answers[q.id ?? q.question] = values
+    })
+    onSubmit(answers)
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: '10px 11px',
+        borderRadius: 6,
+        border: '1px solid rgba(139,128,240,0.30)',
+        background: 'rgba(139,128,240,0.06)',
+      }}
+    >
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
+        {questions.length === 1
+          ? `${getAssistantDisplayName(permission.provider ?? 'claude')} asks`
+          : `${getAssistantDisplayName(permission.provider ?? 'claude')} asks · ${questions.length} questions`}
+      </div>
+      <div role="tablist" aria-label="Questions" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {questions.map((q, qi) => {
+          const active = qi === activeIndex
+          const answered = answeredFor(qi)
+          const label = q.header?.trim() || `Q${qi + 1}`
+          return (
+            <button
+              key={qi}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTabIndex(qi)}
+              disabled={busy}
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.04em',
+                padding: '2px 7px', borderRadius: 3,
+                border: `1px solid ${active ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
+                background: active ? 'rgba(139,128,240,0.18)' : 'var(--surface)',
+                color: active ? 'var(--violet)' : answered ? 'var(--green)' : 'var(--text-3)',
+                cursor: busy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {label}{answered ? ' ✓' : ''}
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={submitTab}
+          onClick={() => setTabIndex(submitIndex)}
+          disabled={busy}
+          style={{
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.04em',
+            padding: '2px 7px', borderRadius: 3,
+            border: `1px solid ${submitTab ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
+            background: submitTab ? 'rgba(139,128,240,0.18)' : 'var(--surface)',
+            color: submitTab ? 'var(--violet)' : allAnswered ? 'var(--green)' : 'var(--text-3)',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Submit
+        </button>
+      </div>
+      {submitTab ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {questions.map((q, qi) => {
+            const values = questionAnswerValues(q, selections[qi], freeformAnswers[qi])
+            const label = q.header?.trim() || `Q${qi + 1}`
+            return (
+              <div key={qi} style={{ display: 'flex', gap: 8, fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13 }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', paddingTop: 2 }}>{label}</span>
+                <span style={{ color: values.length > 0 ? 'var(--text)' : 'var(--text-3)' }}>
+                  {values.length > 0 ? values.join(', ') : 'Unanswered'}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ) : activeQuestion ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+            {activeQuestion.header && (
+              <span style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+                color: 'var(--text-3)',
+                background: 'var(--surface-3)',
+                border: '1px solid var(--border)',
+                borderRadius: 3,
+                padding: '1px 5px',
+                flexShrink: 0,
+              }}>
+                {activeQuestion.header}
+              </span>
+            )}
+            <span>
+              {activeQuestion.question}
+              {activeQuestion.multiSelect ? <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>(select all that apply)</span> : null}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {activeQuestion.externalUrl ? <a href={activeQuestion.externalUrl} target="_blank" rel="noopener noreferrer">Open form in browser ↗</a> : null}
+            {activeQuestion.options.map((opt, oi) => {
+              const optionValue = opt.value ?? opt.label
+              const selected = selections[activeIndex] ?? []
+              const isSelected = selected.includes(optionValue)
+              const previewKey = `${activeIndex}:${oi}`
+              const previewOpen = openPreview === previewKey
+              return (
+                <div key={oi}>
+                  <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
+                    <button
+                      type="button"
+                      className="av-hover-control"
+                      onClick={() => toggle(activeIndex, activeQuestion.multiSelect === true, optionValue)}
+                      disabled={busy}
+                      style={{
+                        flex: 1,
+                        textAlign: 'left',
+                        display: 'flex', alignItems: 'flex-start', gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 4,
+                        border: `1px solid ${isSelected ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
+                        background: isSelected
+                          ? flat
+                            ? 'rgba(139,128,240,0.16)'
+                            : 'linear-gradient(to right, rgba(139,128,240,0.16), rgba(139,128,240,0.05))'
+                          : 'var(--surface)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        transition: 'border-color 0.14s ease, background 0.14s ease',
+                      }}
+                    >
+                      <span style={{
+                        width: 14, height: 14,
+                        borderRadius: activeQuestion.multiSelect ? 3 : '50%',
+                        border: `1.5px solid ${isSelected ? 'var(--violet)' : 'var(--border-2)'}`,
+                        background: isSelected ? 'var(--violet)' : 'transparent',
+                        flexShrink: 0,
+                        marginTop: 2,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {isSelected && <span style={{ fontSize: 10, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontFamily: "'IBM Plex Sans', sans-serif",
+                          fontSize: 13, fontWeight: isSelected ? 600 : 400,
+                          color: isSelected ? 'var(--text)' : 'var(--text-2)',
+                        }}>
+                          {opt.label}
+                        </span>
+                        {opt.description && (
+                          <span style={{
+                            display: 'block',
+                            fontFamily: "'IBM Plex Sans', sans-serif",
+                            fontSize: 11, color: 'var(--text-3)',
+                            marginTop: 2, lineHeight: 1.5,
+                          }}>
+                            {opt.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    {opt.preview && (
+                      <button
+                        type="button"
+                        className="av-hover-control"
+                        aria-label={`${previewOpen ? 'Hide' : 'Show'} preview for ${opt.label}`}
+                        aria-expanded={previewOpen}
+                        onClick={() => setOpenPreview(previewOpen ? null : previewKey)}
+                        disabled={busy}
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          color: 'var(--text-3)',
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 4,
+                          padding: '0 8px',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {previewOpen ? '▲ preview' : '▼ preview'}
+                      </button>
+                    )}
+                  </div>
+                  {opt.preview && previewOpen && (
+                    <pre style={{
+                      margin: '2px 0 0',
+                      padding: '8px 12px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11, lineHeight: 1.6,
+                      color: 'var(--text-2)',
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      borderTop: 'none',
+                      borderRadius: '0 0 4px 4px',
+                      overflowX: 'auto',
+                      whiteSpace: 'pre',
+                    }}>
+                      {opt.preview}
+                    </pre>
+                  )}
+                </div>
+              )
+            })}
+            {activeQuestion.allowFreeform && (
+              <Input
+                type={activeQuestion.secret ? 'password' : 'text'}
+                value={freeformAnswers[activeIndex] ?? ''}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setFreeformAnswers((prev) => ({ ...prev, [activeIndex]: value }))
+                  if (!activeQuestion.multiSelect && value) {
+                    setSelections((prev) => ({ ...prev, [activeIndex]: [] }))
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !activeQuestion.multiSelect) advance()
+                }}
+                disabled={busy}
+                aria-label={`Custom answer for ${activeQuestion.question}`}
+                placeholder={activeQuestion.secret ? 'Enter a private answer…' : 'Other — type a custom answer…'}
+                autoComplete="off"
+                style={{
+                  height: 32,
+                  borderColor: freeformAnswers[activeIndex]?.trim() ? 'rgba(139,128,240,0.55)' : 'var(--border)',
+                  background: 'var(--surface)',
+                  fontFamily: activeQuestion.secret ? "'IBM Plex Mono', monospace" : "'IBM Plex Sans', sans-serif",
+                  fontSize: 12,
+                }} />
+            )}
+          </div>
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+        <span style={{ flex: 1, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+          {busy
+            ? 'SENDING…'
+            : submitTab
+              ? 'Review your answers, then submit.'
+              : activeQuestion?.multiSelect
+                ? 'Choose any that apply, then Next.'
+                : 'Select an option to continue.'}
+        </span>
+        <Button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(248,113,113,0.24)',
+            background: 'rgba(248,113,113,0.08)',
+            color: 'var(--red, #f87171)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          SKIP
+        </Button>
+        {submitTab ? (
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={!allAnswered || busy}
+            variant="outline"
+            size="sm"
+            style={{
+              height: 26, padding: '0 12px', borderRadius: 4,
+              border: '1px solid rgba(139,128,240,0.40)',
+              background: 'rgba(139,128,240,0.14)',
+              color: 'var(--violet)',
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+              cursor: (!allAnswered || busy) ? 'not-allowed' : 'pointer',
+              opacity: (!allAnswered || busy) ? 0.55 : 1,
+            }}
+          >
+            {busy ? 'SENDING…' : 'SUBMIT'}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={advance}
+            disabled={busy}
+            variant="outline"
+            size="sm"
+            style={{
+              height: 26, padding: '0 12px', borderRadius: 4,
+              border: '1px solid rgba(139,128,240,0.40)',
+              background: 'rgba(139,128,240,0.14)',
+              color: 'var(--violet)',
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.06em',
+              cursor: busy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            NEXT →
+          </Button>
+        )}
       </div>
     </div>
   )

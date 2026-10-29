@@ -6,7 +6,8 @@ import { type TuiEffort, type TuiCodexApproval, type TuiCopilotPermissionMode, t
 import { type InlineTextSegment } from '../inlineText'
 import { contextBarColor, formatContextUsageChip, planLimitSegment } from '../contextMeter'
 import { PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL } from '../pickers'
-import { type PendingQuestion, type PendingPermission } from '../../../../lib/permissions'
+import { type PendingPermission } from '../../../../lib/permissions'
+import { type QuestionPickerPlan } from './questionPicker'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { type SendState } from '../../../../lib/types'
 import { type TuiLiveToolActivity } from '../types'
@@ -124,7 +125,7 @@ export type ComposerStatusBlockHeightContext = {
   composerTargetSession: Session | null
   sessionDetail: TuiSessionDetail | null
   pendingPermissions: PendingPermission[]
-  questionPickerPlan: { questions: PendingQuestion[]; focusIndex: number; collapsed: boolean; optionStart: number; optionCount: number; previewLines: string[]; rows: number; } | null
+  questionPickerPlan: QuestionPickerPlan | null
   width: number
 }
 

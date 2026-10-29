@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
-import type { PendingQuestion } from '../../../../lib/permissions'
 import type { TuiThemePalette } from '../../../theme'
+import type { QuestionPickerPlan } from '../derived/questionPicker'
 import { openExternalUrl } from '../../terminalBrowser'
 import { formatProviderLabel } from '../../../format'
 import { fitText } from '../../textLayout'
@@ -10,7 +10,7 @@ import { join } from 'node:path'
 export function QuestionPickerOverlay({ pendingPermissions, width, questionPickerPlan, questionFocusIndex, theme, questionSelections, questionOptionIndex, questionFreeformAnswers, questionFreeformEditing, permissionActionLoading, permissionOptionIndex, resolvePermissionOptionIndex }: {
   pendingPermissions: PendingPermission[]
   width: number
-  questionPickerPlan: { questions: PendingQuestion[]; focusIndex: number; collapsed: boolean; optionStart: number; optionCount: number; previewLines: string[]; rows: number; } | null
+  questionPickerPlan: QuestionPickerPlan | null
   questionFocusIndex: number
   theme: TuiThemePalette
   questionSelections: Record<number, string[]>
@@ -28,11 +28,56 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
         const innerWidth = Math.max(width - 8, 20)
         // Same plan the height reservation used, so the card is drawn at the
         // size the layout actually gave it.
-        const { collapsed, optionStart, optionCount, previewLines } = questionPickerPlan
+        const plan = questionPickerPlan
+        const { collapsed, optionStart, optionCount, previewLines } = plan
           ?? { collapsed: false, optionStart: 0, optionCount: Number.MAX_SAFE_INTEGER, previewLines: [] as string[] }
-        const focusIndex = questionPickerPlan?.focusIndex ?? Math.min(questionFocusIndex, questions.length - 1)
+        const tabbed = plan?.tabbed === true
+        const submitIndex = questions.length
+        const focusIndex = plan?.focusIndex ?? (tabbed
+          ? Math.min(Math.max(questionFocusIndex, 0), submitIndex)
+          : Math.min(questionFocusIndex, questions.length - 1))
+        const submitTab = tabbed && focusIndex === submitIndex
         const focusedQuestion = questions[focusIndex]
         const focusedTotalOptions = (focusedQuestion?.options.length ?? 0) + (focusedQuestion?.allowFreeform ? 1 : 0)
+        const answerValues = (qi: number) => {
+          const values = questionSelections[qi] ?? []
+          const freeform = questionFreeformAnswers[qi]?.trim()
+          if (questions[qi]?.multiSelect && freeform) return [...values, freeform]
+          return freeform ? [freeform] : values
+        }
+        const hint = permissionActionLoading
+          ? 'submitting…'
+          : questionFreeformEditing
+          ? fitText('type custom answer · enter finish · esc cancel editing', innerWidth)
+          : tabbed
+          ? submitTab
+            ? fitText('enter submit · ←/→ tabs · esc skip', innerWidth)
+            : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}${focusedQuestion?.multiSelect ? 'space select · enter next' : 'enter select & next'} · ←/→ tabs · esc skip`, innerWidth)
+          : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)
+        // Submit tab: one summary row per question. The plan already capped
+        // how many fit; when the rest do not, the last row says how many were
+        // left out rather than drawing past the card's budget.
+        const summaryRows = tabbed && submitTab ? (() => {
+          const rows = Math.min(optionCount, questions.length)
+          const truncated = questions.length > rows
+          const visible = truncated ? questions.slice(0, Math.max(rows - 1, 0)) : questions
+          return [
+            ...visible.map((q, qi) => {
+              const values = answerValues(qi)
+              const label = q.header?.trim() || `Q${qi + 1}`
+              return (
+                <text key={`summary:${qi}`} fg={values.length > 0 ? theme.text : theme.dim} wrapMode="none">
+                  {fitText(`  ${label}: ${values.length > 0 ? values.join(', ') : 'unanswered'}`, innerWidth)}
+                </text>
+              )
+            }),
+            ...truncated ? [(
+              <text key="summary:more" fg={theme.dim} wrapMode="none">
+                {fitText(`  … ${questions.length - visible.length} more`, innerWidth)}
+              </text>
+            )] : [],
+          ]
+        })() : null
         return (
           <box id="permission-prompt" backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <box borderStyle="single" borderColor={theme.violet ?? theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
@@ -41,7 +86,29 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
                   ? `● ${formatProviderLabel(permission.provider ?? 'claude')} asks`
                   : `● ${formatProviderLabel(permission.provider ?? 'claude')} asks · ${questions.length} questions`, innerWidth)}
               </text>
-              {questions.map((q, qi) => {
+              {tabbed ? (
+                <box flexDirection="row" gap={1} height={1}>
+                  {questions.map((q, qi) => {
+                    const active = qi === focusIndex
+                    const answered = answerValues(qi).length > 0
+                    const label = q.header?.trim() || `Q${qi + 1}`
+                    return (
+                      <text key={`tab:${qi}`} fg={active ? (theme.violet ?? theme.cyan) : answered ? theme.green : theme.dim} wrapMode="none">
+                        {`${active ? '▶' : ' '}[${label}]`}
+                      </text>
+                    )
+                  })}
+                  <text fg={focusIndex === submitIndex ? (theme.violet ?? theme.cyan) : theme.dim} wrapMode="none">
+                    {`${focusIndex === submitIndex ? '▶' : ' '}[Submit]`}
+                  </text>
+                </box>
+              ) : null}
+              {summaryRows !== null ? (
+                <box flexDirection="column">
+                  {summaryRows}
+                </box>
+              ) : questions.map((q, qi) => {
+                if (tabbed && qi !== focusIndex) return null
                 const focused = qi === focusIndex
                 const selected = questionSelections[qi] ?? []
                 // When the picker cannot fit, only the focused question shows
@@ -114,11 +181,7 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
                 )
               })}
               <text fg={theme.dim} wrapMode="none">
-                {permissionActionLoading
-                  ? 'submitting…'
-                  : questionFreeformEditing
-                  ? fitText('type custom answer · enter finish · esc cancel editing', innerWidth)
-                  : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)}
+                {hint}
               </text>
             </box>
           </box>

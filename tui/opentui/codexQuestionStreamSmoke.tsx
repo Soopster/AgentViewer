@@ -18,6 +18,10 @@ const { mock } = await import(bunTestSpecifier) as {
 const SESSION_ID = 'codex-question-smoke-session'
 const QUESTION_ID = 'project_kind'
 const QUESTION = 'Which sample project should we build?'
+const SECOND_ID = 'runtime'
+const SECOND_QUESTION = 'Where should the sample project run?'
+const SECOND_LOCAL = 'Run locally'
+const SECOND_CLOUD = 'Deploy to cloud'
 const SESSION = {
   sessionId: SESSION_ID,
   provider: 'codex' as const,
@@ -118,6 +122,16 @@ try {
               { label: 'Developer tool', description: 'Build a CLI utility.' },
               { label: 'Web dashboard', description: 'Build a browser UI.' },
             ],
+          }, {
+            id: SECOND_ID,
+            header: 'Runtime',
+            question: SECOND_QUESTION,
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: SECOND_LOCAL },
+              { label: SECOND_CLOUD },
+            ],
           }],
         },
       },
@@ -133,15 +147,45 @@ try {
   if (!pendingFrame.includes('tool ask user')) {
     throw new Error(`Codex question did not render as a transcript tool card:\n${pendingFrame}`)
   }
+  // Codex CLI parity: one tab per question plus Submit, and only the active
+  // question's options are drawn.
+  if (!pendingFrame.includes('[Sample]') || !pendingFrame.includes('[Runtime]') || !pendingFrame.includes('[Submit]')) {
+    throw new Error(`Codex questionnaire tabs did not render:\n${pendingFrame}`)
+  }
+  if (pendingFrame.includes(SECOND_LOCAL) || pendingFrame.includes(SECOND_CLOUD)) {
+    throw new Error(`Inactive question options rendered outside their tab:\n${pendingFrame}`)
+  }
 
+  // A single-choice selection advances to the next tab.
   act(() => { setup.mockInput.pressKey('1') })
-  await settle(100)
+  await settle(200)
+  const secondTabFrame = setup.captureCharFrame()
+  if (!secondTabFrame.includes(SECOND_QUESTION) || !secondTabFrame.includes(SECOND_LOCAL)) {
+    throw new Error(`Single-choice selection did not advance to the next tab:\n${secondTabFrame}`)
+  }
+  if (!secondTabFrame.includes('▶[Runtime]')) {
+    throw new Error(`Runtime tab is not marked active:\n${secondTabFrame}`)
+  }
+
+  // Answering the last question advances to Submit, which summarises both.
+  act(() => { setup.mockInput.pressKey('1') })
+  await settle(200)
+  const submitFrame = setup.captureCharFrame()
+  if (!submitFrame.includes('▶[Submit]')) {
+    throw new Error(`Submit tab is not reachable:\n${submitFrame}`)
+  }
+  if (!submitFrame.includes('Sample: Developer tool') || !submitFrame.includes('Runtime: Run locally')) {
+    throw new Error(`Submit tab does not summarise the answers:\n${submitFrame}`)
+  }
+
   act(() => { setup.mockInput.pressEnter() })
   await settle(500)
 
   const response = actions.find((action) => action.action === 'respondQuestion')
   const answers = response?.answers as Record<string, string[]> | undefined
-  if (response?.permissionId !== 'request-1' || answers?.[QUESTION_ID]?.[0] !== 'Developer tool') {
+  if (response?.permissionId !== 'request-1'
+    || answers?.[QUESTION_ID]?.[0] !== 'Developer tool'
+    || answers?.[SECOND_ID]?.[0] !== SECOND_LOCAL) {
     throw new Error(`Codex question response was not keyed by schema id: ${JSON.stringify(response)}`)
   }
   act(() => { setup.mockInput.pressEscape() })
