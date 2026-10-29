@@ -2,7 +2,7 @@
 import { useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
 import { GitDivider } from './GitDivider'
 import { GitBrowser } from './GitBrowser'
-import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
+import { PopoverDetachButton, popoverRootProps, popoverFrameCells } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../../lib/review/useReview'
 import { localReviewTransport } from '../../../lib/review/localTransport'
@@ -564,6 +564,8 @@ const LEFT_PANE_RESIZE_STEP = 4
 const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 export type GitPopoverProps = {
+  /** Whether this surface owns native input focus in the shared window host. */
+  focused?: boolean
   refreshRevision?: string | number
   onRepositoryChange?: () => void
   onBusyChange?: (busy: boolean) => void
@@ -969,6 +971,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   // Dimensions
   // Docked the panel already reserves its own margins, so the popover fills the
   // box it is given; floating it insets by the scrim's 2-cell gutter.
+  const frame = popoverFrameCells(docked)
   const popW = docked ? width : width - 4
   const popH = docked ? height : height - 4
   const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
@@ -982,11 +985,11 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   // up to LEFT_PANE_RIGHT_MIN_WIDTH would overflow a panel narrower than the two
   // minimums combined — the left pane already shrinks first (minLeftW), so once
   // it is at its floor the only honest answer is the remaining width.
-  const rightW = Math.max(8, popW - leftW - dividerW - 2)
+  const rightW = Math.max(8, popW - leftW - dividerW - frame)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
 
-  const leftInnerH = popH - 2
+  const leftInnerH = popH - frame
   const statusH = embedded ? 0 : 4
   const branchesH = Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2))
   // Files: grow with content up to 60 % of the left panel, with a scrollbox inside.
@@ -996,7 +999,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   // Commits gets the remaining height after Status + Files + Branches (minus 3 section borders).
   const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 3)
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
-  const rightH = popH - 2
+  const rightH = popH - frame
   const diffLayout = resolveDiffLayout(diffLayoutMode, rightW)
   // View controls and review actions share one row when both fit; stacking
   // them cost a row of diff on every terminal wide enough not to need it.
@@ -1756,25 +1759,16 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
 
   return (
     <box
-      position={docked ? undefined : 'absolute'}
-      top={docked ? undefined : popTop}
-      left={docked ? undefined : popLeft}
-      width={popW}
-      height={popH}
-      border
-      borderStyle="single"
-      // Docked, the window frame is the border: this one stays for the layout
-      // inside it, which counts it, but is drawn in the background and untitled.
-      borderColor={docked ? theme.surface : theme.border2}
+      {...popoverRootProps(docked, { top: popTop, left: popLeft, width: popW, height: popH }, zIndex)}
+      {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
-      zIndex={docked ? undefined : zIndex}
       flexDirection="row"
       title={docked ? undefined : review.error ? ` Review: ${fitTerminalText(review.error, Math.max(popW - 14, 8))} ` : scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
       {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
-      {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
+      {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - frame} height={popH - frame} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       {onWorkspace && !embedded ? <box position="absolute" top={0} right={3} zIndex={1} onMouseDown={(event) => { event.stopPropagation(); onWorkspace() }}><text fg={theme.cyan}>[g Git workspace]</text></box> : null}
       {/* ── Left column ─────────────────────────────────── */}
       {!leftPaneHidden ? (
@@ -1956,7 +1950,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       ) : null}
 
       {!leftPaneHidden ? (
-        <GitDivider id="git-review-divider" vertical width={1} height={popH - 2} size={leftW} theme={theme} onResize={value => { setLeftPaneMode('normal'); setLeftPaneWidth(clampLeftPaneWidth(value)) }} />
+        <GitDivider id="git-review-divider" vertical width={1} height={popH - frame} size={leftW} theme={theme} onResize={value => { setLeftPaneMode('normal'); setLeftPaneWidth(clampLeftPaneWidth(value)) }} />
       ) : null}
 
       {/* ── Right column ────────────────────────────────── */}

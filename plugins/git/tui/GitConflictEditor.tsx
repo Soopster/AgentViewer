@@ -7,8 +7,8 @@ import { localWorkspaceTransport } from '../../../lib/git/workspaceService'
 import { chooseConflictBlock, conflictBlocks } from '../../../lib/git/conflictText'
 import type { ConflictPreview, WorkflowDraft } from '../../../lib/git/workspaceTypes'
 
-export function GitConflictEditor({ cwd, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
-  cwd: string; path: string; theme: TuiThemePalette; width: number; height: number; busy: boolean; error: string | null
+export function GitConflictEditor({ focused = true, cwd, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
+  focused?: boolean; cwd: string; path: string; theme: TuiThemePalette; width: number; height: number; busy: boolean; error: string | null
   onRun: (action: WorkflowDraft, revision: string) => Promise<boolean>; onClose: () => void; onKeyHandlerReady: (handler: (key: GitKeyEvent) => boolean | void) => void
 }) {
   const [conflict, setConflict] = useState<ConflictPreview | null>(null), [content, setContent] = useState(''), [loadError, setLoadError] = useState<string | null>(null)
@@ -47,7 +47,7 @@ export function GitConflictEditor({ cwd, path, theme, width, height, busy, error
     <box flexGrow={1} minHeight={1} flexDirection="column" overflow="hidden">
       {!conflict ? <text fg={theme.dim}>Loading conflict versions…</text> : pending ? <><text fg={theme.amber} wrapMode="word">{pending.kind === 'conflict-save' ? 'Save the edited result and stage it as resolved?' : `Replace/stage ${pending.kind === 'resolve' ? pending.choice : ''} for this file? A missing version deletes it.`}</text><text fg={theme.text} wrapMode="word">{path}</text></> : editing ? <>
         <text fg={theme.cyan}>{`${blocks.length} conflict blocks remain · Ctrl+O ours · Ctrl+T theirs · Ctrl+Y both (first block)`}</text>
-        <textarea key={editVersion} ref={editor} id="git-conflict-result" initialValue={content} focused={!busy} width="100%" flexGrow={1} onContentChange={() => setContent(editor.current?.plainText ?? '')} />
+        <textarea key={editVersion} ref={editor} id="git-conflict-result" initialValue={content} focused={focused && !busy} width="100%" flexGrow={1} onContentChange={() => setContent(editor.current?.plainText ?? '')} />
       </> : <>
         <text fg={theme.cyan}>{`${version} · b/o/t versions · e edit result`}</text>
         {lines.slice(offset, offset + Math.max(1, h - 9)).map((line, index) => <text key={offset + index} fg={theme.text} wrapMode="none">{line || ' '}</text>)}

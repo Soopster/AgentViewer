@@ -12,10 +12,10 @@ import { GitConflictEditor } from './GitConflictEditor'
 import type { WorkspaceSnapshot } from '../../../lib/git/workspaceTypes'
 import type { WorkflowContext } from '../../../lib/git/workflowMenu'
 import { DiffCodeText, useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
-import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
+import { PopoverDetachButton, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 
 type Section = 'files' | 'branches' | 'commits' | 'stashes'
-export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, onClose, onReview, onKeyHandlerReady, onKeyCaptureChange, onDetach, embedded = false, startCompose = false, onRepositoryChange, onBusyChange, refreshRevision }: GitPopoverProps & { onReview: () => void; startCompose?: boolean }) {
+export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, onClose, onReview, onKeyHandlerReady, onKeyCaptureChange, onDetach, embedded = false, startCompose = false, onRepositoryChange, onBusyChange, refreshRevision, focused = true }: GitPopoverProps & { onReview: () => void; startCompose?: boolean }) {
   const visible = useWindowVisible()
   const root = cwd || process.cwd(), workspace = useGitWorkspace(root, localWorkspaceTransport)
   useEffect(() => { if (refreshRevision !== undefined) void workspace.refresh() }, [refreshRevision, workspace.refresh])
@@ -60,7 +60,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     if (inspection) void localWorkspaceTransport.inspect(root, inspection.kind, inspection.ref).then(value => { if (live) setContent(value || 'No differences from HEAD.') }).catch(error => { if (live) setContent(String(error)) })
     return () => { live = false }
   }, [root, inspection])
-  useLayoutEffect(() => { onKeyCaptureChange?.(Boolean(visible && (compose || workflowTarget || conflictPath))); return () => onKeyCaptureChange?.(false) }, [visible, compose, workflowTarget, conflictPath, onKeyCaptureChange])
+  useLayoutEffect(() => { onKeyCaptureChange?.(Boolean(visible && focused && (compose || workflowTarget || conflictPath))); return () => onKeyCaptureChange?.(false) }, [visible, focused, compose, workflowTarget, conflictPath, onKeyCaptureChange])
   const selectItem = useCallback((nextSection: Section, index: number) => {
     setSection(nextSection); setCursor(index); setFocus('list')
     if (nextSection === 'files') { setInspection(null); if (files[index]) workspace.setPath(files[index]!.path) }
@@ -142,7 +142,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     </box>
   }
   const firstDiffRow = Math.min(Math.max(0, diffCursor), rows.length - 1)
-  return <box position={docked ? undefined : 'absolute'} left={docked ? undefined : 1} top={docked ? undefined : 1} width={popW} height={popH} border={docked ? [] : true} borderColor={theme.border2} backgroundColor={theme.surface} zIndex={docked ? undefined : zIndex} flexDirection="column" title={docked ? undefined : ' Git workspace '} titleColor={theme.cyan}>
+  return <box {...popoverRootProps(Boolean(docked), { top: 1, left: 1, width: popW, height: popH }, zIndex)} {...(docked ? {} : { border: true, borderColor: theme.border2 })} backgroundColor={theme.surface} flexDirection="column" title={docked ? undefined : ' Git workspace '} titleColor={theme.cyan}>
     {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
     <box height={1} paddingX={1} flexDirection="row" flexShrink={0}>
       <text fg={theme.green} wrapMode="none">{`${snapshot?.branch ?? 'Loading…'}  ↑${snapshot?.ahead ?? 0} ↓${snapshot?.behind ?? 0} `}</text>
@@ -183,7 +183,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
         </box>
         {compose ? <box height={7} flexShrink={0} paddingX={1} flexDirection="column">
           <text fg={theme.cyan}>{`${amend ? 'Amend HEAD' : 'Commit message'} · ${filesForSide(snapshot?.files ?? [], 'staged').length} staged files`}</text>
-          {focus === 'compose' ? <box height={4} border borderColor={theme.cyan}><textarea key={root} id="git-workspace-message" ref={editor} focused={visible && focus === 'compose'} initialValue={message} width="100%" height="100%" placeholder="Describe the staged changes…" onContentChange={() => setMessage(editor.current?.plainText ?? '')} /></box>
+          {focus === 'compose' ? <box height={4} border borderColor={theme.cyan}><textarea key={root} id="git-workspace-message" ref={editor} focused={visible && focused && focus === 'compose'} initialValue={message} width="100%" height="100%" placeholder="Describe the staged changes…" onContentChange={() => setMessage(editor.current?.plainText ?? '')} /></box>
             : <box height={4} flexDirection="column"><text fg={theme.text} wrapMode="word">{message}</text></box>}
           <box onMouseDown={() => { if (busy) return; if (focus === 'confirm') void submit(); else void reviewCommit() }}><text fg={theme.amber} wrapMode="none">{focus === 'confirm' ? 'Enter confirms · Esc edits · preview above' : 'Ctrl+Enter reviews staged diff · Esc saves draft'}</text></box>
         </box> : null}
@@ -191,7 +191,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     </box>
     {workspace.error ? <box height={1} flexShrink={0} paddingX={1}><text fg={theme.red} wrapMode="none">{workspace.error}</text></box> : null}
     <box height={1} flexShrink={0} paddingX={1}><text fg={busy ? theme.amber : theme.dim} wrapMode="none">{busy ? 'Git operation running…' : workspace.output || ': Git actions · f resolve conflict · Space stage · a all/hunk · Tab diff · s apply · c commit · A amend · r refresh'}</text></box>
-    {workflowTarget ? <GitWorkflowMenu {...workflowTarget} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
-    {conflictPath ? <GitConflictEditor key={conflictPath} cwd={root} path={conflictPath} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
+    {workflowTarget ? <GitWorkflowMenu focused={visible && focused} {...workflowTarget} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
+    {conflictPath ? <GitConflictEditor focused={visible && focused} key={conflictPath} cwd={root} path={conflictPath} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
   </box>
 }

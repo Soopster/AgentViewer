@@ -5,7 +5,7 @@ import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/
 import type { TuiPluginKeyEvent, TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 import { GitPopover } from './GitPopover'
 
-function GitSurface({ services, theme, width, height, placement, zIndex, registerKeys, setCapture, runCommand, close, detach }: TuiPluginViewProps) {
+function GitSurface({ services, theme, width, height, placement, focused, zIndex, registerKeys, setCapture, runCommand, close, detach }: TuiPluginViewProps) {
   const repository = services.repository!
   const composer = services.composer
   const capturing = useRef(false)
@@ -25,6 +25,7 @@ function GitSurface({ services, theme, width, height, placement, zIndex, registe
   return (
     <GitPopover
       docked={!overlay}
+      focused={overlay || focused}
       cwd={repository.cwd}
       sessionId={repository.sessionId}
       {...(repository.label ? { scopeLabel: repository.label } : {})}

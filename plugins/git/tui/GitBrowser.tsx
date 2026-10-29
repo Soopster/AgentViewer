@@ -5,7 +5,7 @@ import type { GitKeyEvent, GitPopoverProps } from './GitPopover'
 import { GitReviewPopover } from './GitPopover'
 import { GitWorkspace } from './GitWorkspace'
 import { GitWorkflowMenu } from './GitWorkflowMenu'
-import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
+import { PopoverDetachButton, popoverRootProps, popoverFrameCells } from '../../../tui/opentui/shell/sdk'
 import { git } from '../../../lib/git/command'
 import { useGitWorkspace } from '../../../lib/git/useGitWorkspace'
 import { localWorkspaceTransport } from '../../../lib/git/workspaceService'
@@ -47,7 +47,7 @@ export function GitBrowser(props: GitPopoverProps) {
   const [visited, setVisited] = useState<string[]>([])
   const switchRoot = useCallback((next: string) => { setVisited(old => [...new Set([...old, ...(root ? [root] : []), next])]); setRoot(next) }, [root])
   // Overlay hosts render after the app content; the outer wrapper must not enter flow.
-  const placement = props.docked ? {} : { position: 'absolute' as const, top: 0, left: 0, zIndex: props.zIndex ?? 50 }
+  const placement = popoverRootProps(Boolean(props.docked), { top: 0, left: 0, width: props.width, height: props.height }, props.zIndex ?? 50)
   if (!root) return <box {...placement} id="git-browser" width={props.width} height={props.height} backgroundColor={props.theme.surface}><text fg={resolvingError ? props.theme.red : props.theme.muted}>{resolvingError || 'Loading Git repository…'}</text></box>
   const roots = visited.includes(root) ? visited : [...visited, root]
   return <box {...placement} id="git-browser" width={props.width} height={props.height}>
@@ -101,16 +101,17 @@ function RepositoryBrowser(props: GitPopoverProps & { active: boolean; switchRoo
   const loadedHistory = useRef<{ key: string; commits: BrowseCommit[]; exhausted: boolean }>({ key: '', commits: [], exhausted: false })
   const historyScroll = useRef<ScrollBoxRenderable>(null)
   const navScroll = useRef<ScrollBoxRenderable>(null)
-  const popW = Math.max(20, docked ? width : width - 2), popH = Math.max(8, docked ? height : height - 2)
+  const frame = popoverFrameCells(Boolean(docked))
+  const popW = Math.max(1, docked ? width : width - 2), popH = Math.max(1, docked ? height : height - 2)
   const narrow = popW < 110, short = popH < 32
   const sidebarOverlay = narrow || sidebarHidden
   const navW = sidebarOverlay ? 0 : Math.max(22, Math.min(sidebarWidth, Math.floor(popW * .45), popW - 60))
-  const bodyH = Math.max(1, popH - (docked ? 2 : 4))
-  const contentW = popW - navW - (docked ? 0 : 2)
-  const historyH = historyVisible ? short ? Math.max(3, popH - (docked ? 2 : 4)) : Math.max(5, Math.min(historyRows ?? Math.floor(popH / 4), bodyH - 10)) : 0
+  const bodyH = Math.max(1, popH - frame - 2)
+  const contentW = popW - navW - frame
+  const historyH = historyVisible ? short ? Math.max(3, popH - frame - 2) : Math.max(5, Math.min(historyRows ?? Math.floor(popH / 4), bodyH - 10)) : 0
   const showHistory = historyVisible && (!short || historyOnly)
   const showDetail = !short || !showHistory
-  const detailH = Math.max(3, popH - (docked ? 4 : 6) - (showHistory ? historyH : 0))
+  const detailH = Math.max(3, popH - frame - 4 - (showHistory ? historyH : 0))
   const isLocal = selection.kind === 'local'
   const historyRef = selection.kind === 'branch' ? `refs/heads/${selection.ref}` : selection.kind === 'remote-branch' ? `refs/remotes/${selection.ref}` : selection.kind === 'tag' ? `refs/tags/${selection.ref}` : '--all'
   const navigation = useMemo(() => {
@@ -258,7 +259,7 @@ function RepositoryBrowser(props: GitPopoverProps & { active: boolean; switchRoo
     }
   }, [menu, toggleHistory, childBusy, workspace.busy, childCapture, showDetail, filterEditing, openActions, workspace.refresh, navigationOpen, region, onClose, sidebarOverlay, showHistory, isLocal, staging, switchToReview, changeTab, tab, navigation, navCursor, activate, rangeAnchor, historyCursor, history, selectCommit, hasMore])
   useEffect(() => { if (active) props.onKeyHandlerReady(onKey) }, [active, onKey, props.onKeyHandlerReady])
-  useLayoutEffect(() => { if (active) props.onKeyCaptureChange?.(Boolean(menu || childCapture || navigationOpen || filterEditing)); return () => { if (active) props.onKeyCaptureChange?.(false) } }, [active, menu, childCapture, navigationOpen, filterEditing, region, props.onKeyCaptureChange])
+  useLayoutEffect(() => { if (active) props.onKeyCaptureChange?.(Boolean(props.focused !== false && (menu || childCapture || navigationOpen || filterEditing))); return () => { if (active) props.onKeyCaptureChange?.(false) } }, [active, menu, childCapture, navigationOpen, filterEditing, region, props.focused, props.onKeyCaptureChange])
   useEffect(() => { historyScroll.current?.scrollTo(Math.max(0, historyCursor - historyH + 3)) }, [historyCursor, historyH])
   useEffect(() => { navScroll.current?.scrollTo(Math.max(0, navCursor - bodyH + 7)) }, [navCursor, bodyH])
   useEffect(() => {
@@ -272,14 +273,16 @@ function RepositoryBrowser(props: GitPopoverProps & { active: boolean; switchRoo
   const historyEnd = Math.min(history.length, historyStart + historyH + 8)
   const title = isLocal ? 'Local Changes' : range ? `${range.base.slice(0, 7)}..${range.head.slice(0, 7)}` : selectedCommit ? `${selectedCommit.sha.slice(0, 7)} ${selectedCommit.subject}` : selection.label
   const navigationWidth = sidebarOverlay ? Math.min(38, popW - 2) : navW
-  const navigationPanel = <GitSidebar theme={theme} width={navigationWidth} height={bodyH} repository={root.split('/').pop() ?? root} rows={navigation} cursor={navCursor} selection={selection.id} focused={region === 'navigation'} visible={active && (!sidebarOverlay || navigationOpen)} filter={sidebarFilter} filtering={filterEditing} scrollRef={navScroll} onResize={value => setSidebarWidth(Math.max(22, Math.min(value, Math.floor(popW * .45), popW - 60)))}
+  const navigationPanel = <GitSidebar theme={theme} width={navigationWidth} height={bodyH} repository={root.split('/').pop() ?? root} rows={navigation} cursor={navCursor} selection={selection.id} focused={region === 'navigation'} visible={active && props.focused !== false && (!sidebarOverlay || navigationOpen)} filter={sidebarFilter} filtering={filterEditing} scrollRef={navScroll} onResize={value => setSidebarWidth(Math.max(22, Math.min(value, Math.floor(popW * .45), popW - 60)))}
     onCollapse={() => { setFilterEditing(false); setNavigationOpen(false); if (!sidebarOverlay) setSidebarHidden(true); setRegion('tabs') }}
     onChoose={index => { setFilterEditing(false); setNavCursor(index); setRegion('navigation'); activate(navigation[index]!) }} onFilter={value => { setSidebarFilter(value); setNavCursor(2) }} onEdit={() => { setRegion('navigation'); setFilterEditing(true) }} />
   const repoSummary = `[Repo] ${safeLabel(snapshot?.branch ?? 'Loading…')} ↑${snapshot?.ahead ?? 0} ↓${snapshot?.behind ?? 0}${narrow ? '' : ` · ${safeLabel(root.split('/').pop() ?? root)}${snapshot?.upstream ? ` → ${safeLabel(snapshot.upstream)}` : ' · no upstream'}`}`
   const sidebarControl = narrow ? '[≡] ' : sidebarHidden ? '[▶ Sidebar] ' : '[◀] '
-  const repoSummaryWidth = Math.max(1, popW - (docked ? 0 : 2) - 2 - 22 - sidebarControl.length - (snapshot?.operation ? 16 : 0))
-  // OpenTUI infers a border from borderColor even with border=false; [] explicitly disables it.
-  return <box position={docked ? undefined : 'absolute'} top={docked ? undefined : 1} left={docked ? undefined : 1} width={popW} height={popH} overflow="hidden" border={docked ? [] : true} borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" title={docked ? undefined : ' Git '} zIndex={props.zIndex ?? 50}>
+  const repoSummaryWidth = Math.max(1, popW - frame - 2 - 22 - sidebarControl.length - (snapshot?.operation ? 16 : 0))
+  return <box id="git-browser-frame" {...popoverRootProps(Boolean(docked), { top: 1, left: 1, width: popW, height: popH }, props.zIndex ?? 50)}
+    {...(docked ? {} : { border: true, borderColor: theme.border2 })}
+    overflow={docked ? 'hidden' : undefined} backgroundColor={theme.surface} flexDirection="column" title={docked ? undefined : ' Git '}>
+
     {!docked && props.onDetach ? <PopoverDetachButton theme={theme} onPress={props.onDetach} /> : null}
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1}>
       <box id="git-sidebar-toggle" flexShrink={0} onMouseDown={() => { setFilterEditing(false); if (narrow) { setNavigationOpen(value => !value); setRegion('navigation') } else { setSidebarHidden(value => !value); setNavigationOpen(false); if (region === 'navigation') setRegion('tabs') } }}><text fg={theme.cyan} wrapMode="none">{sidebarControl}</text></box>
@@ -326,7 +329,7 @@ function RepositoryBrowser(props: GitPopoverProps & { active: boolean; switchRoo
     </box>
     <box height={1} flexShrink={0}><text fg={error || workspace.error ? theme.red : workspace.busy ? theme.amber : theme.dim} wrapMode="none">{error || workspace.error || (workspace.busy ? 'Git operation running…' : workspace.output || `Ctrl+N navigation · Ctrl+H history · Tab regions · : actions · Ctrl+R refresh · Esc back/close`)}</text></box>
     {sidebarOverlay && navigationOpen ? <box position="absolute" top={1} left={0} zIndex={10}>{navigationPanel}</box> : null}
-    {menu ? <GitWorkflowMenu snapshot={menu.snapshot} context={menu.context} path={null} theme={theme} width={popW} height={popH} busy={workspace.busy} error={workspace.error} onRun={async (action, revision) => { const result = await workspace.workflow(action, revision); if (result) setRefresh(v => v + 1); return result }} onClose={() => setMenu(null)} onKeyHandlerReady={handler => { menuKey.current = handler }} /> : null}
+    {menu ? <GitWorkflowMenu focused={active && props.focused !== false} snapshot={menu.snapshot} context={menu.context} path={null} theme={theme} width={popW} height={popH} busy={workspace.busy} error={workspace.error} onRun={async (action, revision) => { const result = await workspace.workflow(action, revision); if (result) setRefresh(v => v + 1); return result }} onClose={() => setMenu(null)} onKeyHandlerReady={handler => { menuKey.current = handler }} /> : null}
   </box>
 }
 

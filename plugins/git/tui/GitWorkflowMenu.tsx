@@ -5,8 +5,8 @@ import type { GitKeyEvent } from './GitPopover'
 import { initialWorkflowValues, workflowPaths, workflowChoices, workflowSummary, type WorkflowChoice, type WorkflowContext } from '../../../lib/git/workflowMenu'
 import type { WorkflowDraft, WorkspaceSnapshot } from '../../../lib/git/workspaceTypes'
 
-export function GitWorkflowMenu({ snapshot, context, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
-  snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; theme: TuiThemePalette; width: number; height: number
+export function GitWorkflowMenu({ focused = true, snapshot, context, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
+  focused?: boolean; snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; theme: TuiThemePalette; width: number; height: number
   busy: boolean; error: string | null; onRun: (action: WorkflowDraft, revision: string) => Promise<boolean>; onClose: () => void; onKeyHandlerReady: (handler: (key: GitKeyEvent) => boolean | void) => void
 }) {
   const choices = useMemo(() => workflowChoices(snapshot, context, path), [snapshot, context, path])
@@ -64,7 +64,7 @@ export function GitWorkflowMenu({ snapshot, context, path, theme, width, height,
         <box height={1} flexShrink={0} />
         {selected.fields.map((item, index) => h < 18 && index !== fieldIndex ? null : <box key={item.key} height={item.kind === 'text' ? 2 : 1} flexShrink={0} flexDirection="column" onMouseDown={() => { if (!busy) { setFieldIndex(index); setOptionCursor(0) } }}>
           <text fg={fieldIndex === index ? theme.cyan : theme.muted} wrapMode="none">{`${fieldIndex === index ? '▶ ' : '  '}${item.label}${item.kind === 'text' ? '' : ': ' + (item.kind === 'paths' ? `${workflowPaths(values[item.key] || '[]').length} selected` : values[item.key])}`}</text>
-          {item.kind === 'text' ? <input id={`git-workflow-${item.key}`} value={values[item.key] ?? ''} focused={!busy && fieldIndex === index} onInput={value => change(item.key, value)} /> : null}
+          {item.kind === 'text' ? <input id={`git-workflow-${item.key}`} value={values[item.key] ?? ''} focused={focused && !busy && fieldIndex === index} onInput={value => change(item.key, value)} /> : null}
         </box>)}
         {field?.kind === 'paths' ? <box height={2} flexShrink={0}><text fg={theme.cyan} wrapMode="word">{`↑/↓ choose · space toggles: ${field.options?.[optionCursor]?.label ?? '(no files)'}`}</text></box> : null}
         <box height={1} onMouseDown={() => { if (!busy) prepare() }}><text fg={fieldIndex === selected.fields.length ? theme.cyan : theme.muted}>[Review action]</text></box>
