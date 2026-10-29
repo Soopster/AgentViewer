@@ -1129,10 +1129,10 @@ function OpenTuiWorkspace() {
 
   useLayoutEffect(() => runLiveTranscriptOverlayEffect({
     selectedSessionTarget, sessionDetail, liveTranscriptBaselineRef, composerLiveText,
-    liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
+    liveTranscriptMessages, liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
     setLiveTranscriptMessages, persistedComposerMessages, liveToolIndexesRef, liveToolInputJsonRef,
     setComposerLiveText, setAwaitingPersistedTurn,
-  }), [awaitingPersistedTurn, composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
+  }), [awaitingPersistedTurn, composerLiveText, liveTranscriptMessages, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // Escape hatch mirroring the web composer: if the persisted rows for a
   // completed turn never arrive, force-reveal the polled transcript after a

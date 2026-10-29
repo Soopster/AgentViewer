@@ -102,6 +102,7 @@ export type LiveTranscriptOverlayEffectContext = {
   sessionDetail: TuiSessionDetail | null
   liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
   composerLiveText: string
+  liveTranscriptMessages: ThreadedMessage[]
   liveTranscriptMessagesForSession: ThreadedMessage[]
   awaitingPersistedTurn: boolean
   ownsComposerStream: (key: string) => boolean
@@ -116,7 +117,7 @@ export type LiveTranscriptOverlayEffectContext = {
 export function runLiveTranscriptOverlayEffect(ctx: LiveTranscriptOverlayEffectContext) {
   const {
     selectedSessionTarget, sessionDetail, liveTranscriptBaselineRef, composerLiveText,
-    liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
+    liveTranscriptMessages, liveTranscriptMessagesForSession, awaitingPersistedTurn, ownsComposerStream,
     setLiveTranscriptMessages, persistedComposerMessages, liveToolIndexesRef, liveToolInputJsonRef,
     setComposerLiveText, setAwaitingPersistedTurn,
   } = ctx
@@ -146,7 +147,11 @@ export function runLiveTranscriptOverlayEffect(ctx: LiveTranscriptOverlayEffectC
     // poll-timed gap until the assistant finishes. Keep the echo until the
     // persisted user message is genuinely present (which also avoids a
     // duplicate, since echo and persisted row have different uuids).
-    if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
+    // Guard before dispatching from a layout effect. A no-op updater can still
+    // participate in nested React commits when other effects update state.
+    // Check the unfiltered overlay: the visible snapshot already hides echoes.
+    if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)
+      && visibleComposerMessages(liveTranscriptMessages, persistedComposerMessages).length < liveTranscriptMessages.length) {
       setLiveTranscriptMessages((prev) => {
         const next = visibleComposerMessages(prev, persistedComposerMessages)
         return next.length === prev.length ? prev : next
