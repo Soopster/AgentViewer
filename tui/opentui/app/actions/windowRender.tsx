@@ -38,6 +38,7 @@ import { FLOATING_PANE_INDEX } from '../layoutConstants'
 import { isLiveAssistantTextMessage } from '../liveStream'
 import { SPLIT_PANE_EMPTY_LIVE, type SplitPaneHandle, type TranscriptDiffControls, SplitTranscriptPane } from '../SplitTranscriptPane'
 import { WindowButton } from '../../WindowButton'
+import { SectionFrame } from '../borders'
 import { surfaceKindOf } from '../../windowSurfaceNames'
 import { isPopoverWindowKind } from '../../popoverWindows'
 import { surfaceWindowKey } from '../../windowOrder'
@@ -428,8 +429,9 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
   const focused = !hidden && splitFocusIndex === index
   const height = size.boxHeight ?? size.height
   return (
-    <box
+    <SectionFrame
       key={`surface-window:${surface}`}
+      theme={theme}
       id={place ? `surface-frame:${surface}` : `split-pane:${index}`}
       visible={!hidden}
       width={size.width}
@@ -449,6 +451,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
       border
       borderStyle="single"
       borderColor={focused ? theme.cyan : theme.border}
+      focused={focused}
       backgroundColor={theme.surface}
       title={` ${windowSurfaceTitle(surface)} `}
       titleColor={focused ? theme.cyan : theme.dim}
@@ -482,7 +485,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
         {renderSurfaceBody(surfaceKindOf(surface), { width: Math.max(10, size.width - 2), height: Math.max(3, height - 2) }, () => closeSurfaceWindow(surface), focused && !composerActive, surface)}
         </RetainedWindow>
       </box>
-    </box>
+    </SectionFrame>
   )
 }
 

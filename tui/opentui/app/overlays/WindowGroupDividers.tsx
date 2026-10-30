@@ -4,6 +4,7 @@ import type { TuiThemePalette } from '../../../theme'
 import React from 'react'
 import { type WindowGroupKey } from '../../windowLayout'
 import { join } from 'node:path'
+import { useBordersVisible } from '../borders'
 
 export function WindowGroupDividers({ fullscreenMode, windowZoom, windowSurfacePeek, fittedWindows, rectOf, hoveredWindowBorder, splitDividerDragging, setHoveredWindowBorder, setSplitDividerDragging, theme }: {
   fullscreenMode: boolean
@@ -17,6 +18,7 @@ export function WindowGroupDividers({ fullscreenMode, windowZoom, windowSurfaceP
   setSplitDividerDragging: React.Dispatch<React.SetStateAction<'primary' | 'secondary' | { group: WindowGroupKey; index: number; } | null>>
   theme: TuiThemePalette
 }) {
+  const bordersVisible = useBordersVisible()
   return (
     !fullscreenMode && windowZoom === null && !windowSurfacePeek ? fittedWindows.groups.flatMap((group) => group.members.slice(0, -1).map((member, index) => {
         const rect = rectOf(`split-pane:${member}`)
@@ -43,8 +45,8 @@ export function WindowGroupDividers({ fullscreenMode, windowZoom, windowSurfaceP
               setSplitDividerDragging({ group: group.key, index })
             }}
           >
-            <text fg={lit ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
-              {vertical ? Array.from({ length }, () => '│').join('\n') : '─'.repeat(length)}
+            <text fg={!bordersVisible ? theme.bg : lit ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
+              {vertical ? Array.from({ length }, () => bordersVisible ? '│' : ' ').join('\n') : (bordersVisible ? '─' : ' ').repeat(length)}
             </text>
           </box>
         )

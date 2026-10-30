@@ -2,8 +2,9 @@
 import React from 'react'
 import { getThemePalette, type TuiThemeMode } from '../../../theme'
 import { type ThemeMenuGroup, THEMES, isLightThemeMode, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from '../themes'
+import { SectionFrame } from '../borders'
 
-export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, themeMenuGroup, themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode, chooseTheme, themeFollowsTerminal }: {
+export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, themeMenuGroup, themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode, chooseTheme, themeFollowsTerminal, showBorders, toggleBorders }: {
   themeMenuOpen: boolean
   themeMenuOriginRef: React.RefObject<TuiThemeMode | null>
   height: number
@@ -16,6 +17,8 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
   setThemeMode: React.Dispatch<React.SetStateAction<TuiThemeMode>>
   chooseTheme: (nextTheme: TuiThemeMode) => void
   themeFollowsTerminal: boolean
+  showBorders: boolean
+  toggleBorders: () => void
 }) {
   return (
     themeMenuOpen ? (() => {
@@ -39,7 +42,8 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
             value: mode,
           }))
           return (
-            <box
+            <SectionFrame
+              theme={overlayTheme}
               position="absolute"
               top={focusMode ? 1 : 3}
               right={2}
@@ -120,10 +124,16 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
               <box height={1} paddingX={2} flexDirection="row">
                 <text fg={overlayTheme.cyan} wrapMode="none">tab </text>
                 <text fg={themeFollowsTerminal ? overlayTheme.text : overlayTheme.muted} wrapMode="none">
-                  {themeFollowsTerminal ? '● matching terminal' : '○ match terminal'}
+                  {themeFollowsTerminal ? '● terminal' : '○ terminal'}
                 </text>
+                <box flexDirection="row" onMouseDown={(event) => { if (event.button === 0) { event.stopPropagation(); toggleBorders() } }}>
+                  <text fg={overlayTheme.cyan} wrapMode="none"> · ⌃B </text>
+                  <text fg={showBorders ? overlayTheme.text : overlayTheme.muted} wrapMode="none">
+                    {showBorders ? 'borders ✓' : 'borders'}
+                  </text>
+                </box>
               </box>
-            </box>
+            </SectionFrame>
           )
         })() : null
   )

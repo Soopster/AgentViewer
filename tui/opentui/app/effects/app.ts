@@ -8,7 +8,7 @@ import { readTuiSurfacePanelPlacement, readTuiWindowArrangement } from '../../..
 import { type RefObject } from 'react'
 import { type CliRenderer } from '@opentui/core'
 import { setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../../../theme'
-import { readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSidebarSort, readTuiHideScratchSessions, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../../../lib/tui/service'
+import { readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiBorders, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSidebarSort, readTuiHideScratchSessions, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../../../lib/tui/service'
 import { type ProviderSelection } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
 import { type PaneFocus, type NoticeTone } from '../types'
@@ -71,6 +71,7 @@ export type ThemeFollowEffectContext = {
   setFocusMode: React.Dispatch<React.SetStateAction<boolean>>
   setStickyHeaders: React.Dispatch<React.SetStateAction<boolean>>
   setLightweightWindows: React.Dispatch<React.SetStateAction<boolean>>
+  setShowBorders: React.Dispatch<React.SetStateAction<boolean>>
   setDensity: React.Dispatch<React.SetStateAction<TuiDensity>>
   setDiffLayout: React.Dispatch<React.SetStateAction<TuiDiffLayout>>
   setTranscriptView: React.Dispatch<React.SetStateAction<TuiTranscriptView>>
@@ -97,7 +98,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
     showNotice, themeSlotsRef, themeFollowsTerminalRef, setThemeFollowsTerminal, renderer,
     setThemeMode, workspaceContext, provider, providerInstanceId, providerInstanceIdRef,
     setProviderInstanceId, setProviderInstances, setProvider, setRailVisible, setFocusMode,
-    setStickyHeaders, setLightweightWindows, setDensity, setDiffLayout, setTranscriptView,
+    setStickyHeaders, setLightweightWindows, setShowBorders, setDensity, setDiffLayout, setTranscriptView,
     setTranscriptWidth, setTabsEnabled, setTabOrientation, setSidebarSort, setHideScratch,
     setSidebarWidthPreference, setShowToolCalls, setVelocityScrollEnabled, setSplitPaneCount,
     setSplitOrientation, setSplitReaderShare, setFocusedPane, refreshSessions, setError,
@@ -129,6 +130,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
         configuredStickyHeaders,
         configuredThemeFollow,
         configuredLightweightWindows,
+        configuredBorders,
       ] = await Promise.all([
         readTuiTheme(),
         readTuiProvider(),
@@ -151,6 +153,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
         readTuiStickyHeaders(),
         readTuiThemeFollow(),
         readTuiLightweightWindows(),
+        readTuiBorders(),
       ])
       if (cancelled) return
       // Attached to a daemon that may be older than this client: say so once,
@@ -187,6 +190,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
       setFocusMode(configuredFocusMode)
       setStickyHeaders(configuredStickyHeaders)
       setLightweightWindows(configuredLightweightWindows)
+      setShowBorders(configuredBorders)
       setDensity(configuredDensity)
       setDiffLayout(configuredDiffLayout)
       setTranscriptView(configuredTranscriptView)

@@ -18,6 +18,7 @@ import {
   getConfiguredTuiFocusMode,
   getConfiguredTuiStickyHeaders,
   getConfiguredTuiLightweightWindows,
+  getConfiguredTuiBorders,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
   getConfiguredTuiSidebarSort,
@@ -40,6 +41,7 @@ import {
   setConfiguredTuiFocusMode,
   setConfiguredTuiStickyHeaders,
   setConfiguredTuiLightweightWindows,
+  setConfiguredTuiBorders,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
   setConfiguredTuiSidebarSort,
@@ -332,6 +334,14 @@ export async function readTuiRailVisible(): Promise<boolean> {
 
 export async function writeTuiRailVisible(railVisible: boolean): Promise<void> {
   await setConfiguredTuiRailVisible(railVisible)
+}
+
+export async function readTuiBorders(): Promise<boolean> {
+  return getConfiguredTuiBorders()
+}
+
+export async function writeTuiBorders(borders: boolean): Promise<void> {
+  await setConfiguredTuiBorders(borders)
 }
 
 export async function readTuiSidebarWidth(): Promise<number> {

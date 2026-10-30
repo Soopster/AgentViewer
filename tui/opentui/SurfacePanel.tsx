@@ -12,6 +12,7 @@ import {
 } from '../../lib/rightPanel'
 import { activeSurface, type SurfacePanelState, type TuiSurface } from './surfacePanelState'
 import { WindowButton } from './WindowButton'
+import { SectionFrame, useBordersVisible } from './app/borders'
 
 export type SurfacePanelKey = {
   name: string
@@ -163,6 +164,7 @@ export function SurfacePanel({
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
   const innerWidth = Math.max(10, width - 2)
+  const bordersVisible = useBordersVisible()
   const title = ` Panel${placement === 'bottom' ? ' · under' : ''}${expanded ? ' · expanded' : ''} `
   // Under the reader the handle is the top border, which carries the title; it starts after it.
   const handleLeft = placement === 'bottom' ? title.length + 1 : 0
@@ -179,12 +181,14 @@ export function SurfacePanel({
   const surfaceHeight = Math.max(3, height - 3)
 
   return (
-    <box
+    <SectionFrame
+      theme={theme}
       width={width}
       height={height}
       border
       borderStyle="single"
       borderColor={focused ? theme.cyan : theme.border}
+      focused={focused}
       backgroundColor={theme.surface}
       flexDirection="column"
       onMouseDown={(event: { button: number; stopPropagation?: () => void }) => {
@@ -214,10 +218,10 @@ export function SurfacePanel({
               so without cells of its own it would take no drags at all. */}
           {/* Not selectable: a press here would also start a text selection, and
               the release would copy a run of border glyphs to the clipboard. */}
-          <text fg={focused ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
+          <text fg={!bordersVisible ? theme.bg : focused ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
             {placement === 'bottom'
-              ? '─'.repeat(Math.max(1, width - 2 - handleLeft))
-              : Array.from({ length: Math.max(1, height - 2) }, () => '│').join('\n')}
+              ? (bordersVisible ? '─' : ' ').repeat(Math.max(1, width - 2 - handleLeft))
+              : Array.from({ length: Math.max(1, height - 2) }, () => bordersVisible ? '│' : ' ').join('\n')}
           </text>
         </box>
       ) : null}
@@ -291,7 +295,7 @@ export function SurfacePanel({
       ) : active ? (
         renderSurface(active, { width: innerWidth, height: surfaceHeight })
       ) : null}
-    </box>
+    </SectionFrame>
   )
 }
 

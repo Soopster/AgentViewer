@@ -173,6 +173,7 @@ type TuiState = {
   themeLight?: unknown
   themeDark?: unknown
   railVisible?: unknown
+  borders?: unknown
   sidebarWidth?: unknown
   focusMode?: unknown
   stickyHeaders?: unknown
@@ -345,6 +346,15 @@ export async function getConfiguredTuiRailVisible(): Promise<boolean> {
 
 export async function setConfiguredTuiRailVisible(railVisible: boolean): Promise<void> {
   await writeTuiState({ railVisible })
+}
+
+export async function getConfiguredTuiBorders(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.borders !== false
+}
+
+export async function setConfiguredTuiBorders(borders: boolean): Promise<void> {
+  await writeTuiState({ borders })
 }
 
 export async function getConfiguredTuiSidebarWidth(): Promise<number> {

@@ -193,6 +193,8 @@ type WorkspaceBodyProps = {
   setThemeMode: React.Dispatch<React.SetStateAction<TuiThemeMode>>
   chooseTheme: (nextTheme: TuiThemeMode) => void
   themeFollowsTerminal: boolean
+  showBorders: boolean
+  toggleBorders: () => void
   transcriptViewMenuOpen: boolean
   transcriptViewMenuOriginRef: React.RefObject<TuiTranscriptView | null>
   transcriptViewMenuIndex: number
@@ -250,7 +252,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     applyModelPickerPermission, modelPickerFocusedLabel, modelPickerFocusedOption,
     modelPickerFocusedDescription, themeMenuOpen, themeMenuOriginRef, themeMenuGroup,
     themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode,
-    chooseTheme, themeFollowsTerminal, transcriptViewMenuOpen, transcriptViewMenuOriginRef,
+    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, transcriptViewMenuOpen, transcriptViewMenuOriginRef,
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, setTranscriptView, chooseTranscriptView,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
     commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery,
@@ -437,7 +439,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           )}
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
-            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab}
+            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab && showBorders}
             foreground={theme.cyan} background={theme.surface}
             inactiveForeground={theme.border} inactiveBackground={theme.bg} />
 
@@ -474,7 +476,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <SelectMenusOverlay themeMode={themeMode} theme={theme} providerMenuOpen={providerMenuOpen} presentationFocusMode={presentationFocusMode} providerOptions={providerOptions} providerMenuIndex={providerMenuIndex} setProviderMenuIndex={setProviderMenuIndex} chooseProvider={chooseProvider} modelPickerOpen={modelPickerOpen} width={width} height={height} composerAccentColor={composerAccentColor} modelPickerTarget={modelPickerTarget} modelPickerPermissionLabel={modelPickerPermissionLabel} modelPickerOptions={modelPickerOptions} modelPickerIndex={modelPickerIndex} composerCopilotContextTier={composerCopilotContextTier} modelPickerFocus={modelPickerFocus} filteredModelPickerOptions={filteredModelPickerOptions} modelPickerLoading={modelPickerLoading} modelPickerError={modelPickerError} modelPickerQuery={modelPickerQuery} setModelPickerQuery={setModelPickerQuery} setModelPickerIndex={setModelPickerIndex} applyModelPickerOption={applyModelPickerOption} compactModelPickerEffortOptions={compactModelPickerEffortOptions} modelPickerEffortIndex={modelPickerEffortIndex} setModelPickerEffortIndex={setModelPickerEffortIndex} applyModelPickerEffort={applyModelPickerEffort} compactModelPickerPermissionOptions={compactModelPickerPermissionOptions} modelPickerPermissionIndex={modelPickerPermissionIndex} setModelPickerPermissionIndex={setModelPickerPermissionIndex} applyModelPickerPermission={applyModelPickerPermission} modelPickerFocusedLabel={modelPickerFocusedLabel} modelPickerFocusedOption={modelPickerFocusedOption} modelPickerFocusedDescription={modelPickerFocusedDescription} />
 
-        <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} />
+        <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} showBorders={showBorders} toggleBorders={toggleBorders} />
 
         <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} transcriptViewMenuOriginRef={transcriptViewMenuOriginRef} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} setTranscriptView={setTranscriptView} chooseTranscriptView={chooseTranscriptView} lightweightWindows={lightweightWindows} />
 

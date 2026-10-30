@@ -10,6 +10,7 @@ import { fitText } from '../../textLayout'
 import { Slot } from '../../slots'
 import { type SidebarEntry, type PaneFocus } from '../types'
 import { Spinner } from '../chrome'
+import { SectionFrame } from '../borders'
 
 export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements }: {
   showRail: boolean
@@ -44,8 +45,10 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
 }) {
   return (
     showRail ? (
-          <box
+          <SectionFrame
             id="session-rail"
+            theme={theme}
+            surface={theme.surface}
             width={sidebarWidth}
             height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined}
             flexShrink={0}
@@ -53,6 +56,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
             borderStyle="single"
             borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
+            focused={effectiveFocus === 'sessions'}
             backgroundColor={theme.surface}
             flexDirection="column"
             title={sidebarView === 'coordinator' ? coordinatorSidebarHeader : undefined}
@@ -139,7 +143,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
                 </scrollbox>
               )}
             </box>
-          </box>
+          </SectionFrame>
         ) : null
   )
 }

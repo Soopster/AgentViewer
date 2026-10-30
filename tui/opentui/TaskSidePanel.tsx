@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useMemo } from 'react'
 import type { TuiThemePalette } from '../theme'
+import { SectionFrame } from './app/borders'
 import type { ThreadedMessage, ToolThread } from '../../lib/threading'
 import type { Session } from '../../lib/types'
 import {
@@ -259,7 +260,8 @@ export function TaskSidePanel({
     : (inProgressCount > 0 || runningWorkflowCount > 0 ? theme.amber : blockedCount > 0 ? theme.red : doneCount === registry.size && registry.size > 0 ? theme.green : theme.cyan)
 
   return (
-    <box
+    <SectionFrame
+      theme={theme}
       width={width}
       height={height}
       border
@@ -504,6 +506,6 @@ export function TaskSidePanel({
         )}
       </box>
 
-    </box>
+    </SectionFrame>
   )
 }

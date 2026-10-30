@@ -4,6 +4,7 @@ import { LayoutEvents, type MouseEvent, type ScrollBoxRenderable, type TabSelect
 import { useRenderer } from '@opentui/react'
 import type { TuiThemePalette } from '../theme'
 import { fitText } from './textLayout'
+import { SectionFrame } from './app/borders'
 
 const FRAMES = ['◐', '◓', '◑', '◒']
 
@@ -47,7 +48,7 @@ export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, r
     timer = setTimeout(reveal, 0)
     return () => { clearTimeout(timer); renderer.root.off(LayoutEvents.LAYOUT_CHANGED, afterLayout) }
   }, [activeIndex, options.length, height, renderer])
-  return <box id="vertical-tabs" width={width} height={height} flexShrink={0} flexDirection="column" border={['right']} borderColor={theme.border2} backgroundColor={theme.surface}>
+  return <SectionFrame theme={theme} id="vertical-tabs" width={width} height={height} flexShrink={0} flexDirection="column" border={['right']} borderColor={theme.border2} backgroundColor={theme.surface}>
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1}>
       <text fg={theme.dim} wrapMode="none">Tabs</text>
       <box flexGrow={1} />
@@ -70,5 +71,5 @@ export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, r
         </box>
       })}
     </scrollbox>
-  </box>
+  </SectionFrame>
 })

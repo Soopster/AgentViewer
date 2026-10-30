@@ -3,6 +3,7 @@ import type { WindowLayout } from '../../windowLayout'
 import type { TuiThemePalette } from '../../../theme'
 import React from 'react'
 import { type WindowGroupKey, type WindowArrangement } from '../../windowLayout'
+import { useBordersVisible } from '../borders'
 
 type GridSecondDividerProps = {
   arrangedVisible: boolean
@@ -25,6 +26,7 @@ export function GridSecondDivider(props: GridSecondDividerProps) {
     windowAreaRect, setSecondaryDividerHovered, setSplitDividerDragging, secondaryDividerHovered,
     splitDividerDragging, theme,
   } = props
+  const bordersVisible = useBordersVisible()
   return (
     (() => {
         // The second divider: the grid's row split (the reader's bottom border).
@@ -53,8 +55,8 @@ export function GridSecondDivider(props: GridSecondDividerProps) {
               setSplitDividerDragging('secondary')
             }}
           >
-            <text fg={secondaryDividerHovered || splitDividerDragging === 'secondary' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
-              {'─'.repeat(Math.max(1, span - 2))}
+            <text fg={!bordersVisible ? theme.bg : secondaryDividerHovered || splitDividerDragging === 'secondary' ? theme.cyan : theme.border} wrapMode="none" selectable={false}>
+              {(bordersVisible ? '─' : ' ').repeat(Math.max(1, span - 2))}
             </text>
           </box>
         )

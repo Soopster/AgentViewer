@@ -41,7 +41,7 @@ export function handleOverlayAndMenuKeys({
   filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex,
   setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
   themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-  toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu,
+  toggleThemeFollowsTerminal, toggleBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
   toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
   filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
   transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -120,6 +120,7 @@ export function handleOverlayAndMenuKeys({
   chooseTheme: (nextTheme: TuiThemeMode) => void
   closeThemeMenu: () => void
   toggleThemeFollowsTerminal: () => void
+  toggleBorders: () => void
   transcriptViewMenuOpen: boolean
   closeTranscriptViewMenu: () => void
   toggleLightweightWindows: () => void
@@ -424,6 +425,10 @@ export function handleOverlayAndMenuKeys({
       }
       if (key.name === 'tab') {
         handled(toggleThemeFollowsTerminal)
+        return true
+      }
+      if (isCtrl('b')) {
+        handled(toggleBorders)
         return true
       }
       if (isCtrl('c')) {

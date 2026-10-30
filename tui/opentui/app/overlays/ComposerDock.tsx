@@ -13,6 +13,7 @@ import { TeammatesAttention } from '../../TeammatesAttention'
 import { type InlineTextSegment, renderInlineTextSegments, DraftLengthSpans } from '../inlineText'
 import { fitHintText } from '../contextMeter'
 import { ComposerWaitingStatus } from '../chrome'
+import { SectionFrame } from '../borders'
 
 type ComposerDockProps = {
   composerWindowOpen: boolean
@@ -82,8 +83,10 @@ export function ComposerDock(props: ComposerDockProps) {
   } = props
   return (
     !composerWindowOpen && !composerHidden && !presentationHidesComposer && !embeddedComposer ? (
-        <box
+        <SectionFrame
           id="composer-dock"
+          theme={theme}
+          surface={composerDockBackground}
           marginLeft={composerAreaOffset}
           width={composerAreaWidth}
           paddingX={1}
@@ -94,6 +97,7 @@ export function ComposerDock(props: ComposerDockProps) {
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
           borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
+          focused={composerDockEmphasized}
           title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage
             ? fitText(composerTargetMessage, composerDockTitleWidth)
             : isChatLikeView ? undefined : composerDockBorderTitle}
@@ -174,7 +178,7 @@ export function ComposerDock(props: ComposerDockProps) {
               </text>
             </box>
           </box>
-        </box>
+        </SectionFrame>
       ) : null
   )
 }

@@ -133,7 +133,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -281,6 +281,7 @@ import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 import { ComposerStatusMessage } from './app/overlays/ComposerStatusMessage'
 import { FloatingWindowLayer } from './app/overlays/FloatingWindowLayer'
 import { ThemeMenuOverlay } from './app/overlays/ThemeMenuOverlay'
+import { BordersContext, SectionFrame } from './app/borders'
 import { CommandPaletteOverlay } from './app/overlays/CommandPaletteOverlay'
 import { ChordHelpOverlay } from './app/overlays/ChordHelpOverlay'
 import { TranscriptViewMenuOverlay } from './app/overlays/TranscriptViewMenuOverlay'
@@ -466,7 +467,7 @@ function OpenTuiWorkspace() {
   const {
     provider, setProvider, providerInstanceId, setProviderInstanceId, providerInstanceIdRef,
     providerInstances, setProviderInstances, themeMode, setThemeMode, themeFollowsTerminal,
-    setThemeFollowsTerminal, terminalPaletteEpoch, setTerminalPaletteEpoch,
+    setThemeFollowsTerminal, showBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
     themeFollowsTerminalRef, themeSlotsRef, density, setDensity, diffLayout, setDiffLayout,
     transcriptDiffNotes, setTranscriptDiffNotes, transcriptDiffDraft, setTranscriptDiffDraft,
     pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt, hoveredTranscriptDiffAnchor,
@@ -2288,6 +2289,14 @@ function OpenTuiWorkspace() {
     }
   })
 
+  const toggleBorders = useStableEvent(() => {
+    const next = !showBorders
+    setShowBorders(next)
+    void writeTuiBorders(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store border setting')
+    })
+  })
+
   const openTranscriptViewMenu = useStableEvent(() => {
     transcriptViewMenuOriginRef.current = transcriptView
     setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
@@ -3377,7 +3386,7 @@ function OpenTuiWorkspace() {
     showNotice, themeSlotsRef, themeFollowsTerminalRef, setThemeFollowsTerminal, renderer,
     setThemeMode, workspaceContext, provider, providerInstanceId, providerInstanceIdRef,
     setProviderInstanceId, setProviderInstances, setProvider, setRailVisible, setFocusMode,
-    setStickyHeaders, setLightweightWindows, setDensity, setDiffLayout, setTranscriptView,
+    setStickyHeaders, setLightweightWindows, setShowBorders, setDensity, setDiffLayout, setTranscriptView,
     setTranscriptWidth, setTabsEnabled, setTabOrientation, setSidebarSort, setHideScratch,
     setSidebarWidthPreference, setShowToolCalls, setVelocityScrollEnabled, setSplitPaneCount,
     setSplitOrientation, setSplitReaderShare, setFocusedPane, refreshSessions, setError,
@@ -5557,7 +5566,7 @@ function OpenTuiWorkspace() {
       modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey,
       themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef,
       setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-      toggleThemeFollowsTerminal, transcriptViewMenuOpen, closeTranscriptViewMenu,
+      toggleThemeFollowsTerminal, toggleBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
       toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
       filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
       transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -5859,8 +5868,9 @@ function OpenTuiWorkspace() {
         const tabWidthCells = Math.max(1, windowZoom === 'reader' ? readerAreaWidth : fittedWindows.reader.width)
         const tabHeightCells = Math.max(1, windowZoom === 'reader' ? windowAreaHeight : fittedWindows.reader.height)
         return (
-          <box id="popover-tab-frame" flexGrow={1} width={tabWidthCells} height={tabHeightCells} flexShrink={0} flexDirection="column"
+          <SectionFrame id="popover-tab-frame" theme={theme} flexGrow={1} width={tabWidthCells} height={tabHeightCells} flexShrink={0} flexDirection="column"
             border borderStyle="single" borderColor={popoverTabFocused ? theme.cyan : theme.border}
+            focused={popoverTabFocused}
             backgroundColor={theme.surface} title={` ${windowSurfaceTitle(shownPopoverTab)} `} titleColor={popoverTabFocused ? theme.cyan : theme.dim}
             onMouseDrag={(event) => sessionDragHandlers.move(event)}
             onMouseUp={(event) => sessionDragHandlers.release(event)}
@@ -5886,7 +5896,7 @@ function OpenTuiWorkspace() {
             <box flexGrow={1} overflow="hidden">
               {renderSurfaceBody(kind, { width: tabWidthCells - 2, height: tabHeightCells - 2 }, () => closePopoverTab(shownPopoverTab), popoverTabFocused && !composerActive, shownPopoverTab)}
             </box>
-          </box>
+          </SectionFrame>
         )
   }
 
@@ -5905,6 +5915,7 @@ function OpenTuiWorkspace() {
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
   const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
   return (
+    <BordersContext.Provider value={showBorders}>
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
       {workspacesEnabled && !fullscreenMode ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
@@ -6066,6 +6077,8 @@ function OpenTuiWorkspace() {
         setThemeMode={setThemeMode}
         chooseTheme={chooseTheme}
         themeFollowsTerminal={themeFollowsTerminal}
+        showBorders={showBorders}
+        toggleBorders={toggleBorders}
         transcriptViewMenuOpen={transcriptViewMenuOpen}
         transcriptViewMenuOriginRef={transcriptViewMenuOriginRef}
         transcriptViewMenuIndex={transcriptViewMenuIndex}
@@ -6506,7 +6519,7 @@ function OpenTuiWorkspace() {
           zIndex={40} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); treeDividerActivePathRef.current = divider.path; treeDividerCheckpointedRef.current = false; setTreeDividerDrag(divider.path) } }}
           onMouseDrag={event => { event.stopPropagation(); dragTreeDivider(divider.path, event) }}
           onMouseUp={event => { event.stopPropagation(); dragTreeDivider(divider.path, event); treeDividerActivePathRef.current = null; treeDividerCheckpointedRef.current = false; setTreeDividerDrag(null) }}>
-          <text fg={treeDividerDrag === divider.path ? theme.cyan : theme.border} selectable={false} wrapMode="none">{vertical ? Array(Math.max(1, divider.rect.height - 2)).fill('│').join('\n') : '─'.repeat(Math.max(1, divider.rect.width - 2))}</text>
+          <text fg={!showBorders ? theme.bg : treeDividerDrag === divider.path ? theme.cyan : theme.border} selectable={false} wrapMode="none">{vertical ? Array(Math.max(1, divider.rect.height - 2)).fill(showBorders ? '│' : ' ').join('\n') : (showBorders ? '─' : ' ').repeat(Math.max(1, divider.rect.width - 2))}</text>
         </box>
       }) : null}
       {treeDividerDrag !== null ? <box id="tree-divider-drag" position="absolute" left={0} top={0} width={width} height={height}
@@ -6778,5 +6791,6 @@ function OpenTuiWorkspace() {
 
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
     </box>
+    </BordersContext.Provider>
   )
 }

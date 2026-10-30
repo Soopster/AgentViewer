@@ -14,7 +14,7 @@ export function useProviderGroup() {
   const {
     provider, setProvider, providerInstanceId, setProviderInstanceId, providerInstanceIdRef,
     providerInstances, setProviderInstances, themeMode, setThemeMode, themeFollowsTerminal,
-    setThemeFollowsTerminal, terminalPaletteEpoch, setTerminalPaletteEpoch,
+    setThemeFollowsTerminal, showBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
     themeFollowsTerminalRef, themeSlotsRef, density, setDensity, diffLayout, setDiffLayout,
     transcriptDiffNotes, setTranscriptDiffNotes, transcriptDiffDraft, setTranscriptDiffDraft,
     pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt, hoveredTranscriptDiffAnchor,
@@ -89,7 +89,7 @@ export function useProviderGroup() {
   return {
     provider, setProvider, providerInstanceId, setProviderInstanceId, providerInstanceIdRef,
     providerInstances, setProviderInstances, themeMode, setThemeMode, themeFollowsTerminal,
-    setThemeFollowsTerminal, terminalPaletteEpoch, setTerminalPaletteEpoch,
+    setThemeFollowsTerminal, showBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
     themeFollowsTerminalRef, themeSlotsRef, density, setDensity, diffLayout, setDiffLayout,
     transcriptDiffNotes, setTranscriptDiffNotes, transcriptDiffDraft, setTranscriptDiffDraft,
     pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt, hoveredTranscriptDiffAnchor,

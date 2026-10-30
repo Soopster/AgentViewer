@@ -33,6 +33,7 @@ import { transcriptAccent, turnSummaryMouseProps, streamLandmarkText, streamComp
 import { readerRowCard, findReaderCard } from './readerRows'
 import { agentToolCardsFor, stickyPromptText, groupStreamToolCards, isStreamGhostCard, visibleCardsForTranscriptView, resolveExpandedCardKeys, cardFoldsByDefault, scrollbackParkedCursorKey } from './transcriptRows'
 import { type ReaderScrollFixup, type ReaderWindowGauge, type ReaderWindowOutput, type TranscriptWindowInputs, useReaderWindowSliding, TranscriptWindowBody } from './TranscriptWindowBody'
+import { SectionFrame } from './borders'
 
 // A side-panel surface, or a popover broken out into a window (popoverWindows.ts).
 // A surface window's id is its kind, or `kind#n` for a further one of a kind
@@ -951,7 +952,8 @@ export function SplitTranscriptPaneInner({
   }
 
   return (
-    <box
+    <SectionFrame
+      theme={theme}
       width={width}
       height={height}
       border={frameless ? [] : ['top', 'left', 'right', 'bottom']}
@@ -959,6 +961,7 @@ export function SplitTranscriptPaneInner({
       // Focused frame lights in the provider accent, exactly like the reader
       // and sidebar — one visual language for "this pane has the keyboard".
       borderColor={focused ? theme.cyan : theme.border}
+      focused={focused}
       backgroundColor={theme.surface}
       flexDirection="column"
       // Number the frame whenever more than one is mounted: ⌃B 1/⌃B 2 jump
@@ -1063,7 +1066,7 @@ export function SplitTranscriptPaneInner({
             : fitText(`⌃B ${paneNumber} focus  ·  ⌃B n next session`, innerWidth - 2)).trimEnd()} `}
         </text>
       </box>
-    </box>
+    </SectionFrame>
   )
 }
 

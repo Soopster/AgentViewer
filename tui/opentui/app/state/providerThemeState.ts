@@ -16,6 +16,7 @@ export function useProviderThemeState() {
   const [providerInstances, setProviderInstances] = useState<TuiProviderInstanceChoice[]>([])
   const [themeMode, setThemeMode] = useAppState<TuiThemeMode>('themeMode', 'light')
   const [themeFollowsTerminal, setThemeFollowsTerminal] = useAppState('themeFollowsTerminal', false)
+  const [showBorders, setShowBorders] = useAppState('showBorders', true)
   // Bumped when the terminal's reported colours change, which is what the
   // terminal-palette theme is made of.
   const [terminalPaletteEpoch, setTerminalPaletteEpoch] = useState(0)
@@ -39,7 +40,7 @@ export function useProviderThemeState() {
   return {
     provider, setProvider, providerInstanceId, setProviderInstanceId, providerInstanceIdRef,
     providerInstances, setProviderInstances, themeMode, setThemeMode, themeFollowsTerminal,
-    setThemeFollowsTerminal, terminalPaletteEpoch, setTerminalPaletteEpoch,
+    setThemeFollowsTerminal, showBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
     themeFollowsTerminalRef, themeSlotsRef, density, setDensity, diffLayout, setDiffLayout,
     transcriptDiffNotes, setTranscriptDiffNotes, transcriptDiffDraft, setTranscriptDiffDraft,
     pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt, hoveredTranscriptDiffAnchor,
