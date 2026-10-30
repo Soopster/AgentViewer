@@ -216,9 +216,12 @@ Options:
   --no-mouse           Leave the mouse to the terminal, so its native selection
                        works (tmux, SSH). Keyboard scrolling still works.
                        Env: AGENT_VIEWER_DISABLE_MOUSE=1
+  Rendering pace:      60 FPS on Windows, 120 elsewhere; tune with
+                       AGENT_VIEWER_TUI_MAX_FPS=10..240 (default is on-demand).
   --full-repaint       Repaint every cell each frame instead of only changed ones,
                        for terminals that leave stale fragments (Windows
-                       Terminal / ConPTY). Env: AGENT_VIEWER_FULL_REPAINT=1
+                       Terminal / ConPTY). Increases output volume.
+                       Env: AGENT_VIEWER_FULL_REPAINT=1
 
 Pairing a phone:
   agent-viewer pair                       # against a daemon on port 3000

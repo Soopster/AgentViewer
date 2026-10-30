@@ -1,3 +1,4 @@
+import { TUI_RENDER_POLICY } from '../renderPolicy'
 export const SEARCH_MAX_CHARS = 80
 export const SESSION_REFRESH_MS = 5000
 export const DETAIL_REFRESH_MS = 2000
@@ -103,6 +104,6 @@ export const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
 // schedule a flush with no React commit to drive a frame), freezing the preview
 // after the first token. A timer is render-loop-independent and each flush's
 // setState drives a repaint.
-export const LIVE_TEXT_FLUSH_MS = 16
+export const LIVE_TEXT_FLUSH_MS = TUI_RENDER_POLICY.liveTextFlushMs
 export const MAX_CODE_BLOCK_RENDER_LINES = 240
 export const MAX_MARKDOWN_SYNTAX_CHARS = 80000

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { readReaderLayout } from '../readerLayout'
+import { readReaderLayout, measureReaderRowHeights } from '../readerLayout'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { logCardRecompute } from '../metricsLogger'
 import { LayoutEvents, type Renderable, type ScrollBoxRenderable } from '@opentui/core'
@@ -349,13 +349,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       const sb = transcriptScrollRef.current
       if (!sb) return
       const rows = (sb.content.getChildren() as Renderable[]).filter(row => readerRowKey(row))
-      for (let relative = 0; relative < rows.length; relative++) {
-        const row = rows[relative]!
-        const index = readerWindowOutputRef.current.start + relative
-        if (index >= rowIndex.length) break
-        const next = rows[relative + 1]
-        rowIndex.update(index, next ? next.y - row.y : row.height + densityState.cardGap)
-      }
+      measureReaderRowHeights(rows, readerWindowOutputRef.current.start, rowIndex, densityState.cardGap)
     }
     renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
     return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }

@@ -1,3 +1,4 @@
+import { createLiveTextBatch } from '../../liveTextBatch'
 import { prepareComposerTurnRequest } from '../../../../lib/composerSubmission'
 import { acknowledgeComposerMessage } from '../../../../lib/composerTranscript'
 import { planComposerRetry } from '../../../../lib/composerRetry'
@@ -163,7 +164,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
     canUseChannelBridge, selectedSessionTarget, routeComposerToBridgeRef, lastBridgeChatIdRef,
     setBridgeTranscriptEntries, canUseIdeBridge, routeComposerToIdeRef, composerAbortRef,
     composerRetryTimerRef, activeComposerTurnRequestIdRef, setSteeredSendNotice,
-    steeredEchoCounterRef, steeredComposerSendsRef, setLiveTranscriptMessages,
+    steeredEchoCounterRef, steeredComposerSendsRef, setLiveTranscriptMessages: publishLiveTranscriptMessages,
     composerRetryCountRef, composerTurnProducedOutputRef, writeWorkspaceDraft,
     activeComposerSendCleanupRef, setComposerSendState, setComposerSendStartedAt,
     setComposerWaitingSeed, setComposerError, flushLiveText, pendingLiveTextRef,
@@ -185,6 +186,11 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
     readWorkspaceDraftParts, restoreComposerPromptPartExtmarks, clearSessionRunning,
     exitInProgressRef,
   } = ctx
+  const liveTextBatch = createLiveTextBatch(publishLiveTranscriptMessages, LIVE_TEXT_FLUSH_MS)
+  const setLiveTranscriptMessages: typeof publishLiveTranscriptMessages = (update) => {
+    liveTextBatch.flush()
+    publishLiveTranscriptMessages(update)
+  }
   const isCurrentTarget = () => Boolean(composerTargetSessionRef.current && composerTargetSession && composerSessions.same(sessionKey(composerTargetSessionRef.current), sessionKey(composerTargetSession)))
   const project = <Args extends unknown[]>(action: (...args: Args) => void) => (...args: Args) => { if (isCurrentTarget()) action(...args) }
   const setComposerDraft = project(composerViewActions.setComposerDraft)
@@ -1127,13 +1133,10 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
         if (textBlockIndex != null) {
           const blockText = `${claudeLiveTextByIndex.get(textBlockIndex) ?? ''}${delta}`
           claudeLiveTextByIndex.set(textBlockIndex, blockText)
-          setLiveTranscriptMessages((prev) => upsertThreadedMessage(
-            prev,
-            makeLiveAssistantTextMessage(
-              targetSession,
-              blockText,
-              `${CLAUDE_LIVE_ASSISTANT_UUID_PREFIX}${textBlockIndex}`,
-            ),
+          liveTextBatch.push(makeLiveAssistantTextMessage(
+            targetSession,
+            blockText,
+            `${CLAUDE_LIVE_ASSISTANT_UUID_PREFIX}${textBlockIndex}`,
           ))
         }
       } else if (targetSession.provider === 'codex') {
@@ -1142,13 +1145,10 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
           codexLiveMessageAccumulator = shouldReplaceCodexVisibleAssistantText(parsed)
             ? visibleText
             : `${codexLiveMessageAccumulator}${visibleText}`
-          setLiveTranscriptMessages((prev) => upsertThreadedMessage(
-            prev,
-            makeLiveAssistantTextMessage(
-              targetSession,
-              codexLiveMessageAccumulator,
-              CODEX_LIVE_ASSISTANT_UUID,
-            ),
+          liveTextBatch.push(makeLiveAssistantTextMessage(
+            targetSession,
+            codexLiveMessageAccumulator,
+            CODEX_LIVE_ASSISTANT_UUID,
           ))
         }
       } else {
@@ -1157,10 +1157,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
           ? delta
           : `${providerLiveTextByKey.get(liveMessageKey) ?? ''}${delta}`
         providerLiveTextByKey.set(liveMessageKey, liveMessageText)
-        setLiveTranscriptMessages((prev) => upsertThreadedMessage(
-          prev,
-          makeLiveAssistantTextMessage(targetSession, liveMessageText, liveMessageKey),
-        ))
+        liveTextBatch.push(makeLiveAssistantTextMessage(targetSession, liveMessageText, liveMessageKey))
       }
       pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
       liveTextTargetSessionRef.current = targetSession
@@ -1227,6 +1224,8 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
         handleFrame(frame)
       }
     }
+
+    liveTextBatch.flush()
 
     if (targetSession.provider === 'copilot' && !copilotFinalMessageSeen && replyAccumulator.trim()) {
       setLiveTranscriptMessages((prev) => upsertThreadedMessage(
@@ -1307,6 +1306,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       }
     }
   } catch (err) {
+    liveTextBatch.flush()
     // An interrupt aborts this controller, but the provider's reaction (Claude
     // sends an error frame for the cut-off turn) can land before the abort
     // does. Whatever error follows our own abort is the interrupt, not a
@@ -1442,6 +1442,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
     setComposerPromptParts(restoredParts)
     restoreComposerPromptPartExtmarks(restoredParts, restoredDraft)
   } finally {
+    liveTextBatch.cancel()
     void reader?.cancel().catch(() => {})
     composerAbortRef.current = null
     if (activeComposerTurnRequestIdRef.current === turnRequestId) {

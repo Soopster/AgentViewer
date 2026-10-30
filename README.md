@@ -453,6 +453,19 @@ Session and tool windows share the same title menu (`≡`, right-click, or `Ctrl
 
 Press `Ctrl+Shift+N` anywhere in the OpenTUI app to launch a coordinated workflow directly, or `Ctrl+Shift+A` to open Agent Operations first and press `n` from there. The launcher creates a lead that decomposes the request, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard. Teammates use isolated git worktrees by default; turn off **Isolate teammates in git worktrees** in the launcher only when they should deliberately share the current checkout.
 
+OpenTUI limits on-demand rendering to 60 FPS on Windows and 120 FPS elsewhere. Linux/WSL sessions also use Windows pacing when Windows Terminal passes `WT_SESSION` through. Streaming text is coalesced before updating transcript cards (about 34 ms on Windows, 16 ms on macOS). Set `AGENT_VIEWER_TUI_MAX_FPS` to a number from 10 to 240 to tune the cap; 30 or 60 can reduce output pressure in a slow terminal. Idle screens still render only when needed. `--full-repaint` is a workaround for stale fragments: it writes the whole screen each frame and can make streaming, scrolling, and resizing slower. Leave it off unless needed for display correctness.
+
+For a reproducible Windows Terminal output comparison, run this in PowerShell from the repository, then repeat with `30` and `120`. Run once for each scenario (`stream`, `scroll`, `resize`) at the same terminal size. The harness runs for three seconds and prints JSON after restoring the terminal:
+
+```powershell
+$env:OUTPUT_REAL_TERMINAL = "1"
+$env:AGENT_VIEWER_TUI_MAX_FPS = "60"
+$env:OUTPUT_SCENARIO = "scroll"
+bun tui/opentui/terminalOutputPerf.ts
+```
+
+The output diagnostic measures native ANSI delivery and backpressure, including byte/write counts and renderer frame durations. It uses a synthetic screen to isolate output cost; it does not measure the emulator's pixel paint or the full app's input latency. Without `OUTPUT_REAL_TERMINAL=1`, it writes to a simulated sink; `OUTPUT_BYTES_PER_SECOND=250000` can limit that sink for local comparisons. `OUTPUT_POLICY_PLATFORM=win32` selects the Windows pacing policy on a different OS for simulation; it does not emulate Windows. `AGENT_VIEWER_FULL_REPAINT=1` enables the same full-screen workaround as the app. Use `npm run tui:rendering:smoke` for live-text ordering/completion checks and `npm run tui:inputperf` for full-app CPU measurements in memory. The CPU harness retains its strict 8.33 ms gate independently of the output cap.
+
 OpenTUI enables enhanced keyboard reporting for terminals that support Kitty/CSI-u. In legacy terminals that cannot distinguish `Ctrl+letter` from `Ctrl+Shift+letter`, the raw `Ctrl+A` and `Ctrl+G` sequences fall back to the coordinator and pull-request shortcuts; analytics and Git status remain available from the command palette.
 
 The start modal defaults plan approval on: teammates submit a `task.planned` approach first, Claude teammates are dispatched in plan mode for that planning turn, and the lead must emit `plan.approved` before implementation can complete. Use `Ctrl+P` to toggle plans, `Ctrl+T` to cycle teammate count, and the `gate` field for a command such as `npx tsc --noEmit` that must pass before a teammate task completes.

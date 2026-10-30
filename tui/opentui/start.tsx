@@ -3,6 +3,7 @@ import React from 'react'
 import { createCliRenderer } from '@opentui/core'
 import { createRoot } from '@opentui/react'
 import OpenTuiApp from './App'
+import { TUI_RENDER_POLICY } from './renderPolicy'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 import { installProcessWarningRouting } from '../../lib/processWarnings'
 
@@ -19,10 +20,8 @@ const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   screenMode: 'alternate-screen',
   useMouse: !mouseDisabled,
-  // OpenTUI paces on-demand frames by maxFps (default 60): a scroll that asks
-  // for a frame 4ms after the last one waits out the rest of 16.7ms. Frames
-  // are still only drawn when something asks for one, so idle cost is unchanged.
-  maxFps: 120,
+  // Bound terminal output on Windows while preserving fast-host navigation.
+  maxFps: TUI_RENDER_POLICY.maxFps,
   useKittyKeyboard: {
     disambiguate: true,
     alternateKeys: true,

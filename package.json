@@ -48,6 +48,8 @@
     "coord:workflow:smoke": "bun scripts/coordInteractiveWorkflowSmoke.ts && bun tui/opentui/coordinatorWorkflowSmoke.tsx",
     "coord:scalebench": "bun run ./scripts/coordScaleBench.ts",
     "coord:agents:live": "node ./scripts/coordRealAgentsLive.mjs",
+    "tui:rendering:smoke": "bun tui/opentui/liveTextBatchSmoke.ts && bun tui/opentui/readerRowMeasurementSmoke.ts && bun tui/opentui/rowHeightIndexSmoke.ts && bun tui/opentui/streamBatchSmoke.tsx",
+    "tui:outputperf": "bun tui/opentui/terminalOutputPerf.ts",
     "tui:inputperf": "bun run ./tui/opentui/inputPerf.tsx",
     "tui:scrollperf": "bun run ./tui/opentui/scrollPerfSmoke.ts",
     "tui:editorperf": "bun run ./tui/opentui/editorCompletionPerf.tsx",
