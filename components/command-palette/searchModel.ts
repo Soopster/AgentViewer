@@ -7,9 +7,7 @@ export const MESSAGE_SEARCH_SESSION_LIMIT = 32
 
 export const MESSAGE_SEARCH_RESULT_LIMIT = 12
 
-export function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
-  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
-}
+export { sessionSelectionKey as sessionTabKey } from '@/components/session-catalog/selectionKey'
 
 export function getSessionTitle(session: Session): string {
   return (

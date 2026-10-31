@@ -53,9 +53,7 @@ export function getSessionPreview(session: Session, sessionTitle: string): strin
   return preview
 }
 
-export function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>): string {
-  return `${session.providerInstanceId ?? session.provider ?? 'claude'}:${session.sessionId}`
-}
+export { sessionSelectionKey as sessionTabKey } from '@/components/session-catalog/selectionKey'
 
 export function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
   if (provider === 'codex') {

@@ -1,5 +1,7 @@
 'use client'
 
+import type { SessionMetadataCallbacks } from '@/components/session-catalog/actions'
+
 import { memo, useState, useEffect } from 'react'
 
 import { sameProjectPath } from '@/lib/projectPaths'
@@ -35,8 +37,8 @@ export const ProjectGroup = memo(function ProjectGroup({
   childrenByParentId?: Map<string, Session[]>
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
-  onRename: (sessionId: string, title: string) => void
-  onTag: (sessionId: string, tag: string | null) => void
+  onRename: SessionMetadataCallbacks['onRename']
+  onTag: SessionMetadataCallbacks['onTag']
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)

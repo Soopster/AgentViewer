@@ -1,5 +1,7 @@
 'use client'
 
+import type { SessionMetadataCallbacks } from '@/components/session-catalog/actions'
+
 import { memo, useState, useEffect } from 'react'
 
 import type { Session, SubagentSummary } from '@/lib/types'
@@ -69,8 +71,8 @@ export const SessionRowGroup = memo(function SessionRowGroup({
   hydrated: boolean
   knownChildren: Session[]
   onSelect: (session: Session) => void
-  onRename: (sessionId: string, title: string) => void
-  onTag: (sessionId: string, tag: string | null) => void
+  onRename: SessionMetadataCallbacks['onRename']
+  onTag: SessionMetadataCallbacks['onTag']
 }) {
   const [expanded, setExpanded] = useState(false)
   const [claudeSubagents, setClaudeSubagents] = useState<SubagentSummary[] | null>(null)

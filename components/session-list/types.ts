@@ -1,3 +1,5 @@
+import type { DashboardTab } from '@/components/viewer-navigation/model'
+import type { SessionMetadataCallbacks } from '@/components/session-catalog/actions'
 import type { ProviderInstanceSummary, ProviderSelection, Session } from '@/lib/types'
 
 export type SessionTeamAttention = { waiting: number; finished: number }
@@ -12,17 +14,15 @@ export type SessionListProps = {
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
-  dashboardSelected?: boolean
-  agentOperationsSelected?: boolean
-  messagingSelected?: boolean
+  selectedDashboard?: DashboardTab | null
   /** Teammate attention per `provider:sessionId`, from /api/agent-protocol/attention. */
   teamAttention?: Record<string, SessionTeamAttention>
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onOpenDashboard: () => void
-  onRename: (sessionId: string, title: string) => void
-  onTag: (sessionId: string, tag: string | null) => void
+  onRename: SessionMetadataCallbacks['onRename']
+  onTag: SessionMetadataCallbacks['onTag']
   onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null

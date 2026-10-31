@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -72,17 +72,29 @@ try {
   }
   await page.waitForTimeout(600)
   const frames = await page.evaluate(() => { window.__tailRecording = false; return window.__tailFrames })
-  const jumps = frames.slice(1).map((frame, index) => frame.top - frames[index].top)
-  console.log(JSON.stringify({ frames: frames.length, minimumDelta: Math.min(...jumps), maximumDelta: Math.max(...jumps), errors }))
+  assert.ok(frames.length > 0, 'Transcript tail fixture should record scroll frames')
+  assert.deepEqual(errors, [])
   for (const phase of ['wheel', 'growth']) {
     const samples = frames.filter(frame => frame.phase === phase)
     const differences = samples.slice(1).map((frame, index) => frame.top - samples[index].top)
-    console.log(JSON.stringify({ phase, minimumDelta: Math.min(...differences), maximumDelta: Math.max(...differences),
-      minimumBottom: Math.min(...samples.map(frame => frame.lastBottom)), maximumBottom: Math.max(...samples.map(frame => frame.lastBottom)) }))
+    assert.ok(samples.length > 0, `Transcript tail fixture should record ${phase} frames`)
+    assert.ok(samples.every(frame => frame.following), `Follow mode should remain active during ${phase}`)
+    assert.ok(Math.min(...differences) >= -1, `Scroll position should not jump backward during ${phase}`)
+    if (phase === 'wheel') {
+      assert.ok(Math.max(...samples.map(frame => frame.height)) - Math.min(...samples.map(frame => frame.height)) <= 1,
+        'Polling at the live edge should not change the transcript scroll height')
+      assert.ok(Math.max(...samples.map(frame => frame.lastBottom)) - Math.min(...samples.map(frame => frame.lastBottom)) <= 2,
+        'Polling at the live edge should keep the final row aligned')
+      assert.ok(Math.max(...differences.map(Math.abs)) <= 1, 'Downward wheel input at the live edge should not move the viewport')
+    }
   }
-  await writeFile('/private/tmp/web-transcript-tail-frames.json', JSON.stringify(frames, null, 2))
-  await page.screenshot({ path: '/private/tmp/web-transcript-tail.png' })
-  assert.deepEqual(errors, [])
+  const wheelFrames = frames.filter(frame => frame.phase === 'wheel')
+  const growthFrames = frames.filter(frame => frame.phase === 'growth')
+  assert.ok(Math.max(...growthFrames.map(frame => frame.height)) > wheelFrames.at(-1).height,
+    'Growing streamed content should increase the rendered transcript height')
+  assert.ok(Math.abs(growthFrames.at(-1).lastBottom - wheelFrames.at(-1).lastBottom) <= 2,
+    'Follow mode should return the final row to its live-edge position after streamed growth')
+  console.log(`Transcript live-tail smoke passed (${frames.length} frames; polling stable; streamed growth followed).`)
 } finally {
   await browser?.close()
   if (server) await new Promise(resolve => server.close(resolve))

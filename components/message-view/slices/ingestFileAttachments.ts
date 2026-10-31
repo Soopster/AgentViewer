@@ -1,3 +1,5 @@
+import { runHandleDeleteSession } from '../actions/deleteSession'
+import type { SessionDeleteCallback } from '@/components/session-catalog/actions'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -24,7 +26,7 @@ import { withProviderQuery, threadedMessageKey, threadedMessageEqual } from '../
 import { normalizeSelectValue } from '../composerUi'
 import { runIngestFileAttachments } from '../actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from '../actions/permissions'
-import { runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction } from '../actions/sessionActions'
+import { runHandleForkFromMessage, runRunSessionAction, runRunClaudeSessionAction } from '../actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runAddClaudeMcpServer, runToggleDiagnostics } from '../actions/claude'
 
 export type UseIngestFileAttachmentsGroupContext = {
@@ -47,7 +49,7 @@ export type UseIngestFileAttachmentsGroupContext = {
   setDeleting: Dispatch<SetStateAction<boolean>>
   setSessionActionError: Dispatch<SetStateAction<string | null>>
   setSessionActionNotice: Dispatch<SetStateAction<string | null>>
-  onDelete: ((sessionId: string, provider?: Session['provider']) => void) | undefined
+  onDelete: SessionDeleteCallback | undefined
   sessionActionLoading: string | null
   setSessionActionLoading: Dispatch<SetStateAction<string | null>>
   setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>

@@ -1,16 +1,13 @@
 'use client'
 
+import type { SessionMetadataCallbacks } from '@/components/session-catalog/actions'
+
 import { useState, useRef, useCallback } from 'react'
 import type { Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import { getSessionTitle } from './presentation'
 
-type EditCallbacks = {
-  onRename: (sessionId: string, title: string) => void
-  onTag: (sessionId: string, tag: string | null) => void
-}
-
-export function useSessionRowEditing(session: Session, { onRename, onTag }: EditCallbacks) {
+export function useSessionRowEditing(session: Session, { onRename, onTag }: SessionMetadataCallbacks) {
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -28,15 +25,15 @@ export function useSessionRowEditing(session: Session, { onRename, onTag }: Edit
     setEditing(null)
     const value = editValue.trim()
     if (!value || value === sessionTitle) return
-    onRename(session.sessionId, value)
+    onRename(session, value)
     try {
-      await fetch(`/api/sessions/${session.sessionId}`, {
+      await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: value, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
-  }, [editValue, onRename, session.provider, session.providerInstanceId, session.sessionId, sessionTitle])
+  }, [editValue, onRename, session, sessionTitle])
 
   const commitTagEdit = useCallback(async () => {
     setEditing(null)
@@ -45,15 +42,15 @@ export function useSessionRowEditing(session: Session, { onRename, onTag }: Edit
     if (JSON.stringify(nextTags) === JSON.stringify(currentTags)) return
 
     const nextTag = serializeSessionTags(nextTags)
-    onTag(session.sessionId, nextTag)
+    onTag(session, nextTag)
     try {
-      await fetch(`/api/sessions/${session.sessionId}`, {
+      await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tag: nextTag, provider: session.provider, providerInstanceId: session.providerInstanceId }),
       })
     } catch { /* optimistic — ignore errors */ }
-  }, [editValue, onTag, session.provider, session.providerInstanceId, session.sessionId, session.tag])
+  }, [editValue, onTag, session])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {

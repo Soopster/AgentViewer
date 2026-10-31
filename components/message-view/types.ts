@@ -1,4 +1,5 @@
 'use client'
+import type { SessionDeleteCallback } from '@/components/session-catalog/actions'
 import type { ProtocolAgent } from '../../lib/agentProtocol'
 import type { ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import type { CodexPlanStep } from '../../lib/taskRegistry'
@@ -15,7 +16,7 @@ export type Props = {
   targetMessageRequestId?: number
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all'} 
   onFork?: (newSessionId: string, sourceSession?: Session) => void
-  onDelete?: (sessionId: string, provider?: Session['provider']) => void
+  onDelete?: SessionDeleteCallback
   openTabs?: Session[]
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void

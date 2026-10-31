@@ -1,5 +1,7 @@
 'use client'
 
+import { ActiveSurfaceContext } from './right-panel/activeSurfaceContext'
+
 import { Bot, FileDiff, Files, GitPullRequest, Globe2, Maximize2, Minimize2, PanelRightClose, Plus, TerminalSquare, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
@@ -19,8 +21,8 @@ import {
  * launcher when nothing is open.
  *
  * It only owns the shell — width, tabs, focus and the launcher. Every surface's
- * content comes back from `renderSurface`, which lets the page keep passing the
- * same props it already passes to the full-screen overlays. Inactive surfaces
+ * content is composed through RightPanelContent children, so feature services
+ * stay with their adapters rather than captured render callbacks. Inactive surfaces
  * stay mounted behind `display:none` so switching tabs never restarts a
  * terminal or reloads a page.
  */
@@ -59,7 +61,7 @@ export type RightPanelProps = {
   onToggleExpanded: () => void
   onWidthChange: (width: number) => void
   surfaceTitle: (surface: RightPanelSurface) => string
-  renderSurface: (surface: RightPanelSurface) => ReactNode
+  children?: ReactNode
 }
 
 export default function RightPanel(props: RightPanelProps) {
@@ -89,25 +91,12 @@ export default function RightPanel(props: RightPanelProps) {
       {props.expanded ? null : (
         <ResizeHandle hostRef={hostRef} storedWidth={props.width} onWidthChange={props.onWidthChange} />
       )}
-      <TabStrip {...props} />
+      <TabStrip {...props} activeId={active?.id ?? null} />
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {props.surfaces.length === 0 ? (
           <Launcher {...props} />
         ) : (
-          props.surfaces.map((surface) => (
-            <div
-              key={surface.id}
-              style={{
-                display: surface.id === active?.id ? 'flex' : 'none',
-                flexDirection: 'column',
-                flex: surface.id === active?.id ? 1 : undefined,
-                minHeight: 0,
-                minWidth: 0,
-              }}
-            >
-              {props.renderSurface(surface)}
-            </div>
-          ))
+          <ActiveSurfaceContext value={active?.id ?? null}>{props.children}</ActiveSurfaceContext>
         )}
       </div>
     </div>
@@ -170,6 +159,7 @@ function TabStrip(props: RightPanelProps) {
                 type="button"
                 onClick={() => props.onActivate(surface.id)}
                 title={props.surfaceTitle(surface)}
+                aria-pressed={selected}
                 className="av-hover-control"
                 style={{
                   display: 'flex',

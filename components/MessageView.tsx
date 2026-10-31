@@ -1,5 +1,7 @@
 'use client'
 
+import { runHandleDeleteSession } from './message-view/actions/deleteSession'
+
 import { beginProviderLoading } from '@/lib/providerLoading'
 
 import { VoiceInput } from './VoiceInput'
@@ -128,7 +130,7 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runHandleDeleteSession, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
 import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect, runQueueHydrateEffect } from './message-view/effects/composer'

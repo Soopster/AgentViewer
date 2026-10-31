@@ -281,44 +281,6 @@ export async function runHandleForkFromMessage(ctx: HandleForkFromMessageContext
   }
 }
 
-export type HandleDeleteSessionContext = {
-  session: Session | null
-  deleting: boolean
-  sessionCapabilities: SessionCapabilities | undefined
-  setDeleting: Dispatch<SetStateAction<boolean>>
-  setSessionActionError: Dispatch<SetStateAction<string | null>>
-  setSessionActionNotice: Dispatch<SetStateAction<string | null>>
-  onDelete: ((sessionId: string, provider?: Session['provider']) => void) | undefined
-}
-
-export async function runHandleDeleteSession(ctx: HandleDeleteSessionContext) {
-  const {
-    session, deleting, sessionCapabilities, setDeleting, setSessionActionError,
-    setSessionActionNotice, onDelete,
-  } = ctx
-  if (!session || deleting || !sessionCapabilities?.deleteSession) return
-  const confirmed = window.confirm('Delete this session? This cannot be undone from Agent Viewer.')
-  if (!confirmed) return
-  setDeleting(true)
-  setSessionActionError(null)
-  setSessionActionNotice(null)
-  try {
-    const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider, session.providerInstanceId), {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: session.provider, providerInstanceId: session.providerInstanceId }),
-    })
-    const data = await readOptionalJsonResponse(res, {})
-    if (data.error) throw new Error(data.error)
-    onDelete?.(session.sessionId, session.provider)
-    setSessionActionNotice('Session deleted.')
-  } catch (err) {
-    setSessionActionError(err instanceof Error ? err.message : 'Failed to delete session')
-  } finally {
-    setDeleting(false)
-  }
-}
-
 export type RunSessionActionContext = {
   session: Session | null
   sessionActionLoading: string | null

@@ -27,10 +27,15 @@ try {
   page.setDefaultTimeout(10000)
   const errors = []
   const searches = []
+  const edits = []
   let failedUnpin = false
   page.on('pageerror', error => errors.push(String(error)))
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
+    if (url.pathname === '/api/sessions/alpha' && route.request().method() === 'PATCH') {
+      edits.push(route.request().postDataJSON())
+      return route.fulfill({ json: {} })
+    }
     if (url.pathname.endsWith('/inbox')) {
       const { action } = route.request().postDataJSON()
       if (action === 'unpin') {
@@ -74,6 +79,22 @@ try {
   await alpha.getByPlaceholder('tag1, tag2').fill('review, checked')
   await alpha.getByPlaceholder('tag1, tag2').press('Enter')
   await alpha.getByText('#checked', { exact: true }).waitFor()
+  const other = page.locator('[data-session-key="claude-other:alpha"]')
+  await other.getByText('Other alpha instance', { exact: true }).waitFor()
+  assert.equal(await other.getByText('#checked', { exact: true }).count(), 0)
+  await other.getByTitle('Double-click to rename title').dblclick()
+  await other.locator('input').fill('Other renamed')
+  await other.locator('input').press('Enter')
+  await other.getByText('Other renamed', { exact: true }).waitFor()
+  await alpha.getByText('Renamed alpha', { exact: true }).waitFor()
+  await other.getByTitle('Double-click to edit tags').dblclick()
+  await other.getByPlaceholder('tag1, tag2').fill('personal, isolated')
+  await other.getByPlaceholder('tag1, tag2').press('Enter')
+  await other.getByText('#isolated', { exact: true }).waitFor()
+  assert.equal(await alpha.getByText('#isolated', { exact: true }).count(), 0)
+  await page.waitForFunction(() => JSON.parse(document.querySelector('[data-testid="events"]').textContent).some(event => event.startsWith('tag:alpha:') && event.includes('isolated')))
+  assert.ok(edits.some(edit => edit.title === 'Other renamed' && edit.providerInstanceId === 'claude-other'))
+  assert.ok(edits.some(edit => edit.tag === 'mv-tags:["personal","isolated"]' && edit.providerInstanceId === 'claude-other'))
   await alpha.hover()
   await alpha.getByTitle('Pin', { exact: true }).click()
   await alpha.getByTitle('Unpin', { exact: true }).waitFor()

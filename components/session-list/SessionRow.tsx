@@ -1,5 +1,7 @@
 'use client'
 
+import type { SessionMetadataCallbacks } from '@/components/session-catalog/actions'
+
 import { useSessionRowEditing } from './useSessionRowEditing'
 import { SessionAttentionBadge } from './SessionAttentionBadge'
 import { SessionRowMetadata } from './SessionRowMetadata'
@@ -24,8 +26,8 @@ export const SessionRow = memo(function SessionRow({
   selected: boolean
   hydrated: boolean
   onSelect: (session: Session) => void
-  onRename: (sessionId: string, title: string) => void
-  onTag: (sessionId: string, tag: string | null) => void
+  onRename: SessionMetadataCallbacks['onRename']
+  onTag: SessionMetadataCallbacks['onTag']
 }) {
   const [hovered, setHovered] = useState(false)
   const editor = useSessionRowEditing(session, { onRename, onTag })

@@ -1,5 +1,7 @@
 'use client'
 
+import { sessionSelectionKey as sessionKey } from '@/components/session-catalog/selectionKey'
+
 import { memo, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
@@ -58,9 +60,7 @@ const STATUS_META: Record<RunStatus, { label: string; color: string; icon: typeo
   recent: { label: 'Recent', color: 'var(--cyan)', icon: CheckCircle2 },
 }
 
-function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
-}
+
 
 function titleForSession(session: Session): string {
   return session.customTitle || session.summary || session.firstPrompt || session.sessionId

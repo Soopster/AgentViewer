@@ -4,12 +4,14 @@ import SessionList from '../components/SessionList'
 import CommandPalette from '../components/CommandPalette'
 import { SidebarProvider } from '../components/ui/sidebar'
 import { RIGHT_PANEL_SURFACE_KINDS, type RightPanelSurfaceKind } from '../lib/rightPanel'
+import { patchSessionList } from '../components/session-catalog/actions'
 import type { Session } from '../lib/types'
 
 const noop = () => {}
 const availability = Object.fromEntries(RIGHT_PANEL_SURFACE_KINDS.map(kind => [kind, false])) as Record<RightPanelSurfaceKind, boolean>
 const initialSessions: Session[] = [
   { sessionId: 'alpha', provider: 'claude', summary: 'Alpha session', firstPrompt: 'Alpha prompt', cwd: '/fixture/alpha', tag: 'review' },
+  { sessionId: 'alpha', provider: 'claude', providerInstanceId: 'claude-other', summary: 'Other alpha instance', cwd: '/fixture/other', tag: 'personal' },
   { sessionId: 'beta', provider: 'claude', summary: 'Beta session', cwd: '/fixture/beta', tag: 'work' },
 ]
 
@@ -28,13 +30,13 @@ function Fixture() {
         providerInstances={[]} switchingProvider={false} selectedId={selectedId} selectedProject={null}
         onSelect={session => { setSelectedId(`claude:${session.sessionId}`); record(`session:${session.sessionId}`) }}
         onSelectProject={noop} onOpenDashboard={noop}
-        onRename={(sessionId, customTitle) => {
-          setSessions(previous => previous.map(session => session.sessionId === sessionId ? { ...session, customTitle } : session))
-          record(`rename:${sessionId}:${customTitle}`)
+        onRename={(target, customTitle) => {
+          setSessions(previous => patchSessionList(previous, target, { customTitle }))
+          record(`rename:${target.sessionId}:${customTitle}`)
         }}
-        onTag={(sessionId, tag) => {
-          setSessions(previous => previous.map(session => session.sessionId === sessionId ? { ...session, tag } : session))
-          record(`tag:${sessionId}:${tag}`)
+        onTag={(target, tag) => {
+          setSessions(previous => patchSessionList(previous, target, { tag }))
+          record(`tag:${target.sessionId}:${tag}`)
         }}
         onChangeProvider={noop} scopeMode={scopeMode} scopeProjectName="alpha" canScopeToProject
         includeWorktrees onChangeScope={setScopeMode} onToggleWorktrees={noop}

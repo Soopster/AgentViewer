@@ -49,9 +49,7 @@ function SessionListInner({
   switchingProvider,
   selectedId,
   selectedProject,
-  dashboardSelected = false,
-  agentOperationsSelected = false,
-  messagingSelected = false,
+  selectedDashboard = null,
   teamAttention,
   scrollToSessionRequest,
   onSelect,
@@ -275,7 +273,7 @@ function SessionListInner({
                 aria-label="Run dashboard"
                 title="Run dashboard"
                 className="av-hover-control"
-                style={collapsedIconButtonStyle(dashboardSelected)}
+                style={collapsedIconButtonStyle(selectedDashboard === 'sessions')}
               >
                 <LayoutDashboard size={20} strokeWidth={2.2} />
               </button>
@@ -288,7 +286,7 @@ function SessionListInner({
                 aria-label="Agent Operations dashboard"
                 title="Agent Operations"
                 className="av-hover-control"
-                style={collapsedIconButtonStyle(agentOperationsSelected)}
+                style={collapsedIconButtonStyle(selectedDashboard === 'agents')}
               >
                 <UsersRound size={20} strokeWidth={2.2} />
               </button>
@@ -943,7 +941,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       size="sm"
                       aria-label="Open run dashboard"
                       className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: dashboardSelected, accent: 'cyan' })}
+                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'sessions', accent: 'cyan' })}
                     >
                       <LayoutDashboard size={15} strokeWidth={2.2} />
                     </Button>
@@ -953,7 +951,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       size="sm"
                       aria-label="Open Agent Operations dashboard"
                       className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: agentOperationsSelected, accent: 'cyan' })}
+                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'agents', accent: 'cyan' })}
                     >
                       <UsersRound size={16} strokeWidth={2.2} />
                     </Button>
@@ -963,7 +961,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       size="sm"
                       aria-label="Open cross-session messaging"
                       className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: messagingSelected, accent: 'cyan' })}
+                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'messaging', accent: 'cyan' })}
                     >
                       <MessageSquare size={15} strokeWidth={2.2} />
                     </Button>

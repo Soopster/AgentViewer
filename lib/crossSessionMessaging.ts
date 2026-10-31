@@ -12,23 +12,8 @@ import { randomUUID } from 'node:crypto'
 import type { AgentProvider, Session } from './types'
 import { getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, steerRunningSessionIdempotent } from './sessionRuntime'
 
-export type AddressableSession = {
-  sessionId: string
-  provider: AgentProvider
-  name: string
-  cwd?: string
-  title?: string
-  running: boolean
-}
-
-export type SendCrossSessionMessageResult = {
-  delivered: boolean
-  mode: 'steered' | 'queued' | 'not_found' | 'error' | 'throttled'
-  targetSessionId?: string
-  targetProvider?: AgentProvider
-  targetName?: string
-  error?: string
-}
+import type { AddressableSession, SendCrossSessionMessageResult } from './crossSessionMessagingTypes'
+export type { AddressableSession, SendCrossSessionMessageResult } from './crossSessionMessagingTypes'
 
 const PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const RECENT_WINDOW_MS = 6 * 60 * 60 * 1000

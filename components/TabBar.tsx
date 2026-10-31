@@ -1,5 +1,7 @@
 'use client'
 
+import { sessionSelectionKey as sessionTabKey } from '@/components/session-catalog/selectionKey'
+
 import { ViewTransition } from 'react'
 import type { Session } from '@/lib/types'
 
@@ -13,9 +15,7 @@ function sessionTabTitle(session: Session): string {
   ) || 'Untitled'
 }
 
-function sessionTabKey(session: Session): string {
-  return `${session.provider ?? 'claude'}:${session.sessionId}`
-}
+
 
 type Props = {
   tabs: Session[]
