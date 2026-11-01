@@ -30,6 +30,7 @@ mock.module('../../lib/tui/reads', () => ({
   readTuiSlashCommands: async () => [],
   readTuiComposerOptions: async () => ({}),
   readTuiSubagentSummaries: async () => [],
+  readTuiSubagentMessages: async () => [],
 }))
 
 // Exercise the real worker handler and client together, including actual clone

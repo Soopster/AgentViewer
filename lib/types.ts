@@ -35,7 +35,13 @@ export type ToolResultBlock = {
   /** Structured question output, including annotations the model text omits. */
   questionResult?: import('./askUserAnswers').AskUserAnswers
 }
-export type ThinkingBlock = { type: 'thinking'; thinking: string; signature?: string }
+export type ThinkingBlock = {
+  type: 'thinking'; thinking: string; signature?: string
+  /** Additional reasoning text returned by the provider, separate from its summary. */
+  reasoningText?: string
+  /** Provider-reported/observed reasoning activity; absent for older transcripts. */
+  reasoning?: { startedAt?: number; completedAt?: number; completed?: boolean; tokens?: number; tokenScope?: 'turn' }
+}
 export type ImageBlock = {
   type: 'image'
   // Anthropic API format

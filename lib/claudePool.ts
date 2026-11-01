@@ -1,6 +1,11 @@
+import { createHash } from 'node:crypto'
+import { ClaudeNativeSpare } from './claudeNativeSpare'
 import { claudeQuestionOutcomeCapability } from './claudeQuestionOutcomes'
 import {
   query,
+  prewarm as prewarmNative,
+  type Options,
+  type SpareProcess,
   type CanUseTool,
   type ElicitationRequest,
   type ElicitationResult,
@@ -165,9 +170,8 @@ export function claudeIntegratedQueryExtensions(context: {
 //
 // Phase 1 scope:
 //   - Single consumer per session per turn (mutex-serialized).
-//   - Pending (brand-new) sessions still take the cold path; the SSE adapter
-//     pre-warms a pool entry once the real session_id arrives, so turn 2 is
-//     hot.
+//   - Pending sessions may reuse a composer-prepared entry or opt-in native
+//     spare. Otherwise the SSE adapter adopts their first cold Query for turn 2.
 //   - Live setModel / setPermissionMode / effortLevel (the last via
 //     applyFlagSettings) where the SDK supports it; everything else (cwd,
 //     taskBudget, thinking on/off, resumeSessionAt, forkSession) recycles the
@@ -520,6 +524,16 @@ export function effortToSdk(effort: ReasoningEffortLevel | undefined):
   return { effort, thinking: { type: 'adaptive' } }
 }
 
+type NativeClaudeSetup = ReturnType<typeof createInputStream> & {
+  options: Options
+  bridgeBox: ClaudeBridgeBox
+  spare: SpareProcess
+  coordinator: ReturnType<typeof getCoordinatorMcpServers>
+  dynamic: ReturnType<typeof getClaudeDynamicMcpServers>
+  close(): void
+  exited: Promise<void>
+}
+
 class ClaudePool {
   private entries = new Map<string, InternalEntry>()
   private pendingReadSeeds = new Map<string, Map<string, number>>()
@@ -569,13 +583,12 @@ class ClaudePool {
   }
 
   recycle(sessionId: string): void {
+    this.nativeSpare.discard()
     const entry = this.entries.get(`${currentProviderInstanceId('claude')}:${sessionId}`)
     if (entry) this.recycleInternal(entry, 'explicit')
   }
 
-  private spawn(opts: ClaudePoolAcquireOptions): InternalEntry {
-    const { pushUserMessage, endInput, iterable } = createInputStream()
-
+  private querySetup(opts: ClaudePoolAcquireOptions) {
     // Mutable per-turn bridge. The canUseTool delegation below routes through
     // this so permission requests reach the correct SSE stream controller for
     // each turn while the underlying subprocess stays warm.
@@ -586,74 +599,192 @@ class ClaudePool {
     }
 
     const effortOptions = effortToSdk(opts.effort)
-    const q = query({
-      prompt: iterable,
-      options: {
-        env: { ...CLAUDE_QUERY_ENV, ...currentProviderEnvironment() },
-        ...(currentProviderExecutable('') ? { pathToClaudeCodeExecutable: currentProviderExecutable('') } : {}),
-        stderr: (data) => logClaudeSubprocessStderr(opts.sessionId, data),
-        ...(opts.isPendingSession
-          ? { sessionId: opts.sessionId }
-          : opts.forkSession ? {} : { resume: opts.sessionId }),
-        ...(opts.cwd ? { cwd: opts.cwd } : {}),
-        ...(opts.model ? { model: opts.model } : {}),
-        ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
-        // SDK 0.3.289 starts an omitted mode in 'auto' where available; this app's
-        // contract is that omitted means 'default' (ask through canUseTool).
-        permissionMode: opts.permissionMode ?? 'default',
-        // bypassPermissions is a no-op (and the SDK rejects the option) unless we
-        // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
-        ...(opts.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
-        canUseTool: (toolName, input, toolOpts) =>
-          bridgeBox.fn
-            ? bridgeBox.fn(toolName, input, toolOpts)
-            : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
-        onElicitation: (request, elicitOpts) =>
-          bridgeBox.elicit
-            ? bridgeBox.elicit(request, elicitOpts)
-            : Promise.resolve({ action: 'decline' as const }),
-        onUserDialog: (request, dialogOpts) => bridgeBox.dialog
-          ? bridgeBox.dialog(request, dialogOpts)
-          : Promise.resolve({ behavior: 'cancelled' as const }),
-        supportedDialogKinds: ['refusal_fallback_prompt'],
-        ...claudeIntegratedQueryExtensions(viewerContext, opts.sessionId),
-        ...claudeAgentPolicyOptions(opts.agentPolicy),
-        ...effortOptions,
-        ...claudeSessionPersistenceQueryOptions(),
-        ...claudeProcessSpawnOptions(),
-        resumeSessionAt: opts.resumeSessionAt,
-        forkSession: opts.forkSession,
-        includePartialMessages: true,
-        // Keep background agents/workflows alive when the user interrupts the
-        // foreground turn. They remain visible and independently stoppable via
-        // Query.backgroundTasks(); cancelQueued still controls queued sends.
-        perTaskStopAffordance: true,
-        agentProgressSummaries: true,
-        includeHookEvents: true,
-        promptSuggestions: true,
-        forwardSubagentText: true,
-        // `snapshot` records the rendered system prompt once for the
-        // conversation and replays it verbatim, which is what keeps the API
-        // prompt-cache prefix stable across turns and across a resume — and,
-        // with extended thinking, stops a prompt that shifted between launches
-        // from discarding the model's earlier reasoning. The trade it makes is
-        // real and deliberate: a mid-session `setModel` no longer re-renders
-        // the prompt, so a model switch inherits the recorded one until the
-        // next compaction or a new session. The preset carries no per-model
-        // text worth that instability. Where prompt recording is not enabled
-        // for the account (and on Bedrock/Vertex/Foundry) the field is accepted
-        // and does nothing.
-        systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
-        ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
-        ...(opts.enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
-        ...(opts.additionalDirectories?.length ? { additionalDirectories: opts.additionalDirectories } : {}),
-        // Coordinator-owned sessions get their coord_* tools bound in-process at
-        // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
-        // session's lifetime, so this needs no entry in compatible()/EntryState;
-        // a pool entry only ever exists for a session id that was already
-        // spawned with this same lookup.
-      },
+    const options: Options = {
+      env: { ...CLAUDE_QUERY_ENV, ...currentProviderEnvironment() },
+      ...(currentProviderExecutable('') ? { pathToClaudeCodeExecutable: currentProviderExecutable('') } : {}),
+      stderr: (data) => logClaudeSubprocessStderr(opts.sessionId, data),
+      ...(opts.isPendingSession
+        ? { sessionId: opts.sessionId }
+        : opts.forkSession ? {} : { resume: opts.sessionId }),
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
+      // SDK 0.3.289 starts an omitted mode in 'auto' where available; this app's
+      // contract is that omitted means 'default' (ask through canUseTool).
+      permissionMode: opts.permissionMode ?? 'default',
+      // bypassPermissions is a no-op (and the SDK rejects the option) unless we
+      // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
+      ...(opts.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
+      canUseTool: (toolName, input, toolOpts) =>
+        bridgeBox.fn
+          ? bridgeBox.fn(toolName, input, toolOpts)
+          : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
+      onElicitation: (request, elicitOpts) =>
+        bridgeBox.elicit
+          ? bridgeBox.elicit(request, elicitOpts)
+          : Promise.resolve({ action: 'decline' as const }),
+      onUserDialog: (request, dialogOpts) => bridgeBox.dialog
+        ? bridgeBox.dialog(request, dialogOpts)
+        : Promise.resolve({ behavior: 'cancelled' as const }),
+      supportedDialogKinds: ['refusal_fallback_prompt'],
+      ...claudeIntegratedQueryExtensions(viewerContext, opts.sessionId),
+      ...claudeAgentPolicyOptions(opts.agentPolicy),
+      ...effortOptions,
+      ...claudeSessionPersistenceQueryOptions(),
+      ...claudeProcessSpawnOptions(),
+      resumeSessionAt: opts.resumeSessionAt,
+      forkSession: opts.forkSession,
+      includePartialMessages: true,
+      // Keep background agents/workflows alive when the user interrupts the
+      // foreground turn. They remain visible and independently stoppable via
+      // Query.backgroundTasks(); cancelQueued still controls queued sends.
+      perTaskStopAffordance: true,
+      agentProgressSummaries: true,
+      includeHookEvents: true,
+      promptSuggestions: true,
+      forwardSubagentText: true,
+      // `snapshot` records the rendered system prompt once for the
+      // conversation and replays it verbatim, which is what keeps the API
+      // prompt-cache prefix stable across turns and across a resume — and,
+      // with extended thinking, stops a prompt that shifted between launches
+      // from discarding the model's earlier reasoning. The trade it makes is
+      // real and deliberate: a mid-session `setModel` no longer re-renders
+      // the prompt, so a model switch inherits the recorded one until the
+      // next compaction or a new session. The preset carries no per-model
+      // text worth that instability. Where prompt recording is not enabled
+      // for the account (and on Bedrock/Vertex/Foundry) the field is accepted
+      // and does nothing.
+      systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true, snapshot: true },
+      ...claudeQueryBudgetOptions(opts.taskBudgetTokens, opts.maxBudgetUsd),
+      ...(opts.enableWorkflow ? { settings: { enableWorkflows: true } } : {}),
+      ...(opts.additionalDirectories?.length ? { additionalDirectories: opts.additionalDirectories } : {}),
+      // Coordinator-owned sessions get their coord_* tools bound in-process at
+      // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
+      // session's lifetime, so this needs no entry in compatible()/EntryState;
+      // a pool entry only ever exists for a session id that was already
+      // spawned with this same lookup.
+    }
+    return { options, bridgeBox, ...createInputStream() }
+  }
+
+  private nativeSpare = new ClaudeNativeSpare<NativeClaudeSetup>()
+  private nativeClaims = new Map<string, Promise<void>>()
+
+  private nativeKey(opts: ClaudePoolAcquireOptions): string {
+    const env = { ...CLAUDE_QUERY_ENV, ...currentProviderEnvironment() }
+    // The SDK sets this bookkeeping variable itself during its first startup.
+    delete env.CLAUDE_AGENT_SDK_VERSION
+    const canonical = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(canonical)
+      if (value && typeof value === 'object') return Object.fromEntries(
+        Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, canonical(v)]))
+      return value
+    }
+    return createHash('sha256').update(JSON.stringify(canonical({
+      ...opts, cwd: resolve(opts.cwd ?? process.cwd()), permissionMode: opts.permissionMode ?? 'default',
+      enableWorkflow: Boolean(opts.enableWorkflow), additionalDirectories: opts.additionalDirectories ?? [],
+      instance: currentProviderInstanceId('claude'),
+      env,
+      executable: currentProviderExecutable(''),
+    }))).digest('hex')
+  }
+
+  async prepareNative(opts: ClaudePoolAcquireOptions): Promise<boolean> {
+    if (process.env.AGENT_VIEWER_CLAUDE_NATIVE_PREWARM !== '1') { this.nativeSpare.discard(); return false }
+    if (!opts.isPendingSession || opts.forkSession || opts.resumeSessionAt) return false
+    // Custom/SSH transports need a parking directory on the target host. Keep
+    // their established startup path until that contract is implemented.
+    if (claudeProcessSpawnOptions().spawnClaudeCodeProcess) return false
+    const poolKey = `${currentProviderInstanceId('claude')}:${opts.sessionId}`
+    if (this.nativeClaims.has(poolKey)) return true
+    if (this.entries.has(poolKey)) return false
+    const coordinator = getCoordinatorMcpServers(opts.sessionId)
+    const dynamic = getClaudeDynamicMcpServers(opts.sessionId)
+    const key = this.nativeKey(opts)
+    await this.nativeSpare.prepare(key, async (abortController) => {
+      const setup = this.querySetup(opts)
+      try {
+        const spare = await prewarmNative({ options: { ...setup.options, cwd: undefined, abortController }, initializeTimeoutMs: 30_000 })
+        // Never keep an unhandled rejected claimed promise on an unused spare.
+        void spare.claimed.catch(() => {})
+        return { ...setup, spare, coordinator, dynamic, exited: spare.exited,
+          close: () => { setup.endInput(); spare.close() } }
+      } catch (error) { setup.endInput(); throw error }
     })
+    return true
+  }
+
+  async claimNative(opts: ClaudePoolAcquireOptions, signal: AbortSignal): Promise<void> {
+    if (!opts.isPendingSession || opts.forkSession || opts.resumeSessionAt) return
+    const key = `${currentProviderInstanceId('claude')}:${opts.sessionId}`
+    const pending = this.nativeClaims.get(key)
+    if (pending) return pending
+    const claim = this.claimNativeOnce(opts, signal)
+    this.nativeClaims.set(key, claim)
+    try { await claim } finally { this.nativeClaims.delete(key) }
+  }
+
+  private async claimNativeOnce(opts: ClaudePoolAcquireOptions, signal: AbortSignal): Promise<void> {
+    if (process.env.AGENT_VIEWER_CLAUDE_NATIVE_PREWARM !== '1') { this.nativeSpare.discard(); return }
+    const key = this.nativeKey(opts)
+    const setup = this.nativeSpare.take(key)
+    if (!setup) return
+    const bindingsCurrent = () => {
+      const dynamic = getClaudeDynamicMcpServers(opts.sessionId)
+      return setup.coordinator === getCoordinatorMcpServers(opts.sessionId)
+        && Object.keys(setup.dynamic).length === Object.keys(dynamic).length
+        && Object.entries(setup.dynamic).every(([name, value]) => dynamic[name] === value)
+    }
+    if (signal.aborted || !bindingsCurrent() || claudeProcessSpawnOptions().spawnClaudeCodeProcess) {
+      setup.close()
+      return
+    }
+    const started = performance.now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const abort = () => setup.close()
+    signal.addEventListener('abort', abort, { once: true })
+    try {
+      // The input stream is EMPTY until adoption. Even a refused claim can
+      // never consume the user's message; cold fallback has nothing to replay.
+      const q = setup.spare.claim({ prompt: setup.iterable, options: {
+        cwd: resolve(opts.cwd ?? process.cwd()), permissionMode: opts.permissionMode ?? 'default',
+      } })
+      const claim = await Promise.race([setup.spare.claimed, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { setup.close(); reject(new Error('Native Claude claim timed out')) }, 30_000)
+        timer.unref?.()
+      })])
+      if (signal.aborted || claim.sessionId !== opts.sessionId || !bindingsCurrent()
+        || this.nativeKey(opts) !== key || claudeProcessSpawnOptions().spawnClaudeCodeProcess) {
+        throw new Error('Native Claude claim cancelled or its identity/configuration changed')
+      }
+      // Another acquire may have won while the asynchronous claim was running.
+      const poolKey = `${currentProviderInstanceId('claude')}:${opts.sessionId}`
+      if (this.entries.has(poolKey)) { setup.close(); return }
+      const entry = this.spawn(opts, { ...setup, query: q })
+      this.entries.set(poolKey, entry)
+      this.enforceCapacity(poolKey)
+      this.ensureSweep()
+      this.nativeSpare.noteClaim(performance.now() - started, false)
+    } catch {
+      setup.close()
+      this.nativeSpare.noteClaim(performance.now() - started, true)
+      // No user input was placed on setup.iterable, including when the SDK
+      // reports option_not_applied. Close it before starting the cold path.
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+    }
+  }
+
+  nativeDiagnostics() {
+    return { enabled: process.env.AGENT_VIEWER_CLAUDE_NATIVE_PREWARM === '1', ...this.nativeSpare.diagnostics() }
+  }
+
+  private spawn(opts: ClaudePoolAcquireOptions, native?: ReturnType<ClaudePool['querySetup']> & { query: Query }): InternalEntry {
+    const setup = native ?? this.querySetup(opts)
+    const { pushUserMessage, endInput, iterable, bridgeBox } = setup
+    const q = native?.query ?? query({ prompt: iterable, options: setup.options })
 
     let initialized = false
     const initialization = q.initializationResult().then(() => {
@@ -1440,6 +1571,19 @@ function getPool(): ClaudePool {
 
 export function acquireClaudeSession(opts: ClaudePoolAcquireOptions): ClaudePoolEntry {
   return getPool().acquire(opts)
+}
+
+/** Opt-in native spare for a pending UUID; never resumes an existing chat. */
+export function prepareNativeClaudeSession(opts: ClaudePoolAcquireOptions): Promise<boolean> {
+  return getPool().prepareNative(opts)
+}
+
+export function claimNativeClaudeSession(opts: ClaudePoolAcquireOptions, signal: AbortSignal): Promise<void> {
+  return getPool().claimNative(opts, signal)
+}
+
+export function claudeNativePrewarmDiagnostics() {
+  return getPool().nativeDiagnostics()
 }
 
 export function recycleClaudeSession(sessionId: string): void {

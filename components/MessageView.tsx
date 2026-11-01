@@ -3,6 +3,7 @@
 import { runHandleDeleteSession } from './message-view/actions/deleteSession'
 
 import { beginProviderLoading } from '@/lib/providerLoading'
+import { hasReasoningContent } from '@/lib/reasoningDisplay'
 
 import { VoiceInput } from './VoiceInput'
 
@@ -1314,14 +1315,21 @@ function MessageViewInner({
         blocks: [{ type: 'text', text: optimisticContextText || optimisticUserText }],
       }
     : null), [optimisticUserText, optimisticContextText, session?.provider, session?.providerInstanceId, session?.sessionId, showLiveTimelineOverlay])
-  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn)
+  const codexThinking = useMemo(() => {
+    if (session?.provider !== 'codex') return undefined
+    for (let index = liveThreadedMessages.length - 1; index >= 0; index--) {
+      const block = liveThreadedMessages[index].blocks.find(block => block.type === 'thinking' && block.reasoning && !block.reasoning.completed && block.reasoning.completedAt === undefined)
+      if (block?.type === 'thinking') return block
+    }
+  }, [liveThreadedMessages, session?.provider])
+  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn) && !(codexThinking && !liveAssistantText.trim())
     ? {
         role: 'assistant',
         uuid: 'live-assistant',
         sessionId: session?.sessionId,
         provider: session?.provider,
         blocks: [
-          ...(liveReasoningText.trim()
+          ...(session?.provider !== 'codex' && liveReasoningText.trim()
             ? [{ type: 'thinking' as const, thinking: liveReasoningText.trim() }]
             : []),
           {
@@ -1339,6 +1347,7 @@ function MessageViewInner({
       }
     : null), [
       activeToolCount,
+      codexThinking,
       awaitingPersistedTurn,
       liveAssistantText,
       liveReasoningText,
@@ -1407,7 +1416,7 @@ function MessageViewInner({
   ])
 
   const liveThreadedVisible = useMemo(
-    () => (showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)),
+    () => (showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)).filter(message => message.blocks.some(block => block.type !== 'thinking' || hasReasoningContent(block))),
     [liveThreadedMessages, showTools],
   )
   const liveTimelineRows = useMemo<TimelineRow[]>(() => {
@@ -2421,6 +2430,7 @@ function MessageViewInner({
         composerRuntime={composerRuntime}
         composerStatusDetail={composerStatusDetail}
         composerStatus={composerStatus}
+        codexThinking={codexThinking}
         composerGitBranch={composerGitBranch}
         setBranchSwitcherOpen={setBranchSwitcherOpen}
         composerWorkingDirectory={composerWorkingDirectory}

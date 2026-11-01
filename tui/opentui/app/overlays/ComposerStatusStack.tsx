@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import type { TuiThemePalette } from '../../../theme'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
-import { type SendState, type Session } from '../../../../lib/types'
+import { type SendState, type Session, type ThinkingBlock } from '../../../../lib/types'
+import { CodexThinkingPreview } from './CodexThinkingPreview'
 import { fitText } from '../../textLayout'
 import { type TuiLiveToolActivity, type TuiEffort } from '../types'
 import { type InlineTextSegment, renderInlineTextSegments, LivePreviewCard } from '../inlineText'
@@ -19,6 +20,7 @@ type ComposerStatusStackProps = {
   composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
   tuiEffort: TuiEffort
   composerThinkingTokens: number
+  codexThinking?: ThinkingBlock
   liveReasoningPreviewLines: string[]
   embeddedComposer: boolean
   composerTurnStatusInBorder: boolean
@@ -49,7 +51,7 @@ type ComposerStatusStackProps = {
 export function ComposerStatusStack(props: ComposerStatusStackProps) {
   const {
     presentationHidesComposer, liveStatus, visibleComposerSending, theme, width,
-    composerLiveReasoning, isStreamView, composerProvider, tuiEffort, composerThinkingTokens,
+    composerLiveReasoning, isStreamView, composerProvider, tuiEffort, composerThinkingTokens, codexThinking,
     liveReasoningPreviewLines, embeddedComposer, composerTurnStatusInBorder, isChatLikeView,
     densityState, composerSendStartedAt, composerWaitingStatusSeed, composerWaitingSuffix,
     composerWaitingOnUser, reattachedRunning, visibleAwaitingPersistedTurn, composerTargetSession,
@@ -75,6 +77,7 @@ export function ComposerStatusStack(props: ComposerStatusStackProps) {
       ) : null}
 
       {visibleComposerSending && composerLiveReasoning.trim() && !isStreamView ? (
+        codexThinking ? <CodexThinkingPreview block={codexThinking} theme={theme} width={width} /> :
         <LivePreviewCard
           title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}${composerThinkingTokens > 0 ? ` · ~${composerThinkingTokens >= 1000 ? `${(composerThinkingTokens / 1000).toFixed(1)}k` : composerThinkingTokens} tok` : ''}`}
           lines={liveReasoningPreviewLines}

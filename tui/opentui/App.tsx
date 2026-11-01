@@ -1122,6 +1122,17 @@ function OpenTuiWorkspace() {
   }), [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
 
   const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
+  const codexThinking = useMemo(() => {
+    if (selectedSessionTarget?.provider !== 'codex') return undefined
+    const key = sessionKey(selectedSessionTarget)
+    for (let index = liveTranscriptMessages.length - 1; index >= 0; index--) {
+      const message = liveTranscriptMessages[index]
+      if (liveMessageSessionKey(message) !== key) continue
+      const thinking = message.blocks.find(block => block.type === 'thinking' && block.reasoning && !block.reasoning.completed && block.reasoning.completedAt === undefined)
+      if (thinking?.type === 'thinking') return thinking
+    }
+    return undefined
+  }, [liveTranscriptMessages, selectedSessionTarget])
   const persistedComposerMessages = useMemo(() => {
     const key = selectedSessionTarget ? sessionKey(selectedSessionTarget) : ''
     const baseline = liveTranscriptBaselineRef.current.get(key)
@@ -6193,6 +6204,7 @@ function OpenTuiWorkspace() {
         composerProvider={composerProvider}
         tuiEffort={tuiEffort}
         composerThinkingTokens={composerThinkingTokens}
+        codexThinking={codexThinking}
         liveReasoningPreviewLines={liveReasoningPreviewLines}
         embeddedComposer={embeddedComposer}
         composerTurnStatusInBorder={composerTurnStatusInBorder}

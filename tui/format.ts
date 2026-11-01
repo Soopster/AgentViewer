@@ -21,6 +21,7 @@ import {
 } from './format/tasks'
 
 import { inlineImageBlock } from '../lib/imageContent'
+import { reasoningLabel, latestReasoningSummary, hasReasoningContent, thinkingTranscriptText } from '../lib/reasoningDisplay'
 import type { ToolResultBlock } from '../lib/types'
 import { readAsyncQuestions } from '../lib/asyncQuestions'
 import { mcpResourceLinks } from '../lib/mcpArtifacts'
@@ -500,9 +501,11 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
         : []
     }
     case 'thinking':
+      if (!hasReasoningContent(block)) return []
       // An empty thinking block carries no information — emitting a bare
       // "thinking" placeholder just painted noise rows (Stream view especially).
       // The expanded formatter already returns [] for this case.
+      if (block.reasoning) return [line(reasoningLabel(block), 'thinking'), ...(block.thinking.trim() ? [line(truncateLine(latestReasoningSummary(block.thinking)), 'dim')] : [])]
       return block.thinking.trim()
         ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
         : []
@@ -936,9 +939,10 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const blockAnalysis = analyzeCardBlocks(message)
   const asyncQuestions = message.blocks.some(block => block.type === 'tool_thread' && block.toolUse.input.asyncUserInput === true)
   const category = asyncQuestions ? 'conversation' : blockAnalysis.category
-  const autoFold = category !== 'conversation' && category !== 'insight'
+  const reasoningOnly = message.blocks.length > 0 && message.blocks.every(block => block.type === 'thinking' && block.reasoning)
+  const autoFold = reasoningOnly || (category !== 'conversation' && category !== 'insight')
   const previewSourceLines = previewLines
-  const collapsedLines = asyncQuestions ? expandedLines : hasMermaidDiagrams
+  const collapsedLines = reasoningOnly && previewSourceLines.length === 0 ? [] : asyncQuestions ? expandedLines : hasMermaidDiagrams
     ? compactMermaidLines(expandedLines)
     : autoFold
     ? compactAutoFoldLines(previewSourceLines)
@@ -955,6 +959,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     label,
     category,
     autoFold,
+    thinkingTranscript: reasoningOnly || undefined,
     compactSummary,
     usageSummary: formatUsageSummary(message),
     durationLabel: turnDurationLabel(durationMs),
@@ -1070,12 +1075,13 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
     }
 
     case 'thinking': {
-      const content = block.thinking.trim()
-      if (!content) return []
-      return content
+      if (!hasReasoningContent(block)) return []
+      const content = thinkingTranscriptText(block)
+      if (!content) return block.reasoning ? [line(reasoningLabel(block), 'thinking')] : []
+      return [...(block.reasoning ? [line(reasoningLabel(block), 'thinking')] : []), ...content
         .split('\n')
         .map((ln) => line(ln.trim(), 'thinking'))
-        .filter((entry) => entry.text.length > 0)
+        .filter((entry) => entry.text.length > 0)]
     }
 
     case 'tool_thread': {

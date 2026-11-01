@@ -269,7 +269,7 @@ await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200))
 await act(async () => { await app.flush() })
 appFrame = app.captureCharFrame()
 if (appFrame.includes('AGENT VIEWER ▸ DESK')) fail(`Escape did not close the desk:\n${appFrame}`)
-if (!appFrame.includes('COMPOSER')) fail(`the app did not come back after the desk:\n${appFrame}`)
+if (!appFrame.includes('To:')) fail(`the app did not come back after the desk:\n${appFrame}`)
 app.renderer.destroy()
 
 console.log('Desk smoke passed (commands, layouts tile, cell-aware columns, tables, autocomplete, MENU, row <GO>, search, layout, focus, theme, CANCEL, colours, both themes, ⌃K b in the App)')

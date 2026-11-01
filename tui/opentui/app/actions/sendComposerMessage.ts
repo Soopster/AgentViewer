@@ -446,10 +446,9 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
               { text: trimmed, messageUuid: result.messageUuid, liveMessageUuid },
             ]
           }
-          setLiveTranscriptMessages((prev) => [
-            ...prev,
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev,
             makeLiveUserMessage(steerTarget, trimmed, liveMessageUuid),
-          ])
+          ))
           return
         }
       } catch {
@@ -646,7 +645,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       if (frame.event === 'turn-accepted') {
         const receipt = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
         const messageUuid = receipt?.messageUuid
-        if (targetSession.provider === 'claude' && typeof messageUuid === 'string' && messageUuid) {
+        if ((targetSession.provider === 'claude' || targetSession.provider === 'codex') && typeof messageUuid === 'string' && messageUuid) {
           const owner = typeof receipt?.sessionId === 'string' && receipt.sessionId
             ? { ...targetSession, sessionId: receipt.sessionId } : targetSession
           setLiveTranscriptMessages(previous => acknowledgeComposerMessage(previous, owner, messageUuid))
@@ -814,6 +813,15 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       }
       if (!parsed) return
       const parsedRecord = parsed as Record<string, unknown>
+      if (parsedRecord.type === 'codex_reasoning') {
+        const threaded = normalizeCodexStreamThreadedMessage(parsed, targetSession.sessionId)
+        const block = threaded?.blocks.find(block => block.type === 'thinking')
+        if (block?.type === 'thinking') {
+          noteFirstOutput()
+          setComposerLiveReasoning(block.reasoning?.completedAt === undefined ? block.thinking || 'Thinking…' : '')
+          if (block.reasoning?.tokens !== undefined) setComposerThinkingTokens(block.reasoning.tokens)
+        }
+      }
 
       const pendingPermission = extractPendingPermission(parsed)
       if (pendingPermission) {

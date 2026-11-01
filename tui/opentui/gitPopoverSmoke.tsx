@@ -53,6 +53,12 @@ try {
       throw new Error(`Expected one modified file row on initial render:\n${frame}`)
     }
 
+    // The diff must be loaded first: its arrival syncs the tree to the diff's
+    // file and re-expands the folder, which would undo a collapse made earlier.
+    for (let attempt = 0; attempt < 20 && frame.includes('loading…'); attempt++) {
+      await flushEffects(setup)
+      frame = setup.captureCharFrame()
+    }
     // Clicking the flattened directory row toggles it just like h/l.
     await act(async () => { await setup.mockMouse.click(8, 8) })
     await flushEffects(setup)

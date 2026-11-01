@@ -382,7 +382,7 @@ export function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] 
 // conversation, agents and stream views — overridden per card: `expanded`
 // opens a folding card, `collapsed` closes any other.
 export function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean, foldAll = false): boolean {
-  if (foldAll) return true
+  if (foldAll || card.thinkingTranscript) return true
   return (transcriptView === 'conversation' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
 }
 export function resolveExpandedCardKeys(

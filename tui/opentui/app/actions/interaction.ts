@@ -21,7 +21,7 @@ import { type PermissionResponse } from '../../../../lib/permissions'
 import { type TuiPermissionMode } from '../types'
 import { type TuiTranscriptCard } from '../../../format'
 import { type TuiTranscriptView } from '../../../theme'
-import { agentToolCardsFor, agentToolCardIsExpanded } from '../transcriptRows'
+import { agentToolCardsFor, agentToolCardIsExpanded, cardFoldsByDefault } from '../transcriptRows'
 import { TranscriptDetailCache } from '../../transcriptDetailCache'
 import { patchTuiSession, type TuiSessionDetail } from '../../../../lib/tui/service'
 import { type ProviderSelection } from '../../../../lib/types'
@@ -223,11 +223,7 @@ export function runToggleExpansion(ctx: ToggleExpansionContext, scope?: 'selecte
     : null
   const targetCard = selectedAgentTool ?? card
   const isAgentToolTarget = selectedAgentTool !== null
-  const shouldAutoFold = (
-    transcriptView === 'conversation'
-    || isChatLikeView
-    || transcriptView === 'agents'
-  ) && targetCard.autoFold
+  const shouldAutoFold = cardFoldsByDefault(targetCard, transcriptView, isChatLikeView)
   const isExpanded = isAgentToolTarget
     ? agentToolCardIsExpanded(targetCard, expandedCardKeys, collapsedCardKeys)
     : resolvedExpandedKeys.has(targetCard.key)

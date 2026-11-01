@@ -1593,7 +1593,7 @@ export function TranscriptCardInner({
           {isThinkingCard ? (
             <box paddingX={1} marginTop={bodyLines.length > 0 ? 1 : 0}>
               <text fg={thinkingMode ? theme.cyan : theme.dim}>
-                {thinkingMode ? '✦ thinking shown · T to hide' : '✦ thinking hidden · T to show'}
+                {thinkingMode ? '✦ thinking shown · i to fold' : isExpanded ? 'Enter to collapse thinking transcript' : 'Enter to view thinking transcript'}
               </text>
             </box>
           ) : null}

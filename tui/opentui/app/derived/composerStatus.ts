@@ -158,7 +158,7 @@ return (() => {
   }
   if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
   if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
-  if (visibleComposerSending && composerLiveReasoning.trim() && !isStreamView) rows += LIVE_PREVIEW_HEIGHT
+  if (visibleComposerSending && composerLiveReasoning.trim() && !isStreamView) rows += composerTargetSession?.provider === 'codex' ? 3 : LIVE_PREVIEW_HEIGHT
   // Reattached-turn banner (rendered when a turn runs without an owned stream).
   if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
   // Codex external-writer banner — another Codex client owns the rollout,

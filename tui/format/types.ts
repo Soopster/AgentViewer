@@ -33,6 +33,7 @@ export type TuiTranscriptCodeBlock = {
 }
 
 export type TuiTranscriptCard = {
+  thinkingTranscript?: boolean
   images?: string[]
   asyncQuestions?: import('../../lib/permissions').PendingQuestion[]
   key: string

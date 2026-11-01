@@ -10,6 +10,7 @@ import { recordContextTransfer } from "./contextTransfers";
 import { PendingRequestGoneError } from "./pendingRequestGone";
 import { getRunningSession, interruptRunningSession } from "./sessionRuntime";
 import { createTurnCheckpoint } from "./checkpoints";
+import { timeSendPhase } from "./sendPhaseTrace";
 import { currentProviderInstanceId } from "./providerInstances";
 import { updateSessionInboxState } from "./sessionInbox";
 import type { AgentProvider, SendAttachment } from "./types";
@@ -58,11 +59,11 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
         ? params.body.cwd.trim()
         : null;
     const checkpoint = checkpointCwd
-        ? createTurnCheckpoint(checkpointCwd, {
+        ? timeSendPhase('checkpoint', createTurnCheckpoint(checkpointCwd, {
             sessionId: params.sessionId,
             provider,
             message: userMessage,
-        }).catch(() => null)
+        })).catch(() => null)
         : undefined;
     const runtime = await getProviderRuntime(provider);
     return runtime.streamTurn({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) }, checkpoint);

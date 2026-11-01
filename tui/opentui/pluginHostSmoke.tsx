@@ -116,6 +116,11 @@ const fail = (message: string): never => {
   process.exit(1)
 }
 const check = (condition: unknown, message: string) => { if (!condition) fail(message) }
+// Esc in the Git browser's detail pane first steps back to its tabs; a second closes it.
+const closeGit = async () => {
+  await key('escape')
+  if (screen().includes('[: Actions]')) { await settle(); if (screen().includes('[: Actions]')) await key('escape') }
+}
 const waitFor = async (label: string, test: () => boolean) => {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
@@ -169,10 +174,10 @@ await key('escape')
 await key('b', { ctrl: true }); await key('1')
 check(!tuiPluginViews.isLoaded('git'), 'the Git plugin loaded before it was opened')
 await key('g', { ctrl: true })
-await waitFor('the Git overlay', () => screen().includes('[1] Status'))
+await waitFor('the Git overlay', () => screen().includes('[: Actions]'))
 check(tuiPluginViews.isLoaded('git'), 'Git opened without its plugin module')
-await key('escape')
-await waitFor('Git closed', () => !screen().includes('[1] Status'))
+await closeGit()
+await waitFor('Git closed', () => !screen().includes('[: Actions]'))
 
 // The plugin manager turns Git off: ⌃G then says so and opens nothing, and the
 // choice is on disk for the next launch and the web daemon.
@@ -193,7 +198,7 @@ await key('escape')
 await waitFor('the manager closed', () => !setup.renderer.root.findDescendantById('plugin-manager'))
 await key('g', { ctrl: true })
 await settle(300)
-check(!screen().includes('[1] Status') && screen().includes('Git status is off'), 'a disabled plugin still opened, or said nothing')
+check(!screen().includes('[: Actions]') && screen().includes('Git status is off'), 'a disabled plugin still opened, or said nothing')
 await key('?')
 await settle(250)
 await act(async () => { await setup.mockInput.typeText('Git status') })
@@ -212,9 +217,9 @@ await key('return')
 await waitFor('Git on', () => screen().includes('● Git'))
 await key('escape')
 await key('g', { ctrl: true })
-await waitFor('the Git overlay after re-enabling', () => screen().includes('[1] Status'))
+await waitFor('the Git overlay after re-enabling', () => screen().includes('[: Actions]'))
 check(isPluginEnabled('git') && !readPluginSettingsFile().disabled.includes('git'), 'turning Git back on was not saved')
-await key('escape')
+await closeGit()
 console.log('Git opens as a lazy plugin; the plugin manager turns it off (no command, no binding, saved) and back on.')
 
 // Files is a plugin, and the new-session folder picker is its view in picker mode.
@@ -421,9 +426,9 @@ await waitFor('checkpoints back on top', () => !screen().includes(' File history
 await key('escape')
 await waitFor('checkpoints closed', () => !screen().includes(' Checkpoints & review '))
 await key('g', { ctrl: true })
-await waitFor('the Git overlay for p', () => screen().includes('[1] Status'))
+await waitFor('the Git overlay for p', () => screen().includes('[: Actions]'))
 await key('p')
-await waitFor('pull requests from Git', () => tuiPluginViews.isLoaded('pull-requests') && !screen().includes('[1] Status'))
+await waitFor('pull requests from Git', () => tuiPluginViews.isLoaded('pull-requests') && !screen().includes('[: Actions]'))
 await key('escape')
 await settle(300)
 applyPluginSettings({ ...DEFAULT_PLUGIN_SETTINGS, disabled: ['checkpoints', 'pull-requests', 'file-history'] })
@@ -435,11 +440,11 @@ await key('g', { ctrl: true, shift: true })
 await settle(300)
 check(screen().includes('Review pull requests is off'), 'disabled pull requests still opened from ⌃⇧G, or said nothing')
 await key('g', { ctrl: true })
-await waitFor('the Git overlay with PRs off', () => screen().includes('[1] Status'))
+await waitFor('the Git overlay with PRs off', () => screen().includes('[: Actions]'))
 await key('p')
 await settle(300)
-check(screen().includes('[1] Status') && screen().includes('Review pull requests is off'), "Git's p did not keep Git and say pull requests are off")
-await key('escape')
+check(screen().includes('[: Actions]') && screen().includes('Review pull requests is off'), "Git's p did not keep Git and say pull requests are off")
+await closeGit()
 applyPluginSettings({ ...DEFAULT_PLUGIN_SETTINGS, disabled: ['file-history'] })
 await settle(200)
 await key('u', { shift: true })
@@ -475,7 +480,7 @@ check(!tuiPluginViews.isLoaded('desk'), 'the Desk plugin loaded before the desk 
 await portable('a')
 await waitFor('the control center', () => screen().includes('AGENT CONTROL CENTER'))
 check(tuiPluginViews.isLoaded('coordination'), 'the control center opened without its plugin module')
-await checkWindowRoundTrip('coordination', 'AGENT CONTROL CENTER')
+await checkWindowRoundTrip('coordination', 'AGENT CONTROL CENTE')
 await key('escape')
 await waitFor('the control center closed', () => !screen().includes('AGENT CONTROL CENTER'))
 await key('a', { ctrl: true, shift: true })

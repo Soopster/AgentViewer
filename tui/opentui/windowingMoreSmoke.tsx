@@ -227,6 +227,8 @@ const paneHas = (index: number, text: string) => {
 }
 const paneName = (index: number) => NAMES.find((name) => paneHas(index, marker(`win-${name}`))) ?? null
 const openMenu = async () => {
+  // A zoomed window's restore label sits over its title controls; restore first.
+  if (setup.renderer.root.findDescendantById('presentation-restore')) await chordKey('m')
   const button = locate('⊞ layout')
   await click(button.x + 1, button.y)
   await waitFor('the layout menu', () => !!frame('window-layout:grid'))

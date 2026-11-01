@@ -133,7 +133,9 @@ try {
   }
   if (mounted.includes('light-ghost')) fail('the empty placeholder was not dropped')
 
-  // The tail page, and g loading one page at a time.
+  // The tail page, and g loading one page at a time. A switch mounts a seed
+  // that grows by steps, so let it reach its full page first.
+  await waitFor('the tail page to finish mounting', () => mountedCards().length >= 80)
   await toTop()
   if (hint() !== String(PERSISTED - 80)) fail(`the tail mounted more or less than a page: ${hint()} hidden`)
   await press('g')

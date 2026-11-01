@@ -11,6 +11,7 @@ import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { attachedTranscriptCardsForVariant, getTranscriptCardsSync } from '../../sessionDetailWorkerClient'
 import { type Session } from '../../../../lib/types'
 import { SYNC_FORMAT_CARD_LIMIT } from '../timing'
+import { hasReasoningContent } from '../../../../lib/reasoningDisplay'
 
 export type TranscriptCardsContext = {
   liveTranscriptMessagesForSession: ThreadedMessage[]
@@ -43,9 +44,10 @@ export function runTranscriptCards(ctx: TranscriptCardsContext) {
     }
     return baseAndBridgeTranscriptCards
   }
+  const visibleLiveMessages = liveTranscriptMessagesForSession.filter(message => message.blocks.some(block => block.type !== 'thinking' || hasReasoningContent(block)))
   const liveMessages = showToolCalls
-    ? liveTranscriptMessagesForSession
-    : stripToolCallBlocks(liveTranscriptMessagesForSession)
+    ? visibleLiveMessages
+    : stripToolCallBlocks(visibleLiveMessages)
   const liveTimestampBase = liveTurnStartedAt ?? latestBaseAndBridgeTimestamp + 1
   const liveCards = liveMessages.map((message, index) => {
     const timestampedMessage = message.timestamp
@@ -71,7 +73,15 @@ export function runTranscriptCards(ctx: TranscriptCardsContext) {
   // Live turns normally follow every persisted/bridge card. Preserve the
   // existing append order without scanning and sorting the live suffix on
   // every streamed token; the provider's live sequence is already ordered.
-  const sortedCards = [...baseAndBridgeTranscriptCards, ...liveCards]
+  const reasoningOverrides = new Map(liveMessages.flatMap((message, index) => message.blocks.some(block => (block.type === 'thinking' && block.reasoning) || (message.provider === 'codex' && block.type === 'tool_thread')) ? [[message.uuid, liveCards[index]] as const] : []))
+  const replaced = new Set<string>()
+  const baseCards = reasoningOverrides.size ? baseAndBridgeTranscriptCards.map(card => {
+    const override = reasoningOverrides.get(card.key)
+    if (!override) return card
+    replaced.add(override.key)
+    return override
+  }) : baseAndBridgeTranscriptCards
+  const sortedCards = [...baseCards, ...liveCards.filter(card => !replaced.has(card.key))]
 
   if (CARD_PROFILE) {
     logCardRecompute({

@@ -27,6 +27,7 @@
 // (registerTuiMetricsGauge still returns an unregister fn so call sites don't
 // need to branch), and nothing samples, monitors, or writes.
 
+import { setSendPhaseSink } from '../../lib/sendPhaseTrace'
 import { appendFile, appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks'
@@ -170,6 +171,14 @@ export function noteTuiComposerLatency(
 // the worker read (0 on a cache hit); `select-to-paint` is the number the user
 // actually feels — keypress to the new transcript being on screen.
 const navLatencyStats = new PerfStats()
+
+// Server-side pieces of a send (checkpoint wait, first-use imports), so a slow
+// `send-to-ack` can be attributed. Fed by lib/sendPhaseTrace.ts.
+if (METRICS_ENABLED) {
+  setSendPhaseSink((phase, durationMs) => {
+    if (Number.isFinite(durationMs) && durationMs >= 0) composerLatencyStats.record(`send.${phase}`, durationMs)
+  })
+}
 
 export function noteTuiNavLatency(
   phase: 'select-to-open' | 'open-to-detail' | 'detail-to-paint' | 'select-to-paint',

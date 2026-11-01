@@ -21,6 +21,7 @@ import { CODEX_CAPABILITIES } from './provider'
 import { buildThreadedMessages, type ThreadedMessage } from './threading'
 import { mcpResourceLinks } from './mcpArtifacts'
 import { recordRawFrames } from './rawFrames'
+import type { CodexReasoningMetadata } from './codexReasoning'
 
 function isPendingCodexThread(thread: CodexThread): boolean {
   return !thread.path && !thread.preview && (thread.turns?.length ?? 0) === 0
@@ -154,7 +155,7 @@ function mapItemToMessages(
   turnId: string,
   item: CodexThreadItem,
   timestamp?: string,
-  options: { includeToolResults?: boolean } = {},
+  options: { includeToolResults?: boolean; reasoning?: import('./types').ThinkingBlock['reasoning'] } = {},
 ): SessionMessage[] {
   const baseId = `${turnId}:${item.id}`
   const includeToolResults = options.includeToolResults ?? true
@@ -170,7 +171,7 @@ function mapItemToMessages(
         return text ? [{ type: 'text', text }] : []
       })
       return content.length
-        ? [makeMessage(threadId, baseId, 'user', content, turnId, timestamp)]
+        ? [{ ...makeMessage(threadId, baseId, 'user', content, turnId, timestamp), requestId: item.clientId ?? undefined }]
         : []
     }
     case 'agentMessage': {
@@ -207,9 +208,10 @@ function mapItemToMessages(
     case 'plan':
       return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp)] : []
     case 'reasoning': {
-      const thinking = [...item.summary, ...item.content].filter(Boolean).join('\n\n').trim()
-      return thinking
-        ? [makeMessage(threadId, baseId, 'assistant', [{ type: 'thinking', thinking }], turnId, timestamp)]
+      const thinking = (item.summary.some(Boolean) ? item.summary : item.content).filter(Boolean).join('\n\n').trim()
+      const reasoningText = item.summary.some(Boolean) ? item.content.filter(Boolean).join('\n\n').trim() || undefined : undefined
+      return thinking || (options.reasoning?.tokens ?? 0) > 0
+        ? [makeMessage(threadId, baseId, 'assistant', [{ type: 'thinking', thinking, reasoningText, reasoning: options.reasoning ?? { completed: true } }], turnId, timestamp)]
         : []
     }
     case 'commandExecution': {
@@ -378,6 +380,11 @@ function mapItemToMessages(
 export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
+  if (record.type === 'codex_reasoning') {
+    const message = record.message as SessionMessage | undefined
+    if (!message || message.provider !== 'codex' || message.type !== 'assistant' || !Array.isArray(message.message?.content)) return null
+    return buildThreadedMessages([message])[0] ?? null
+  }
   if (record.type !== 'codex_item_completed' && record.type !== 'codex_item_started') return null
 
   const item = asObject(record.item)
@@ -404,7 +411,7 @@ export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSe
   })
   if (messages.length === 0) return null
 
-  return buildThreadedMessages(messages).find((message) => message.role === 'assistant') ?? null
+  return buildThreadedMessages(messages).find((message) => message.role === (itemType === 'userMessage' ? 'user' : 'assistant')) ?? null
 }
 
 /** Web streams prose separately; retain non-text blocks from agent completions too. */
@@ -458,7 +465,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
   }
 }
 
-export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] {
+export function mapCodexThreadToMessages(thread: CodexThread, reasoningMetadata: CodexReasoningMetadata = {}): SessionMessage[] {
   const messages: SessionMessage[] = []
   const turns = [...thread.turns]
 
@@ -475,7 +482,13 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
       // UUID is still the only finer-grained signal we can use; fall
       // back to the turn timestamp if even that doesn't parse.
       const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
-      const itemMessages = mapItemToMessages(thread.id, turn.id, item, itemTimestamp)
+      const itemMessages = mapItemToMessages(thread.id, turn.id, item, itemTimestamp, { reasoning: reasoningMetadata[`${turn.id}:${item.id}`] })
+      for (const message of itemMessages) {
+        const info = reasoningMetadata[message.uuid]
+        if (info && Array.isArray(message.message.content)) {
+          message.message.content = message.message.content.map(block => block.type === 'thinking' ? { ...block, reasoning: { ...info, completed: turn.status !== 'inProgress' || info.completedAt !== undefined } } : block)
+        }
+      }
       recordRawFrames(itemMessages, {
         source: 'codex.thread-event',
         messageType: (item as { type?: string })?.type,

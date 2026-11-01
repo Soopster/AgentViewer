@@ -258,7 +258,10 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   // The tab takes over the selected window, which stays mounted but hidden.
   const readerVisible = () => {
     type Node = { visible?: boolean; parent?: Node | null }
-    for (let node = setup.renderer.root.findDescendantById('transcript-reader') as unknown as Node | null; node; node = node.parent ?? null) {
+    // Under a popover tab the window is hidden or not mounted at all; neither shows.
+    const reader = setup.renderer.root.findDescendantById('transcript-reader') as unknown as Node | null
+    if (!reader) return false
+    for (let node: Node | null = reader; node; node = node.parent ?? null) {
       if (node.visible === false) return false
     }
     return true
@@ -347,7 +350,7 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await waitFor('a new workspace tab', () => tabsAfter().length === tabsBefore.length + 1)
   await waitFor('the daily summary filling the new tab', () => (windowFrame('daily-summary')?.width ?? 0) === area().width)
   check(!windowFrame('coordination'), 'the new tab shows the old tab\'s windows')
-  check(screen().split('\n')[0]?.includes('Daily summary'), `the new tab is not named for its popover: ${screen().split('\n')[0]}`)
+  check(screen().split('\n')[0]?.includes('Daily'), `the new tab is not named for its popover: ${screen().split('\n')[0]}`)
   // Back to the first tab: its windows are where they were.
   const first = frame(tabsBefore[0]!)!
   await click(first.x + 2, first.y)

@@ -1,4 +1,5 @@
 import { beginProviderLoading } from '../providerLoading'
+import { timeSendPhase } from '../sendPhaseTrace'
 import { isAgentProvider } from '../provider'
 import { getProviderManifest } from '../extensions/providers/catalog'
 import {
@@ -102,7 +103,7 @@ let loadedSessionBackend: SessionBackendModule | null = null
 let sessionBackendLoad: Promise<SessionBackendModule> | null = null
 function sendPath(): Promise<SessionBackendModule> {
   if (loadedSessionBackend) return Promise.resolve(loadedSessionBackend)
-  sessionBackendLoad ??= import('../sessionBackend').then((mod) => {
+  sessionBackendLoad ??= timeSendPhase('import-send-path', import('../sessionBackend')).then((mod) => {
     loadedSessionBackend = mod
     return mod
   })
@@ -116,7 +117,7 @@ let loadedCoordination: CoordinationModule | null = null
 let coordinationLoad: Promise<CoordinationModule> | null = null
 function coordination(): Promise<CoordinationModule> {
   if (loadedCoordination) return Promise.resolve(loadedCoordination)
-  coordinationLoad ??= import('../agentCoordination').then((mod) => {
+  coordinationLoad ??= timeSendPhase('import-coordination', import('../agentCoordination')).then((mod) => {
     loadedCoordination = mod
     return mod
   })

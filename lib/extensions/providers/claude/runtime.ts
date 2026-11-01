@@ -1120,6 +1120,13 @@ export async function createClaudeStream(sessionId: string, signal: AbortSignal,
     const additionalDirectories = Array.isArray(body.additionalDirectories)
         ? body.additionalDirectories.filter((dir): dir is string => typeof dir === 'string' && dir.trim() !== '')
         : undefined;
+    if (isPendingSession && !forkSessionOnSend && !resumeSessionAt && bangShell === null) {
+        await claudePoolModule().claimNativeClaudeSession({
+            sessionId, cwd: cwdOverride, model, fallbackModel, permissionMode, effort,
+            taskBudgetTokens: taskBudgetTotal, maxBudgetUsd, enableWorkflow,
+            additionalDirectories, agentPolicy, isPendingSession: true,
+        }, signal);
+    }
     // Cold-path conditions: brand-new session (no id yet), fork (creates a new
     // conversation root), or rewind (changes the resume point). These mutate
     // the conversation root or don't have a stable id to key the pool on, so we
@@ -2098,6 +2105,10 @@ export async function prewarm(params: {
 }): Promise<void> {
     const provider = "claude";
     await ensureClaudePool();
+    if (params.isPending && await claudePoolModule().prepareNativeClaudeSession({
+        sessionId: params.sessionId, cwd: params.cwd, model: params.model,
+        fallbackModel: claudeFallbackModelChain(), effort: params.effort, isPendingSession: true,
+    })) return;
     {
         const warm = claudePoolModule().peekClaudeSession(params.sessionId);
         if (warm) {
@@ -2245,7 +2256,15 @@ export async function rewindSession({ sessionId, body, provider }: RewindParams)
     }
 }
 export function readMemoryDiagnostics(): Record<string, number> {
+    const native = claudePoolIfLoaded()?.claudeNativePrewarmDiagnostics();
     return {
+        claudeNativeSpareReady: native?.state === 'ready' ? 1 : 0,
+        claudeNativeSpareInitializing: native?.state === 'initializing' ? 1 : 0,
+        claudeNativeSpareHits: native?.hits ?? 0,
+        claudeNativeSpareMisses: native?.misses ?? 0,
+        claudeNativeSpareFailures: native?.failures ?? 0,
+        claudeNativeSpareInitializationMs: native?.initializationMs ?? 0,
+        claudeNativeSpareClaimMs: native?.claimMs ?? 0,
         pendingClaudePermissions: pendingClaudePermissions.size,
         pendingClaudeElicitations: pendingClaudeElicitations.size,
         pendingClaudeDialogs: pendingClaudeDialogs.size,

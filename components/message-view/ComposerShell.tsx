@@ -45,6 +45,7 @@ import { ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopove
 import { attachmentImagePreviewSrc, attachmentDisplayName } from './composerStorage'
 import { compactNativeSelectClassName, PierrePatchDiffView, PromptLibrary, ChannelBridgePanel, IdeBridgePanel, PluginSurfaceHost } from './lazyPanels'
 import { SessionGoalDock } from './SessionGoalDock'
+import { ReasoningStatus } from './ThinkingSummary'
 
 type ComposerShellProps = {
   isProject: boolean
@@ -190,6 +191,7 @@ type ComposerShellProps = {
   composerRuntime: ComposerRuntimeState
   composerStatusDetail: string
   composerStatus: string
+  codexThinking?: import('../../lib/types').ThinkingBlock
   composerGitBranch: string | null
   setBranchSwitcherOpen: Dispatch<SetStateAction<boolean>>
   composerWorkingDirectory: string | null
@@ -241,7 +243,7 @@ export function ComposerShell(props: ComposerShellProps) {
     ideBridgeOpen, handleDiffCommentToComposer, contextUsage, reattachedRunning, sendMessage,
     canSubmitMessage, activeToolCount, backgroundClaudeTasks, backgroundingTasks, cancelSend,
     awaitingPersistedTurn, composerStatusColor, composerRuntime, composerStatusDetail,
-    composerStatus, composerGitBranch, setBranchSwitcherOpen, composerWorkingDirectory,
+    composerStatus, codexThinking, composerGitBranch, setBranchSwitcherOpen, composerWorkingDirectory,
     branchSwitcherOpen, onOpenGit, composerGitTitle, composerGitSummary, composerGitHasDetails,
     handleComposerBranchSwitched, teammatesServices, returnToChat, rewindPreview,
     handleApplyRewind, setRewindPreview, rollbackPreview, handleApplyRollback, setRollbackPreview,
@@ -1511,10 +1513,10 @@ export function ComposerShell(props: ComposerShellProps) {
                 data-composer-transcript-state={composerRuntime.transcript}
                 data-composer-queue-state={composerRuntime.queue}
                 title={composerStatusDetail}
-                aria-label={`${composerStatus}. ${composerStatusDetail}`}
+                aria-label={codexThinking && sendState === 'sending' ? 'Thinking' : `${composerStatus}. ${composerStatusDetail}`}
               >
                 <span style={{ color: `var(${composerConfig.cssAccentVar})`, marginRight: 6, fontWeight: 600 }}>{composerConfig.glyph}</span>
-                {composerStatus}
+                {codexThinking && sendState === 'sending' ? <ReasoningStatus block={codexThinking} /> : composerStatus}
               </span>
               <span className="av-web-composer-meta">
                 <span className="av-web-composer-hint">

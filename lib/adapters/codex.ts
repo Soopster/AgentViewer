@@ -13,6 +13,7 @@
 // CODEX_CAPABILITIES.deleteSession is false; registry.ts asserts that pair.
 
 import { compactStableFingerprint } from '../compactFingerprint'
+import { readCodexReasoningMetadata } from '../codexReasoningStore'
 import { getCodexClient } from '../codexClient'
 import { getCodexProjectDiagnostics } from '../codexHarness'
 import { withTimeout } from '../withTimeout'
@@ -131,14 +132,16 @@ export const codexAdapter: SessionAdapter = {
       turns.length,
       turnsSignature,
     ].join(':')
-    const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
+    const reasoningMetadata = await readCodexReasoningMetadata(sessionId)
+    const reasoningSignature = `${signature}:${compactStableFingerprint(JSON.stringify(reasoningMetadata))}`
+    const cached = readMappedMessagesCache(`codex:${sessionId}`, reasoningSignature)
     if (cached) return { messages: cached, externalWriter: false }
     // thread/turns/list(sortDirection: 'asc') plus each Turn.items array is the
     // Codex archive's authoritative order. Do not timestamp-sort it: many items
     // only have the turn-level fallback timestamp while user items can have a
     // later UUID-derived timestamp, which moved the prompt behind its reply.
-    const messages = mapCodexThreadToMessages(thread)
-    return { messages: writeMappedMessagesCache(`codex:${sessionId}`, signature, messages), externalWriter: false }
+    const messages = mapCodexThreadToMessages(thread, reasoningMetadata)
+    return { messages: writeMappedMessagesCache(`codex:${sessionId}`, reasoningSignature, messages), externalWriter: false }
   },
 
   async readProviderModels(cwd) {

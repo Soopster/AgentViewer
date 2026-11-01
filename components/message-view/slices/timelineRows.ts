@@ -1,5 +1,6 @@
 import type { SessionMessage } from '../../../lib/types'
 import { useMemo } from 'react'
+import { messageOwner } from '../../../lib/composerTranscript'
 import { type WebViewMode } from '../../MessageItem'
 import { streamMessageHasContent } from '../../messageItemShared'
 import { type MessageVisualizerRow } from '../../MessageSessionVisualizer'
@@ -32,7 +33,18 @@ export function useTimelineRowsGroup(ctx: UseTimelineRowsGroupContext) {
   const timelineRows = useMemo<TimelineRow[]>(() => {
     if (persistedTimelineRows.length === 0) return liveTimelineRows
     if (liveTimelineRows.length === 0) return persistedTimelineRows
-    return [...persistedTimelineRows, ...liveTimelineRows]
+    const key = (row: TimelineRow) => `${messageOwner(row.message)}\u0000${row.message.uuid}`
+    const reasoning = new Map(liveTimelineRows.filter(row => row.message.blocks.some(block => (block.type === 'thinking' && block.reasoning) || (row.message.provider === 'codex' && block.type === 'tool_thread'))).map(row => [key(row), row]))
+    if (!reasoning.size) return [...persistedTimelineRows, ...liveTimelineRows]
+    const replaced = new Set<string>()
+    const persisted = persistedTimelineRows.map(row => {
+      const id = key(row)
+      const live = reasoning.get(id)
+      if (!live) return row
+      replaced.add(id)
+      return { ...row, message: live.message }
+    })
+    return [...persisted, ...liveTimelineRows.filter(row => !replaced.has(key(row)))]
   }, [liveTimelineRows, persistedTimelineRows])
   const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
   const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {

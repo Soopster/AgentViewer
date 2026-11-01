@@ -50,7 +50,8 @@ verified 0.8.1 release matches the React package's exact core dependency.
 ## Features worth integrating next
 
 The four requested follow-ups (1, 2, 3 and 6) are now implemented. Native
-warming and OpenCode service integration remain recommendations.
+warming is available as an opt-in prototype (disabled by default); OpenCode
+service integration remains a recommendation.
 
 ### 1. Claude context attribution and cache lifetime breakdown — implemented
 
@@ -110,23 +111,59 @@ fall back to the SDK's textual transcript without inventing missing metadata.
 Source: [0.3.312 release notes](https://github.com/anthropics/claude-agent-sdk-typescript/releases/tag/v0.3.312)
 and installed `AskUserQuestionOutput` / init capability documentation.
 
-### 4. Claude lighter runtime imports and native spare processes — deferred
+### 4. Claude native spare processes — opt-in prototype
 
-Agent Viewer currently reuses persistent SDK `query()` processes. It does not
-call the native `startup()` or `prewarm()` APIs.
+Set `AGENT_VIEWER_CLAUDE_NATIVE_PREWARM=1` on the web/TUI server process to
+replace pending-chat composer prewarming with SDK-native `prewarm()` / `claim()`.
+Default behavior remains the existing persistent `query()` pool. The lighter
+`/core` import migration remains deferred.
 
-The `/core` entry point now exports native `prewarm()`, while excluding session
-listing/reading/import code. Existing root-level prewarming APIs predate this
-update; this is an opportunity to reduce eager loading and investigate
-session-independent spare processes, rather than a reason to replace the pool
-immediately.
+This prototype holds **one spare for one pending chat**, across provider
+instances, for at most two minutes. It is not a generic spare for any future
+chat: the pending UUID, SDK MCP servers (including Coordinator identity), hooks,
+permission bridges and immutable options are fixed at preparation. Project
+SessionStart hooks and registration wait until the first send claims the spare.
+After a successful claim the ordinary session pool owns the Query; a subsequent
+new-chat composer prewarm prepares the next spare. There is no automatic idle
+replenishment. Closing a session discards the spare too.
 
-Compare module load time and first-send latency in `lib/claudePool.ts`. A spare
-claim has option-overlay and hook-order constraints; retain the cold fallback,
-per-session Coordinator identity, permission bridges and passive-read policy.
-Do not resume existing sessions merely to warm them.
+The first send never waits for an unfinished preparation. Incompatible options,
+provider instance/environment/executable changes, changed Coordinator/dynamic
+MCP bindings, cancellation, expiry, process death or a refused claim discard the
+spare and retain normal startup. The input stream stays empty until the claim
+succeeds and its returned session ID is checked. A failed claim is closed before
+fallback, so no user prompt is replayed (including `option_not_applied`). Concurrent
+claims for the same chat share one operation. Remote/custom process transports
+retain normal startup; their parking-directory contract is not implemented.
+Existing sessions are never resumed merely to prepare a native spare.
 
-Source: installed 0.3.316 package exports, `SpareProcess` and `WarmQuery` docs;
+`readMemoryDiagnostics()` exposes ready/initializing counts, hits, misses,
+failures, and last initialization/claim durations. The SDK documents roughly
+230–260 MB per parked spare; this has not been measured in Agent Viewer. This
+alpha API also refuses some project settings (for example project-level `env`
+or `model`), so those projects may consistently fall back. Host configuration
+is a snapshot at preparation; restart after changing host settings or signing
+out. No user-facing cache warming or model prompt is issued by preparation.
+
+Validation:
+
+- `bun run scripts/claudeNativeSpareSmoke.ts`: lifecycle, initialization dedupe,
+  late completion cleanup, expiry/death, single claim, exact UUID adoption,
+  empty-input refusal fallback, permissions, cancellation and pool reuse.
+- `bun run scripts/claudeNativeSpareProbe.ts`: real local SDK/CLI, isolated
+  settings and project, no prompts. Three comparison samples measured cold
+  initialization at 327–501 ms, existing prepared-pool acquisition at
+  0.07–0.19 ms, background native preparation at 264–445 ms and native claim at
+  113–138 ms. These are control-handshake measurements, not first-token or
+  end-to-end latency, and do not cover normal user plugins/settings/hooks.
+  **Keep this disabled by default:** the current pool already shifts startup
+  into composer time, and this session-bound prototype adds a claim round trip.
+  A startup-speed justification needs an earlier, genuinely session-independent
+  spare and a broader design for reserved session IDs and MCP identity.
+- Web/OpenTUI type checks, provider pool smoke, Claude runtime/integration/dialog
+  smokes, Claude SDK surface smoke and SDK follow-ups smoke pass.
+
+Source: installed 0.3.316 package exports, `SpareProcess` / `ClaimOptions` docs;
 [0.3.314 release notes](https://github.com/anthropics/claude-agent-sdk-typescript/releases/tag/v0.3.314).
 
 ### 5. OpenCode persistent terminal and scheduling services

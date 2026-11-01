@@ -103,17 +103,19 @@ export async function createTurnCheckpoint(
   meta: { sessionId?: string; provider?: string; message?: string },
 ): Promise<TurnCheckpoint | null> {
   const work = (async (): Promise<TurnCheckpoint | null> => {
-    const repoRoot = await findRepoRoot(cwd)
-    if (!repoRoot) return null
-    const indexFile = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), 'agent-viewer-ckpt-')),
-      'index',
-    )
+    // None of these four depend on each other, and every one sits on the
+    // send's critical path (providers await the checkpoint before submitting).
+    const [repoRoot, indexDir, head] = await Promise.all([
+      findRepoRoot(cwd),
+      fs.mkdtemp(path.join(tmpdir(), 'agent-viewer-ckpt-')),
+      git(cwd, ['rev-parse', '--verify', 'HEAD']).catch(() => null),
+    ])
+    const indexFile = path.join(indexDir, 'index')
     try {
+      if (!repoRoot) return null
       const env = { GIT_INDEX_FILE: indexFile }
       await git(cwd, ['add', '-A'], { env })
       const tree = await git(cwd, ['write-tree'], { env })
-      const head = await git(cwd, ['rev-parse', '--verify', 'HEAD']).catch(() => null)
       const label = sanitizeLabel(meta.message ?? '')
       const body = JSON.stringify({ sessionId: meta.sessionId, provider: meta.provider, worktree: repoRoot })
       const commitArgs = ['commit-tree', tree, '-m', `${label}\n\n${body}`]

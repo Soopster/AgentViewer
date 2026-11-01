@@ -1,5 +1,6 @@
 import type { ToolResultBlock } from './types'
 import type { ThreadedMessage } from './threading'
+import { thinkingTranscriptText } from './reasoningDisplay'
 
 function toolResultToText(result: ToolResultBlock | null): string {
   if (!result) return ''
@@ -37,8 +38,8 @@ export function messageToCopyText(message: ThreadedMessage): string {
   for (const block of message.blocks) {
     if (block.type === 'text' && block.text) {
       parts.push(block.text)
-    } else if (block.type === 'thinking' && block.thinking) {
-      parts.push(block.thinking)
+    } else if (block.type === 'thinking') {
+      parts.push(thinkingTranscriptText(block))
     } else if (block.type === 'tool_thread') {
       const sections = [`[${block.toolUse.name}]`]
       const inputText = toolInputToText(block.toolUse.input)

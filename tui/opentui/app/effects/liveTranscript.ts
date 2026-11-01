@@ -11,7 +11,7 @@ import { liveMessageSessionKey } from '../../liveTranscriptState'
 import { type ThreadedMessage } from '../../../../lib/threading'
 import { AWAITING_PERSISTED_TURN_TIMEOUT_MS } from '../timing'
 import { keepFiltered } from '../collections'
-import { visibleComposerMessages } from '../../../../lib/composerTranscript'
+import { indexComposerMessages, visibleComposerMessages } from '../../../../lib/composerTranscript'
 import { summarizeDurableSessionMessages } from '../../messageFingerprint'
 import { hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline } from '../liveStream'
 import { sessionKey } from '../sessionList'
@@ -107,7 +107,7 @@ export type LiveTranscriptOverlayEffectContext = {
   awaitingPersistedTurn: boolean
   ownsComposerStream: (key: string) => boolean
   setLiveTranscriptMessages: React.Dispatch<React.SetStateAction<ThreadedMessage[]>>
-  persistedComposerMessages: { ids: Set<string>; recentUsers: ThreadedMessage[]; }
+  persistedComposerMessages: ReturnType<typeof indexComposerMessages>
   liveToolIndexesRef: React.MutableRefObject<Map<number, string>>
   liveToolInputJsonRef: React.MutableRefObject<Map<number, string>>
   setComposerLiveText: React.Dispatch<React.SetStateAction<string>>

@@ -1,4 +1,7 @@
 // Provider architecture extraction: SDK behavior preserved from the session backend.
+import { randomUUID } from 'node:crypto'
+import { createCodexReasoningTracker } from '../../../codexReasoning'
+import { saveCodexReasoningMetadata } from '../../../codexReasoningStore'
 import { parseQuestionAnswers, commandResultEvent, startTurnWatchdog, createTurnUsageReporter, parseAttachments, parseEffort, parseTurnRequestId } from '../runtimeCore'
 import { steerViewSession } from '../../../sessionSteering'
 import { listPendingProviderPermissionPayloads } from '../../../sessionControlPlane'
@@ -505,6 +508,7 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                 completionCloseTimer = setTimeout(() => closeStream(unsubscribe), 400);
             };
             const flushNotification = (notification: CodexNotification) => {
+                if (publishReasoning(notification)) return;
                 const payload = formatCodexNotification(notification);
                 if (!payload)
                     return;
@@ -554,17 +558,21 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                 const params = notification.params as {
                     itemId?: string;
                     delta?: string;
+                    summaryIndex?: number;
+                    contentIndex?: number;
                 };
                 const pendingParams = pendingDelta?.params as {
                     itemId?: string;
                     delta?: string;
+                    summaryIndex?: number;
+                    contentIndex?: number;
                 } | undefined;
                 if (typeof params.delta !== 'string' || typeof params.itemId !== 'string') {
                     flushPendingDelta();
                     flushNotification(notification);
                     return;
                 }
-                if (!pendingDelta || pendingDelta.method !== notification.method || pendingParams?.itemId !== params.itemId) {
+                if (!pendingDelta || pendingDelta.method !== notification.method || pendingParams?.itemId !== params.itemId || pendingParams?.summaryIndex !== params.summaryIndex || pendingParams?.contentIndex !== params.contentIndex) {
                     flushPendingDelta();
                     pendingDelta = notification;
                     scheduleDeltaFlush();
@@ -590,6 +598,16 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             // opencode stream consumes its harness.
             const subscription = subscribeToCodexEvents({ threadId: sessionId });
             const cachedSnapshot = subscription.snapshot;
+            const reasoning = createCodexReasoningTracker(sessionId, cachedSnapshot?.tokenUsage);
+            const publishReasoning = (notification: CodexNotification) => {
+                const messages = reasoning.update(notification);
+                for (const message of messages) safeEnqueue(`data: ${JSON.stringify({ type: 'codex_reasoning', message })}\n\n`);
+                if (messages.length && (notification.method === 'item/completed' || notification.method === 'turn/completed' || notification.method === 'thread/tokenUsage/updated')) {
+                    void saveCodexReasoningMetadata(sessionId, reasoning.metadata()).catch(() => {});
+                }
+                const item = (notification.params as { item?: { type?: string } }).item;
+                return messages.length > 0 || notification.method.startsWith('item/reasoning/') || item?.type === 'reasoning';
+            };
             let turnOutputUsage = {
                 lastTotalOutputTokens: cachedSnapshot?.tokenUsage?.total?.outputTokens ?? null,
                 outputTokens: 0,
@@ -658,6 +676,8 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             };
             const reportTurnUsage = createTurnUsageReporter(safeEnqueue);
             const emitTokenUsage = (tokenUsage: CodexThreadTokenUsage) => {
+                flushPendingDelta();
+                publishReasoning({ method: 'thread/tokenUsage/updated', params: { threadId: sessionId, turnId: targetTurnId ?? '', tokenUsage } } as CodexNotification);
                 const usage = mapCodexTokenUsageToContextUsage(tokenUsage, currentModel);
                 safeEnqueue(codexContextUsageToEventData(usage));
                 turnOutputUsage = advanceCodexTurnOutputUsage(turnOutputUsage, tokenUsage);
@@ -674,13 +694,18 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                     // Native mid-turn steering (the Codex CLI's type-while-running flow).
                     // expectedTurnId makes this fail cleanly if the turn just ended —
                     // the caller then falls back to queueing for the next turn.
-                    steer: (text) => client.request('turn/steer', {
-                        threadId: sessionId,
-                        expectedTurnId: turnId,
-                        input: buildCodexComposerInput(text, []),
-                    }),
+                    steer: async (text) => {
+                        const messageUuid = randomUUID();
+                        await client.request('turn/steer', {
+                            threadId: sessionId,
+                            expectedTurnId: turnId,
+                            clientUserMessageId: messageUuid,
+                            input: buildCodexComposerInput(text, []),
+                        });
+                        return messageUuid;
+                    },
                 });
-                safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'codex', turnId })}\n\n`);
+                safeEnqueue(`event: turn-accepted\ndata: ${JSON.stringify({ sessionId, provider: 'codex', turnId, messageUuid: turnRequestId })}\n\n`);
                 // Backstop a dropped turn/completed: if the notification stream goes
                 // silent, ask the app-server for the turn's actual status. A legit
                 // long-running tool call reports `inProgress` and the watchdog keeps
@@ -715,6 +740,8 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                     if (bufferedTurnId === turnId)
                         targetTurnObserved = true;
                     if (notification.method === 'turn/completed') {
+                        flushPendingDelta();
+                        publishReasoning(notification);
                         bufferedTurnCompleted = true;
                         continue;
                     }
@@ -814,6 +841,8 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                         continue;
                     }
                     if (notification.method === 'turn/completed') {
+                        flushPendingDelta();
+                        publishReasoning(notification);
                         scheduleCompletionClose(unsubscribe);
                         continue;
                     }
@@ -1205,6 +1234,8 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                         },
                     } : {}),
                     input: buildCodexComposerInput(codexInitPrompt ?? userMessage, attachments, cwdOverride),
+                    clientUserMessageId: turnRequestId,
+                    summary: 'auto',
                 } satisfies CodexRequestParams<'turn/start'>;
                 // No watchdog covers this call yet — it runs before activateTargetTurn
                 // sets up startTurnWatchdog above, so a hang here (e.g. the app-server

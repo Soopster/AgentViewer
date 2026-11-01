@@ -7,6 +7,7 @@ import { streamToolStatus, isStreamActivityThread, streamActivitySummary, isStre
 import { ClaudeSystemCard } from './message-item/ClaudeSystemCard'
 
 import { AsyncQuestionCard } from './AsyncQuestionCard'
+import { ThinkingSummary } from './message-view/ThinkingSummary'
 import ContextMessage from './ContextMessage'
 import { contextReferences, readComposerContext } from '@/lib/composerContext'
 
@@ -4176,6 +4177,10 @@ function RenderText({ block }: { block: TextBlock }) {
 }
 
 function RenderThinking({ block }: { block: ThinkingBlock }) {
+  return block.reasoning ? <ThinkingSummary block={block} /> : <LegacyThinking block={block} />
+}
+
+function LegacyThinking({ block }: { block: ThinkingBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const flat = useColorTreatment() === 'flat'
