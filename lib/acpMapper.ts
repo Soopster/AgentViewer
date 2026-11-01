@@ -3,12 +3,12 @@ import { inlineImageBlock } from './imageContent'
 // buffered ActiveSessionMessage stream) into the canonical SessionMessage
 // shape, following the same pattern as claudeMapper.ts/codexMapper.ts:
 // raw event -> local helpers -> SessionMessage.
-import type { ActiveSessionMessage } from '@agentclientprotocol/sdk'
+import type { ActiveSessionMessage } from '@agentclientprotocol/sdk/unstable'
 import type {
   ContentBlock as AcpContentBlock,
   SessionUpdate,
   ToolCallContent,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import type {
   AgentProvider,
   ApiMessage,

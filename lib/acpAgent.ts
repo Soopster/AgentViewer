@@ -61,7 +61,7 @@ import {
   type StopReason,
   type ToolCallContent,
   type ToolKind,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
   closeViewSession,

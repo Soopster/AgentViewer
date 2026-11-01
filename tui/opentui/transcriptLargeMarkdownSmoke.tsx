@@ -87,7 +87,7 @@ assert.ok(setup.captureCharFrame().includes(label(0)), setup.captureCharFrame())
 const findVirtual = (node: { id: string; getChildren(): unknown[] }): boolean => node.id.startsWith('virtual-row:') || node.getChildren().some(child => findVirtual(child as Parameters<typeof findVirtual>[0]))
 const baseline = process.env.STRUCTURED_MARKDOWN_PERF === '1'
 const expectVirtual = kind === 'paragraph' || rowCount > STRUCTURED_MARKDOWN_ROWS
-if (!baseline && expectVirtual) assert.ok(findVirtual(scroll.content), 'large Markdown must use block virtualization')
+if (!baseline && expectVirtual) assert.ok(scroll.content.getChildren().some(findVirtual), 'large Markdown must use block virtualization')
 const countNodes = (node: { getChildren(): unknown[] }): number => 1 + node.getChildren().reduce<number>((sum, child) => sum + countNodes(child as Parameters<typeof countNodes>[0]), 0)
 if (!baseline) assert.ok(countNodes(scroll.content) < 700, `large Markdown mounted ${countNodes(scroll.content)} native nodes at the top`)
 await act(async () => { scroll.scrollTo(Math.floor(scroll.scrollHeight / 2)) })

@@ -31,6 +31,7 @@ import type { AgentProvider } from './types';
 import { z } from 'zod';
 import { Type, type TSchema } from 'typebox';
 import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { Tool as CopilotTool, ToolNamespace } from '@github/copilot-sdk';
 import type { DynamicToolSpec } from './codex-schema/v2';
 import type { JsonValue } from './codex-schema/serde_json/JsonValue';
 import type { ExternalProtocolIdentity } from './agentProtocol';
@@ -189,12 +190,21 @@ export function registerCoordinatorPiTools(sessionId: string, identity: External
 }
 // ---- Copilot (zod-schema Tool[]) -------------------------------------------
 /** Build the coord_* tool set bound to one participant identity (Copilot SDK's Tool[]). */
-export function buildCoordinatorCopilotTools(identity: ExternalProtocolIdentity): unknown[] {
+const COPILOT_COORDINATOR_NAMESPACE: ToolNamespace = {
+    name: 'agent_viewer_coordinator',
+    description: 'Coordinate this participant: tasks, mailbox, findings, and path locks in the current Agent Viewer run.',
+};
+// Board/mailbox entry points and completion must be callable before discovery.
+const COPILOT_EAGER_COORDINATOR_TOOLS = new Set(['coord_status', 'coord_read_inbox', 'coord_claim_task', 'coord_complete_task', 'coord_send_message']);
+
+export function buildCoordinatorCopilotTools(identity: ExternalProtocolIdentity): CopilotTool<Record<string, unknown>>[] {
     return coordinatorToolSpecsForRole(identity.role).map((spec) => ({
         name: spec.name,
         description: spec.description,
         parameters: z.object(zodShape(spec.fields)),
         skipPermission: true,
+        namespace: COPILOT_COORDINATOR_NAMESPACE,
+        defer: COPILOT_EAGER_COORDINATOR_TOOLS.has(spec.name) ? 'never' as const : 'auto' as const,
         async handler(args: Record<string, any>) {
             const { text, isError } = await callJson(identity, spec.action, spec.mapArgs(args));
             if (isError)

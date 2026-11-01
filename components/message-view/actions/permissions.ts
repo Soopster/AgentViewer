@@ -1,3 +1,4 @@
+import type { QuestionResponseOptions } from '../../../lib/claudeQuestionOutcomes'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { Session } from '../../../lib/types'
@@ -85,7 +86,7 @@ export type RespondToQuestionContext = {
   setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
 }
 
-export async function runRespondToQuestion(ctx: RespondToQuestionContext, permission: PendingPermission, answers: PendingQuestionAnswers) {
+export async function runRespondToQuestion(ctx: RespondToQuestionContext, permission: PendingPermission, answers: PendingQuestionAnswers, options?: QuestionResponseOptions) {
   const {
     session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
     setPendingPermissions,
@@ -102,6 +103,7 @@ export async function runRespondToQuestion(ctx: RespondToQuestionContext, permis
         action: 'respondQuestion',
         permissionId: permission.id,
         answers,
+        ...(permission.provider === 'claude' && permission.supportsQuestionOutcomes ? options : {}),
         provider: session.provider,
         providerInstanceId: session.providerInstanceId,
       }),

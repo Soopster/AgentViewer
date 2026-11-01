@@ -48,6 +48,8 @@ export type PendingElicitation = {
 }
 
 export type PendingPermission = {
+  /** Claude init explicitly advertises typed unanswered-question annotations. */
+  supportsQuestionOutcomes?: boolean
   /** Local follow-up picker; answers enter the composer, never an approval RPC. */
   asyncQuestion?: boolean
   providerInstanceId?: string
@@ -653,6 +655,7 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
         toolName,
         title: questions.length === 1 ? questions[0].question : `Claude has ${questions.length} questions`,
         questions,
+        supportsQuestionOutcomes: data.supportsQuestionOutcomes === true,
       }
     }
   }

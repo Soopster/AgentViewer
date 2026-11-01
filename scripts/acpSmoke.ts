@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
-import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
+import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk/unstable'
 
 const child = spawn(process.execPath, [
   'run',

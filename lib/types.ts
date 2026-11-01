@@ -32,6 +32,8 @@ export type ToolResultBlock = {
   mcpMeta?: Record<string, unknown>
   /** Claude SDK sidecar metadata classifying denied/interrupted/cancelled results. */
   tool_result_meta?: Record<string, unknown>
+  /** Structured question output, including annotations the model text omits. */
+  questionResult?: import('./askUserAnswers').AskUserAnswers
 }
 export type ThinkingBlock = { type: 'thinking'; thinking: string; signature?: string }
 export type ImageBlock = {

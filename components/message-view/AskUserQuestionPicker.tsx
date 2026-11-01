@@ -1,4 +1,5 @@
 'use client'
+import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { useState, useSyncExternalStore } from 'react'
 import { type ColorTreatment, subscribeColorTreatment, getCurrentColorTreatment, DEFAULT_COLOR_TREATMENT } from '../../lib/colorTreatment'
 import { type PendingPermission, type PendingQuestionAnswers, initialQuestionState } from '../../lib/permissions'
@@ -10,7 +11,7 @@ import { Input } from '../ui/input'
 export function AskUserQuestionPicker(props: {
   permission: PendingPermission
   busy: boolean
-  onSubmit: (answers: PendingQuestionAnswers) => void
+  onSubmit: (answers: PendingQuestionAnswers, options?: QuestionResponseOptions) => void
   onCancel: () => void
 }) {
   // Codex's requestUserInput gets the CLI's tabbed questionnaire (one tab per
@@ -23,7 +24,7 @@ export function AskUserQuestionPicker(props: {
 type PickerProps = {
   permission: PendingPermission
   busy: boolean
-  onSubmit: (answers: PendingQuestionAnswers) => void
+  onSubmit: (answers: PendingQuestionAnswers, options?: QuestionResponseOptions) => void
   onCancel: () => void
 }
 
@@ -36,6 +37,7 @@ function StackedQuestionPicker({ permission, busy, onSubmit, onCancel }: PickerP
   const [selections, setSelections] = useState(() => initialQuestionState(questions).selections)
   const [freeformAnswers, setFreeformAnswers] = useState(() => initialQuestionState(questions).freeformAnswers)
   const [openPreview, setOpenPreview] = useState<string | null>(null)
+  const [chatReply, setChatReply] = useState<string | null>(null)
   const flat = useColorTreatmentFlat()
 
   const toggle = (qi: number, multiSelect: boolean, label: string) => {
@@ -243,10 +245,25 @@ function StackedQuestionPicker({ permission, busy, onSubmit, onCancel }: PickerP
           </div>
         )
       })}
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+      {permission.supportsQuestionOutcomes && chatReply !== null ? (
+        <form onSubmit={(event) => {
+          event.preventDefault()
+          if (chatReply.trim() && !busy) onSubmit({}, { unanswered: 'replied_in_chat', response: chatReply.trim() })
+        }} style={{ display: 'flex', gap: 6 }}>
+          <Input autoFocus value={chatReply} onChange={(event) => setChatReply(event.target.value)} disabled={busy}
+            aria-label="Reply to Claude" placeholder="Reply in your own words…" />
+          <Button type="submit" size="sm" disabled={busy || !chatReply.trim()}>Send reply</Button>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setChatReply(null)}>Back</Button>
+        </form>
+      ) : null}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+        {permission.supportsQuestionOutcomes ? <>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setChatReply('')}>Reply in chat</Button>
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onSubmit({}, { unanswered: 'dismissed' })}>Dismiss</Button>
+        </> : null}
         <Button
           type="button"
-          onClick={onCancel}
+          onClick={() => permission.supportsQuestionOutcomes ? onSubmit({}, { unanswered: 'skipped' }) : onCancel()}
           disabled={busy}
           variant="outline"
           size="sm"

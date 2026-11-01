@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
+import { SkillsClient } from '@modelcontextprotocol/client/ext/skills'
+import assert from 'node:assert/strict'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
 import { COORD_TOOL_SPECS } from '../lib/coordinatorToolContract.mjs'
@@ -334,6 +336,24 @@ try {
     if (!resourceUris.has(uri)) throw new Error(`Bridge resource missing: ${uri}`)
   }
   const skill = await client.readResource({ uri: 'skill://coordinate-agents/SKILL.md' })
+  const catalog = new SkillsClient(client)
+  assert.equal(catalog.supported, true)
+  assert.equal(catalog.directoryRead, true)
+  const listedSkills = await catalog.list()
+  assert.equal(listedSkills.skills.length, 1, 'Only bundled Coordinator guidance is published')
+  assert.equal(listedSkills.cacheScope, 'public')
+  const entry = listedSkills.skills[0]
+  assert.equal(entry.uri, 'skill://coordinate-agents/SKILL.md')
+  assert.equal(entry.resources.length, 3)
+  assert.deepEqual((await catalog.get(entry.uri)).skill, entry)
+  const manifest = await catalog.read(entry)
+  assert.equal(manifest.verified, true)
+  assert.equal(manifest.text, skill.contents[0].text, 'Native catalog and legacy resource must serve identical bytes')
+  const reference = await catalog.read(entry, 'references/protocol-and-hosts.md')
+  assert.equal(reference.verified, true)
+  assert.match(reference.text, /MCP discovery and host features/)
+  assert.equal((await catalog.readDirectory('skill://coordinate-agents/references')).resources.length, 2)
+  await assert.rejects(catalog.read(entry, 'private-notes.md'), (error) => error.reason === 'unlisted')
   if (!skill.contents.some((entry) => (
     entry.text?.includes('## Multi-agent startup invariant')
     && entry.text?.includes('## Shared-checkout guardrails')
@@ -795,6 +815,10 @@ try {
   try {
     await legacyClient.connect(legacyTransport)
     if (legacyClient.getProtocolEra() !== 'legacy') throw new Error('Bridge did not preserve legacy MCP clients')
+    const legacyIndex = await legacyClient.readResource({ uri: 'skill://index.json' })
+    assert.equal(JSON.parse(legacyIndex.contents[0].text)[0].url, 'skill://coordinate-agents/SKILL.md')
+    const legacySkill = await legacyClient.readResource({ uri: 'skill://coordinate-agents/SKILL.md' })
+    assert.equal(legacySkill.contents[0].text, manifest.text, 'Clients without native skill methods keep the resource fallback')
     const legacyTools = await legacyClient.listTools()
     if (!legacyTools.tools.some((tool) => tool.name === 'coord_status')) {
       throw new Error('Legacy MCP client could not discover Coordinator tools')

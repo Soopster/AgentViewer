@@ -13,7 +13,7 @@
  * provider is currently active in this agentViewer install.
  */
 import { Readable, Writable } from 'node:stream'
-import { ndJsonStream } from '@agentclientprotocol/sdk'
+import { ndJsonStream } from '@agentclientprotocol/sdk/unstable'
 import { createAcpAgentApp } from '../lib/acpAgent'
 import { isAgentProvider } from '../lib/provider'
 import { getConfiguredProvider } from '../lib/providerState'

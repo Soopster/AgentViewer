@@ -1,3 +1,4 @@
+import { claudeQuestionOutcomeCapability } from './claudeQuestionOutcomes'
 import {
   query,
   type CanUseTool,
@@ -60,6 +61,7 @@ export type ClaudeBridgeBox = {
   fn: CanUseTool | null
   elicit: ClaudeElicitationHandler | null
   dialog: OnUserDialog | null
+  supportsQuestionOutcomes?: boolean
 }
 
 /**
@@ -329,6 +331,7 @@ export type ClaudePoolEntry = {
   isAlive(): boolean
   /** True once the CLI has answered its initialize control request. */
   isInitialized(): boolean
+  supportsQuestionOutcomes?(): boolean
   /**
    * Resolve when startup initialization finishes. A selection-time prewarm can
    * hand the entry to a send before this settles; callers use this distinction
@@ -750,6 +753,8 @@ class ClaudePool {
     try {
       for await (const message of entry.query) {
         if (!entry.alive) break
+        const outcomes = claudeQuestionOutcomeCapability(message)
+        if (outcomes !== undefined) entry.bridgeBox.supportsQuestionOutcomes = outcomes
         // A streaming query is active by definition — keep the LRU/idle-sweep
         // ordering honest even when no run() subscriber is attached (e.g. a
         // steered follow-up turn the CLI started after the stream detached).
@@ -1000,6 +1005,7 @@ class ClaudePool {
       pushUserMessage: (msg) => entry.pushUserMessage(msg),
       isAlive: () => entry.alive,
       isInitialized: () => entry.initialized,
+      supportsQuestionOutcomes: () => entry.bridgeBox.supportsQuestionOutcomes === true,
       whenInitialized: () => entry.initialization,
       whenConfigured: async () => {
         await configuration

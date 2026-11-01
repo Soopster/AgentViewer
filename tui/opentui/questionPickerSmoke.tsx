@@ -10,6 +10,10 @@ import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
+import assert from 'node:assert/strict'
+
+const outcomeMode = process.env.QUESTION_OUTCOME_SMOKE
+const actions: Record<string, unknown>[] = []
 
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-question-smoke-')))
 
@@ -61,6 +65,7 @@ const RUNNING = [{
     requestId: 'question-smoke-request',
     sessionId: SESSION_ID,
     toolName: 'AskUserQuestion',
+    supportsQuestionOutcomes: Boolean(outcomeMode && outcomeMode !== 'older'),
     input: { questions: QUESTIONS },
   }],
   pendingPermissions: [],
@@ -90,6 +95,11 @@ mock.module('../../lib/tui/service', () => ({
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
   listTuiRunningSessions: async () => RUNNING,
   readTuiRuntimeActivity: async () => ({ running: RUNNING, waiting: [], attention: [] }),
+  runTuiSessionAction: async (_session: unknown, action: Record<string, unknown>) => {
+    actions.push(action)
+    RUNNING[0]!.pendingPrompts = []
+    return { ok: true }
+  },
 }))
 
 const { default: OpenTuiApp } = await import('./App')
@@ -125,7 +135,25 @@ try {
     }
   }
 
-  console.log('OpenTUI AskUserQuestion picker smoke passed')
+  if (outcomeMode) {
+    if (outcomeMode === 'replied_in_chat') {
+      assert.match(frame, /r reply/)
+      await act(async () => { setup.mockInput.pressKey('r'); await setup.flush() })
+      assert.match(setup.captureCharFrame(), /Reply:/)
+      await act(async () => { await setup.mockInput.typeText('Use a simpler approach'); await setup.flush() })
+      assert.match(setup.captureCharFrame(), /Use a simpler approach/)
+      await act(async () => { setup.mockInput.pressEnter(); await setup.flush() })
+    } else if (outcomeMode === 'dismissed') {
+      await act(async () => { setup.mockInput.pressKey('d'); await setup.flush() })
+    } else {
+      await act(async () => { setup.mockInput.pressEscape(); await setup.flush() })
+    }
+    assert.equal(actions.length, 1)
+    assert.equal(actions[0]!.action, outcomeMode === 'older' ? 'respondPermission' : 'respondQuestion')
+    assert.equal(actions[0]!.unanswered, outcomeMode === 'older' ? undefined : outcomeMode)
+    if (outcomeMode === 'replied_in_chat') assert.equal(actions[0]!.response, 'Use a simpler approach')
+    console.log(`OpenTUI question outcome passed (${outcomeMode})`)
+  } else console.log('OpenTUI AskUserQuestion picker smoke passed')
 } finally {
   act(() => {
     setup.renderer.destroy()

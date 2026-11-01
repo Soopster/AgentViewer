@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
 import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
@@ -2690,13 +2691,13 @@ function OpenTuiWorkspace() {
 
   // Submit the AskUserQuestion answers back into the running turn (allows the
   // tool with the user's selections merged into its input).
-  const submitTuiQuestion = useStableEvent(async (permission: PendingPermission) => runSubmitTuiQuestion({
+  const submitTuiQuestion = useStableEvent(async (permission: PendingPermission, options?: QuestionResponseOptions) => runSubmitTuiQuestion({
     composerTargetSession, permissionActionLoading, questionSelections, questionFreeformAnswers,
     setQuestionFocusIndex, setQuestionOptionIndex, setAsyncQuestionPrompt, showNotice,
     composerTextareaRef, composerDraft, setComposerDraft, setComposerActive, setFocusedPane,
     setPermissionActionLoading, setLiveTranscriptMessages, setPendingPermissions,
     setQuestionSelections, setQuestionFreeformAnswers, setQuestionFreeformEditing,
-  }, permission))
+  }, permission, options))
 
   // Desktop-notify that a background turn is blocked on a prompt the user
   // can't see (mirrors the slow-send OSC notification; BMP-sanitized).

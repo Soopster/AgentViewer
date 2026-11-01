@@ -1,3 +1,4 @@
+import type { QuestionResponseOptions } from '../../../../lib/claudeQuestionOutcomes'
 import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
 import type { Dispatch } from 'react'
@@ -80,7 +81,7 @@ export type SubmitTuiQuestionContext = {
   setQuestionFreeformEditing: React.Dispatch<React.SetStateAction<boolean>>
 }
 
-export async function runSubmitTuiQuestion(ctx: SubmitTuiQuestionContext, permission: PendingPermission) {
+export async function runSubmitTuiQuestion(ctx: SubmitTuiQuestionContext, permission: PendingPermission, options?: QuestionResponseOptions) {
   const {
     composerTargetSession, permissionActionLoading, questionSelections, questionFreeformAnswers,
     setQuestionFocusIndex, setQuestionOptionIndex, setAsyncQuestionPrompt, showNotice,
@@ -92,7 +93,9 @@ export async function runSubmitTuiQuestion(ctx: SubmitTuiQuestionContext, permis
   if (!target || permissionActionLoading) return
   const questions = permission.questions ?? []
   const { answers, missingIndex } = collectQuestionAnswers(questions, questionSelections, questionFreeformAnswers)
-  if (missingIndex !== null) {
+  const responseOptions = permission.provider === 'claude' && permission.supportsQuestionOutcomes ? options : undefined
+  if (responseOptions?.unanswered === 'replied_in_chat' && !responseOptions.response?.trim()) return
+  if (missingIndex !== null && !responseOptions?.unanswered) {
     // Jump focus to the first unanswered question instead of submitting.
     setQuestionFocusIndex(missingIndex)
     setQuestionOptionIndex(0)
@@ -118,7 +121,7 @@ export async function runSubmitTuiQuestion(ctx: SubmitTuiQuestionContext, permis
   try {
     await runTuiSessionAction(
       { ...target, sessionId: permission.sessionId ?? target.sessionId },
-      { action: 'respondQuestion', permissionId: permission.id, answers, provider: target.provider },
+      { action: 'respondQuestion', permissionId: permission.id, answers: responseOptions?.unanswered ? {} : answers, ...responseOptions, provider: target.provider },
     )
     setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, answers))
     setPendingPermissions((prev) => keepFiltered(prev, (entry) => entry.id !== permission.id))

@@ -7,6 +7,7 @@ export type PendingClaudePermission = {
     resolve: (result: PermissionResult) => void;
     suggestions?: PermissionUpdate[];
     input?: Record<string, unknown>;
+    supportsQuestionOutcomes?: boolean;
     // The exact `data` payload sent in the permission.requested frame, retained so
     // a client that reconnects mid-turn can re-surface the still-pending prompt
     // (the resolver stays valid and is answered by id, independent of the stream

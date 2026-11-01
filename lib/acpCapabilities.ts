@@ -33,7 +33,7 @@ import {
   type ClientContext,
   type SessionInfo as AcpSessionInfo,
   type SessionNotification,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import { acpAgentKey, CUSTOM_ACP_UNCONFIGURED, isAcpAgentConfigured, resolveAcpAgentSpawn, type AcpAgentKind } from './acpAgentSpawn'
 import { currentProviderEnvironment } from './providerInstances'
 import type { AcpBufferedMessage } from './acpClientPool'

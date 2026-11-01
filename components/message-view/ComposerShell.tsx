@@ -1,3 +1,4 @@
+import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { useState } from 'react'
 import type { DragEvent } from 'react'
 import type { Dispatch } from 'react'
@@ -116,7 +117,7 @@ type ComposerShellProps = {
   setResumeFromMessageId: Dispatch<SetStateAction<string | null>>
   pendingPermissions: PendingPermission[]
   sessionActionLoading: string | null
-  respondToQuestion: (permission: PendingPermission, answers: PendingQuestionAnswers) => Promise<void>
+  respondToQuestion: (permission: PendingPermission, answers: PendingQuestionAnswers, options?: QuestionResponseOptions) => Promise<void>
   respondToPermission: (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => Promise<void>
   respondToPlan: (permission: PendingPermission, decision: 'acceptEdits' | 'default' | 'reject') => Promise<void>
   attachmentPanelOpen: boolean
@@ -729,7 +730,7 @@ export function ComposerShell(props: ComposerShellProps) {
                       key={permission.id}
                       permission={permission}
                       busy={sessionActionLoading === `permission:${permission.id}`}
-                      onSubmit={(answers) => respondToQuestion(permission, answers)}
+                      onSubmit={(answers, options) => respondToQuestion(permission, answers, options)}
                       onCancel={() => respondToPermission(permission, 'reject')}
                     />
                   ) : permission.toolName === 'ExitPlanMode' ? (

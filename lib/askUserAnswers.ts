@@ -1,7 +1,41 @@
+import { isQuestionUnansweredOutcome, type QuestionAnnotation } from './claudeQuestionOutcomes'
+import type { ToolResultBlock } from './types'
 export type AskUserOption = { label: string; description?: string; preview?: string }
 export type AskUserQuestionSpec = { question: string; header?: string; multiSelect?: boolean; options: AskUserOption[] }
-export type AskUserAnnotation = { preview?: string; notes?: string }
-export type AskUserAnswers = { answers?: Record<string, string>; annotations?: Record<string, AskUserAnnotation> }
+export type AskUserAnnotation = QuestionAnnotation
+export type AskUserAnswers = { answers?: Record<string, string>; annotations?: Record<string, AskUserAnnotation>; response?: string }
+
+export function questionOutcomeLabel(question: Pick<AskUserQuestionSpec, 'question'>, result: AskUserAnswers): string | null {
+  const outcome = result.annotations?.[question.question]?.unanswered
+  return !isQuestionUnansweredOutcome(outcome) ? null : outcome === 'replied_in_chat' ? 'replied in chat' : outcome
+}
+
+export function questionOutcomeSummary(questions: Pick<AskUserQuestionSpec, 'question'>[], result: AskUserAnswers): string | null {
+  const outcomes = questions.map(question => questionOutcomeLabel(question, result))
+  if (!outcomes.some(Boolean)) return null
+  return outcomes.every(outcome => outcome === outcomes[0]) ? outcomes[0]! : 'completed with unanswered questions'
+}
+
+/** AskUserQuestion's SDK sidecar carries UI-only annotations absent from model text. */
+export function attachAskUserResultSidecar(results: ToolResultBlock[], raw: unknown): ToolResultBlock[] {
+  if (results.length !== 1 || !raw || typeof raw !== 'object' || Array.isArray(raw)) return results
+  const value = raw as Record<string, unknown>
+  if (!Array.isArray(value.questions) || !value.answers || typeof value.answers !== 'object' || Array.isArray(value.answers)) return results
+  const answers = Object.fromEntries(Object.entries(value.answers).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  const annotations: Record<string, AskUserAnnotation> = Object.create(null)
+  if (value.annotations && typeof value.annotations === 'object' && !Array.isArray(value.annotations)) {
+    for (const [question, rawAnnotation] of Object.entries(value.annotations)) {
+      if (!rawAnnotation || typeof rawAnnotation !== 'object') continue
+      const entry = rawAnnotation as Record<string, unknown>
+      annotations[question] = {
+        ...(typeof entry.preview === 'string' ? { preview: entry.preview } : {}),
+        ...(typeof entry.notes === 'string' ? { notes: entry.notes } : {}),
+        ...(isQuestionUnansweredOutcome(entry.unanswered) ? { unanswered: entry.unanswered } : {}),
+      }
+    }
+  }
+  return [{ ...results[0]!, questionResult: { answers, annotations, ...(typeof value.response === 'string' ? { response: value.response } : {}) } }]
+}
 
 /** `"<question>"="<answer>"` pairs, comma-separated, as the tool's plain
  * confirmation string reports them. Backslash escapes are honoured so a quote
@@ -15,7 +49,8 @@ function unescapeConfirmation(value: string): string {
 /** The result arrives either as a JSON answers map or as the plain
  * confirmation string. Both reduce to the same question → answer map, so
  * callers never have to sniff the raw text for option labels. */
-export function parseAskUserAnswers(raw: string | null | undefined): AskUserAnswers {
+export function parseAskUserAnswers(raw: string | null | undefined, sidecar?: AskUserAnswers): AskUserAnswers {
+  if (sidecar) return sidecar
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw) as AskUserAnswers

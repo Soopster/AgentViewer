@@ -115,7 +115,7 @@ const press = async (key: string, ms = 180, ctrl = false, shift = false) => {
 }
 const scroll = () => setup.renderer.root.findDescendantById('transcript-scroll') as ScrollBoxRenderable
 const primarySession = () => {
-  const nodes = [scroll().content]
+  const nodes = [...scroll().content.getChildren()]
   const identities = new Set<string>()
   while (nodes.length) {
     const node = nodes.pop()!
@@ -123,7 +123,7 @@ const primarySession = () => {
       const session = sessions.slice(0, 3).find((session) => node.id.includes(session.sessionId))
       if (session) identities.add(session.sessionId)
     }
-    nodes.push(...node.getChildren() as typeof nodes)
+    nodes.push(...node.getChildren())
   }
   assert.equal(identities.size, 1, 'primary transcript contains one distinct session identity')
   return [...identities][0]

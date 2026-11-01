@@ -263,6 +263,12 @@ for (const [label, content] of [
 }
 const startupCardText = JSON.stringify(formatTranscriptCards(buildThreadedMessages(historyStartup)).flatMap((card) => (card.expandedLines ?? card.lines).map((cardLine) => cardLine.text)))
 assert.ok(startupCardText.includes('fix: '), 'TUI result card does not show the startup failure fix')
+// SDK 0.3.314 adds a distinct failure when a required sandbox cannot run.
+const sandboxFailure = { ...startupFailure, errors: ['Sandbox unavailable'], startup_failure_reason: 'sandbox_required_unavailable' }
+const sandboxHistory = normalizeClaudeHistoryMessages([sandboxFailure])
+assert.ok(JSON.stringify(normalizeClaudeStreamThreadedMessage(sandboxFailure)).includes('requires a working sandbox'))
+assert.ok(JSON.stringify(sandboxHistory).includes('requires a working sandbox'))
+assert.ok(JSON.stringify(formatTranscriptCards(buildThreadedMessages(sandboxHistory))).includes('requires a working sandbox'))
 // An unknown reason gets no invented hint.
 assert.equal(
   JSON.stringify(normalizeClaudeHistoryMessages([{ ...startupFailure, startup_failure_reason: 'not_a_reason' }])).includes('working directory was deleted'),

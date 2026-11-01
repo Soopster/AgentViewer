@@ -6,6 +6,7 @@ import {
   ProtocolError,
   ProtocolErrorCode,
 } from '@modelcontextprotocol/server'
+import { SkillsExtension, memorySkillFiles } from '@modelcontextprotocol/server/ext/skills'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -31,7 +32,6 @@ import { callerAgentProvider } from '../lib/inheritedIdentityEnv.mjs'
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
 const MCP_UI_EXTENSION = 'io.modelcontextprotocol/ui'
-const MCP_SKILLS_EXTENSION = 'io.modelcontextprotocol/skills'
 const MCP_TASKS_EXTENSION = 'io.modelcontextprotocol/tasks'
 const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
 const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
@@ -46,6 +46,13 @@ const coordinatorProtocolReferenceMarkdown = await readFile(new URL('../.agents/
 const coordinatorPlaybookReferenceMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/references/playbooks-and-memory.md', import.meta.url), 'utf8')
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
   ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
+// Publish only the bundled Coordinator guidance, never arbitrary workspace/user skills.
+// Snapshot the exact bytes also served by the legacy resource URLs.
+const coordinatorSkillCatalog = await SkillsExtension.load(memorySkillFiles({
+  'coordinate-agents/SKILL.md': coordinatorSkillMarkdown,
+  'coordinate-agents/references/protocol-and-hosts.md': coordinatorProtocolReferenceMarkdown,
+  'coordinate-agents/references/playbooks-and-memory.md': coordinatorPlaybookReferenceMarkdown,
+}), { strict: true, cacheHint: { ttlMs: 60_000, cacheScope: 'public' } })
 const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_MCP_TASK_POLL_INTERVAL_MS = 2_000
 const COORD_FINDING_DETAIL_MAX_CHARS = 32_000
@@ -549,14 +556,14 @@ async function requestJson(path, init, timeoutMs = 10_000) {
         ...(init?.headers ?? {}),
       },
     })
-    const payload = await response.json().catch(() => null)
     if (!response.ok) {
+      const payload = await response.json().catch(() => null)
       const detail = payload && typeof payload.error === 'string'
         ? payload.error
         : `${response.status} ${response.statusText}`
       throw new Error(`Agent Viewer request failed: ${detail}`)
     }
-    return payload
+    return await response.json().catch(() => null)
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error(`Agent Viewer did not respond at ${baseUrl}`)
@@ -737,7 +744,6 @@ const server = new McpServer(
       resources: { subscribe: coordinatorTransport() === 'ahp' },
       extensions: {
         [MCP_UI_EXTENSION]: { mimeTypes: ['text/html;profile=mcp-app'] },
-        [MCP_SKILLS_EXTENSION]: {},
         [MCP_TASKS_EXTENSION]: {},
       },
     },
@@ -761,6 +767,7 @@ const server = new McpServer(
   },
 )
 
+coordinatorSkillCatalog.attach(server)
 installMcpTasksHandlers(server)
 ahpClient.onAction((envelope) => {
   const channel = typeof envelope?.channel === 'string' ? envelope.channel : ''
@@ -814,21 +821,6 @@ server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKIL
       url: COORDINATOR_SKILL_URI,
     }]),
   }],
-}))
-
-server.registerResource('Coordinate agents skill', COORDINATOR_SKILL_URI, {
-  title: 'Coordinate agents',
-  description: 'Progressively disclosed operating instructions for Agent Viewer Coordinator.',
-  mimeType: 'text/markdown',
-  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
-  _meta: {
-    'io.modelcontextprotocol.skills/frontmatter': {
-      name: 'coordinate-agents',
-      description: coordinatorSkillDescription,
-    },
-  },
-}, async (uri) => ({
-  contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorSkillMarkdown }],
 }))
 
 server.registerResource('Coordinate agents protocol and hosts reference', COORDINATOR_PROTOCOL_REFERENCE_URI, {

@@ -250,8 +250,6 @@ export function useReaderWindowSliding({
       const sb = scrollRef.current
       if (!sb) return
       const content = sb.content
-      const contentLayout = readReaderLayout(content)
-      if (!contentLayout) return
       const scrollTop = sb.scrollTop
       let nextTop = scrollTop
       if (fixup.kind === 'anchor') {
@@ -274,9 +272,7 @@ export function useReaderWindowSliding({
           nextTop = startsAbove === height < viewportRows ? offset : offset + height - viewportRows
         }
       }
-      // The scrollbar clamps to the content height it last saw, which is the
-      // old window's until the content box is positioned later this frame.
-      sb.verticalScrollBar.scrollSize = Math.max(contentLayout.height, 1)
+      // Native scrollbars derive their extent from the current layout.
       sb.scrollTo(Math.max(0, nextTop))
       seenRef.current.top = sb.scrollTop
       onScrolledEvent(sb.scrollTop)

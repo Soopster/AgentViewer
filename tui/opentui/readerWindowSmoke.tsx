@@ -79,7 +79,7 @@ const mountedCards = (sb: ScrollBoxRenderable): Mounted[] => {
     }
     if (depth < 4) for (const child of node.getChildren()) visit(child as Parameters<typeof visit>[0], depth + 1)
   }
-  visit(sb.content as unknown as Parameters<typeof visit>[0], 0)
+  for (const child of sb.content.getChildren()) visit(child, 1)
   return found.sort((left, right) => left.index - right.index)
 }
 

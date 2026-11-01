@@ -89,12 +89,6 @@ function createClientOptions(): CopilotClientOptions {
   const telemetry = readCopilotTelemetry()
   if (telemetry) options.telemetry = telemetry
 
-  // Opt in to Mission Control via env. Default off because agent-viewer is a
-  // local observer; remote sessions would surface in GitHub web/mobile.
-  if (isEnvFlagEnabled(process.env.COPILOT_REMOTE) && !cliUrl) {
-    options.enableRemoteSessions = true
-  }
-
   return options
 }
 

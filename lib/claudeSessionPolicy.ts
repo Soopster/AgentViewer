@@ -235,6 +235,14 @@ export function formatClaudeMcpServerStatus(
 // producing a meter that reads near-full on an empty session, with no error.
 type ContextCategoryRow = { name: string; tokens: number; kind?: string }
 
+const CONTEXT_CATEGORY_NAMES: Record<string, string> = {
+  system_prompt: 'System prompt', system_tools: 'System tools', mcp_tools: 'MCP tools',
+  mcp_instructions: 'MCP instructions', mcp_tools_deferred: 'Deferred MCP tools',
+  system_tools_deferred: 'Deferred system tools', custom_agents: 'Custom agents',
+  memory_files: 'Memory files', skills: 'Skills', messages: 'Messages',
+  autocompact_buffer: 'Autocompact buffer', compact_buffer: 'Compaction buffer', free_space: 'Free space',
+}
+
 export type ClaudeContextBreakdown = {
   items: string[]
   /** Tokens that actually occupy the window: 'used' rows only. */
@@ -262,8 +270,9 @@ export function claudeContextBreakdown(usage: unknown, maxTokens?: number): Clau
   const rows = asArray(record.categories).flatMap((raw): ContextCategoryRow[] => {
     const row = asRecord(raw)
     if (!row) return []
-    const name = str(row, 'name')
-    const tokens = typeof row.tokens === 'number' ? row.tokens : 0
+    const id = str(row, 'id')
+    const name = Object.hasOwn(CONTEXT_CATEGORY_NAMES, id) ? CONTEXT_CATEGORY_NAMES[id]! : str(row, 'name')
+    const tokens = typeof row.tokens === 'number' && Number.isFinite(row.tokens) && row.tokens >= 0 ? row.tokens : 0
     if (!name) return []
     return [{ name, tokens, kind: typeof row.kind === 'string' ? row.kind : undefined }]
   })
@@ -295,6 +304,44 @@ export function claudeContextBreakdown(usage: unknown, maxTokens?: number): Clau
   push('deferred (out of window, not counted)', group('deferred'))
   push('unclassified (older CLI)', group(undefined))
 
+  const instructions = asArray(record.mcpInstructions).flatMap((raw) => {
+    const entry = asRecord(raw)
+    return entry && typeof entry.serverName === 'string' && typeof entry.tokens === 'number'
+      && Number.isFinite(entry.tokens) && entry.tokens >= 0
+      ? [{ name: revealRuleText(entry.serverName), tokens: entry.tokens }] : []
+  })
+  push('MCP instructions by server (estimated shares; already counted above)', instructions
+    .sort((a, b) => b.tokens - a.tokens)
+    .map((entry) => `  ${entry.name} · ${formatTokens(entry.tokens)}`))
+
   if (window > 0) items.unshift(`window · ${formatTokens(window)}`)
   return { items, usedTokens }
+}
+
+/** The SDK prices cache writes itself; lifetime counts are subsets, never extra usage. */
+export function claudeCacheUsageItems(modelUsage: unknown): string[] {
+  const models = asRecord(modelUsage)
+  if (!models) return []
+  const count = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+  return Object.entries(models).flatMap(([model, value]) => {
+    const usage = asRecord(value)
+    if (!usage) return []
+    const total = count(usage.cacheCreationInputTokens)
+    const read = count(usage.cacheReadInputTokens)
+    if (total === null && read === null) return []
+    const five = count(usage.cacheCreationEphemeral5mInputTokens)
+    const hour = count(usage.cacheCreationEphemeral1hInputTokens)
+    const lines = [revealRuleText(model)]
+    if (read !== null) lines.push(`  cache reads · ${formatTokens(read)}`)
+    if (total !== null) lines.push(`  cache writes · ${formatTokens(total)}`)
+    lines.push(`  5-minute writes · ${five === null ? 'not reported' : formatTokens(five)}`)
+    lines.push(`  1-hour writes · ${hour === null ? 'not reported' : formatTokens(hour)}`)
+    if (total !== null) {
+      const unknown = Math.max(0, total - (five ?? 0) - (hour ?? 0))
+      if (unknown > 0) lines.push(`  lifetime unknown · ${formatTokens(unknown)}`)
+      if ((five ?? 0) + (hour ?? 0) > total) lines.push('  lifetime breakdown exceeds reported total; totals kept unchanged')
+    }
+    lines.push('  Lifetime counts are included in total writes; older turns may lack the breakdown.')
+    return lines
+  })
 }

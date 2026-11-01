@@ -427,6 +427,7 @@ const STARTUP_FAILURE_HINTS: Record<string, string> = {
   worktree_unverified: "The session's worktree could not be verified right now. Retrying may succeed.",
   cli_version_too_old: 'This Claude Code version is below the minimum required. Update the CLI.',
   bypass_root: 'Bypass-permissions mode cannot run as root. Pick another permission mode.',
+  sandbox_required_unavailable: 'This session requires a working sandbox, but it is unavailable. Install the required sandbox support or ask your administrator to review the requirement.',
 }
 
 export function claudeStartupFailureHint(reason: unknown): string | null {

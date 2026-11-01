@@ -1,5 +1,5 @@
 import type { ToolThread } from '../../lib/threading'
-import { answerTextFor, parseAskUserAnswers, selectedOptionLabels, type AskUserQuestionSpec } from '../../lib/askUserAnswers'
+import { answerTextFor, parseAskUserAnswers, questionOutcomeLabel, questionOutcomeSummary, selectedOptionLabels, type AskUserQuestionSpec } from '../../lib/askUserAnswers'
 import type { TuiTranscriptCardLine, TuiTranscriptLineTone } from './types'
 import { line, truncateLine, MAX_CARD_LINES } from './text'
 import { resultTextOf } from './tools'
@@ -28,9 +28,9 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
     }))
   const raw = resultTextOf(thread)
   const isError = thread.result?.is_error === true
-  const parsed = parseAskUserAnswers(raw)
-  // A completed, non-error result means the questions were answered — the answer
-  // may be a JSON map OR a plain confirmation string, so don't require the map.
+  const parsed = parseAskUserAnswers(raw, thread.result?.questionResult)
+  // A completed, non-error result resolves the prompt, including explicit
+  // unanswered outcomes. Older results may only carry a confirmation string.
   const answered = !!thread.result && !isError
 
   const stateTone: TuiTranscriptLineTone = isError
@@ -41,7 +41,7 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
         ? 'dim'
         : 'thinking'
   const stateGlyph = isError ? '✗' : answered ? '✓' : thread.result ? '○' : '◌'
-  const stateLabel = thread.toolUse.input.asyncUserInput === true ? 'click to answer · or reply in composer' : isError ? 'error' : answered ? 'answered' : thread.result ? 'no answer' : 'pending'
+  const stateLabel = thread.toolUse.input.asyncUserInput === true ? 'click to answer · or reply in composer' : isError ? 'error' : answered ? questionOutcomeSummary(questions, parsed) ?? 'answered' : thread.result ? 'no answer' : 'pending'
 
   const headerSummary = questions.length === 0
     ? 'no questions'
@@ -52,6 +52,7 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
   const lines: TuiTranscriptCardLine[] = [
     line(`ask user: ${headerSummary}`, 'tool'),
     line(`${stateGlyph} ${stateLabel}`, stateTone),
+    ...(typeof parsed.response === 'string' && parsed.response.trim() ? [line(`Reply: ${truncateLine(parsed.response)}`, 'agent')] : []),
   ]
 
   // Compact mode: show at most one line per question if there are multiple,
@@ -59,7 +60,7 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
   if (!expanded) {
     if (questions.length === 1) {
       const q = questions[0]
-      const selected = selectedOptionLabels(q, parsed.answers, raw)
+      const selected = questionOutcomeLabel(q, parsed) ? new Set<string>() : selectedOptionLabels(q, parsed.answers, raw)
       const maxOptions = Math.max(MAX_CARD_LINES, 4)
       const visible = q.options.slice(0, maxOptions)
       for (const opt of visible) {
@@ -75,10 +76,10 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
       }
     } else {
       for (const q of questions.slice(0, 3)) {
-        const selected = selectedOptionLabels(q, parsed.answers, raw)
+        const selected = questionOutcomeLabel(q, parsed) ? new Set<string>() : selectedOptionLabels(q, parsed.answers, raw)
         const answer = selected.size > 0
           ? [...selected].join(', ')
-          : (answerTextFor(q, parsed.answers) || (answered ? '—' : 'pending'))
+          : (questionOutcomeLabel(q, parsed) || answerTextFor(q, parsed.answers) || (answered ? '—' : 'pending'))
         const headerChip = q.header ? `[${q.header}] ` : ''
         const tone: TuiTranscriptLineTone = selected.size > 0 ? 'result_ok' : 'muted'
         lines.push(line(`  ${headerChip}${truncateLine(q.question)} → ${truncateLine(answer)}`, tone))
@@ -98,7 +99,7 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
     const mode = q.multiSelect ? ' (multi-select)' : ''
     lines.push(line(`${headerChip}${truncateLine(q.question)}${mode}`, 'system'))
 
-    const selected = selectedOptionLabels(q, parsed.answers, raw)
+    const selected = questionOutcomeLabel(q, parsed) ? new Set<string>() : selectedOptionLabels(q, parsed.answers, raw)
     for (const opt of q.options) {
       const hit = selected.has(opt.label)
       const marker = hit
@@ -113,7 +114,9 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
 
     // A typed "Other" answer matches no option; show it rather than leaving
     // every box empty under an "answered" header.
-    const custom = selected.size === 0 ? answerTextFor(q, parsed.answers) : ''
+    const outcome = questionOutcomeLabel(q, parsed)
+    if (outcome) lines.push(line(`  ${outcome}`, 'dim'))
+    const custom = selected.size === 0 && !outcome ? answerTextFor(q, parsed.answers) : ''
     if (custom) lines.push(line(`  → ${truncateLine(custom)}`, 'result_ok'))
 
     const note = parsed.annotations?.[q.question]?.notes?.trim()

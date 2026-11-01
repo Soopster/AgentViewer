@@ -10,6 +10,7 @@ import type { ThreadedMessage } from './threading'
 import { attachMcpResultSidecar, mcpResourceLinks } from './mcpArtifacts'
 import { recordRawFrame } from './rawFrames'
 import { claudeStartupFailureHint } from './claudeSdkFeatures'
+import { attachAskUserResultSidecar } from './askUserAnswers'
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -102,7 +103,7 @@ function normalizeApiMessage(
   const record = asObject(value)
   const rawContent = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult, toolResultMeta))
   const results = Array.isArray(rawContent) ? rawContent.filter((block): block is ToolResultBlock => block.type === 'tool_result') : []
-  const enriched = attachMcpResultSidecar(results, toolUseResult)
+  const enriched = attachAskUserResultSidecar(attachMcpResultSidecar(results, toolUseResult), toolUseResult)
   let resultIndex = 0
   const content = Array.isArray(rawContent)
     ? rawContent.map(block => block.type === 'tool_result' ? enriched[resultIndex++] : block)
@@ -480,7 +481,7 @@ export function extractClaudeStreamToolResults(value: unknown): ToolResultBlock[
         .map((entry) => toolResultBlock(entry, record.tool_result_meta))
         .filter((result): result is ToolResultBlock => Boolean(result))
     : []
-  if (contentResults.length > 0) return attachMcpResultSidecar(contentResults, record.tool_use_result)
+  if (contentResults.length > 0) return attachAskUserResultSidecar(attachMcpResultSidecar(contentResults, record.tool_use_result), record.tool_use_result)
 
   // Some SDK messages expose the result only through the structured sidecar.
   return attachMcpResultSidecar(toolResultBlocks(record.tool_use_result, record.tool_result_meta), record.tool_use_result)

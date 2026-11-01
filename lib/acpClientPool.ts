@@ -27,7 +27,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import { acpAgentKey, resolveAcpAgentSpawn, type AcpAgentKind } from './acpAgentSpawn'
 import { currentProviderEnvironment } from './providerInstances'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'

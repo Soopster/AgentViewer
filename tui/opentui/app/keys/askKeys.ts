@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { QUESTION_CHAT_REPLY_INDEX, type QuestionResponseOptions } from '../../../../lib/claudeQuestionOutcomes'
 import type { KeyEvent } from '@opentui/core'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -39,7 +40,7 @@ export function handleAskAndShortcutKeys({
   sequence: string
   toggleTuiQuestionOption: (qi: number, multiSelect: boolean, label: string) => void
   questionFreeformAnswers: Record<number, string>
-  submitTuiQuestion: (permission: PendingPermission) => Promise<void>
+  submitTuiQuestion: (permission: PendingPermission, options?: QuestionResponseOptions) => Promise<void>
   respondToTuiPermission: (permission: PendingPermission, response: PermissionResponse, permissionMode?: TuiPermissionMode) => Promise<void>
   permissionOptionIndex: number
   setPermissionOptionIndex: React.Dispatch<React.SetStateAction<number>>
@@ -79,6 +80,29 @@ export function handleAskAndShortcutKeys({
           setQuestionFreeformAnswers, setQuestionFreeformEditing, toggleTuiQuestionOption,
           submitTuiQuestion, respondToTuiPermission,
         })
+      }
+      if (activePermission.supportsQuestionOutcomes && questionFocusIndex === QUESTION_CHAT_REPLY_INDEX) {
+        if (key.name === 'escape') {
+          handled(() => setQuestionFocusIndex(0))
+        } else if (key.name === 'return') {
+          const response = questionFreeformAnswers[QUESTION_CHAT_REPLY_INDEX]?.trim()
+          if (response) handled(() => { void submitTuiQuestion(activePermission, { unanswered: 'replied_in_chat', response }) })
+        } else if (key.name === 'backspace' || key.name === 'delete') {
+          handled(() => setQuestionFreeformAnswers(prev => ({ ...prev, [QUESTION_CHAT_REPLY_INDEX]: (prev[QUESTION_CHAT_REPLY_INDEX] ?? '').slice(0, -1) })))
+        } else if (key.sequence && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(key.sequence)) {
+          handled(() => setQuestionFreeformAnswers(prev => ({ ...prev, [QUESTION_CHAT_REPLY_INDEX]: (prev[QUESTION_CHAT_REPLY_INDEX] ?? '') + key.sequence })))
+        }
+        return true
+      }
+      if (activePermission.supportsQuestionOutcomes && !questionFreeformEditing && !key.ctrl && !key.meta) {
+        if (key.name === 'r') {
+          handled(() => setQuestionFocusIndex(QUESTION_CHAT_REPLY_INDEX))
+          return true
+        }
+        if (key.name === 'd') {
+          handled(() => { void submitTuiQuestion(activePermission, { unanswered: 'dismissed' }) })
+          return true
+        }
       }
       const qi = Math.min(questionFocusIndex, questions.length - 1)
       const question = questions[qi]!
@@ -161,9 +185,12 @@ export function handleAskAndShortcutKeys({
         })
         return true
       }
-      // Esc skips the whole prompt (declines the tool), matching the web SKIP.
+      // Esc skips the prompt; older CLIs retain their tool-denial fallback.
       if (key.name === 'escape') {
-        handled(() => { void respondToTuiPermission(activePermission, 'reject') })
+        handled(() => {
+          if (activePermission.supportsQuestionOutcomes) void submitTuiQuestion(activePermission, { unanswered: 'skipped' })
+          else void respondToTuiPermission(activePermission, 'reject')
+        })
         return true
       }
       return true

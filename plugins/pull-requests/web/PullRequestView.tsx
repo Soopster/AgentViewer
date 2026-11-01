@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { CodeView, type CodeViewHandle, WorkerPoolContextProvider } from '@pierre/diffs/react'
+import { CodeView, type CodeViewAnnotationArgs, type CodeViewHandle, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import {
   parsePatchFiles,
   type CodeViewDiffItem,
@@ -11,7 +11,6 @@ import {
   type CodeViewOptions,
   type DiffLineAnnotation,
   type FileDiffMetadata,
-  type LineAnnotation,
   type SelectedLineRange,
 } from '@pierre/diffs'
 import {
@@ -785,7 +784,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
     },
   }), [createDraft, viewOptions])
 
-  const renderAnnotation = useCallback((annotation: LineAnnotation<ReviewMeta> | DiffLineAnnotation<ReviewMeta>, item: ReviewItem) => {
+  const renderAnnotation = useCallback((...[annotation, , item]: CodeViewAnnotationArgs<ReviewMeta>) => {
     if (!('side' in annotation) || item.type !== 'diff') return null
     const metadata = annotation.metadata
     if (metadata.kind === 'draft') {

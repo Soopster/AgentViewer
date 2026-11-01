@@ -1,3 +1,4 @@
+import { claudeQuestionAnnotations, claudeQuestionOutcomeCapability, isQuestionUnansweredOutcome, type QuestionAnnotation, type QuestionUnansweredOutcome } from '../../../claudeQuestionOutcomes'
 // Provider architecture extraction: SDK behavior preserved from the session backend.
 import { pendingClaudeDialogs, pendingClaudeElicitations, pendingClaudePermissions, listPendingClaudeElicitations, listPendingClaudePrompts, CLAUDE_PERMISSION_MODES, type PendingClaudePermission, claudePermissionDecision, type ClaudePermissionModeValue, pendingClaudePermissionKey, claudeResultErrorMessage, createClaudeUserDialogBridge, createClaudeDeltaCoalescer } from './helpers'
 import { parseQuestionAnswers, parseAttachments, parseEffort, parseTurnRequestId } from '../runtimeCore'
@@ -380,21 +381,29 @@ export function claudeResultContextUsage(msg: SDKMessage): ContextUsage | null {
 // Resolve an AskUserQuestion by allowing the tool with the user's answers
 // merged into its input — the SDK's AskUserQuestion tool echoes `answers`
 // (and optional freeform `response`/`annotations`) straight into its output.
-export function claudeQuestionDecision(pending: Pick<PendingClaudePermission, 'input'>, payload: {
+export function claudeQuestionDecision(pending: Pick<PendingClaudePermission, 'input' | 'supportsQuestionOutcomes'>, payload: {
     answers: Record<string, string>;
     response?: string;
-    annotations?: Record<string, {
-        preview?: string;
-        notes?: string;
-    }>;
+    annotations?: Record<string, QuestionAnnotation>;
+    unanswered?: QuestionUnansweredOutcome;
 }): PermissionResult {
+    const annotations = claudeQuestionAnnotations(pending.input, payload.answers, payload.annotations ?? pending.input?.annotations, payload, pending.supportsQuestionOutcomes === true);
+    const { annotations: _inputAnnotations, ...input } = pending.input ?? {};
+    const answers = new Map(Object.entries(payload.answers));
+    // The SDK withholds annotations from the model. Supply the human's text or
+    // an explicit outcome in answers as well; metadata alone would be silent.
+    for (const [question, annotation] of Object.entries(annotations ?? {})) {
+        if (annotation.unanswered && !answers.get(question)?.trim()) answers.set(question, annotation.unanswered === 'replied_in_chat'
+            ? payload.response?.trim() || 'User replied in chat.'
+            : annotation.unanswered === 'dismissed' ? 'User dismissed this question.' : 'User skipped this question.');
+    }
     return {
         behavior: 'allow',
         updatedInput: {
-            ...(pending.input ?? {}),
-            answers: payload.answers,
+            ...input,
+            answers: Object.fromEntries(answers),
             ...(payload.response ? { response: payload.response } : {}),
-            ...(payload.annotations ? { annotations: payload.annotations } : {}),
+            ...(annotations ? { annotations } : {}),
         },
     };
 }
@@ -408,7 +417,7 @@ export function claudePermissionEvent(type: 'permission.requested' | 'permission
         },
     });
 }
-export function createClaudePermissionBridge(sessionId: string, controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder, activeIds: Set<string>): CanUseTool {
+export function createClaudePermissionBridge(sessionId: string, controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder, activeIds: Set<string>, supportsQuestionOutcomes: () => boolean = () => false): CanUseTool {
     const enqueuePermissionEvent = (type: 'permission.requested' | 'permission.completed', data: Record<string, unknown>) => {
         try {
             controller.enqueue(encoder.encode(`data: ${claudePermissionEvent(type, data)}\n\n`));
@@ -432,6 +441,7 @@ export function createClaudePermissionBridge(sessionId: string, controller: Read
             sessionId,
             toolName,
             input,
+            supportsQuestionOutcomes: toolName === 'AskUserQuestion' && supportsQuestionOutcomes(),
             title: options.title,
             displayName: options.displayName,
             description: options.description,
@@ -469,6 +479,7 @@ export function createClaudePermissionBridge(sessionId: string, controller: Read
                 suggestions: options.suggestions,
                 input,
                 requestData,
+                supportsQuestionOutcomes: requestData.supportsQuestionOutcomes === true,
                 resolve: (result) => {
                     cleanup();
                     enqueuePermissionEvent('permission.completed', { requestId });
@@ -651,7 +662,9 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
             const permissionMode = CLAUDE_PERMISSION_MODES.includes(body.permissionMode as ClaudePermissionModeValue)
                 ? body.permissionMode as ClaudePermissionModeValue
                 : undefined;
-            pending.resolve(claudePermissionDecision(response, pending, permissionMode));
+            pending.resolve(response === 'reject' && pending.requestData?.toolName === 'AskUserQuestion' && pending.supportsQuestionOutcomes
+                ? claudeQuestionDecision(pending, { answers: {}, unanswered: 'skipped' })
+                : claudePermissionDecision(response, pending, permissionMode));
             return { ok: true };
         }
         // Answer an AskUserQuestion prompt: allow the tool with the user's selected
@@ -664,6 +677,9 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
             if (!answers)
                 throw new Error('answers is required');
             const response = typeof body.response === 'string' && body.response.trim() ? body.response.trim() : undefined;
+            if (body.unanswered !== undefined && !isQuestionUnansweredOutcome(body.unanswered)) throw new Error('Invalid unanswered question outcome');
+            const unanswered = isQuestionUnansweredOutcome(body.unanswered) ? body.unanswered : undefined;
+            if (unanswered === 'replied_in_chat' && !response) throw new Error('A chat response is required');
             const annotations = (body.annotations && typeof body.annotations === 'object' && !Array.isArray(body.annotations))
                 ? body.annotations as Record<string, {
                     preview?: string;
@@ -718,6 +734,7 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
                 answers: Object.fromEntries(Object.entries(answers).map(([key, values]) => [key, values.join(', ')])),
                 response,
                 annotations,
+                unanswered,
             }));
             return { ok: true };
         }
@@ -1351,7 +1368,7 @@ export async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promis
             // the iterator drives SDK processing, so no tool call can arrive until
             // the first pull of the iterator at the for-await.
             if (bridgeInstalled) {
-                bridgeBox.fn = createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds);
+                bridgeBox.fn = createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds, () => bridgeBox.supportsQuestionOutcomes === true);
             }
             // Elicitation isn't gated on manual permissions — an MCP server can elicit
             // in any mode, so always install the handler.
@@ -1455,6 +1472,8 @@ export async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promis
                     if (step.done)
                         break;
                     const msg = step.value;
+                    const outcomes = claudeQuestionOutcomeCapability(msg);
+                    if (outcomes !== undefined) bridgeBox.supportsQuestionOutcomes = outcomes;
                     const messageSessionId = typeof msg.session_id === 'string' && msg.session_id ? msg.session_id : undefined;
                     try {
                         claudePoolModule().reportClaudePluginLoadFailures(messageSessionId ?? realizedSessionId ?? sessionId, msg, reportedPluginFailures);
@@ -1643,7 +1662,7 @@ export async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Pr
                 && permissionMode !== 'bypassPermissions'
                 && permissionMode !== 'plan';
             const bridge = bridgeInstalled
-                ? createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds)
+                ? createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds, () => claudePoolModule().peekClaudeSession(sessionId)?.supportsQuestionOutcomes?.() === true)
                 : undefined;
             // Elicitation isn't gated on manual permissions — install it every turn.
             const elicit = createClaudeElicitationBridge(sessionId, controller, encoder);

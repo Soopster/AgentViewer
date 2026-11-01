@@ -1,4 +1,4 @@
-import type { Renderable } from '@opentui/core'
+import type { Renderable, ScrollBoxContent } from '@opentui/core'
 import { READER_CARD_SEARCH_DEPTH } from './layoutConstants'
 import { readReaderLayout } from '../readerLayout'
 
@@ -12,9 +12,9 @@ import { readReaderLayout } from '../readerLayout'
 // READER_CARD_SEARCH_DEPTH, so stopping there skips every card's interior
 // while still finding the card. The full search stays as a fallback: a missed
 // card would silently drop a scroll restore, not fail loudly.
-export function findReaderCard(content: Renderable | undefined | null, id: string): Renderable | undefined {
+export function findReaderCard(content: Renderable | ScrollBoxContent | undefined | null, id: string): Renderable | undefined {
   if (!content) return undefined
-  const scan = (node: Renderable, depth: number): Renderable | undefined => {
+  const scan = (node: Pick<Renderable, 'getChildren'>, depth: number): Renderable | undefined => {
     for (const child of node.getChildren()) {
       if (child.id === id) return child as Renderable
       if (depth > 1) {
@@ -39,13 +39,17 @@ export function readerRowKey(row: Renderable, depth = READER_CARD_SEARCH_DEPTH):
 // A renderable's offset inside the scrollbox content as Yoga just computed it.
 // `el.y` is only refreshed later in the frame (updateFromLayout), so inside the
 // layout pass this is the one place the new position can be read.
-export function readerLayoutOffset(el: Renderable, content: Renderable): number | null {
+export function readerLayoutOffset(el: Renderable, content: Renderable | ScrollBoxContent): number | null {
+  // Native scroll content is a geometry facade rather than a parent renderable.
+  // Its direct children still report layout relative to that content node.
+  const children = new Set(content.getChildren())
   let offset = 0
   let node: Renderable | null = el
   while (node && node !== content) {
     const layout = readReaderLayout(node)
     if (!layout) return null
     offset += layout.top
+    if (children.has(node)) return offset
     node = node.parent as Renderable | null
   }
   return node === content ? offset : null

@@ -1,3 +1,4 @@
+import type { QuestionResponseOptions } from '../../../lib/claudeQuestionOutcomes'
 import { runHandleDeleteSession } from '../actions/deleteSession'
 import type { SessionDeleteCallback } from '@/components/session-catalog/actions'
 import type { RefObject } from 'react'
@@ -187,10 +188,10 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
   // Submit answers to a structured question prompt. Codex keys answers by its
   // schema id; Claude falls back to question text. Arrays stay lossless for
   // Codex/MCP (including custom answers that contain commas).
-  const respondToQuestion = useCallback(async (permission: PendingPermission, answers: PendingQuestionAnswers) => runRespondToQuestion({
+  const respondToQuestion = useCallback(async (permission: PendingPermission, answers: PendingQuestionAnswers, options?: QuestionResponseOptions) => runRespondToQuestion({
     session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
     setPendingPermissions,
-  }, permission, answers), [session, sessionActionLoading])
+  }, permission, answers, options), [session, sessionActionLoading])
 
   // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
   // exits plan mode for this turn) AND switches the composer + warm query to the

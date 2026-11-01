@@ -34,7 +34,7 @@ import { deleteClaudeHookEvents, listClaudeHookEvents } from '../claudeHookEvent
 import { claudeProcessTransportStatus } from '../claudeProcessSpawner'
 import { readClaudeSupportedModels } from '../claudeModels'
 import { withoutClaudeResumeTouch } from '../claudeResumeTouch'
-import { claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems, formatClaudeMcpServerStatus } from '../claudeSessionPolicy'
+import { claudeCacheUsageItems, claudeContextBreakdown, claudeHooksListingItems, claudePermissionRuleItems, formatClaudeMcpServerStatus } from '../claudeSessionPolicy'
 import { claudeListCacheKey, readClaudeCorpus, readClaudeListPage } from '../claudeSessionListCache'
 import { peekClaudeSessionIfLoaded } from '../claudePoolHandle'
 import { getClaudeCommandsOverride } from '../claudeCommandsStore'
@@ -61,24 +61,25 @@ type ClaudeUsageCapableQuery = {
   ) => Promise<SDKControlGetUsageResponse>
 }
 
-async function claudePlanUsageItems(q: unknown): Promise<string[]> {
+async function claudeUsageDiagnosticItems(q: unknown): Promise<{ plan: string[]; cache: string[] }> {
   const call = (q as ClaudeUsageCapableQuery)?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-  if (typeof call !== 'function') return ['Unavailable']
+  if (typeof call !== 'function') return { plan: ['Unavailable'], cache: [] }
   let usage: SDKControlGetUsageResponse
   try {
     // `behaviors` is a scan of the local transcripts and nothing here reads it
-    // — skip it (SDK 0.3.261) and keep only the plan rate limits.
+    // — skip it (SDK 0.3.261) and reuse the session usage and plan limits.
     usage = await call.call(q, { skipBehaviors: true })
   } catch {
-    return ['Unavailable']
+    return { plan: ['Unavailable'], cache: [] }
   }
+  const cache = claudeCacheUsageItems(usage.session?.model_usage)
   const items: string[] = []
   if (usage.subscription_type) items.push(`plan · ${usage.subscription_type}`)
   if (!usage.rate_limits_available || !usage.rate_limits) {
     // API key / Bedrock / Vertex sessions have no plan windows at all — say so
     // rather than showing an empty section that reads like a failed read.
     items.push('plan limits do not apply to this session')
-    return items
+    return { plan: items, cache }
   }
   const limits = usage.rate_limits
   const formatReset = (iso: string | null) => {
@@ -108,7 +109,7 @@ async function claudePlanUsageItems(q: unknown): Promise<string[]> {
     const currency = extra.currency ? ` ${extra.currency}` : ''
     items.push(extra.is_enabled ? `extra usage · enabled${pct}${currency}` : `extra usage · disabled${pct}${currency}`)
   }
-  return items.length > 0 ? items : ['No plan limit windows reported']
+  return { plan: items.length > 0 ? items : ['No plan limit windows reported'], cache }
 }
 
 
@@ -392,7 +393,7 @@ export const claudeAdapter: SessionAdapter = {
     const q = createSessionControlQuery(sessionId)
     try {
       const init = await q.initializationResult()
-      const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, planUsageItems, permissionRuleItems, hooksListingItems] = await Promise.all([
+      const [commands, agents, mcpServers, contextUsage, subagents, rawMessages, resolvedSettings, hookEvents, usageDiagnosticItems, permissionRuleItems, hooksListingItems] = await Promise.all([
         q.supportedCommands(),
         q.supportedAgents(),
         q.mcpServerStatus(),
@@ -410,7 +411,7 @@ export const claudeAdapter: SessionAdapter = {
           .then((info) => resolveSettings({ cwd: info?.cwd }))
           .catch(() => null),
         listClaudeHookEvents(sessionId, { limit: 20 }).catch(() => []),
-        claudePlanUsageItems(q),
+        claudeUsageDiagnosticItems(q),
         // Both go through methods the SDK implements but does not declare, so
         // each degrades to an empty list on its own rather than failing the
         // whole read — see lib/claudeSessionPolicy.ts.
@@ -508,8 +509,9 @@ export const claudeAdapter: SessionAdapter = {
           {
             id: 'plan-usage',
             title: 'PLAN USAGE',
-            items: planUsageItems,
+            items: usageDiagnosticItems.plan,
           },
+          ...(usageDiagnosticItems.cache.length ? [{ id: 'cache-usage', title: 'CACHE USAGE', items: usageDiagnosticItems.cache }] : []),
           {
             id: 'latency',
             title: 'LATENCY & MODEL USAGE',

@@ -1,5 +1,5 @@
 // getSessionMessages() currently strips SDK tool_use_result sidecars. Retain
-// only the artifact/app sidecars observed through the SDK, never raw transcripts.
+// artifact/app and question-outcome sidecars observed through the SDK, never raw transcripts.
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -7,9 +7,11 @@ import { extractClaudeStreamToolResults } from './claudeMapper'
 import { currentProviderInstanceId } from './providerInstances'
 import type { ApiMessage, SessionMessage, ToolResultBlock } from './types'
 
-type Artifact = Pick<ToolResultBlock, 'resourceLinks' | 'structuredContent' | 'mcpMeta'>
+type Artifact = Pick<ToolResultBlock, 'resourceLinks' | 'structuredContent' | 'mcpMeta' | 'questionResult'>
 const MAX_ENTRIES = 32
 const MAX_APP_DATA = 128_000
+const MAX_QUESTION_ENTRIES = 256
+const MAX_QUESTION_DATA = 32_000
 
 export function createClaudeArtifactStore(directory: string) {
   const writes = new Map<string, Promise<void>>()
@@ -19,7 +21,7 @@ export function createClaudeArtifactStore(directory: string) {
   }
   async function read(file: string): Promise<Record<string, Artifact>> {
     try {
-      if ((await stat(file)).size > MAX_ENTRIES * (MAX_APP_DATA + 100_000)) return {}
+      if ((await stat(file)).size > MAX_ENTRIES * (MAX_APP_DATA + 100_000) + MAX_QUESTION_ENTRIES * MAX_QUESTION_DATA) return {}
       const value = JSON.parse(await readFile(file, 'utf8'))
       return value?.version === 1 && value.results && typeof value.results === 'object' && !Array.isArray(value.results) ? value.results : {}
     } catch { return {} }
@@ -27,7 +29,7 @@ export function createClaudeArtifactStore(directory: string) {
   return {
     async capture(sessionId: string, message: unknown, instanceId = currentProviderInstanceId('claude')): Promise<void> {
       const results = extractClaudeStreamToolResults(message).filter(result =>
-        result.resourceLinks?.length || result.structuredContent !== undefined || result.mcpMeta)
+        result.resourceLinks?.length || result.structuredContent !== undefined || result.mcpMeta || result.questionResult)
       if (!results.length) return
       const file = filename(sessionId, instanceId)
       const pending = (writes.get(file) ?? Promise.resolve()).catch(() => {}).then(async () => {
@@ -37,11 +39,25 @@ export function createClaudeArtifactStore(directory: string) {
           const artifact: Artifact = {
             ...(result.resourceLinks?.length ? { resourceLinks: result.resourceLinks } : {}),
             ...(JSON.stringify(appData).length <= MAX_APP_DATA ? appData : {}),
+            ...(result.questionResult && Buffer.byteLength(JSON.stringify(result.questionResult), 'utf8') <= MAX_QUESTION_DATA ? { questionResult: result.questionResult } : {}),
           }
           stored.delete(result.tool_use_id)
-          stored.set(result.tool_use_id, artifact)
+          if (artifact.resourceLinks?.length || artifact.structuredContent !== undefined || artifact.mcpMeta || artifact.questionResult) stored.set(result.tool_use_id, artifact)
         }
-        while (stored.size > MAX_ENTRIES) stored.delete(stored.keys().next().value!)
+        // Question outcomes have their own budget: answering questions must not
+        // evict MCP Apps, and routine transcripts commonly contain >32 asks.
+        const appKeys = [...stored].filter(([, value]) => value.resourceLinks?.length || value.structuredContent !== undefined || value.mcpMeta).map(([id]) => id)
+        for (const id of appKeys.slice(0, Math.max(0, appKeys.length - MAX_ENTRIES))) {
+          const questionResult = stored.get(id)?.questionResult
+          if (questionResult) stored.set(id, { questionResult })
+          else stored.delete(id)
+        }
+        const questionKeys = [...stored].filter(([, value]) => value.questionResult).map(([id]) => id)
+        for (const id of questionKeys.slice(0, Math.max(0, questionKeys.length - MAX_QUESTION_ENTRIES))) {
+          const { questionResult: _, ...artifact } = stored.get(id)!
+          if (artifact.resourceLinks?.length || artifact.structuredContent !== undefined || artifact.mcpMeta) stored.set(id, artifact)
+          else stored.delete(id)
+        }
         await mkdir(directory, { recursive: true, mode: 0o700 })
         const temporary = `${file}.${process.pid}.tmp`
         await writeFile(temporary, JSON.stringify({ version: 1, results: Object.fromEntries(stored) }), { mode: 0o600 })

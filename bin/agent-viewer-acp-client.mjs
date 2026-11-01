@@ -37,7 +37,7 @@
  */
 import { spawn } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
-import { client, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
+import { client, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk/unstable'
 
 export { parseAcpCommand } from '../lib/acpCommand.mjs'
 

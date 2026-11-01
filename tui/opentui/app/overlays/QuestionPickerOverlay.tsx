@@ -6,6 +6,7 @@ import { formatProviderLabel } from '../../../format'
 import { fitText } from '../../textLayout'
 import { permissionMcpServerLabel, permissionOptionsFor, type PendingPermission, type PermissionOption } from '../../../../lib/permissions'
 import { join } from 'node:path'
+import { QUESTION_CHAT_REPLY_INDEX } from '../../../../lib/claudeQuestionOutcomes'
 
 export function QuestionPickerOverlay({ pendingPermissions, width, questionPickerPlan, questionFocusIndex, theme, questionSelections, questionOptionIndex, questionFreeformAnswers, questionFreeformEditing, permissionActionLoading, permissionOptionIndex, resolvePermissionOptionIndex }: {
   pendingPermissions: PendingPermission[]
@@ -25,6 +26,7 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
     pendingPermissions.length > 0 && (pendingPermissions[0]!.questions?.length ?? 0) > 0 ? (() => {
         const permission = pendingPermissions[0]!
         const questions = permission.questions ?? []
+        const chatReplyMode = permission.supportsQuestionOutcomes && questionFocusIndex === QUESTION_CHAT_REPLY_INDEX
         const innerWidth = Math.max(width - 8, 20)
         // Same plan the height reservation used, so the card is drawn at the
         // size the layout actually gave it.
@@ -47,13 +49,17 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
         }
         const hint = permissionActionLoading
           ? 'submitting…'
+          : chatReplyMode
+          ? fitText('type reply · enter send · esc back', innerWidth)
           : questionFreeformEditing
           ? fitText('type custom answer · enter finish · esc cancel editing', innerWidth)
           : tabbed
           ? submitTab
             ? fitText('enter submit · ←/→ tabs · esc skip', innerWidth)
             : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}${focusedQuestion?.multiSelect ? 'space select · enter next' : 'enter select & next'} · ←/→ tabs · esc skip`, innerWidth)
-          : fitText(`${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)
+          : fitText(permission.supportsQuestionOutcomes
+            ? '↑/↓ option · enter submit · r reply · d dismiss · esc skip'
+            : `${collapsed ? `${Math.min(questionOptionIndex, Math.max(focusedTotalOptions - 1, 0)) + 1}/${focusedTotalOptions} · ` : ''}↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)
         // Submit tab: one summary row per question. The plan already capped
         // how many fit; when the rest do not, the last row says how many were
         // left out rather than drawing past the card's budget.
@@ -103,7 +109,9 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
                   </text>
                 </box>
               ) : null}
-              {summaryRows !== null ? (
+              {chatReplyMode ? (
+                <text fg={theme.text} wrapMode="word">{fitText(`Reply: ${questionFreeformAnswers[QUESTION_CHAT_REPLY_INDEX] ?? ''}▏`, innerWidth)}</text>
+              ) : summaryRows !== null ? (
                 <box flexDirection="column">
                   {summaryRows}
                 </box>

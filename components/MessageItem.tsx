@@ -36,7 +36,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantDisplayName } from '@/lib/provider'
 import { buildDiffCommentComposerPrompt } from '@/lib/diffCommentComposer'
-import { answerTextFor, parseAskUserAnswers, selectedOptionLabels, type AskUserAnswers, type AskUserOption, type AskUserQuestionSpec } from '@/lib/askUserAnswers'
+import { answerTextFor, parseAskUserAnswers, questionOutcomeLabel, questionOutcomeSummary, selectedOptionLabels, type AskUserAnswers, type AskUserOption, type AskUserQuestionSpec } from '@/lib/askUserAnswers'
 import { Separator } from '@/components/ui/separator'
 import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProtocol'
 import { readJsonResponse } from '@/lib/httpResponse'
@@ -1396,12 +1396,15 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
   // so downstream access (q.header, q.options.map) never throws.
   const questions = (input.questions ?? []).filter((q): q is AUQQuestion => !!q && typeof q === 'object')
   const resultStr = thread.result ? resultToString(thread.result.content) : ''
-  const answered  = !!resultStr
+  const isError = thread.result?.is_error === true
+  const answered = !!thread.result && !isError
   const flat      = useColorTreatment() === 'flat'
   // Resolve each question's own answer instead of scanning the whole result for
   // option labels: multi-select answers are one comma-separated string, so a
   // quoted-label scan matches none of them.
-  const answers   = useMemo(() => parseAskUserAnswers(resultStr).answers, [resultStr])
+  const parsed = useMemo(() => parseAskUserAnswers(resultStr, thread.result?.questionResult), [resultStr, thread.result?.questionResult])
+  const answers = parsed.answers
+  const outcomeSummary = questionOutcomeSummary(questions, parsed)
 
   return (
     <div style={{
@@ -1432,30 +1435,31 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 11,
-          color: answered ? 'var(--green)' : 'var(--amber)',
+          color: isError ? 'var(--red)' : answered ? 'var(--green)' : 'var(--amber)',
           marginLeft: 'auto', flexShrink: 0,
         }}>
-          {answered ? '✓ answered' : '◌ pending'}
+          {isError ? '✗ error' : answered ? `✓ ${outcomeSummary ?? 'answered'}` : '◌ pending'}
         </span>
       </div>
 
+      {typeof parsed.response === 'string' && parsed.response.trim() ? <div style={{ padding: '8px 12px', color: 'var(--text)', whiteSpace: 'pre-wrap' }}>Reply: {parsed.response}</div> : null}
       {/* Questions */}
       <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {questions.map((q, qi) => (
-          <AUQQuestionBlock key={qi} q={q} answers={answers} resultStr={resultStr} />
+          <AUQQuestionBlock key={qi} q={q} answers={answers} resultStr={resultStr} outcome={questionOutcomeLabel(q, parsed)} />
         ))}
       </div>
     </div>
   )
 }
 
-function AUQQuestionBlock({ q, answers, resultStr }: { q: AUQQuestion; answers: AskUserAnswers['answers']; resultStr: string }) {
+function AUQQuestionBlock({ q, answers, resultStr, outcome }: { q: AUQQuestion; answers: AskUserAnswers['answers']; resultStr: string; outcome: string | null }) {
   const [expandedPreview, setExpandedPreview] = useState<number | null>(null)
   const flat = useColorTreatment() === 'flat'
-  const selectedLabels = useMemo(() => selectedOptionLabels(q, answers, resultStr), [answers, q, resultStr])
+  const selectedLabels = useMemo(() => outcome ? new Set<string>() : selectedOptionLabels(q, answers, resultStr), [answers, q, resultStr, outcome])
   // A typed "Other" answer matches no option and would otherwise leave every
   // box empty under an "answered" header.
-  const customAnswer = selectedLabels.size === 0 ? answerTextFor(q, answers) : ''
+  const customAnswer = selectedLabels.size === 0 && !outcome ? answerTextFor(q, answers) : ''
 
   return (
     <div>
@@ -1484,6 +1488,7 @@ function AUQQuestionBlock({ q, answers, resultStr }: { q: AUQQuestion; answers: 
         {q.question}
       </div>
 
+      {outcome ? <div style={{ marginBottom: 8, color: 'var(--text-3)' }}>{outcome}</div> : null}
       {/* Options */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {(Array.isArray(q.options) ? q.options : []).map((opt, oi) => {
