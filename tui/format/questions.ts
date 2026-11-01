@@ -17,7 +17,14 @@ export function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean)
       question: typeof q.question === 'string' ? q.question : '',
       header: typeof q.header === 'string' ? q.header : undefined,
       multiSelect: q.multiSelect === true,
-      options: Array.isArray(q.options) ? q.options : [],
+      options: (Array.isArray(q.options) ? q.options : [])
+        .map((opt: unknown) => (typeof opt === 'string' ? { label: opt } : opt))
+        .filter((opt): opt is AskUserQuestion['options'][number] => !!opt && typeof opt === 'object')
+        .map((opt) => ({
+          ...opt,
+          label: typeof opt.label === 'string' ? opt.label : '',
+          description: typeof opt.description === 'string' ? opt.description : undefined,
+        })),
     }))
   const raw = resultTextOf(thread)
   const isError = thread.result?.is_error === true
