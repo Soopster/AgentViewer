@@ -174,7 +174,12 @@ await settle(250)
 // Window 0 is the lead; 1 and 2 are Nova and Orion.
 if (setup.renderer.root.findDescendantById('split-pane:2')) fail('short terminal did not hide the second teammate')
 await chord('p')
-await act(async () => { await setup.mockInput.pasteBracketedText('orion') })
+// The switcher lists windows first; `/` starts its search.
+await act(async () => { setup.mockInput.pressKey('/') })
+for (const char of 'orion') {
+  await act(async () => { setup.mockInput.pressKey(char) })
+  await settle(30)
+}
 await settle(120)
 act(() => { setup.mockInput.pressEnter() })
 await waitFor('the hidden teammate to be brought into view', frame => frame.includes(transcriptText('watch-orion')))

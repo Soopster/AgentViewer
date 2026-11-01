@@ -6,13 +6,31 @@
 // path `npm run tui` boots, minus the terminal.
 import React from 'react'
 import { testRender, act } from './testRender'
-import { mkdtempSync } from 'fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
 // Hermetic: state files resolve from process.cwd(), so run against a temp
 // data dir rather than the user's real preferences. Import App AFTER chdir.
+const repoPlaybooks = path.join(process.cwd(), '.agent-viewer', 'playbooks')
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-app-smoke-')))
+// The workflow launcher lists the session's repository's playbooks; give it the repository's own two.
+mkdirSync(path.join('.agent-viewer', 'playbooks'), { recursive: true })
+for (const file of readdirSync(repoPlaybooks)) if (file.endsWith('.json')) copyFileSync(path.join(repoPlaybooks, file), path.join('.agent-viewer', 'playbooks', file))
+// Windows (and so fullscreen) need a session: seed one in a private Claude store.
+{
+  const configDir = mkdtempSync(path.join(tmpdir(), 'agent-viewer-app-smoke-claude-'))
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  const cwd = realpathSync(process.cwd())
+  const projectDir = path.join(configDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(projectDir, { recursive: true })
+  const at = new Date().toISOString()
+  const base = { cwd, sessionId: '11111111-2222-4333-8444-555555555555', version: '2.1.0', gitBranch: 'main', userType: 'external' }
+  writeFileSync(path.join(projectDir, `${base.sessionId}.jsonl`), [
+    { ...base, type: 'user', uuid: 'a0000000-0000-4000-8000-000000000001', parentUuid: null, timestamp: at, message: { role: 'user', content: 'seed prompt' } },
+    { ...base, type: 'assistant', uuid: 'a0000000-0000-4000-8000-000000000002', parentUuid: 'a0000000-0000-4000-8000-000000000001', timestamp: at, message: { role: 'assistant', model: 'claude-sonnet-4-5', content: [{ type: 'text', text: 'seed reply' }] } },
+  ].map((record) => JSON.stringify(record)).join('\n') + '\n')
+}
 const { default: OpenTuiApp } = await import('./App')
 const { chordHintText, COMMAND_CHORD_MAP, SPLIT_CHORD_MAP } = await import('./chordHelp')
 
@@ -111,7 +129,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 let fullscreenFrame = captureCharFrame()
-if (!fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
+if (!fullscreenFrame.includes('FULLSCREEN · Shift+Z restore')) {
   throw new Error(`Shift+Z did not expose the fullscreen restore affordance:\n${fullscreenFrame}`)
 }
 if (fullscreenFrame.includes('j/k move') || fullscreenFrame.includes('SESSIONS') || fullscreenFrame.includes('● LIVE')) {
@@ -142,7 +160,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 fullscreenFrame = captureCharFrame()
-if (hasDock(fullscreenFrame) || !fullscreenFrame.includes('FULLSCREEN  Shift+Z restore')) {
+if (hasDock(fullscreenFrame) || !fullscreenFrame.includes('FULLSCREEN · Shift+Z restore')) {
   throw new Error(`Shift+E did not minimize the composer independently in fullscreen:\n${fullscreenFrame}`)
 }
 act(() => {
@@ -154,7 +172,7 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 100))
 })
 const restoredFullscreenFrame = captureCharFrame()
-if (restoredFullscreenFrame.includes('FULLSCREEN  Shift+Z restore') || !hasDock(restoredFullscreenFrame)) {
+if (restoredFullscreenFrame.includes('FULLSCREEN · Shift+Z restore') || !hasDock(restoredFullscreenFrame)) {
   throw new Error(`Shift+Z did not restore normal chrome and composer state:\n${restoredFullscreenFrame}`)
 }
 
@@ -179,7 +197,7 @@ await act(async () => {
   await setup.flush()
 })
 const escapedComposerFrame = captureCharFrame()
-if (!escapedComposerFrame.includes('FULLSCREEN  Shift+Z restore')) {
+if (!escapedComposerFrame.includes('FULLSCREEN · Shift+Z restore')) {
   throw new Error(`Esc unexpectedly restored normal chrome from fullscreen:\n${escapedComposerFrame}`)
 }
 act(() => {
@@ -195,7 +213,7 @@ await act(async () => {
   await setup.flush()
 })
 const shiftZRestoredFrame = captureCharFrame()
-if (shiftZRestoredFrame.includes('FULLSCREEN  Shift+Z restore') || !shiftZRestoredFrame.includes('SESSIONS')) {
+if (shiftZRestoredFrame.includes('FULLSCREEN · Shift+Z restore') || !shiftZRestoredFrame.includes('SESSIONS')) {
   throw new Error(`Shift+Z did not restore normal chrome while the composer was active:\n${shiftZRestoredFrame}`)
 }
 act(() => {
@@ -204,6 +222,11 @@ act(() => {
 await act(async () => {
   await setup.flush()
 })
+// With a session open the composer may already be closed, and Esc then asks to exit.
+if (captureCharFrame().includes('EXIT AGENT VIEWER?')) {
+  act(() => { setup.mockInput.pressEscape() })
+  await act(async () => { await setup.flush() })
+}
 
 // New agent session: Shift+N opens the folder/provider picker modal (rather
 // than immediately creating a session in the viewed workspace). Assert the
@@ -311,7 +334,8 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 200))
 })
 const splitFrame = captureCharFrame()
-if (!splitFrame.includes('Open another tab to split')) {
+// With one tab the command asks for another; a window too narrow to divide says so instead.
+if (!splitFrame.includes('Open another tab to split') && !splitFrame.includes('too narrow to split')) {
   throw new Error(`Ctrl+B % did not run the split transcript command:\n${splitFrame}`)
 }
 
@@ -398,6 +422,11 @@ if (!coordinationFrame.includes('NEW WORKFLOW')) {
 }
 if (!coordinationFrame.includes('Use separate teammate checkouts')) {
   throw new Error(`New Workflow is missing the optional worktree control:\n${coordinationFrame}`)
+}
+// The playbook list loads after the modal opens.
+for (let attempt = 0; attempt < 20 && !coordinationFrame.includes('2 available'); attempt++) {
+  await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, 150)) })
+  coordinationFrame = captureCharFrame()
 }
 if (!coordinationFrame.includes('2 available')) {
   throw new Error(`New Workflow did not expose the saved playbook selector:\n${coordinationFrame}`)

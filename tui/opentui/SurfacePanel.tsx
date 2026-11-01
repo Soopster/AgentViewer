@@ -55,6 +55,9 @@ type Props = {
    * over the whole screen can keep it.
    */
   onResizeStart?: (position: number) => void
+  /** The pointer moved to `position` (a row under the reader, else a column) while a resize is held. */
+  onResizeDrag?: (position: number) => void
+  onResizeEnd?: () => void
   onKeyHandlerReady: (handler: (key: SurfacePanelKey) => void) => void
   /** Key handler of the surface currently mounted, when it has one. */
   surfaceKeyHandler: (key: SurfacePanelKey) => void
@@ -99,6 +102,8 @@ export function SurfacePanel({
   onToggleExpand,
   onClosePanel,
   onResizeStart,
+  onResizeDrag,
+  onResizeEnd,
   onKeyHandlerReady,
   surfaceKeyHandler,
   renderSurface,
@@ -213,6 +218,8 @@ export function SurfacePanel({
             ? { top: -1, left: handleLeft, width: Math.max(1, width - 2 - handleLeft), height: 1 }
             : { left: -1, top: 0, width: 1, height: Math.max(1, height - 2) })}
           onMouseDown={startResize}
+          onMouseDrag={(event: { x: number; y: number }) => onResizeDrag?.(placement === 'bottom' ? event.y : event.x)}
+          onMouseUp={() => onResizeEnd?.()}
         >
           {/* It redraws the border it lies on: an empty box is not hit-testable,
               so without cells of its own it would take no drags at all. */}

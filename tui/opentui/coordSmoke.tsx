@@ -384,10 +384,14 @@ if (captureCharFrame().includes('agent committed change')) {
   console.error('Lead Git history leaked commits from nova’s isolated branch')
   process.exit(1)
 }
-await act(async () => {
-  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
-})
-if (!await waitForFrameMarker('[3] AGENT INSPECTOR')) {
+// Esc in the Git browser's detail pane first steps back to its tabs; a second closes it.
+for (let press = 0; press < 2; press++) {
+  await act(async () => {
+    handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  })
+  if (await waitForFrameMarker('[3] AGENT INSPECTOR', 600)) break
+}
+if (!captureCharFrame().includes('[3] AGENT INSPECTOR')) {
   console.error('Closing lead Git review did not return to the Coordinator')
   process.exit(1)
 }
@@ -409,16 +413,20 @@ if (!await waitForFrameMarker('Git · nova · agent/x') || !await waitForFrameMa
   process.exit(1)
 }
 await act(async () => {
-  handleKey?.({ name: '4', ctrl: false, shift: false, sequence: '4' })
+  // The browser's commit history (the review popover's pane 4) is its History strip.
+  handleKey?.({ name: 'h', ctrl: true, shift: false, sequence: '\b' })
 })
 if (!await waitForFrameMarker('agent committed change')) {
   console.error('Nova Git review did not expose commits from the agent branch')
   process.exit(1)
 }
-await act(async () => {
-  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
-})
-if (!await waitForFrameMarker('[2/2]')) {
+for (let press = 0; press < 3; press++) {
+  await act(async () => {
+    handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  })
+  if (await waitForFrameMarker('[2/2]', 600)) break
+}
+if (!captureCharFrame().includes('[2/2]')) {
   console.error('Closing worktree Git review did not preserve the selected agent')
   process.exit(1)
 }

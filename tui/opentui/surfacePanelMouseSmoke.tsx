@@ -91,7 +91,11 @@ try {
   await click('⤓ under')
   const under = panel()
   assert(under.y > beside.y && under.x < beside.x, `the under button did not move the panel: ${JSON.stringify(under)}`)
-  await drag({ x: under.x + 40, y: under.y }, { x: under.x + 40, y: under.y - 4 })
+  // The handle lies over the panel's top border; read where it is drawn instead of assuming a row.
+  const handle = frame('surface-panel-resize-handle')
+  assert(handle, `no resize handle:\n${setup.captureCharFrame()}`)
+  const grabX = handle.x + Math.min(40, Math.max(0, handle.width - 1))
+  await drag({ x: grabX, y: handle.y }, { x: grabX, y: handle.y - 4 })
   assert(panel().height === under.height + 4, `dragging the top border up did not grow the panel: ${under.height} → ${panel().height}`)
   // The border is text; a drag that also selected it would copy a run of ─ on release.
   assert(!setup.renderer.getSelection()?.getSelectedText?.(), `the resize drag selected text: ${JSON.stringify(setup.renderer.getSelection()?.getSelectedText?.())}`)

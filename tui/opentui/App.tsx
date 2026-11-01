@@ -5976,7 +5976,7 @@ function OpenTuiWorkspace() {
     effectiveSurfacePanelRows, surfacePanelHeight, surfacePanelFocused, gitRepoCwd,
     liveSubagentText, setSurfacePanel, setSurfacePanelFocused, toggleSurfacePanelPlacement,
     openSurfaceWindow, setSurfacePanelExpanded, setSurfacePanelOpen, surfacePanelResizeFromRef,
-    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody,
+    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody, resizeSurfacePanelBy,
   })
 
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.

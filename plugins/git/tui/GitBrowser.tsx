@@ -281,7 +281,7 @@ function RepositoryBrowser(props: GitPopoverProps & { active: boolean; switchRoo
   const repoSummaryWidth = Math.max(1, popW - frame - 2 - 22 - sidebarControl.length - (snapshot?.operation ? 16 : 0))
   return <box id="git-browser-frame" {...popoverRootProps(Boolean(docked), { top: 1, left: 1, width: popW, height: popH }, props.zIndex ?? 50)}
     {...(docked ? {} : { border: true, borderColor: theme.border2 })}
-    overflow={docked ? 'hidden' : undefined} backgroundColor={theme.surface} flexDirection="column" title={docked ? undefined : ' Git '}>
+    overflow={docked ? 'hidden' : undefined} backgroundColor={theme.surface} flexDirection="column" title={docked ? undefined : props.scopeLabel ? ` Git · ${safeLabel(props.scopeLabel)} ` : ' Git '}>
 
     {!docked && props.onDetach ? <PopoverDetachButton theme={theme} onPress={props.onDetach} /> : null}
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1}>

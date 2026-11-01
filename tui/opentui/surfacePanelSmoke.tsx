@@ -6,12 +6,15 @@
 import React from 'react'
 import { testRender, act } from './testRender'
 import { mkdtempSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { tmpdir } from 'os'
 import path from 'path'
 
 // Hermetic: state files resolve from process.cwd(). Import App AFTER chdir.
 const repoRoot = process.cwd()
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-surface-smoke-')))
+// The Git surface needs a repository to show anything but its error.
+execFileSync('git', ['init', '-q'])
 const { default: OpenTuiApp } = await import('./App')
 
 const setup = await testRender(<OpenTuiApp />, { width: 160, height: 44, kittyKeyboard: true })
@@ -121,7 +124,7 @@ if (!restoredLauncher || restoredLauncher.width !== initialLauncherWidth) {
 // The message column should be one continuous frame down to the footer: the
 // composer docks directly below the transcript at the same x/width, and its
 // bottom lands on the same row as the full-height surface panel.
-const transcriptFrame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as FrameGeometry | null
+const transcriptFrame = (setup.renderer.root.findDescendantById('transcript-reader') ?? setup.renderer.root.findDescendantById('window-area')) as unknown as FrameGeometry | null
 const composerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
 const surfaceFrame = setup.renderer.root.findDescendantById('surface-panel-frame') as unknown as FrameGeometry | null
 // Whatever sits between the two is the composer's status block (a non-default permission mode adds a
@@ -185,7 +188,7 @@ act(() => { setup.mockInput.pressKey('D') })
 await settle(2500)
 const diff = captureCharFrame()
 if (diff.includes('Open a surface')) throw new Error('Launcher still showing after picking Diff')
-if (!/Git|Status|Branches/.test(diff)) throw new Error(`Diff surface did not mount:\n${diff}`)
+if (!/Git|Status|Branches|Local Changes|\[Repo\]/.test(diff)) throw new Error(`Diff surface did not mount:\n${diff}`)
 if (process.env.DUMP_FRAME === '1') {
   const lines = diff.split('\n')
   console.log(lines.map((line, index) => `${String(index).padStart(3)}|${line.slice(90)}`).slice(-14).join('\n'))
@@ -233,7 +236,7 @@ const diffTab = locate(twoTabs, '± Diff')
 await act(async () => { await setup.mockMouse.click(diffTab.x + 2, diffTab.y) })
 await settle(1500)
 const backOnDiff = captureCharFrame()
-if (!/Git|Status|Branches/.test(backOnDiff)) {
+if (!/Git|Status|Branches|Local Changes|\[Repo\]/.test(backOnDiff)) {
   throw new Error(`Clicking the Diff tab did not switch to it:\n${backOnDiff}`)
 }
 const diffClose = locate(backOnDiff, '± Diff')
@@ -305,7 +308,7 @@ act(() => { setup.mockInput.pressKey('O', { shift: true }) })
 await settle(600)
 const closed = captureCharFrame()
 if (closed.includes('URL, host, or port')) throw new Error('⇧O did not close the surface panel')
-const closedTranscriptFrame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as FrameGeometry | null
+const closedTranscriptFrame = (setup.renderer.root.findDescendantById('transcript-reader') ?? setup.renderer.root.findDescendantById('window-area')) as unknown as FrameGeometry | null
 const closedComposerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
 if (
   !closedTranscriptFrame

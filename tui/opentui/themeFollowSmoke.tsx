@@ -65,8 +65,8 @@ const terminalReports = async (foreground: string, background: string) => {
   await settle(400)
 }
 const expectTheme = (name: 'light' | 'dark', when: string) => {
-  // Most of the frame is panes, which sit on the surface colour rather than bg.
-  const want = getThemePalette(name).surface.toLowerCase()
+  // The borderless layout paints most of the frame on the theme's own background.
+  const want = getThemePalette(name).bg.toLowerCase()
   const got = paintedBackground()
   if (got !== want) fail(`${when}: painted ${got}, expected the ${name} theme's ${want}`)
 }

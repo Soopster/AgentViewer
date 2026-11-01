@@ -122,11 +122,9 @@ const scroll = () => {
 const limit = () => Math.max(scroll().scrollHeight - scroll().viewport.height, 0)
 // The pane title says READING for as long as the tail is not being followed;
 // being scrolled to the bottom is not the same thing.
-// A window that has let go of the tail says so in its title.
-const followsTail = () => {
-  const frame = setup.renderer.root.findDescendantById('transcript-reader') as unknown as { y: number } | null
-  return !frame || !(setup.captureCharFrame().split('\n')[frame.y] ?? '').includes('paused')
-}
+// A window that follows the tail stays pinned to the bottom of its scrollbox;
+// its tab chip no longer carries a `paused` state, so the position is the evidence.
+const followsTail = () => scroll().scrollTop >= limit() - 1
 const rowWith = (needle: string) => setup.captureCharFrame().split('\n').find((row) => row.includes(needle))
 
 const fail = (message: string): never => {
@@ -157,7 +155,8 @@ try {
     const headerRow = rows.findIndex((row) => row.includes('▌ PROMPT  Explain the pool.'))
     if (headerRow !== titleRow + 1) fail('The sticky header leaves a spare row below the pane title')
     const borderTitle = rows[titleRow] ?? ''
-    if (!/smoke\s{0,2}─/.test(borderTitle)) fail('Trailing title padding hides the top border')
+    // The title is a tab chip on the border; its padding must not swallow the rule after it.
+    if (!/╰─{3,}/.test(borderTitle)) fail('Trailing title padding hides the top border')
     if (process.env.STICKY_HEADER_SMOKE_ONLY) {
       console.log('Sticky header smoke passed (accent marker, prompt label, no spare row above header)')
       setup.renderer.destroy()
@@ -191,7 +190,8 @@ try {
     const rows = setup.captureCharFrame().split('\n')
     const top = rows.findIndex((row) => row.includes('SESSIONS'))
     if (!rows[top]?.startsWith('┌')) fail('The sidebar frame does not start in the top-left cell')
-    const body = rows[top + 2] ?? ''
+    // The reader's tab chip rows sit above its frame; any body row below shows the shared border.
+    const body = rows.slice(top + 2, top + 8).find((row) => row.includes('││')) ?? ''
     if (!body.includes('││')) fail('A gutter separates the sidebar and reader frames')
     if (!body.trimEnd().endsWith('│') || body.trimEnd().length !== body.length) fail('The reader frame stops short of the right edge')
   }
@@ -200,7 +200,7 @@ try {
   {
     const rows = setup.captureCharFrame().split('\n')
     if (rows.some((row) => row.includes('shift+tab to cycle'))) fail('The permission mode took a row of its own')
-    if (!rows.some((row) => row.startsWith('└') && row.includes('▶▶ auto'))) fail('The dock border does not show the permission mode')
+    if (!rows.some((row) => (row.trimStart().startsWith('└') || row.trimStart().startsWith('╰')) && row.includes('▶▶ auto'))) fail('The dock border does not show the permission mode')
   }
 
   // ── nothing is highlighted ───────────────────────────────────────────────

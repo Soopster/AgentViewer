@@ -406,6 +406,7 @@ export type SurfacePanelElementContext = {
   setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   surfacePanelResizeFromRef: React.RefObject<number | null>
   setSurfacePanelResizing: React.Dispatch<React.SetStateAction<boolean>>
+  resizeSurfacePanelBy: (delta: number) => void
   surfacePanelKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   surfacePluginKeyRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>
   renderSurfaceBody: (kind: WindowSurfaceKind, box: { width: number; height: number; }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => React.ReactNode
@@ -418,7 +419,7 @@ export function runSurfacePanelElement(ctx: SurfacePanelElementContext) {
     effectiveSurfacePanelRows, surfacePanelHeight, surfacePanelFocused, gitRepoCwd,
     liveSubagentText, setSurfacePanel, setSurfacePanelFocused, toggleSurfacePanelPlacement,
     openSurfaceWindow, setSurfacePanelExpanded, setSurfacePanelOpen, surfacePanelResizeFromRef,
-    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody,
+    setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody, resizeSurfacePanelBy,
   } = ctx
 return surfacePanelVisible ? (
   <SurfacePanel
@@ -459,6 +460,18 @@ return surfacePanelVisible ? (
     onResizeStart={(position) => {
       surfacePanelResizeFromRef.current = position
       setSurfacePanelResizing(true)
+    }}
+    // A drag is delivered to the border it started on, so the border carries it
+    // too; the full-screen layer takes over only if the pointer is captured elsewhere.
+    onResizeDrag={(position) => {
+      const last = surfacePanelResizeFromRef.current
+      if (last === null || position === last) return
+      surfacePanelResizeFromRef.current = position
+      resizeSurfacePanelBy(last - position)
+    }}
+    onResizeEnd={() => {
+      surfacePanelResizeFromRef.current = null
+      setSurfacePanelResizing(false)
     }}
     onKeyHandlerReady={(handler) => { surfacePanelKeyHandlerRef.current = handler }}
     surfaceKeyHandler={(key) => {
