@@ -48,7 +48,7 @@ export function runFooterSegments(ctx: FooterSegmentsContext) {
             ? [[['j/k', 'select'], ['↵', 'open'], ['tab', 'focus']], [['a', 'sessions']]] as Array<Array<[string, string]>>
             : [
                 [['j/k', 'select'], ['↵', 'open'], ['x', 'settle'], ['tab', 'focus']],
-                [['/', 'search'], ['⌃R', 'rename']],
+                [['e', 'date groups'], ['/', 'search'], ['⌃R', 'rename']],
                 [['⇧S', 'sort'], ['⇧Y', 'scratch'], ['a', 'agents']],
                 [['[/]', 'width']],
               ] as Array<Array<[string, string]>>

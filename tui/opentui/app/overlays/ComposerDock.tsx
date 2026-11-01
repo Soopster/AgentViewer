@@ -95,7 +95,7 @@ export function ComposerDock(props: ComposerDockProps) {
           // border in fullscreen, a band that did not match the draft.
           backgroundColor={composerDockBackground}
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
-          borderStyle={composerDockRouted ? 'heavy' : isChatLikeView ? 'single' : 'rounded'}
+          borderStyle="rounded"
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
           focused={composerDockEmphasized}
           title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage

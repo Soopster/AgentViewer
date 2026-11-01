@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { indexComposerMessages, visibleComposerMessages } from '../../../lib/composerTranscript'
+import { foldTurnActivity } from './turnActivity'
 import { transcriptMeasure } from '../engineeringLayout'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { WindowButton } from '../WindowButton'
@@ -414,6 +415,10 @@ export function SplitTranscriptPaneInner({
   // and only the tail is mounted, loading a page at a time as the cursor walks
   // back, so a long transcript costs nothing it is not showing.
   const lightView = lightweight
+  const [foldedTurns, setFoldedTurns] = useState<ReadonlySet<string>>(() => new Set())
+  const runningRef = useRef(running)
+  runningRef.current = running
+  useEffect(() => setFoldedTurns(new Set()), [session.sessionId, session.provider, session.providerInstanceId])
   const fullPaneCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map(card => card.key))
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
@@ -426,7 +431,7 @@ export function SplitTranscriptPaneInner({
   // window's position, so a remount does not drop the pages already loaded.
   const [loadedCount, setLoadedCount] = useState(initialPosition?.loadedCount ?? SPLIT_PANE_CARD_WINDOW)
   const lightStart = lightView ? Math.max(0, fullPaneCards.length - liveCards.length - loadedCount) : 0
-  const allPaneCards = useMemo(() => lightStart > 0 ? fullPaneCards.slice(lightStart) : fullPaneCards, [fullPaneCards, lightStart])
+  const allPaneCards = useMemo(() => foldTurnActivity(lightStart > 0 ? fullPaneCards.slice(lightStart) : fullPaneCards, foldedTurns, running), [fullPaneCards, lightStart, foldedTurns, running])
   const fullCardsRef = useRef(fullPaneCards)
   fullCardsRef.current = fullPaneCards
   const lightRef = useRef({ light: lightView, start: lightStart })
@@ -591,6 +596,13 @@ export function SplitTranscriptPaneInner({
         const list = cardsRef.current
         const card = list[cursorIndexNow()]
         if (!card) return
+        if (card.role === 'user') {
+          const index = list.indexOf(card)
+          if (runningRef.current && !list.slice(index + 1).some(item => item.role === 'user')) return
+          setFollowTail(false)
+          setFoldedTurns(previous => { const next = new Set(previous); if (!next.delete(card.key)) next.add(card.key); return next })
+          return
+        }
         jumpCursor(card.key)
         const { expandedKeys: open, view, chatLike, foldAll } = expansionRef.current
         const isExpanded = open.has(card.key)
@@ -1058,7 +1070,7 @@ export function SplitTranscriptPaneInner({
       ) : null}
       {footer ? <box flexDirection="column" flexShrink={0}>{footer.render(width)}</box> : null}
       {/* Key hints sit in the bottom border, as the composer's status does. */}
-      <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface} visible={!frameless}>
+      <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface} visible={!frameless && !focused}>
         <text fg={theme.dim} wrapMode="none">
           {` ${(focused
             ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ zoom  esc focus' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ zoom  esc focus', innerWidth - 2)

@@ -241,3 +241,35 @@ export function buildSidebarEntries(
   }
   return entries
 }
+
+/** Calendar buckets preserve parent/child adjacency and the existing project order. */
+export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date()): SidebarEntry[] {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime()
+  const result: SidebarEntry[] = []
+  let project = ''
+  let bucketKey = ''
+  let hidden = false
+  let header: Extract<SidebarEntry, { type: 'project' }> | undefined
+  for (const entry of entries) {
+    if (entry.type === 'project') {
+      project = entry.key
+      bucketKey = ''
+      hidden = false
+      result.push(entry)
+    } else if (entry.type === 'session') {
+      const time = sessionActivityMs(entry.session)
+      const label = time >= today ? 'Today' : time >= yesterday ? 'Yesterday' : 'Older'
+      const key = `${project}:date:${label}`
+      if (key !== bucketKey) {
+        bucketKey = key
+        hidden = collapsed.has(key)
+        header = { type: 'project', key, projectName: label, count: 0, dateGroup: true, collapsed: hidden }
+        result.push(header)
+      }
+      if (header?.type === 'project') header.count++
+      if (!hidden) result.push(entry)
+    } else if (!hidden) result.push(entry)
+  }
+  return result
+}

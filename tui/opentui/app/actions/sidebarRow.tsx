@@ -18,6 +18,7 @@ import { mixHexColor } from '../transcriptStyle'
 import { sessionProviderLabel } from '../pickers'
 
 export type BuildSidebarRowContext = {
+  toggleDateGroup: (key: string) => void
   sidebarEntries: SidebarEntry[]
   sidebarInnerWidth: number
   firstSidebarEntryKey: string
@@ -57,14 +58,15 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
       <box
         key={entry.key}
         id={`sidebar:${entry.key}`}
+        onMouseDown={event => { if (entry.dateGroup && event.button === 0) { event.stopPropagation(); ctx.toggleDateGroup(entry.key) } }}
         paddingX={1}
         // A blank row separates groups; the first has the rail's own title
         // above it and nothing to be separated from.
-        marginTop={entry.key === firstSidebarEntryKey ? 0 : 1}
+        marginTop={entry.dateGroup || entry.key === firstSidebarEntryKey ? 0 : 1}
         backgroundColor={theme.surface}
       >
         <text fg={theme.dim} wrapMode="none">
-          {fitText(`${projectLabel} / ${countLabel}`, sidebarInnerWidth - 2)}
+          {fitText(`${entry.dateGroup ? entry.collapsed ? "▸ " : "▾ " : ""}${projectLabel} / ${countLabel}`, sidebarInnerWidth - 2)}
         </text>
       </box>
     )

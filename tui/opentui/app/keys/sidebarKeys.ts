@@ -9,11 +9,12 @@ import { type SidebarEntry, type PaneFocus, type NoticeTone } from '../types'
 
 /** Returns true when one of these branches handled the key. */
 export function handleSidebarKeys({
-  effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
+  toggleDateGroups, effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
   showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted,
   openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,
   toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort,
 }: {
+  toggleDateGroups?: () => void
   effectiveFocus: PaneFocus
   sidebarSubagentCursor: string | null
   key: KeyEvent
@@ -34,6 +35,10 @@ export function handleSidebarKeys({
   toggleSidebarSort: () => void
   sidebarSort: TuiSidebarSort
 }): boolean {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'e' && !key.ctrl && !key.meta && !key.shift && toggleDateGroups) {
+      handled(toggleDateGroups)
+      return true
+    }
     if (effectiveFocus === 'sessions' && sidebarSubagentCursor && !key.ctrl && !key.meta
       && ['x', 'd', 'r', 't', 'b'].includes(key.name.toLowerCase())) {
       handled(() => showNotice('info', 'Captured subagent transcripts are read only · Enter to view'))

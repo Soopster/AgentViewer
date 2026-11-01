@@ -361,7 +361,7 @@ export async function getConfiguredTuiSidebarWidth(): Promise<number> {
   const parsed = await readTuiState()
   return typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
     ? Math.max(28, Math.round(parsed.sidebarWidth))
-    : 32
+    : 40
 }
 
 export async function setConfiguredTuiSidebarWidth(sidebarWidth: number): Promise<void> {

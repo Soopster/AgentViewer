@@ -231,7 +231,7 @@ export function transcriptToolColor(name: string, theme: TuiThemePalette): strin
 export function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): string {
   switch (line.tone) {
     case 'tool':
-      return transcriptToolColor(toolNameFromTranscriptLine(line.text), theme)
+      return theme.muted
     case 'agent':
       return theme.violet
     case 'result_ok':
@@ -239,7 +239,7 @@ export function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePale
     case 'result_error':
       return theme.red
     case 'thinking':
-      return theme.violet
+      return theme.muted
     case 'system':
       return theme.amber
     case 'diff_add':
@@ -370,8 +370,11 @@ function streamCardLatestTimestampMs(card: TuiTranscriptCard): number | null {
 export function turnSummaryText(cards: readonly TuiTranscriptCard[], promptIndex: number, endIndex: number, elapsedMs: number | null): string | null {
   const edits = formatFileEditSummary(mergeFileEditStats(cards.slice(promptIndex + 1, endIndex).map((card) => card.fileEdits)))
   const worked = elapsedMs != null && elapsedMs >= 1000 ? `Worked for ${formatElapsedClock(elapsedMs)}` : null
-  if (worked && edits) return `${worked} · ${edits}`
-  return worked ?? edits
+  const activity = cards.slice(promptIndex + 1, endIndex).flatMap(card => (card as AgentToolGroupCard).agentToolCards ?? [card])
+  const commands = activity.filter(card => card.category === 'technical').length
+  const failures = activity.filter(card => card.lines.some(line => line.tone === 'result_error')).length
+  const parts = [worked, commands ? `${commands} tool calls` : null, failures ? `${failures} failed` : null, edits].filter(Boolean)
+  return parts.length ? parts.join(' · ') : null
 }
 export function streamCompletedTurnHint(cards: TuiTranscriptCard[]): CardLandmark | null {
   let userIndex = -1

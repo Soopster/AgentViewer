@@ -378,12 +378,9 @@ export function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] 
   if (grouped && grouped.length > 0) return grouped
   return isAgentsToolOnlyCard(card) ? [card] : []
 }
-// A card's expansion is its view's default — technical cards fold in the
-// conversation, agents and stream views — overridden per card: `expanded`
-// opens a folding card, `collapsed` closes any other.
-export function cardFoldsByDefault(card: TuiTranscriptCard, transcriptView: TuiTranscriptView, chatLike: boolean, foldAll = false): boolean {
-  if (foldAll || card.thinkingTranscript) return true
-  return (transcriptView === 'conversation' || chatLike || transcriptView === 'agents') && Boolean(card.autoFold)
+// Activity stays expanded until the user folds it; explicit fold-all remains available.
+export function cardFoldsByDefault(_card: TuiTranscriptCard, _transcriptView: TuiTranscriptView, _chatLike: boolean, foldAll = false): boolean {
+  return foldAll
 }
 export function resolveExpandedCardKeys(
   cards: TuiTranscriptCard[], transcriptView: TuiTranscriptView, chatLike: boolean,
@@ -418,7 +415,7 @@ export function agentToolCardIsExpanded(
   card: TuiTranscriptCard,
   expandedKeys: ReadonlySet<string>,
   collapsedKeys: ReadonlySet<string>): boolean {
-  return card.autoFold ? expandedKeys.has(card.key) : !collapsedKeys.has(card.key)
+  return !collapsedKeys.has(card.key)
 }
 // A Coordinator call's header is `coordinator verb[ → who][ · qualifier…]  said`
 // (`coordinatorHeader` in tui/format.ts). Colour follows what the reader scans

@@ -6,7 +6,7 @@ export function cycleTranscriptWidth(width: TuiTranscriptWidth): TuiTranscriptWi
 }
 
 export function transcriptMeasure(available: number, width: TuiTranscriptWidth): number {
-  return width === 'full' ? available : Math.min(available, width === 'readable' ? 112 : 144)
+  return width === 'full' ? available : Math.min(available, width === 'readable' ? 104 : 144)
 }
 
 /** A project name is enough in the dock; the expanded composer retains cwd. */

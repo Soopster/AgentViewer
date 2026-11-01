@@ -37,16 +37,9 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
   }, [runningSessions])
 
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
-  // When either right-hand panel is open, dock the composer under the reader
-  // column so it sits beside the panel instead of running underneath it.
   const rightSidePanelVisible = taskPanelVisible || surfacePanelOnRight
-  const composerAreaOffset = rightSidePanelVisible
-    ? (showRail ? sidebarWidth : 0)
-    : 0
-  const composerAreaWidth = Math.max(
-    30,
-    rightSidePanelVisible ? readerAreaWidth : width,
-  )
+  const composerAreaOffset = 0
+  const composerAreaWidth = width
   const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
   const composerWindowWidth = Math.max(
     20,

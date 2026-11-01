@@ -90,7 +90,7 @@ export type PendingInboxEdit = { settledAt: number | undefined; until: number}
  * whose subagents live only inside the parent transcript. */
 export type SidebarSubagentEntry = { kind: 'session'; session: Session}  |
 { kind: 'summary'; summary: SubagentSummary} 
-export type SidebarEntry = { type: 'project'; key: string; projectName: string; count: number}  |
+export type SidebarEntry = { type: 'project'; key: string; projectName: string; count: number; dateGroup?: boolean; collapsed?: boolean}  |
 { type: 'session'; key: string; session: Session; absoluteIndex: number}  |
 { type: 'subagent'; key: string; parentSession: Session; entry: SidebarSubagentEntry; depth: number} 
 export type TuiEffort = 'auto' | ReasoningEffortLevel

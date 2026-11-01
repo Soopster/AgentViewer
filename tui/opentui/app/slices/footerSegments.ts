@@ -8,7 +8,7 @@ import type { RefObject } from 'react'
 import React, { useCallback, useMemo } from 'react'
 import { isPluginEnabled } from '../../../../lib/plugins/enablement'
 import { toast } from '../../toastStore'
-import { formatSessionTitle } from '../../../format'
+import { formatProviderLabel, formatSessionTitle } from '../../../format'
 import { writeTuiSidebarWidth, type TuiSessionDetail } from '../../../../lib/tui/service'
 import { useStableEvent } from '../../useStableEvent'
 import { type Session } from '../../../../lib/types'
@@ -117,12 +117,12 @@ export function useFooterSegmentsGroup(ctx: UseFooterSegmentsGroupContext) {
   // An explicit pane target outranks the auto-targeting note: the user aimed
   // this composer at a split pane and must be able to see that before sending.
   const composerTargetMessage = composerPaneTargetKey && composerTargetSession
-    ? `To: ${formatSessionTitle(composerTargetSession)}`
+    ? `To: ${formatSessionTitle(composerTargetSession)} · ${formatProviderLabel(composerTargetSession.provider ?? 'claude')}`
     : composerPaneTargetKey
     ? 'Session target is unavailable — select a session to retarget'
     : composerAutoTargetingRunning && composerTargetSession
-      ? `To: ${formatSessionTitle(composerTargetSession)}`
-      : composerTargetSession ? `To: ${formatSessionTitle(composerTargetSession)}` : null
+      ? `To: ${formatSessionTitle(composerTargetSession)} · ${formatProviderLabel(composerTargetSession.provider ?? 'claude')}`
+      : composerTargetSession ? `To: ${formatSessionTitle(composerTargetSession)} · ${formatProviderLabel(composerTargetSession.provider ?? 'claude')}` : null
   const composerIdleFooterHint = useMemo(
     () => formatTuiComposerIdleHint(composerConfig.footerHintIdle, sentHistory.length),
     [composerConfig.footerHintIdle, sentHistory.length],

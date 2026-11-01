@@ -115,7 +115,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
               </box>
             ) : null}
             {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
-            <box height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.dim}>{allProjects ? 'All projects · click to scope' : 'Project sessions · click for all'}</text></box>
+            <box height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.dim}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>
             <box flexGrow={1} paddingX={1}>
               {sidebarView === 'coordinator' ? (
                 <Slot

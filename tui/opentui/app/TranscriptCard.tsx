@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import { transcriptMeasure } from '../engineeringLayout'
 import { TranscriptImages } from '../TranscriptImages'
-import React, { useMemo } from 'react'
+import { toolOutputPreview } from './toolOutputPreview'
+import React, { useMemo, useState } from 'react'
 import { getAssistantDisplayName } from '../../../lib/provider'
 import { hasTuiLinkTarget } from '../../../lib/tuiLinkTargets'
 import { CardSelectionVariants } from '../cardSelectionVariants'
@@ -289,7 +290,7 @@ export function TranscriptCardInner({
   // as an Agents operation, its outer container should follow the same centered
   // width as every multi-tool group; the nested diff still fills that container.
   const centeredCard = shouldCenterTranscriptCard(card, transcriptWidth, agentsMode)
-  const boundedCard = centeredCard || (transcriptWidth === 'readable' && (card.category !== 'diff' || agentsMode))
+  const boundedCard = centeredCard || (transcriptWidth === 'readable' && (card.category === 'conversation' && !card.codeBlocks?.length))
   const readableCardWidth = boundedCard
     ? transcriptMeasure(availableCardWidth, transcriptWidth)
     : availableCardWidth
@@ -811,7 +812,7 @@ export function TranscriptCardInner({
     // The transcript pane spends two columns on its border and two more on
     // the surrounding paddingX={1}; bodyIndent is budgeted separately below.
     const streamAvailableWidth = Math.max(rightPaneWidth - 4, 16)
-    const streamWidth = Math.max((copilotMode || openCodeMode) ? streamAvailableWidth - densityState.bodyIndent : transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
+    const streamWidth = Math.max((copilotMode || openCodeMode || (transcriptWidth === 'readable' && (card.category !== 'conversation' || Boolean(card.codeBlocks?.length)))) ? streamAvailableWidth - densityState.bodyIndent : transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
     const streamLandmarkWidth = streamWidth + densityState.bodyIndent
     // Subagent cards prefix the marker with one ↪ per spawn-chain level
     // (`subagent:parent/child` origin), widening the marker gutter to match.
@@ -1604,10 +1605,22 @@ export function TranscriptCardInner({
 }
 
 export const TranscriptCard = React.memo(function TranscriptCardWithImages(props: TranscriptCardProps) {
-  if (!props.card.images?.length) return <TranscriptCardInner {...props} />
+  const [showAll, setShowAll] = useState(false)
+  const preview = useMemo(() => props.isExpanded ? toolOutputPreview(props.card, props.display.bodyLines) : null,
+    [props.card, props.display.bodyLines, props.isExpanded])
+  const clippedProps = useMemo(() => preview && !showAll ? {
+    ...props,
+    card: { ...props.card, markdownContent: undefined, codeBlocks: undefined },
+    display: { ...props.display, bodyLines: preview.lines, markdownFallbackLines: null, codeBlockLineCounts: [] },
+  } : props, [props, preview, showAll])
+  if (!props.card.images?.length && !preview) return <TranscriptCardInner {...props} />
   return <box id={`card:${props.card.key}`} flexDirection="column" flexShrink={0}>
-    <TranscriptCardInner {...props} />
-    <TranscriptImages sources={props.card.images} width={Math.max(1, props.rightPaneWidth - 8)} muted={props.theme.muted} />
+    <TranscriptCardInner {...clippedProps} />
+    {preview ? <box id={`tool-output-toggle:${props.card.key}`} height={1} paddingLeft={2}
+      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setShowAll(value => !value) } }}>
+      <text fg={props.theme.cyan} wrapMode="none">{showAll ? '▴ Show less output' : `▸ Show all output (${preview.hidden} more lines)`}</text>
+    </box> : null}
+    {props.card.images?.length ? <TranscriptImages sources={props.card.images} width={Math.max(1, props.rightPaneWidth - 8)} muted={props.theme.muted} /> : null}
   </box>
 })
 

@@ -254,7 +254,7 @@ import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOu
 import { formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
-import { sessionKey, sessionActivityMs, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
+import { sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
 
 
@@ -1319,8 +1319,11 @@ function OpenTuiWorkspace() {
     return map
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
+  const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
+  const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
   const sidebarEntries = useMemo(() => {
-    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
+    const rawEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
+    const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
     if (filteredSessionsForSidebar === sessions) return entries
     const originalIndex = new Map<string, number>()
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
@@ -1329,7 +1332,7 @@ function OpenTuiWorkspace() {
       const idx = originalIndex.get(sessionKey(entry.session))
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
-  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId, collapsedSubagentSet])
+  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId, collapsedSubagentSet, normalizedSessionQuery, collapsedDateGroups])
   // Keep keyboard navigation and neighbour prefetch on the same flattened
   // session order as the rendered sidebar. Rebuilding this array inside every
   // j/k handler was needlessly allocating one wrapper array per keypress.
@@ -1464,9 +1467,9 @@ function OpenTuiWorkspace() {
     if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path' })
     const branch = composerGitSummary?.branch ?? composerGitBranch
     if (branch) parts.push({ text: branch, fg: theme.green, action: 'git' })
-    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, fg: theme.amber, action: 'git' })
-    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, fg: theme.dim, action: 'git' })
-    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, fg: theme.amber, action: 'git' })
+    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, atomic: true, fg: theme.amber, action: 'git' })
+    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, atomic: true, fg: theme.dim, action: 'git' })
+    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, atomic: true, fg: theme.amber, action: 'git' })
     if (selectedWorktreeTask) {
       const counts = [
         selectedWorktreeTask.dirtyFiles > 0 ? `${selectedWorktreeTask.dirtyFiles} dirty` : null,
@@ -3278,7 +3281,7 @@ function OpenTuiWorkspace() {
   // 5s sessions poll produces a new array), which is frequent enough.
   const firstSidebarEntryKey = sidebarEntries[0]?.key ?? null
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
-    sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    toggleDateGroup, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
     showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
@@ -5686,6 +5689,7 @@ function OpenTuiWorkspace() {
       openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
     })) return
     if (handleSidebarKeys({
+      toggleDateGroups: () => setCollapsedDateGroups(previous => previous.size ? new Set() : new Set(sidebarEntries.filter(entry => entry.type === 'project' && entry.dateGroup).map(entry => entry.key))),
       effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
       showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection,
       isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,

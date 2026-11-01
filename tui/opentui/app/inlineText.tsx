@@ -12,6 +12,7 @@ export type InlineTextSegment = {
   fg: string
   bg?: string
   attributes?: number
+  atomic?: boolean
   action?: ComposerStatusAction
 }
 /** The action of the segment under a column of a row drawn by renderInlineTextSegments. */
@@ -27,6 +28,7 @@ export function inlineSegmentIndexAt(segments: readonly InlineTextSegment[], wid
   let remaining = width
   for (let index = 0; index < segments.length; index += 1) {
     if (remaining <= 0) break
+    if (segments[index]!.atomic && segments[index]!.text.length > remaining) break
     const length = clipText(segments[index]!.text, remaining).length
     if (length === 0) continue
     if (column >= start && column < start + length) return index
@@ -110,6 +112,7 @@ export function renderInlineTextSegments(segments: InlineTextSegment[], width: n
     if (remaining <= 0) break
     const segment = segments[i]
     if (!segment?.text) continue
+    if (segment.atomic && segment.text.length > remaining) break
     const clipped = clipText(segment.text, remaining)
     if (!clipped) continue
     if (segment.action) {
