@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { TuiThemePalette } from '../../../theme'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -26,7 +27,7 @@ export type BuildSidebarRowContext = {
   selectSidebarSession: (session: Session) => void
   setSidebarSubagentCursor: React.Dispatch<React.SetStateAction<string | null>>
   setSubagentTranscriptSelection: React.Dispatch<React.SetStateAction<{ parent: Session; agent: SubagentSummary; } | null>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
   recentlyWrittenKeys: ReadonlySet<string>
   teamAttention: TeamAttention
   density: TuiDensity
@@ -255,6 +256,13 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
         {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
         {activityGlyph ? <text fg={activityColor} wrapMode="none" selectable={false}>{` ${activityGlyph}`}</text> : null}
       </box>
+      )}
+      {/* The idle recap earns a row only where the rail already spends two. */}
+      {singleRow || !entry.session.recap ? null : (
+        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+          <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+          <text fg={theme.muted} wrapMode="none" selectable={false}>{fitText(entry.session.recap.text, sidebarInnerWidth - 3)}</text>
+        </box>
       )}
     </box>
   )

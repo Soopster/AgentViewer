@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { WorkspaceContextValue } from '../../workspaceContext'
@@ -64,7 +65,7 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   treeGeometry: { layout: WindowLayout; rects: Map<number, SplitRect>; dividers: SplitDivider[]; } | null
   treeDividerActivePathRef: React.RefObject<string | null>
   treeDividerCheckpointedRef: React.RefObject<boolean>
-  pluginOverlay: 'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   dailySummaryOpen: boolean
   playbookManagerOpen: boolean
   attentionOpen: boolean

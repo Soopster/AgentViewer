@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { KeyEvent } from '@opentui/core'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -63,9 +64,9 @@ export function handleWindowControlKeys({
   isCtrlShift: (char: string) => boolean
   openPopoverKind: () => PopoverWindowKind | null
   openPopoverWindow: (kind: PopoverWindowKind, pin?: SurfaceMeta, placement?: 'beside' | 'fill' | 'tab') => void
-  pluginOverlay: 'teammates' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   gitRepoCwd: string
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'teammates' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
   openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
   focusedWindowSurfaceKind: WindowSurfaceKind | null
   focusedWindowSurface: string | null

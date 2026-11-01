@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -57,7 +58,7 @@ export type SubmitCoordinatedRunContext = {
   setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   setCoordModalOpen: React.Dispatch<React.SetStateAction<boolean>>
   setCoordBoardRunId: React.Dispatch<React.SetStateAction<string | null>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   setCoordDraft: React.Dispatch<React.SetStateAction<string>>
   setCoordAcceptanceDraft: React.Dispatch<React.SetStateAction<string>>

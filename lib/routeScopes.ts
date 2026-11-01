@@ -57,6 +57,10 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/sessions/[sessionId]/interrupt': { POST: 'write' },
   // Spends model tokens, so not a read however much it looks like one.
   '/api/sessions/[sessionId]/insights': { POST: 'write' },
+  '/api/sessions/[sessionId]/goal': { GET: 'read', POST: 'write', PATCH: 'write', DELETE: 'write' },
+  // POST spends model tokens; DELETE only dismisses a stored recap.
+  '/api/sessions/[sessionId]/recap': { GET: 'read', POST: 'write', DELETE: 'write' },
+  '/api/session-recaps': { GET: 'read', POST: 'write' },
   '/api/sessions/[sessionId]/coordination': { GET: 'read', POST: 'write' },
   '/api/sessions/[sessionId]/coord-join': { POST: 'write', DELETE: 'write' },
 
@@ -96,6 +100,19 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // read — method is not intent.
   '/api/git/content': { POST: 'read' },
   '/api/github/pr': { POST: 'write' },
+  // GitHub reads are cached `gh` queries; only the issue POST changes anything.
+  '/api/github/inbox': { GET: 'read' },
+  '/api/github/issues': { GET: 'read', POST: 'write' },
+  '/api/github/runs': { GET: 'read', POST: 'write' },
+  // GET only drafts text from git log; POST merges, creates and checks out.
+  '/api/github/repo': { GET: 'read' },
+  '/api/github/prs': { GET: 'read' },
+  '/api/github/releases': { GET: 'read', POST: 'write' },
+  // Open vulnerabilities and where they are: not something a read-only device should see.
+  '/api/github/security': { GET: 'write' },
+  '/api/github/workflows': { GET: 'read', POST: 'write' },
+  '/api/github/notifications': { POST: 'write' },
+  '/api/github/pr-actions': { GET: 'read', POST: 'write' },
   '/api/worktrees': { GET: 'read', POST: 'write' },
 
   // --- Remote access -----------------------------------------------------

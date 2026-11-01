@@ -14,4 +14,6 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   terminal: async () => (await import('@/plugins/terminal/web')).module,
   browser: async () => (await import('@/plugins/browser/web')).module,
   coordination: async () => (await import('@/plugins/coordination/web')).module,
+  github: async () => (await import('@/plugins/github/web')).module,
+  recaps: async () => (await import('@/plugins/recaps/web')).module,
 }, WEB_PLUGIN_SERVICES)

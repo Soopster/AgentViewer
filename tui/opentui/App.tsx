@@ -271,6 +271,8 @@ import { keepEmpty, keepFiltered, sameKeys, touchMapEntry, pruneSessionCaches } 
 import { ExitConfirmOverlay } from './app/overlays/ExitConfirmOverlay'
 import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
 import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
+import { SessionGoalOverlay } from './app/overlays/SessionGoalOverlay'
+import { SessionGoalStrip } from './app/SessionGoalStrip'
 import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
@@ -338,6 +340,8 @@ import { useQuestionPickerState } from './app/state/questionPickerState'
 import { useComposerListState } from './app/state/composerListState'
 import { useComposerInputState } from './app/state/composerInputState'
 import { useBookmarkScrollState } from './app/state/bookmarkScrollState'
+import { useSessionGoalState } from './app/state/sessionGoalState'
+import { useSessionRecapSuggestion } from './app/state/sessionRecapState'
 import { useBridgeAttentionState } from './app/state/bridgeAttentionState'
 import { useMenuState } from './app/state/menuState'
 import { useSidebarPreferenceState } from './app/state/sidebarPreferenceState'
@@ -938,6 +942,31 @@ function OpenTuiWorkspace() {
     composerPreferredTargetKey, sessions, queuedComposerSends,
   })
   useLayoutEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
+  const sessionGoal = useSessionGoalState(composerTargetSession ?? selectedSession)
+  useSessionRecapSuggestion({
+    session: composerTargetSession ?? selectedSession,
+    draft: composerDraft,
+    sending: composerSendState === 'sending',
+    livePromptSuggestion,
+    setLivePromptSuggestion,
+  })
+  /** Start (or save) the goal dialog's content, then send the objective itself. */
+  const submitSessionGoal = useStableEvent(() => {
+    const state = sessionGoal
+    void (async () => {
+      if (state.goal) { await state.save(); return }
+      const objective = await state.start()
+      if (!objective) return
+      // The objective becomes this turn. Leaving it in the composer would send
+      // the same text again on the next Enter.
+      composerTextareaRef.current?.setText('')
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerDraft('')
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      void sendComposerMessage(objective)
+    })()
+  })
   const canUseChannelBridge = Boolean(
     selectedSessionTarget
     && (selectedSessionTarget.provider ?? 'claude') === 'claude'
@@ -5261,6 +5290,7 @@ function OpenTuiWorkspace() {
     runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
+    openSessionGoalDialog: () => sessionGoal.openDialog(composerDraft),
     openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
@@ -5471,6 +5501,23 @@ function OpenTuiWorkspace() {
       key.stopPropagation()
       action()
     }
+    // The goal dialog owns every key while it is open: Tab moves between its
+    // two fields, ^P pauses or resumes, ^D clears the goal, everything else
+    // falls through to the focused input.
+    if (sessionGoal.dialogOpen) {
+      if (key.name === 'escape') {
+        handled(() => sessionGoal.closeDialog())
+      } else if (key.name === 'tab') {
+        handled(() => sessionGoal.setGoalFocus((current) => current === 'objective' ? 'budget' : 'objective'))
+      } else if (isCtrl('p') && sessionGoal.goal) {
+        // The one way out of a runaway goal from the keyboard: the strip is a
+        // readout, so stopping it has to live where the goal is edited.
+        handled(() => { void sessionGoal.setStatus(sessionGoal.goal?.status === 'active' ? 'paused' : 'active') })
+      } else if (isCtrl('d') && sessionGoal.goal) {
+        handled(() => { void sessionGoal.clear() })
+      }
+      return
+    }
     if (handleWindowControlKeys({
       windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls,
       sequence, readControlWindows, pickControlWindow, endWindowResizeGroup,
@@ -5658,6 +5705,10 @@ function OpenTuiWorkspace() {
       setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch,
       jumpToMatchingCard,
     })) return
+    if (!composerActive && isShifted('D')) {
+      handled(() => sessionGoal.openDialog(composerDraft))
+      return
+    }
     if (handleLetterShortcutKeys({
       sequence, composerActive, handled, setComposerHidden, setComposerActive,
       normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode,
@@ -6125,6 +6176,10 @@ function OpenTuiWorkspace() {
       <SessionSearchBar sessionSearchMode={sessionSearchMode} width={width} theme={theme} filteredSessionsForSidebar={filteredSessionsForSidebar} sessions={sessions} sessionSearchQuery={sessionSearchQuery} setSessionSearchQuery={setSessionSearchQuery} sidebarEntries={sidebarEntries} setSelectedSessionKey={setSelectedSessionKey} setSessionSearchMode={setSessionSearchMode} />
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
+
+      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? (
+        <SessionGoalStrip goal={sessionGoal.goal} theme={theme} width={composerAreaWidth} marginLeft={composerAreaOffset} />
+      ) : null}
 
       <ComposerStatusStack
         presentationHidesComposer={presentationHidesComposer}
@@ -6722,6 +6777,21 @@ function OpenTuiWorkspace() {
       ) : null}
 
       <WorktreeModalOverlay worktreeModalOpen={worktreeModalOpen} width={width} height={height} theme={theme} worktreeDraft={worktreeDraft} setWorktreeDraft={setWorktreeDraft} submitWorktreeTask={submitWorktreeTask} worktreeBusy={worktreeBusy} />
+      <SessionGoalOverlay
+        open={sessionGoal.dialogOpen}
+        goal={sessionGoal.goal}
+        objective={sessionGoal.objective}
+        setObjective={sessionGoal.setObjective}
+        budget={sessionGoal.budget}
+        setBudget={sessionGoal.setBudget}
+        focus={sessionGoal.goalFocus}
+        busy={sessionGoal.busy}
+        error={sessionGoal.error}
+        width={width}
+        height={height}
+        theme={theme}
+        onSubmit={submitSessionGoal}
+      />
 
       <WorktreeConfirmOverlay worktreeConfirm={worktreeConfirm} selectedWorktreeTask={selectedWorktreeTask} width={width} height={height} theme={theme} />
 

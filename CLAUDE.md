@@ -2667,6 +2667,36 @@ request settles itself when that PR merges, so finished work leaves the active l
 transition into `MERGED`), so deliberately reopening a settled session is not undone on the next
 sweep. A missing or logged-out `gh` yields no state at all and is never an error.
 
+### GitHub plugin (`plugins/github`, `lib/github/`)
+
+The in-app GitHub surface: Overview (repo facts, branches, commits), Inbox (review requests, my PRs, assigned,
+mentions, notifications with mark-read), PRs (list/filter, checks, reviews, review threads with resolve, merge,
+update-branch, draft, checkout, review/comment), Issues (create, comment, close, labels, assignees), Actions (runs,
+jobs, failed-step log, rerun, cancel, `workflow_dispatch`), Releases (list, notes, create) and Security (Dependabot,
+code-scanning, secret-scanning). PR *diff* review stays in `plugins/pull-requests`/`lib/githubPr.ts`. Both renderers
+share `lib/github/*`; the TUI reaches it through `lib/tui/github.ts` (attached → the same `/api/github/*` routes).
+
+- **`ghRunner.ts` is the only place `gh` is spawned** (argv, never a shell; 20s timeout; `classifyGhFailure` →
+  `missing | unauthenticated | rate-limited | no-remote`). Bodies go over stdin (`--body-file -`); any value that becomes
+  a flag argument goes through `flagValue` (a leading `-` is refused); GraphQL thread ids and workflow input names are
+  pattern-checked.
+- **Everything from GitHub is scrubbed** (`text.ts`: ANSI/OSC, control chars, bidi overrides) before leaving `lib/github`.
+- **Reads are single-flight and TTL-cached** (`cache.ts`); a failure is never cached and a mutation invalidates by prefix.
+- **A feature that is off is "unavailable", never "no alerts"** (`security.ts`, `isFeatureOff`), and a secret-scanning
+  alert never carries the secret value. The security route is `write`-scoped so a read-only paired device cannot see
+  open vulnerabilities; the other reads are `read`.
+- **Merge is refused server-side** unless mergeable, not draft, no failing checks, no changes requested (`assessMerge`);
+  pending checks need auto-merge. Checkout is refused over a dirty tree. The UIs confirm, but the guard does not
+  depend on them.
+- **The TUI surface is `keys: 'capture'` and takes text itself** (`githubCompose.ts`: Enter submits, ⌃J newline) — no
+  host input element. In the split layout the detail follows the cursor (200ms debounce); a reload of the *same* row
+  must not wipe what was loaded onto it (`detailKeyRef`) — a debounced reload once erased the failed-step log.
+- Not done: no `panel` placement and no key chord (⌃⇧H arrives as ⌃H/backspace without Shift reporting); web cannot
+  yet edit PR reviewers/labels (API supports it); no opt-in notification toasts; `dailySummaryReader` keeps its own
+  injectable `gh` runner.
+
+`npm run github:smoke` (fake `gh` on PATH; guards verified by mutation) and `tui/opentui/githubPopoverSmoke.tsx`.
+
 ### Local data
 
 `.agent-viewer-data/` (gitignored) stores per-provider local-only state: tags, title overrides, selected provider. Do not commit it; do not expect it to exist on first run.

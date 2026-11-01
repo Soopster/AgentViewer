@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { classifyGhFailure, ghUnavailableMessage, parseJson, runGh as runGhShared } from './github/ghRunner'
 
 export type PullRequestListItem = {
   number: number
@@ -79,27 +79,7 @@ export type PullRequestWorkspace = {
   error?: string
 }
 
-type GhResult = { stdout: string; stderr: string; code: number }
-
-function runGh(cwd: string, args: string[], maxBuffer = 20 * 1024 * 1024, input?: string): Promise<GhResult> {
-  return new Promise((resolve) => {
-    const child = execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer }, (error, stdout, stderr) => {
-      resolve({
-        stdout: String(stdout ?? '').trim(),
-        stderr: String(stderr || (error instanceof Error ? error.message : '')).trim(),
-        code: typeof error === 'object' && error && 'code' in error && typeof error.code === 'number' ? error.code : error ? 1 : 0,
-      })
-    })
-    if (input != null && child.stdin) {
-      child.stdin.write(input)
-      child.stdin.end()
-    }
-  })
-}
-
-function parseJson<T>(text: string, fallback: T): T {
-  try { return JSON.parse(text) as T } catch { return fallback }
-}
+const runGh = runGhShared
 
 function normalizeListItem(value: Record<string, unknown>): PullRequestListItem {
   const author = value.author as { login?: unknown } | null
@@ -144,8 +124,9 @@ async function fetchDiscussion(cwd: string, repo: string, number: number): Promi
 export async function fetchPullRequestWorkspace(cwd: string, selectedNumber?: number): Promise<PullRequestWorkspace> {
   const auth = await runGh(cwd, ['auth', 'status'])
   if (auth.code !== 0) {
-    const unavailable = /not found|ENOENT/i.test(auth.stderr)
-    return { available: !unavailable, authenticated: false, repo: null, viewer: null, pullRequests: [], selected: null, error: unavailable ? 'GitHub CLI (gh) is not installed.' : auth.stderr || 'Run gh auth login to review pull requests.' }
+    const reason = classifyGhFailure(auth)
+    const unavailable = reason === 'missing' || /not found/i.test(auth.stderr)
+    return { available: !unavailable, authenticated: false, repo: null, viewer: null, pullRequests: [], selected: null, error: unavailable ? ghUnavailableMessage('missing') : auth.stderr || ghUnavailableMessage('unauthenticated') }
   }
 
   const [repoResult, listResult, viewerResult] = await Promise.all([
@@ -166,7 +147,7 @@ export async function fetchPullRequestWorkspace(cwd: string, selectedNumber?: nu
 
   const [detailResult, filesResult, discussion] = await Promise.all([
     runGh(cwd, ['pr', 'view', String(number), '--json', 'number,title,state,url,isDraft,author,headRefName,baseRefName,updatedAt,body,additions,deletions,changedFiles,mergeable,reviewDecision,headRefOid,labels,reviews,reviewRequests,commits,statusCheckRollup']),
-    runGh(cwd, ['api', `repos/${repo}/pulls/${number}/files`, '--paginate'], 50 * 1024 * 1024),
+    runGh(cwd, ['api', `repos/${repo}/pulls/${number}/files`, '--paginate'], { maxBuffer: 50 * 1024 * 1024 }),
     fetchDiscussion(cwd, repo, number),
   ])
   if (detailResult.code !== 0) throw new Error(detailResult.stderr || `Unable to load PR #${number}`)
@@ -274,7 +255,7 @@ export async function mutatePullRequest(cwd: string, repo: string, mutation: Pul
     args = ['api', `repos/${repo}/pulls/${mutation.number}/comments`, '--method', 'POST', '-f', `body=${body}`, '-f', `commit_id=${mutation.commitId}`, '-f', `path=${mutation.path}`, '-F', `line=${mutation.line}`, '-f', `side=${mutation.side}`]
     if (mutation.startLine != null) args.push('-F', `start_line=${mutation.startLine}`, '-f', `start_side=${mutation.startSide ?? mutation.side}`)
   }
-  const result = await runGh(cwd, args, undefined, input)
+  const result = await runGh(cwd, args, { input })
   if (result.code !== 0) throw new Error(result.stderr || 'GitHub CLI command failed.')
 }
 

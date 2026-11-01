@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { TuiThemePalette } from '../../../theme'
 import type { ProviderComposerConfig } from '../../../../lib/providerComposer'
 import type { Dispatch } from 'react'
@@ -64,7 +65,7 @@ export type UseFooterSegmentsGroupContext = {
   gitRepoCwd: string
   sessionDetail: TuiSessionDetail | null
   setCheckpointFocusPrompt: React.Dispatch<React.SetStateAction<{ sessionId: string; text: string; timestamp?: string; } | null>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'terminal' | 'tasks' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
 }
 
 export function useFooterSegmentsGroup(ctx: UseFooterSegmentsGroupContext) {

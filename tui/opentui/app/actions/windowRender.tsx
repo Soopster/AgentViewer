@@ -60,7 +60,7 @@ export type RenderSurfaceBodyInnerContext = {
   pluginSessionFor: (surfaceId: PluginSurfaceId, slot?: WindowSurfaceId) => Session | null
   pluginSelectedDetail: { key: string | null; detail: TuiSessionDetail | null; }
   pluginLiveTranscript: { key: string | null; messages: ThreadedMessage[]; }
-  pluginOpenRequests: Partial<Record<'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk', { count: number; session: Session | null; }>>
+  pluginOpenRequests: Partial<Record<PluginSurfaceId, { count: number; session: Session | null }>>
   density: TuiDensity
   showToolCalls: boolean
   splitPaneShouldYield: () => boolean

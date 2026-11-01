@@ -1,3 +1,4 @@
+import type { SessionRecap } from './sessionRecap'
 export type McpResourceLink = {
   type: 'resource_link'
   uri: string
@@ -192,6 +193,8 @@ export type Session = {
   providerDisplayName?: string
   providerAccentColor?: string
   inbox?: SessionInboxState
+  /** Idle recap and suggested next message; present only when recaps are on and still describe the latest turn. */
+  recap?: SessionRecap
   capabilities?: SessionCapabilities
   /** Provider-native pinned state when the session backend exposes it. */
   isPinned?: boolean

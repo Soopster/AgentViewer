@@ -68,6 +68,27 @@ Routes live under `app/api/`:
 
 The page (`app/page.tsx`) drives polling: sessions list every 5s, active-session messages every 2s with an `offset` param for incremental delta. `MessageView.tsx` uses a custom absolute-positioning virtual scroll (`ResizeObserver` per-row + RAF batching), not `react-window`.
 
+### Session goals
+
+A goal turns one prompt into a finish line: after every settled turn an
+independent, tool-less auditor decides continue / complete / blocked, and a
+`continue` decision starts the next turn through the ordinary send path. One
+goal per provider + instance + session, stored locally.
+
+- `lib/sessionGoals.ts` — shared shape, key scheme (`[provider, instance, sessionId]`), token counting, continuation prompt, audit schema and parser.
+- `lib/sessionGoalStore.ts` — `.agent-viewer-data/session-goals.json`.
+- `lib/sessionGoalEngine.ts` — the observer. `ensureSessionGoalEngine()` is armed by the goal route and by the TUI service; on a settle it waits 2s (transcript writes trail the running-entry clear), audits, then sends one continuation and drains the stream so the provider generator runs. Stops on budget, continuation cap, or a non-`continue` decision.
+- `app/api/sessions/[sessionId]/goal/route.ts` — GET/POST/PATCH/DELETE.
+- Web: `components/message-view/SessionGoalDock.tsx` above the composer. OpenTUI: `app/SessionGoalStrip.tsx` + `app/overlays/SessionGoalOverlay.tsx`, reached with `⇧D` or the `goal` palette command, state in `app/state/sessionGoalState.ts`.
+
+The only trigger is `onTurnSettled` in `lib/sessionRuntime.ts`, fired by
+`clearRunningSession` after an entry is actually deleted. Keep it that way:
+any other hook races a live turn. A user interrupt pauses a live goal in
+`interruptViewSession` (covers web and both TUIs).
+
+Verification: `npm run goals:smoke` (the route) and `sessionGoalSmoke.tsx`
+(pure rules, store round trip, strip and dialog rendering).
+
 ### Persistent search index
 
 `lib/sessionPersistence.ts` mirrors session metadata + messages into a SQLite database at `.agent-viewer-data/session-index/index.sqlite`. The file is large (~1570 lines) and load-bearing — it backs `/api/session-index/{search,rebuild,stats}` and the in-app session search UI. Key entry points: `syncPersistedSessions`, `syncPersistedSessionMessages`, `searchPersistedSessions`, `readPersistedIndexStats`, `removePersistedSession`, `clearPersistedSessionIndex`.

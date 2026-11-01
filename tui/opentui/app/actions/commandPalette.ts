@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { RefObject } from 'react'
@@ -57,6 +58,7 @@ export type ExecuteCommandPaletteContext = {
   setSessionSearchMode: React.Dispatch<React.SetStateAction<boolean>>
   setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
   setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
+  openSessionGoalDialog: () => void
   selectedWorktreeTask: WorktreeTask | null
   setWorktreeConfirm: React.Dispatch<React.SetStateAction<'merge' | 'discard' | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
@@ -204,6 +206,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
+    openSessionGoalDialog,
     openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
@@ -273,6 +276,9 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     case 'worktree-new':
       setWorktreeDraft('')
       setWorktreeModalOpen(true)
+      break
+    case 'goal':
+      openSessionGoalDialog()
       break
     case 'worktree-merge':
       if (selectedWorktreeTask) setWorktreeConfirm('merge')
@@ -1071,8 +1077,8 @@ export type RunPluginCommandContext = {
   setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
   setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
-  setPluginOpenRequests: React.Dispatch<React.SetStateAction<Partial<Record<'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'analytics' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk', { count: number; session: Session | null; }>>>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'analytics' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOpenRequests: React.Dispatch<React.SetStateAction<Partial<Record<PluginSurfaceId, { count: number; session: Session | null; }>>>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
 }
 
 export function runRunPluginCommand(ctx: RunPluginCommandContext, command: ResolvedPluginCommand, session?: Session | null) {

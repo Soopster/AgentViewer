@@ -160,6 +160,23 @@ export const SessionRow = memo(function SessionRow({
         </div>
       )}
 
+      {session.recap && editing !== 'title' && (
+        <div
+          title={`Recap: ${session.recap.text}`}
+          style={{
+            marginTop: 3,
+            fontSize: 11,
+            fontStyle: 'italic',
+            color: 'var(--text-3)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {session.recap.text}
+        </div>
+      )}
+
       {/* Tag + time */}
       <SessionRowMetadata session={session} selected={selected} hovered={hovered} editor={editor} />
     </div>

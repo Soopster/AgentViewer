@@ -104,6 +104,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'composer-stash-list', label: 'List composer stash', key: '', category: 'Session' },
   { id: 'new', label: 'New agent session', key: '⇧N', category: 'Session' },
   { id: 'reuse', label: 'Reuse last prompt', key: '⇧R', category: 'Session' },
+  { id: 'goal', label: 'Session goal — work until done', key: '⇧D', category: 'Session' },
   { id: 'rename', label: 'Rename session', key: '⌃R', category: 'Session' },
   { id: 'cli', label: 'Copy CLI resume command', key: '', category: 'Session' },
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },

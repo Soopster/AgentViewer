@@ -18,7 +18,7 @@ import { type WindowSurfaceId } from '../SplitTranscriptPane'
 export type UsePluginSessionForGroupContext = {
   pinnedSessionOf: (surface: WindowSurfaceId) => Session | null
   selectedSession: Session | null
-  pluginOpenRequests: Partial<Record<'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk', { count: number; session: Session | null; }>>
+  pluginOpenRequests: Partial<Record<PluginSurfaceId, { count: number; session: Session | null }>>
   selectedSessionKey: string | null
   liveTranscriptMessagesForSession: ThreadedMessage[]
   pluginServices: TuiProvidedPluginServices
@@ -27,11 +27,11 @@ export type UsePluginSessionForGroupContext = {
   handleNewSessionFolderSelected: (path: string) => void
   folderPickerKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>
   surfacePluginKeyCaptureRef: React.RefObject<TuiPluginCapture>
-  pluginOverlay: 'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   setEditorInitialPath: React.Dispatch<React.SetStateAction<string | null>>
   setEditorInitialLine: React.Dispatch<React.SetStateAction<number | null>>
   setCheckpointFocusPrompt: React.Dispatch<React.SetStateAction<{ sessionId: string; text: string; timestamp?: string; } | null>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   openPopoverWindow: (kind: PopoverWindowKind, pin?: SurfaceMeta, placement?: 'beside' | 'fill' | 'tab') => void
   setFileHistoryPath: React.Dispatch<React.SetStateAction<string | null>>

@@ -359,21 +359,8 @@ export async function createReviewPullRequest(cwd: string, title: string): Promi
   if (branch === 'main' || branch === 'master') {
     await git(cwd, ['checkout', '-b', `agent/review-${Date.now()}`])
   }
-  await git(cwd, ['push', '-u', 'origin', 'HEAD'])
-  return new Promise((resolve, reject) => {
-    execFile(
-      'gh',
-      ['pr', 'create', '--title', title.trim() || 'Agent review', '--body', 'Reviewed in agent-viewer.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'],
-      { cwd, encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(new Error(String(stderr ?? '').trim() || 'gh pr create failed'))
-          return
-        }
-        resolve(String(stdout ?? '').trim())
-      },
-    )
-  })
+  const { runGithubPrAction } = await import('./github/prActions')
+  return (await runGithubPrAction(cwd, { action: 'create', title: title.trim() || 'Agent review' })).url
 }
 
 // ---------------------------------------------------------------------------

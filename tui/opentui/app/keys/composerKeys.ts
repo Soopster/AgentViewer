@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { KeyEvent } from '@opentui/core'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -75,7 +76,7 @@ export function handleComposerKeys({
   toggleComposerBridgeRoute: () => void
   searchComposerHistory: () => void
   editComposerInExternalEditor: () => void
-  pluginOverlay: 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   closePluginOverlay: () => void
   runPluginCommandId: (id: string, session?: Session | null) => void
   composerTargetSession: Session | null

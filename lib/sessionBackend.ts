@@ -8,7 +8,7 @@ import { coordinatorPermissionToken } from "./coordinatorNativePermission";
 import { extractPendingPermissions } from "./permissions";
 import { recordContextTransfer } from "./contextTransfers";
 import { PendingRequestGoneError } from "./pendingRequestGone";
-import { interruptRunningSession } from "./sessionRuntime";
+import { getRunningSession, interruptRunningSession } from "./sessionRuntime";
 import { createTurnCheckpoint } from "./checkpoints";
 import { currentProviderInstanceId } from "./providerInstances";
 import { updateSessionInboxState } from "./sessionInbox";
@@ -93,6 +93,21 @@ export async function forkViewSession(params: ForkParams): Promise<{
  * undefined when the provider has no receipt.
  */
 export async function interruptViewSession(sessionId: string, turnRequestId?: string, cancelQueued = false): Promise<string[] | undefined> {
+    // A user interrupt outranks the goal: pause it before the provider stops so
+    // a continuation cannot win the race while the turn unwinds.
+    const running = getRunningSession(sessionId);
+    const goalTarget = running
+        ? { provider: running.provider, providerInstanceId: running.providerInstanceId, sessionId }
+        : undefined;
+    if (goalTarget) {
+        try {
+            const { pauseSessionGoalForTurn } = await import('./sessionGoalEngine');
+            await pauseSessionGoalForTurn(sessionId, goalTarget);
+        }
+        catch (error) {
+            console.error('[session-goals] failed to pause on interrupt:', error);
+        }
+    }
     const receipt = await interruptRunningSession(sessionId, turnRequestId, cancelQueued);
     const stillQueued = (receipt as {
         still_queued?: unknown;

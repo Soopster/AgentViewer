@@ -1411,3 +1411,158 @@ export async function readTuiCoordinatorResult(sessionId: string, provider: Agen
   if (isRemoteAttached()) return remoteJson(`${encodeSessionPath(sessionId, '/coordination/results/' + encodeURIComponent(taskId))}${providerQuery(provider)}`)
   return (await import('../coordinatorResultReviewServer')).readCoordinatorResultReview(sessionId, provider, taskId)
 }
+
+// --- Session goals ---------------------------------------------------------
+// A goal is a local note plus a server-side engine that nudges the session
+// after every settled turn. The TUI reads and mutates it exactly like the web
+// dock does, over `/api/sessions/:id/goal` when attached to a daemon and
+// through the store when it owns the process.
+
+export type TuiSessionGoal = import('../sessionGoals').SessionGoal
+
+function goalQueryString(session: { provider?: AgentProvider; providerInstanceId?: string }): string {
+  const params = new URLSearchParams()
+  if (session.provider) params.set('provider', session.provider)
+  if (session.providerInstanceId) params.set('providerInstanceId', session.providerInstanceId)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+function goalBody(session: { provider?: AgentProvider; providerInstanceId?: string }): Record<string, unknown> {
+  return {
+    ...(session.provider ? { provider: session.provider } : {}),
+    ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}),
+  }
+}
+
+export async function readTuiSessionGoal(session: Session): Promise<TuiSessionGoal | null> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ goal: TuiSessionGoal | null }>(
+      `${encodeSessionPath(session.sessionId, '/goal')}${goalQueryString(session)}`,
+    )
+    return result.goal ?? null
+  }
+  const goal = await asSessionInstance(session, async () => {
+    const store = await import('../sessionGoalStore')
+    const { currentProviderInstanceId } = await import('../providerInstances')
+    const provider = session.provider ?? 'claude'
+    return store.readSessionGoal({
+      provider,
+      providerInstanceId: currentProviderInstanceId(provider),
+      sessionId: session.sessionId,
+    })
+  })
+  const { ensureSessionGoalEngine } = await import('../sessionGoalEngine')
+  ensureSessionGoalEngine()
+  return goal
+}
+
+export async function startTuiSessionGoal(
+  session: Session,
+  input: { objective: string; tokenBudget?: number | null },
+): Promise<TuiSessionGoal> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ goal: TuiSessionGoal }>(encodeSessionPath(session.sessionId, '/goal'), {
+      method: 'POST',
+      body: JSON.stringify({ ...goalBody(session), ...input }),
+    })
+    return result.goal
+  }
+  const goal = await asSessionInstance(session, async () => {
+    const store = await import('../sessionGoalStore')
+    const { currentProviderInstanceId } = await import('../providerInstances')
+    const provider = session.provider ?? 'claude'
+    return store.createSessionGoal({
+      target: { provider, providerInstanceId: currentProviderInstanceId(provider), sessionId: session.sessionId },
+      objective: input.objective,
+      tokenBudget: input.tokenBudget ?? null,
+    })
+  })
+  const { ensureSessionGoalEngine } = await import('../sessionGoalEngine')
+  ensureSessionGoalEngine()
+  return goal
+}
+
+export async function patchTuiSessionGoal(
+  session: Session,
+  patch: Record<string, unknown>,
+): Promise<TuiSessionGoal | null> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ goal: TuiSessionGoal }>(encodeSessionPath(session.sessionId, '/goal'), {
+      method: 'PATCH',
+      body: JSON.stringify({ ...goalBody(session), ...patch }),
+    })
+    return result.goal ?? null
+  }
+  const outcome = await asSessionInstance(session, async () => {
+    const store = await import('../sessionGoalStore')
+    const { currentProviderInstanceId } = await import('../providerInstances')
+    const provider = session.provider ?? 'claude'
+    const target = {
+      provider,
+      providerInstanceId: currentProviderInstanceId(provider),
+      sessionId: session.sessionId,
+    }
+    const existing = await store.readSessionGoal(target)
+    if (!existing) return { goal: null, resumed: false, target }
+    const updated = await store.patchSessionGoal(target, patch)
+    return { goal: updated, resumed: patch.status === 'active' && existing.status !== 'active', target }
+  })
+  if (outcome.resumed) {
+    const engine = await import('../sessionGoalEngine')
+    engine.ensureSessionGoalEngine()
+    engine.wakeSessionGoal(outcome.target)
+  }
+  return outcome.goal
+}
+
+export async function clearTuiSessionGoal(session: Session): Promise<boolean> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ ok: boolean }>(encodeSessionPath(session.sessionId, '/goal'), {
+      method: 'DELETE',
+      body: JSON.stringify(goalBody(session)),
+    })
+    return result.ok === true
+  }
+  return asSessionInstance(session, async () => {
+    const store = await import('../sessionGoalStore')
+    const { currentProviderInstanceId } = await import('../providerInstances')
+    const provider = session.provider ?? 'claude'
+    return store.removeSessionGoal({
+      provider,
+      providerInstanceId: currentProviderInstanceId(provider),
+      sessionId: session.sessionId,
+    })
+  })
+}
+
+// --- Session recaps --------------------------------------------------------
+// Off until switched on: a recap sends transcript text to a model. The engine
+// that writes them runs where turns settle — this process when it owns the
+// run, the daemon when attached — so reading the switch here arms it locally
+// only when it is local. Recaps themselves arrive on `session.recap`.
+
+export async function readTuiSessionRecapsEnabled(): Promise<boolean> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ enabled: boolean }>('/api/session-recaps')
+    return result.enabled === true
+  }
+  const store = await import('../sessionRecapStore')
+  const enabled = await store.readSessionRecapsEnabled()
+  if (enabled) (await import('../sessionRecapEngine')).ensureSessionRecapEngine()
+  return enabled
+}
+
+export async function setTuiSessionRecapsEnabled(enabled: boolean): Promise<boolean> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ enabled: boolean }>('/api/session-recaps', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    })
+    return result.enabled === true
+  }
+  const store = await import('../sessionRecapStore')
+  const next = await store.setSessionRecapsEnabled(enabled)
+  if (next) (await import('../sessionRecapEngine')).ensureSessionRecapEngine()
+  return next
+}

@@ -1,5 +1,6 @@
 import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import React, { useRef, useState, useSyncExternalStore } from 'react'
 import { surfaceKindOf } from '../../windowSurfaceNames'
 import { type FloatingRect, type WindowStack } from '../../windowTabs'
@@ -23,7 +24,7 @@ export type UseComposerInterruptPendingRefGroupContext = {
   exitConfirmOpen: boolean
   searchMode: boolean
   sessionSearchMode: boolean
-  pluginOverlay: 'tasks' | 'terminal' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   pluginManagerOpen: boolean
   windowSwitcherOpen: boolean
   windowBroadcastOpen: boolean

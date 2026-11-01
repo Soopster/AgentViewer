@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { KeyEvent } from '@opentui/core'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -100,7 +101,7 @@ export function handleModalDialogKeys({
   windowBroadcastKeyRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean) | null>
   windowPickerOpen: boolean
   windowPickerKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean) | null>
-  pluginOverlay: 'browser' | 'terminal' | 'pull-request' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'subagents' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   pluginOverlayKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>
   folderPickerForNewSession: boolean
   folderPickerKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>

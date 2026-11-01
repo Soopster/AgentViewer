@@ -41,6 +41,46 @@ type RunningSession = {
 
 type PendingInterrupt = { requestId: string; timer: ReturnType<typeof setTimeout> }
 
+/**
+ * A turn actually left the running registry. Fired after the entry is gone, so
+ * listeners may safely start the next turn (that is exactly what the session
+ * goal engine does).
+ */
+export type TurnSettledEvent = {
+  sessionId: string
+  provider: AgentProvider
+  providerInstanceId?: string
+}
+
+type TurnSettledListener = (event: TurnSettledEvent) => void
+
+declare global {
+  // Listeners outlive a Next dev reload with the registries they observe.
+  // eslint-disable-next-line no-var
+  var __agentViewerTurnSettledListeners: Set<TurnSettledListener> | undefined
+}
+
+function turnSettledListeners(): Set<TurnSettledListener> {
+  globalThis.__agentViewerTurnSettledListeners ??= new Set()
+  return globalThis.__agentViewerTurnSettledListeners
+}
+
+/** Observe settled turns. Returns an unsubscribe function. */
+export function onTurnSettled(listener: TurnSettledListener): () => void {
+  turnSettledListeners().add(listener)
+  return () => { turnSettledListeners().delete(listener) }
+}
+
+function notifyTurnSettled(event: TurnSettledEvent): void {
+  for (const listener of [...turnSettledListeners()]) {
+    try {
+      listener(event)
+    } catch (error) {
+      console.error('[session-runtime] turn-settled listener failed:', error)
+    }
+  }
+}
+
 type SteerReceipt = {
   text: string
   turnRequestId?: string
@@ -168,12 +208,21 @@ export function getRunningSession(sessionId: string, target?: RuntimeSessionTarg
 }
 
 export function clearRunningSession(sessionId: string, requestId?: string): boolean {
-  const running = runningSessions.get(runtimeKey(sessionId))
+  const key = runtimeKey(sessionId)
+  const running = runningSessions.get(key)
   if (!running) return false
   // A stale stream can finish after a retry/new turn has replaced its registry
   // entry. Request-scoped cleanup must never erase that newer turn.
   if (requestId && running.requestId !== requestId) return false
-  return runningSessions.delete(runtimeKey(sessionId))
+  const deleted = runningSessions.delete(key)
+  if (deleted) {
+    notifyTurnSettled({
+      sessionId,
+      provider: running.provider,
+      ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}),
+    })
+  }
+  return deleted
 }
 
 /**

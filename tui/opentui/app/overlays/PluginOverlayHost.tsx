@@ -13,11 +13,11 @@ import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 type PluginOverlayHostProps = {
-  pluginOverlay: 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   pluginSessionFor: (surfaceId: PluginSurfaceId, slot?: WindowSurfaceId) => Session | null
   pluginSelectedDetail: { key: string | null; detail: TuiSessionDetail | null; }
   pluginLiveTranscript: { key: string | null; messages: ThreadedMessage[]; }
-  pluginOpenRequests: Partial<Record<'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk', { count: number; session: Session | null; }>>
+  pluginOpenRequests: Partial<Record<PluginSurfaceId, { count: number; session: Session | null }>>
   density: TuiDensity
   showToolCalls: boolean
   splitPaneShouldYield: () => boolean

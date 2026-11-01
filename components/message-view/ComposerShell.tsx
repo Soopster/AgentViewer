@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { DragEvent } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -42,6 +43,7 @@ import { AskUserQuestionPicker } from './AskUserQuestionPicker'
 import { ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopoverHintStyle, composerPopoverItemStyle, ComposerContextUsageRing } from './composerUi'
 import { attachmentImagePreviewSrc, attachmentDisplayName } from './composerStorage'
 import { compactNativeSelectClassName, PierrePatchDiffView, PromptLibrary, ChannelBridgePanel, IdeBridgePanel, PluginSurfaceHost } from './lazyPanels'
+import { SessionGoalDock } from './SessionGoalDock'
 
 type ComposerShellProps = {
   isProject: boolean
@@ -243,6 +245,23 @@ export function ComposerShell(props: ComposerShellProps) {
     handleComposerBranchSwitched, teammatesServices, returnToChat, rewindPreview,
     handleApplyRewind, setRewindPreview, rollbackPreview, handleApplyRollback, setRollbackPreview,
   } = props
+  // The SDK's live prompt suggestion wins; otherwise the idle recap's suggested
+  // next message, offered only into an empty draft and until it is dismissed.
+  const [dismissedRecapAt, setDismissedRecapAt] = useState<string | null>(null)
+  const recap = session?.recap
+  const recapSuggestion = recap?.suggestion && recap.at !== dismissedRecapAt && !inputText.trim() ? recap.suggestion : null
+  const shownSuggestion = livePromptSuggestion ?? recapSuggestion
+  const dismissSuggestion = () => {
+    if (livePromptSuggestion) {
+      setLivePromptSuggestion(null)
+      return
+    }
+    if (!session || !recap) return
+    setDismissedRecapAt(recap.at)
+    const params = new URLSearchParams({ provider: session.provider ?? 'claude' })
+    if (session.providerInstanceId) params.set('providerInstanceId', session.providerInstanceId)
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/recap?${params}`, { method: 'DELETE' }).catch(() => undefined)
+  }
   return (
     !isProject && !composerCollapsed && <div
         className="av-web-composer-shell"
@@ -339,7 +358,7 @@ export function ComposerShell(props: ComposerShellProps) {
             ) : null}
           </div>
         )}
-        {livePromptSuggestion && sendState !== 'sending' && (
+        {shownSuggestion && sendState !== 'sending' && (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -359,15 +378,15 @@ export function ComposerShell(props: ComposerShellProps) {
               type="button"
               className="av-hover-control"
               onClick={() => {
-                setInputText(livePromptSuggestion)
-                inputTextRef.current = livePromptSuggestion
-                setLivePromptSuggestion(null)
+                setInputText(shownSuggestion)
+                inputTextRef.current = shownSuggestion
+                dismissSuggestion()
                 window.requestAnimationFrame(() => {
                   textareaRef.current?.focus()
                   resizeComposer()
                 })
               }}
-              title={livePromptSuggestion}
+              title={shownSuggestion}
               style={{
                 fontFamily: "'IBM Plex Sans', sans-serif",
                 fontSize: 12,
@@ -384,12 +403,12 @@ export function ComposerShell(props: ComposerShellProps) {
                 whiteSpace: 'nowrap',
               }}
             >
-              {livePromptSuggestion}
+              {shownSuggestion}
             </button>
             <button
               type="button"
               className="av-hover-control"
-              onClick={() => setLivePromptSuggestion(null)}
+              onClick={dismissSuggestion}
               title="Dismiss suggestion"
               style={{
                 fontFamily: "'IBM Plex Mono', monospace",
@@ -1114,6 +1133,19 @@ export function ComposerShell(props: ComposerShellProps) {
                   })}
                 </div>
               )}
+              <SessionGoalDock
+                session={session}
+                draft={inputText}
+                disabled={sendBusy || !canSubmitMessage}
+                onStart={(objective) => {
+                  const goalAttachments = attachments
+                  setInputText('')
+                  inputTextRef.current = ''
+                  setAttachments([])
+                  resizeComposer()
+                  void sendMessage({ text: objective, attachments: goalAttachments })
+                }}
+              />
               <ContextComposer
                 key={composerDraftKey}
                 attachments={loadedComposerDraftKey === composerDraftKey ? attachments : []}

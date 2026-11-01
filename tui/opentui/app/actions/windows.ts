@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { RefObject } from 'react'
@@ -704,7 +705,7 @@ export type OpenSurfaceWindowContext = {
   popoverTabs: string[]
   parkedWindowKeysRef: React.RefObject<Set<string>>
   checkpointWindowLayout: () => void
-  pluginOverlay: 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   workspaceContext: WorkspaceContextValue
   windowShellSelectionRef: React.MutableRefObject<Map<string, string | null>>
   setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>

@@ -3,6 +3,8 @@ import { isProviderSelection } from '@/lib/provider'
 import { normalizeProjectPath } from '@/lib/projectPaths'
 import { listViewSessions } from '@/lib/sessionBackend'
 import { maybeSweepLinkedPullRequests } from '@/lib/linkedPullRequests'
+import { ensureSessionRecapEngine } from '@/lib/sessionRecapEngine'
+import { readSessionRecapsEnabled } from '@/lib/sessionRecapStore'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -20,6 +22,8 @@ export async function GET(request: Request) {
   // out to `gh`, which must never sit in the path of the sidebar refresh. A
   // settle simply appears on a later poll.
   maybeSweepLinkedPullRequests()
+  // Re-arm the recap observer after a restart; the switch is in the file.
+  void readSessionRecapsEnabled().then((enabled) => { if (enabled) ensureSessionRecapEngine() })
 
   try {
     const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider, providerInstanceId })

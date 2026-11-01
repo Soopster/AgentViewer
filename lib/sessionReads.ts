@@ -48,6 +48,8 @@ import {
   type ProviderInstance,
 } from './providerInstances'
 import { readSessionInboxStates } from './sessionInbox'
+import { isSessionRecapFresh, sessionRecapKey } from './sessionRecap'
+import { readSessionRecaps, readSessionRecapsEnabled } from './sessionRecapStore'
 import {
   removePersistedSession,
   syncPersistedSessionMessages,
@@ -260,6 +262,17 @@ function messageForProviderInstance(message: SessionMessage, instanceId: string)
   return marked
 }
 
+/** Attach each session's recap while recaps are on and it still describes the latest turn. */
+async function applyRecaps(sessions: Session[]): Promise<Session[]> {
+  if (!(await readSessionRecapsEnabled())) return sessions
+  const recaps = await readSessionRecaps()
+  if (Object.keys(recaps).length === 0) return sessions
+  return sessions.map((session) => {
+    const recap = recaps[sessionRecapKey(session.provider ?? 'claude', session.providerInstanceId, session.sessionId)]
+    return isSessionRecapFresh(recap, session.lastModified) ? { ...session, recap } : session
+  })
+}
+
 async function applyInboxStates(sessions: Session[]): Promise<Session[]> {
   const states = await readSessionInboxStates(sessions)
   const decorated = sessions.map((session) => {
@@ -314,7 +327,7 @@ async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   // ordering, mirror into the search index — so that tail lives here once
   // instead of in each adapter.
   const finish = async (sessions: Session[]): Promise<Session[]> => {
-    const decorated = await applyInboxStates(sessions)
+    const decorated = await applyRecaps(await applyInboxStates(sessions))
     await syncSessionsBestEffort(decorated)
     return decorated
   }

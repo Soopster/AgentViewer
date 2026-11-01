@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { WaitingSession } from '../../../../lib/sessionRuntime'
 import type { ViewerAttentionNote } from '../../../../lib/viewerAttention'
 import type { RefObject } from 'react'
@@ -19,7 +20,7 @@ export type UseRecentlyWrittenKeysGroupContext = {
   runningSessions: RunningSessionRef[]
   waitingSessions: WaitingSession[]
   viewerAttentionNotes: ViewerAttentionNote[]
-  pluginOverlay: 'terminal' | 'tasks' | 'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'diagnostics' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null
+  pluginOverlay: PluginSurfaceId | null
   windowedPopoverKinds: Set<WindowSurfaceKind>
   sessionsByKeyRef: React.RefObject<Map<string, Session>>
   attentionDone: { key: string; sessionId: string; provider: AgentProvider; sessionKey: string; title: string; createdAt: number; }[]

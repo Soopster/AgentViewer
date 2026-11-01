@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { KeyEvent } from '@opentui/core'
 import type { WorkspaceContextValue } from '../../workspaceContext'
 import type { Dispatch } from 'react'
@@ -33,7 +34,7 @@ export function handleWindowAndTabKeys({
   sidebarEntries: SidebarEntry[]
   selectedSidebarEntryIndex: number
   setSubagentTranscriptSelection: React.Dispatch<React.SetStateAction<{ parent: Session; agent: SubagentSummary; } | null>>
-  setPluginOverlay: React.Dispatch<React.SetStateAction<'analytics' | 'file-history' | 'channel-bridge' | 'ide-bridge' | 'coordination' | 'diff' | 'files' | 'editor' | 'messaging' | 'tasks' | 'diagnostics' | 'terminal' | 'browser' | 'subagents' | 'pull-request' | 'checkpoints' | 'teammates' | 'desk' | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
   promotePreviewToTab: () => void
   setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
   showTabs: boolean
