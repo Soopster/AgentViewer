@@ -1,5 +1,7 @@
 /** One-line, human reading of a shell command made only of read-only lookups. */
-export interface ShellSummary { verb: 'Read' | 'Searched' | 'Listed'; detail: string }
+import { shellWrittenFiles } from '../../../lib/turnEditStats'
+
+export interface ShellSummary { verb: 'Read' | 'Searched' | 'Listed' | 'Edited'; detail: string }
 
 type Step = { verb: ShellSummary['verb']; detail: string }
 
@@ -62,7 +64,7 @@ function stepFor(statement: string): Step | null {
       return { verb: 'Read', detail: `${baseName(file)}:${range[1]}${range[2] ? `–${range[2]}` : ''}` }
     }
     case 'cat': case 'head': case 'tail': case 'bat': case 'less': case 'nl': {
-      const file = [...operands].reverse().find(t => !/^\d+$/.test(t))
+      const file = [...operands].reverse().find(t => !/^[+-]?\d+$/.test(t))
       return file ? { verb: 'Read', detail: baseName(file) } : null
     }
     case 'grep': case 'rg': case 'ag': {
@@ -91,16 +93,33 @@ function splitPipeline(statement: string): string[] {
 }
 
 /** Returns null unless every statement is a recognised read-only lookup, so a write is never softened. */
-export function summarizeShellCommand(command: string): ShellSummary | null {
+export function summarizeShellCommand(rawCommand: string): ShellSummary | null {
+  // Row text arrives as `$ command`, and cut to width with a trailing `…`.
+  let command = rawCommand.replace(/^\$\s+/, '')
+  const cut = command.endsWith('…')
+  if (cut) {
+    command = command.slice(0, -1)
+    // Drop the statement the cut landed in; it is counted as one more below.
+    const lastBreak = Math.max(command.lastIndexOf(';'), command.lastIndexOf('&&'), command.lastIndexOf('||'))
+    if (lastBreak < 0) return summarizeWrites(rawCommand.replace(/^\$\s+/, ''))
+    command = command.slice(0, lastBreak)
+  }
   const statements = splitStatements(command)
   if (!statements || statements.length === 0) return null
   const steps: Step[] = []
   for (const statement of statements) {
     const step = stepFor(statement)
-    if (!step) return null
+    if (!step) return summarizeWrites(rawCommand.replace(/^\$\s+/, ''))
     steps.push(step)
   }
   const first = steps[0]!
-  const more = steps.length - 1
+  const more = steps.length - 1 + (cut ? 1 : 0)
   return { verb: first.verb, detail: `${first.detail}${more > 0 ? ` · ${more} more` : ''}` }
+}
+
+/** A command that visibly rewrites files reads as the edit it is. */
+function summarizeWrites(command: string): ShellSummary | null {
+  const files = shellWrittenFiles(command.replace(/…$/, ''))
+  if (files.length === 0) return null
+  return { verb: 'Edited', detail: `${baseName(files[0]!.path)}${files.length > 1 ? ` · ${files.length - 1} more` : ''}` }
 }

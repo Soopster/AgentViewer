@@ -36,7 +36,7 @@ import { Spinner, TuiErrorBoundary } from './chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage } from './liveStream'
 import { sessionKey } from './sessionList'
 import { transcriptAccent, turnSummaryMouseProps, streamLandmarkText, streamCompletedTurnHint } from './transcriptStyle'
-import { readerRowCard, findReaderCard } from './readerRows'
+import { readerRowCard, findReaderCard, findToolRow } from './readerRows'
 import { agentToolCardsFor, stickyPromptText, groupStreamToolCards, isStreamGhostCard, visibleCardsForTranscriptView, resolveExpandedCardKeys, cardFoldsByDefault, scrollbackParkedCursorKey } from './transcriptRows'
 import { type ReaderScrollFixup, type ReaderWindowGauge, type ReaderWindowOutput, type TranscriptWindowInputs, useReaderWindowSliding, TranscriptWindowBody } from './TranscriptWindowBody'
 import { SectionFrame } from './borders'
@@ -868,6 +868,22 @@ export function SplitTranscriptPaneInner({
     if (!hit) return
     const cardKey = hit.id.slice('card:'.length)
     const card = allPaneCards.find((entry) => entry.key === cardKey)
+    // One tool row of a group folds or opens on its own; a click on its body, below the first row, is left alone.
+    const toolRow = findToolRow(hit, event.y)
+    if (toolRow && card && toolRow.key !== cardKey) {
+      if (toolRow.open && event.y !== toolRow.y) return
+      if (followTail) {
+        scrollbackSyncedCursorKeyRef.current = cardKey
+        setCursorKey(cardKey)
+        setFollowTail(false)
+      }
+      setScrollbackToggledKeys((current) => {
+        const next = new Set(current)
+        if (!next.delete(toolRow.key)) next.add(toolRow.key)
+        return next
+      })
+      return
+    }
     if (card?.asyncQuestions?.length) { onOpenAsyncQuestions(session, card); return }
     if (!card || !(card.autoFold || agentToolCardsFor(card).length > 0)) return
     if (windowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && event.y !== hit.y) return

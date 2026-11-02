@@ -28,6 +28,9 @@ import { cardDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, 
 import { streamDiffPreviewData, StreamDiffPreview } from './StreamDiffPreview'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './transcriptDiffSelection'
 
+/** Lines of a tool's own output shown when one row is opened on its own. */
+const TOOL_ROW_OPEN_LINES = 40
+
 // Conversation prose becomes difficult to scan when cards stretch across an
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
 // diffs to use the full reader width for side-by-side content.
@@ -673,12 +676,21 @@ export function TranscriptCardInner({
                   return (
                     <box
                       key={`${card.key}:stream-tool-summary:${toolCard.key}`}
+                      id={`${agentToolExpandedKeys.has(toolCard.key) ? 'tool-row-open' : 'tool-row'}:${toolCard.key}`}
                       flexDirection="column"
                     >
                       <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                         {renderInlineTextSegments(segments, agentBodyWidth, theme.dim)}
                       </text>
-                      {detailLine ? (
+                      {agentToolExpandedKeys.has(toolCard.key) && !diffPreview ? (
+                        <box flexDirection="column">
+                          {toolCard.expandedLines.filter(line => line.tone !== 'tool').slice(0, TOOL_ROW_OPEN_LINES).map((line, lineIndex) => (
+                            <text key={lineIndex} fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
+                              {fitText(`${isActivityTool ? (isLastActivityTool ? '      ' : '  │   ') : '    '}${line.text}`, agentBodyWidth)}
+                            </text>
+                          ))}
+                        </box>
+                      ) : detailLine ? (
                         <text fg={transcriptColor(detailLine, theme)} wrapMode="none" selectable {...selectionColors}>
                           {renderInlineTextSegments([
                             {
@@ -721,8 +733,8 @@ export function TranscriptCardInner({
                 {expandedToolDisplays.map((toolEntry, toolIndex) => {
                   const toolCard = toolEntry.card
                   return (
+                    <box key={`${card.key}:agent-tool-card:${toolCard.key}:${toolIndex}`} id={`${toolEntry.isExpanded ? 'tool-row-open' : 'tool-row'}:${toolCard.key}`} flexDirection="column">
                     <TranscriptCard
-                      key={`${card.key}:agent-tool-card:${toolCard.key}:${toolIndex}`}
                       card={toolCard}
                       display={toolEntry.display}
                       theme={theme}
@@ -770,6 +782,7 @@ export function TranscriptCardInner({
                       setDiffRowCursor={setDiffRowCursor}
                       setDiffSelectionAnchor={setDiffSelectionAnchor}
                     />
+                    </box>
                   )
                 })}
               </box>

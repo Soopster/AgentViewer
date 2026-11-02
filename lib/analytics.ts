@@ -4,11 +4,14 @@ import type { AgentProvider, SessionInfo, SessionMessage } from './types'
 export type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
 
 const MODEL_PRICING: { match: RegExp; price: Price }[] = [
+  // Opus 4.5 and later list at a third of Opus 4 / 4.1; the broader pattern below keeps the older price.
+  { match: /opus-4[-.]?[5-9]|opus-[5-9]/i,     price: { in: 5,     out: 25,   cacheRead: 0.5,  cacheWrite: 6.25 } },
   { match: /opus-4|claude-opus-4/i,            price: { in: 15,    out: 75,   cacheRead: 1.5,  cacheWrite: 18.75 } },
   { match: /claude-3-opus|opus-3/i,            price: { in: 15,    out: 75 } },
   { match: /sonnet-4|claude-sonnet-4/i,        price: { in: 3,     out: 15,   cacheRead: 0.3,  cacheWrite: 3.75 } },
   { match: /sonnet-3\.?5|claude-3-5-sonnet/i,  price: { in: 3,     out: 15,   cacheRead: 0.3,  cacheWrite: 3.75 } },
   { match: /sonnet/i,                          price: { in: 3,     out: 15 } },
+  { match: /haiku-4[-.]?[5-9]|haiku-[5-9]/i,   price: { in: 1,     out: 5,    cacheRead: 0.1,  cacheWrite: 1.25 } },
   { match: /haiku-4|claude-haiku-4/i,          price: { in: 0.8,   out: 4,    cacheRead: 0.08, cacheWrite: 1 } },
   { match: /haiku/i,                           price: { in: 0.25,  out: 1.25 } },
   { match: /gpt-5|o5/i,                        price: { in: 5,     out: 40 } },

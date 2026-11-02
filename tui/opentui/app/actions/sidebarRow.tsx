@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { retitleCoordinatorSession } from '../../../../lib/coordinatorSessionTitle'
 import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { TuiThemePalette } from '../../../theme'
 import type { Dispatch } from 'react'
@@ -22,6 +23,7 @@ export type BuildSidebarRowContext = {
   /** The Session insights plugin is on: PR glyph and the selected row's branch/PR detail. */
   sessionInsightsOn: boolean
   toggleDateGroup: (key: string) => void
+  coordinatorRunGoals: ReadonlyMap<string, string>
   sidebarEntries: SidebarEntry[]
   sidebarInnerWidth: number
   firstSidebarEntryKey: string
@@ -246,7 +248,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           >{collapsedSubagentSet.has(sessionKey(entry.session)) ? '▸ ' : '▾ '}</text> : null}
           {/* Keep the title readable; provider identity belongs to the rail. */}
           <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
-            {fitText(formatSessionTitle(entry.session), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth)}
+            {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth)}
           </text>
           {singleRow ? (
             <>

@@ -514,7 +514,7 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
     case 'tool_thread':
       return previewTool(block, activeForms, taskRegistry)
     case 'task_notification':
-      return [line(`task ${block.status}: ${truncateLine(block.summary || block.taskId)}`, 'thinking')]
+      return [line(`task ${block.status}: ${truncateLine(tidyTaskSummary(block.summary || block.taskId))}`, 'thinking')]
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
     case 'coordinator_brief':
@@ -556,7 +556,7 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
         const taskEndCause = claudeTaskEndCause(block.payload)
         // Leads rather than trails, so truncating a long summary cannot cut it.
         const cause = taskEndCause ? `stopped (${taskEndCause}) · ` : ''
-        return [line(`● ${subagentPrefix}${cause}${truncateLine(withClaudeRuntimeSuffix(text, block.payload))}`, 'thinking')]
+        return [line(`● ${subagentPrefix}${cause}${truncateLine(withClaudeRuntimeSuffix(tidyTaskSummary(text), block.payload))}`, 'thinking')]
       }
       if (block.subtype === 'hook_started') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
@@ -1001,6 +1001,18 @@ function cardToolTimings(message: ThreadedMessage): ToolTiming[] | undefined {
     timings.push({ name: 'Bash', label: compactOneLine(command, 160), durationMs })
   }
   return timings.length > 0 ? timings : undefined
+}
+
+/**
+ * A background task's summary quotes its command, HTML-escaped (`&lt;&lt;'EOF'`) and often a whole
+ * script. Decode it and keep the command's first line, so one notice is one row.
+ */
+export function tidyTaskSummary(text: string): string {
+  const decoded = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+  const quoted = /^(.*?")([^"]*)("[^"]*)$/s.exec(decoded)
+  if (!quoted) return decoded.includes('\n') ? `${decoded.split('\n')[0]!.trimEnd()}…` : decoded
+  const lines = quoted[2]!.split('\n')
+  return lines.length > 1 ? `${quoted[1]}${lines[0]!.trimEnd()}…${quoted[3]}` : decoded
 }
 
 function cardFileEdits(message: ThreadedMessage): FileEditStat[] | undefined {

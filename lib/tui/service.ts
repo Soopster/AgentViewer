@@ -699,6 +699,19 @@ export async function readTuiInteractiveAttention(): Promise<InteractiveAttentio
  * conversation asks this first; most conversations have no team. Attached to a
  * daemon the observation is an HTTP read, so the answer is simply yes.
  */
+/** The goal (prompt) of each named Coordinator run, from the read-only ledger; none when attached or unreadable. */
+export async function readTuiCoordinatorRunGoals(runIds: readonly string[]): Promise<Record<string, string>> {
+  if (runIds.length === 0 || isRemoteAttached()) return {}
+  const db = await openCoordinationLedgerReadOnly()
+  if (!db) return {}
+  try {
+    const rows = db.prepare(`SELECT id, prompt FROM protocol_runs WHERE id IN (${runIds.map(() => '?').join(',')})`).all(...runIds) as Array<{ id: string; prompt: string }>
+    return Object.fromEntries(rows.filter(row => row.prompt).map(row => [String(row.id), String(row.prompt)]))
+  } catch {
+    return {}
+  }
+}
+
 export async function readTuiHasSessionCoordinator(sessionId: string, provider: AgentProvider): Promise<boolean> {
   if (isRemoteAttached()) return true
   const db = await openCoordinationLedgerReadOnly()

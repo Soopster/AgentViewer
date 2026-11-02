@@ -1,6 +1,6 @@
 import type { TuiTranscriptCard, TuiTranscriptCardLine } from '../../format'
 
-export const TOOL_OUTPUT_PREVIEW_LINES = 12
+export const TOOL_OUTPUT_PREVIEW_LINES = 6
 
 /** Limit output only, retaining the command heading and any failure indicator. */
 export function toolOutputPreview(card: TuiTranscriptCard, bodyLines: TuiTranscriptCardLine[]) {

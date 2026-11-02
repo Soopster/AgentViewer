@@ -482,15 +482,22 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   const expandedKeysForRender = stagedExpansion ?? fullExpandedKeys
   // A tool group expands to its tools, each folded by its own key — which
   // nothing in SCROLLBACK can press. An expanded group shows its tools' output.
-  const scrollbackExpandedToolKeys = useMemo(() => {
+  // A click on one tool flips just that tool: in an expanded group it folds it, in a folded group
+  // (the one-line Activity form) it opens its output. Tool keys share `scrollbackToggledKeys` with cards.
+  const scrollbackToolKeys = useMemo(() => {
     if (!scrollbackExpandedKeys) return null
-    const keys = new Set<string>()
+    const expanded = new Set<string>()
+    const collapsed = new Set<string>()
     for (const card of visibleTranscriptCards) {
-      if (!scrollbackExpandedKeys.has(card.key)) continue
-      for (const toolCard of agentToolCardsFor(card)) keys.add(toolCard.key)
+      const groupOpen = scrollbackExpandedKeys.has(card.key)
+      for (const toolCard of agentToolCardsFor(card)) {
+        // A card that is its own only tool folds as a card, not as a tool of itself.
+        if (toolCard.key === card.key || !scrollbackToggledKeys.has(toolCard.key)) continue
+        ;(groupOpen ? collapsed : expanded).add(toolCard.key)
+      }
     }
-    return keys
-  }, [scrollbackExpandedKeys, visibleTranscriptCards])
+    return { expanded, collapsed }
+  }, [scrollbackExpandedKeys, scrollbackToggledKeys, visibleTranscriptCards])
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -759,8 +766,8 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
         turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
         agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
-        agentToolExpandedKeys: scrollbackExpandedToolKeys ?? (groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS),
-        agentToolCollapsedKeys: groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS,
+        agentToolExpandedKeys: scrollbackToolKeys?.expanded ?? (groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS),
+        agentToolCollapsedKeys: scrollbackToolKeys?.collapsed ?? (groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS),
         onSelectAgentTool: selectAgentTool,
         noteNamespace: transcriptNoteNamespace,
         diffNotes: transcriptDiffNotes,
@@ -805,7 +812,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     groupedToolView,
     agentToolCursorByGroupKey,
     expandedCardKeys,
-    scrollbackExpandedToolKeys,
+    scrollbackToolKeys,
     collapsedCardKeys,
     selectAgentTool,
     transcriptNoteNamespace,

@@ -273,7 +273,22 @@ export function liftNeedsInput(entries: SidebarEntry[], needsInput: (session: Se
 }
 
 /** Coordinator-run projects (`COORD-ORION`) hold dozens of identical chat rows; fold them until asked. */
-export const isCollapsedByDefaultProject = (projectName: string) => /^COORD-/i.test(projectName)
+export const isCollapsedByDefaultProject = (projectName: string) => /^COORD-|^COORDINATOR RUNS$/i.test(projectName)
+export const COORDINATOR_RUNS_KEY = 'project:COORDINATOR RUNS'
+
+/** Every `COORD-*` project's sessions in one trailing group: ten one-row projects were ten header rows of noise. */
+export function mergeCoordinatorGroups(entries: SidebarEntry[]): SidebarEntry[] {
+  const merged: SidebarEntry[] = []
+  const rest: SidebarEntry[] = []
+  let inCoordinator = false
+  for (const entry of entries) {
+    if (entry.type === 'project') inCoordinator = !entry.dateGroup && /^COORD-/i.test(entry.projectName) && entry.key !== NEEDS_YOU_KEY
+    if (inCoordinator) { if (entry.type !== 'project') merged.push(entry) } else rest.push(entry)
+  }
+  const count = merged.filter(entry => entry.type === 'session').length
+  if (count === 0) return entries
+  return [...rest, { type: 'project', key: COORDINATOR_RUNS_KEY, projectName: 'COORDINATOR RUNS', count }, ...merged]
+}
 
 /** Calendar buckets preserve parent/child adjacency and the existing project order. */
 export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date()): SidebarEntry[] {

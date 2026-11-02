@@ -495,6 +495,15 @@ export function transcriptToolLineSegments(
     ? cleaned.slice(colon + 1).trim()
     : cleaned.slice(name.length).trim()
   if (name.toLowerCase() === 'bash' && detail) {
+    // A lookup reads as what it did in every view; anything that writes keeps its command.
+    const human = summarizeShellCommand(detail)
+    if (human) {
+      return [
+        { text: marker, fg: markerColor },
+        { text: human.verb, fg: transcriptToolColor(name, theme), attributes: emphasizeName ? TextAttributes.BOLD : undefined },
+        { text: ` ${human.detail}`, fg: theme.dim },
+      ]
+    }
     return [
       { text: marker, fg: markerColor },
       { text: name, fg: transcriptToolColor(name, theme), attributes: emphasizeName ? TextAttributes.BOLD : undefined },

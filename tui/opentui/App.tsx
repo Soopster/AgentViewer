@@ -190,6 +190,8 @@ import {
   subscribeCoordinator,
   cycleCoordinatorFilter,
 } from './coordinatorStore'
+import { getCoordinatorRunGoals, requestCoordinatorRunGoals, subscribeCoordinatorRunGoals } from './coordinatorRunGoalStore'
+import { parseCoordinatorSessionTitle } from '../../lib/coordinatorSessionTitle'
 import { getTeamAttention, startTeamAttentionFeed, subscribeTeamAttention } from './teamAttentionStore'
 import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
@@ -259,7 +261,7 @@ import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOu
 import { formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
-import { liftNeedsInput, isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
+import { mergeCoordinatorGroups, liftNeedsInput, isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
 
 
@@ -1330,7 +1332,7 @@ function OpenTuiWorkspace() {
   const sidebarEntries = useMemo(() => {
     const builtEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
     // Sessions waiting on the user lead the rail; a search shows results in place.
-    const rawEntries = normalizedSessionQuery ? builtEntries : liftNeedsInput(builtEntries, session => sidebarSessionActivity.get(sessionKey(session)) === 'needs-input')
+    const rawEntries = normalizedSessionQuery ? builtEntries : mergeCoordinatorGroups(liftNeedsInput(builtEntries, session => sidebarSessionActivity.get(sessionKey(session)) === 'needs-input'))
     // Folding hides a session's row, so remember each session's folder from the unfolded list.
     const folders = new Map<string, string>()
     let folderKey = ''
@@ -3333,13 +3335,18 @@ function OpenTuiWorkspace() {
   const pinnedTabs = usePinnedTabs()
   const pinnedTabsRowOption = usePinnedTabsRow()
   const sessionInsightsOn = !useDisabledPlugins().has('session-insights')
+  const coordinatorRunGoals = useSyncExternalStore(subscribeCoordinatorRunGoals, getCoordinatorRunGoals)
+  useEffect(() => {
+    const ids = sessions.flatMap(session => parseCoordinatorSessionTitle(session.customTitle ?? session.summary ?? '')?.runId ?? [])
+    if (ids.length > 0) void requestCoordinatorRunGoals([...new Set(ids)])
+  }, [sessions])
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
-    sessionInsightsOn, toggleDateGroup, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
     showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
-  }, entry, selected), [sessionInsightsOn, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, entry, selected), [sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows

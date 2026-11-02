@@ -11,7 +11,7 @@ import type { TuiTranscriptCard } from '../format'
 
 const lines = [{ text: 'tool Bash: test', tone: 'tool' as const }, ...Array.from({ length: 25 }, (_, i) => ({ text: `OUTPUT_${String(i + 1).padStart(2, '0')}`, tone: 'default' as const }))]
 const card: TuiTranscriptCard = { key: 'preview-tool', role: 'assistant', label: 'Bash', category: 'technical', autoFold: true, compactSummary: 'test', lines, expandedLines: lines, searchText: '', searchHaystackLower: '' }
-assert.equal(toolOutputPreview(card, lines)?.lines.length, 13)
+assert.equal(toolOutputPreview(card, lines)?.lines.length, 7)
 assert.equal(toolOutputPreview({ ...card, thinkingTranscript: true }, lines), null)
 assert.equal(toolOutputPreview({ ...card, category: 'conversation' }, lines), null)
 assert.equal(toolOutputPreview({ ...card, category: 'diff' }, lines), null)
@@ -35,8 +35,8 @@ const props: TranscriptCardProps = {
 const setup = await testRender(<TranscriptCard {...props} />, { width: 100, height: 45 })
 try {
   await act(async () => { await setup.flush() })
-  assert(setup.captureCharFrame().includes('OUTPUT_12'))
-  assert(!setup.captureCharFrame().includes('OUTPUT_13'))
+  assert(setup.captureCharFrame().includes('OUTPUT_06'))
+  assert(!setup.captureCharFrame().includes('OUTPUT_07'))
   const clickToggle = async () => {
     const button = setup.renderer.root.findDescendantById('tool-output-toggle:preview-tool')!
     assert(button)
@@ -46,7 +46,7 @@ try {
   assert(setup.captureCharFrame().includes('OUTPUT_25'), 'show all reveals last output line')
   assert(setup.captureCharFrame().includes('Show less output'))
   await clickToggle()
-  assert(!setup.captureCharFrame().includes('OUTPUT_13'), 'show less restores the bounded preview')
-  console.log('Tool output preview passed: 12 lines, show all/less clicks, reasoning/prose/diff exemptions, failure visibility.')
+  assert(!setup.captureCharFrame().includes('OUTPUT_07'), 'show less restores the bounded preview')
+  console.log('Tool output preview passed: 6 lines, show all/less clicks, reasoning/prose/diff exemptions, failure visibility.')
 } finally { await act(async () => { setup.renderer.destroy() }) }
 process.exit(0)

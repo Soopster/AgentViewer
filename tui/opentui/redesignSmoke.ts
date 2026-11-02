@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { groupSidebarDates, liftNeedsInput } from './app/sessionList'
+import { groupSidebarDates, liftNeedsInput, mergeCoordinatorGroups } from './app/sessionList'
 import { transcriptMeasure } from './engineeringLayout'
 import { resolveExpandedCardKeys } from './app/transcriptRows'
 import type { SidebarEntry } from './app/types'
@@ -12,6 +12,14 @@ assert.equal(grouped.filter(e => e.type === 'session').length, 3)
 const folded = groupSidebarDates(entries, new Set(['project:test:date:Older']), now)
 assert.equal(folded.filter(e => e.type === 'session').length, 2)
 assert.equal(entries.length, 4)
+const sess = (id: string): SidebarEntry => ({ type: 'session', key: id, absoluteIndex: 0, session: { sessionId: id, provider: 'codex' as const, cwd: '/tmp', lastModified: 1 } })
+const mergedCoord = mergeCoordinatorGroups([
+  { type: 'project', key: 'project:COORD-ORION', projectName: 'COORD-ORION', count: 1 }, sess('c1'),
+  { type: 'project', key: 'project:app', projectName: 'APP', count: 1 }, sess('a1'),
+  { type: 'project', key: 'project:COORD-NOVA', projectName: 'COORD-NOVA', count: 2 }, sess('c2'), sess('c3'),
+])
+assert.deepEqual(mergedCoord.map(e => e.type === 'project' ? `${e.projectName}/${e.count}` : e.key), ['APP/1', 'a1', 'COORDINATOR RUNS/3', 'c1', 'c2', 'c3'], 'coordinator projects share one trailing group')
+assert.equal(groupSidebarDates(mergedCoord, new Set(), now).filter(e => e.type === 'session').length, 1, 'the merged group starts folded')
 const lifted = liftNeedsInput(entries, session => session.sessionId === 's1')
 assert.deepEqual(lifted.map(e => e.type === 'project' ? `${e.projectName}/${e.count}` : e.key), ['NEEDS YOU/1', 's1', 'test/2', 's0', 's5'], 'a waiting session moves to its own group, once')
 assert.deepEqual(liftNeedsInput(entries, () => false), entries, 'nothing waiting leaves the list alone')
