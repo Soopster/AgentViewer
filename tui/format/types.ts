@@ -74,4 +74,8 @@ export type TuiTranscriptCard = {
   pending?: boolean
   /** Files this card's tool calls changed, with line counts (see lib/turnEditStats.ts). */
   fileEdits?: FileEditStat[]
+  /** Tool calls on this card that reported how long they ran (Bash `duration_ms`). */
+  toolTimings?: ToolTiming[]
 }
+
+export type ToolTiming = { name: string; label: string; durationMs: number }

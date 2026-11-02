@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { isPluginEnabled } from '../../../../lib/plugins/enablement'
+import { cardHasError, cardHasEdit } from '../cardJumpPredicates'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { KeyEvent } from '@opentui/core'
@@ -211,7 +213,7 @@ export function handleGlobalChordKeys({
         scrollback: paneHandle?.isScrollback() ?? false,
         pageRows: paneHandle?.pageRows() ?? 1,
         cardPageRows: Math.max(Math.floor(transcriptViewportRows * 0.8), 1),
-        primaryFrame: hasPrimaryFrame, scrollStep: velocityScrollStep,
+        primaryFrame: hasPrimaryFrame, scrollStep: velocityScrollStep, insightJumps: isPluginEnabled('session-insights'),
       })
       if (command) {
         handled(() => {
@@ -221,6 +223,8 @@ export function handleGlobalChordKeys({
           else if (command.type === 'searchStep') jumpToSearchMatch(command.direction)
           else if (command.type === 'conversationJump') jumpToMatchingCard(command.direction, card => card.category === 'conversation')
           else if (command.type === 'technicalJump') jumpToMatchingCard(command.direction, card => card.category !== 'conversation')
+          else if (command.type === 'errorJump') jumpToMatchingCard(command.direction, cardHasError)
+          else if (command.type === 'editJump') jumpToMatchingCard(command.direction, cardHasEdit)
           else if (command.type === 'bookmarkJump') jumpToBookmark(command.direction)
           else if (command.type === 'stripStep') {
             const from = paneSession ? visibleTabSessions.findIndex(tab => sessionKey(tab) === sessionKey(paneSession)) : -1

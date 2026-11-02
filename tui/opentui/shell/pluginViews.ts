@@ -24,5 +24,6 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   coordination: async () => (await import('../../../plugins/coordination/tui')).module,
   desk: async () => (await import('../../../plugins/desk/tui')).module,
   github: async () => (await import('../../../plugins/github/tui')).module,
+  'session-insights': async () => (await import('../../../plugins/session-insights/tui')).module,
   recaps: async () => (await import('../../../plugins/recaps/tui')).module,
 }, TUI_PLUGIN_SERVICES)

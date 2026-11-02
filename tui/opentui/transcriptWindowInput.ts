@@ -8,13 +8,13 @@ export type TranscriptWindowCommand =
   | { type: 'scroll'; rows: number }
   | { type: 'moveCursor'; delta: number }
   | { type: 'edge'; edge: 'first' | 'last' }
-  | { type: 'searchStep' | 'conversationJump' | 'technicalJump' | 'bookmarkJump' | 'stripStep'; direction: 1 | -1 }
+  | { type: 'searchStep' | 'conversationJump' | 'technicalJump' | 'errorJump' | 'editJump' | 'bookmarkJump' | 'stripStep'; direction: 1 | -1 }
 
 export function isTranscriptLocalKey(key: Pick<ShortcutKeyEvent, 'name' | 'ctrl' | 'shift' | 'meta'>, sequence: string): boolean {
   if (key.meta) return false
   if (key.ctrl) return key.name === 'd' || key.name === 'u'
   if (['up', 'down', 'pageup', 'pagedown', 'home', 'end', 'return'].includes(key.name)) return true
-  return sequence.length === 1 && 'jkgGefoumbQyYsx()[]{}/'.includes(sequence)
+  return sequence.length === 1 && 'jkgGefoumbQyYsx()[]{}/<>#$'.includes(sequence)
 }
 
 /** The focused transcript's key policy, independent of app state setters and
@@ -24,6 +24,8 @@ export function transcriptWindowCommand(key: ShortcutKeyEvent, context: {
   selected: boolean; hasSession: boolean; searchMatches: boolean; fleetPaging: boolean
   scrollback: boolean; pageRows: number; cardPageRows: number; primaryFrame: boolean
   scrollStep: (direction: 1 | -1) => number
+  /** The Session insights plugin is on (default): `<` `>` `#` `$` jump to errors and edits. */
+  insightJumps?: boolean
 }): TranscriptWindowCommand | null {
   const sequence = key.sequence || ''
   const letter = key.ctrl || key.meta ? '' : sequence
@@ -34,6 +36,8 @@ export function transcriptWindowCommand(key: ShortcutKeyEvent, context: {
     if (context.searchMatches && (letter === 'n' || letter === 'N')) return { type: 'searchStep', direction: letter === 'n' ? 1 : -1 }
     if (letter === '(' || letter === ')') return { type: 'conversationJump', direction: letter === '(' ? -1 : 1 }
     if (letter === '{' || letter === '}') return { type: 'technicalJump', direction: letter === '{' ? -1 : 1 }
+    if (context.insightJumps !== false && (letter === '<' || letter === '>')) return { type: 'errorJump', direction: letter === '<' ? -1 : 1 }
+    if (context.insightJumps !== false && (letter === '#' || letter === '$')) return { type: 'editJump', direction: letter === '#' ? -1 : 1 }
     if (letter === '[' || letter === ']') return { type: 'bookmarkJump', direction: letter === '[' ? -1 : 1 }
     if (letter === 'u') return action('unread')
     if (letter === 'm') return action('resume')

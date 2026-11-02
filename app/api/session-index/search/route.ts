@@ -23,8 +23,16 @@ export async function GET(request: Request) {
   const toolNameRaw = searchParams.get('toolName')?.trim() ?? ''
   const toolName = toolNameRaw ? toolNameRaw : undefined
 
+  const finite = (name: string) => { const value = Number(searchParams.get(name)); return searchParams.get(name) && Number.isFinite(value) ? value : undefined }
+  const hasError = searchParams.get('hasError') === '1' || searchParams.get('hasError') === 'true'
+  const touchedFile = searchParams.get('touchedFile')?.trim() || undefined
+
   try {
     const results = await searchPersistedSessions({
+      sinceMs: finite('sinceMs'),
+      untilMs: finite('untilMs'),
+      hasError: hasError || undefined,
+      touchedFile,
       query,
       limit,
       provider,

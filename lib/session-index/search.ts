@@ -323,6 +323,7 @@ export async function queryPersistedSessions(readRows: IndexReader, params: Pers
   const usefulTerms = meaningfulTerms(terms)
   const messagesOnly = params.messagesOnly === true
   const hasSessionFilter = (params.provider && params.provider !== 'all') || Boolean(normalizeProjectPath(params.dir))
+    || Number.isFinite(params.sinceMs) || Number.isFinite(params.untilMs) || params.hasError === true || Boolean(params.touchedFile?.trim())
 
   // Fast path: messagesOnly with no session-narrowing filter — query messages
   // directly, then hydrate only the sessions referenced by matched candidates.

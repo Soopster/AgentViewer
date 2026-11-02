@@ -894,6 +894,44 @@ export async function readTuiLineHistory(cwd: string, filePath: string, startLin
 export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk, FileHistory, FileHistoryStep }
 
 /**
+ * What a session wrote, from the provenance index: every recorded edit (with the prompt that led to
+ * it) and, per file, how many of those lines still survive in the working tree. `edits` is empty
+ * when attached to a daemon, whose route returns only the per-file summary.
+ */
+export async function readTuiSessionProvenance(provider: AgentProvider, sessionId: string): Promise<{
+  summary: import('../provenance').SessionProvenanceResult
+  edits: import('../session-index/types').PersistedFileEditRecord[]
+}> {
+  if (isRemoteAttached()) {
+    const summary = await remoteJson<import('../provenance').SessionProvenanceResult>(`/api/sessions/${encodeURIComponent(sessionId)}/provenance?provider=${provider}`)
+    return { summary, edits: [] }
+  }
+  const [{ sessionProvenanceSummary }, { readFileEditsForSession }] = await Promise.all([import('../provenance'), import('../sessionPersistence')])
+  const [summary, edits] = await Promise.all([sessionProvenanceSummary(provider, sessionId), readFileEditsForSession(provider, sessionId)])
+  return { summary, edits }
+}
+
+/**
+ * Full-text search over the persistent session index, with the index's facets.
+ * Loaded on demand: it opens the SQLite index, which browsing never needs.
+ */
+export async function searchTuiSessionIndex(params: import('../session-index/types').PersistedSearchParams): Promise<import('../session-index/types').PersistedSearchResponse> {
+  if (isRemoteAttached()) {
+    const query = new URLSearchParams({ q: params.query, messagesOnly: '0' })
+    if (params.limit) query.set('limit', String(params.limit))
+    if (params.provider && params.provider !== 'all') query.set('provider', params.provider)
+    if (params.dir) query.set('dir', params.dir)
+    if (params.sinceMs != null) query.set('sinceMs', String(params.sinceMs))
+    if (params.untilMs != null) query.set('untilMs', String(params.untilMs))
+    if (params.hasError) query.set('hasError', '1')
+    if (params.touchedFile) query.set('touchedFile', params.touchedFile)
+    return remoteJson(`/api/session-index/search?${query}`)
+  }
+  const { searchPersistedSessions } = await import('../sessionPersistence')
+  return searchPersistedSessions(params)
+}
+
+/**
  * What every agent did over a day or a week, grouped by repository. Loaded on
  * demand: it opens the search index and spawns git and `gh` per repository,
  * which nothing on the browse path should pay for.

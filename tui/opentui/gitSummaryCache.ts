@@ -34,6 +34,13 @@ type Entry = {
 }
 
 const entries = new Map<string, Entry>()
+const listeners = new Set<() => void>()
+
+/** Told whenever a read lands, so a surface showing `peekGitSummaryCached` can repaint without polling. */
+export function subscribeGitSummary(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
 
 function evictOldest() {
   if (entries.size <= MAX_ENTRIES) return
@@ -58,7 +65,9 @@ export function readGitSummaryCached(cwd: string, options?: { force?: boolean })
   const read = fetchGitSummary(cwd, runGitCommand)
     .then((summary) => {
       entry.at = Date.now()
+      const changed = JSON.stringify(entry.summary) !== JSON.stringify(summary)
       entry.summary = summary
+      if (changed) for (const listener of listeners) listener()
       return summary
     })
     .catch(() => entry.summary)

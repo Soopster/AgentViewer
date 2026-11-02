@@ -24,6 +24,10 @@ import { useTranscriptCards } from '../useTranscriptCards'
 import { type Session } from '../../../lib/types'
 import { fitText, joinMeta } from '../textLayout'
 import { calculateSplitPaneBodyRows } from '../splitPaneState'
+import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
+import { TaskStrip } from './TaskStrip'
+import { latestTaskStrip, taskStripRows } from './todoStripModel'
+import { ScrollMarkers, useScrollLayout } from './ScrollMarkers'
 import { type CardLandmark, type AgentToolGroupCard, type DensityState } from './types'
 import { EMPTY_EXPANDED_KEYS } from './timing'
 import { DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL } from './layoutConstants'
@@ -909,7 +913,13 @@ export function SplitTranscriptPaneInner({
   // Lightweight windows draw no view header: the title already names the session.
   const header = useSyncExternalStore(visible && chromeHost && !lightView ? selectedWindowHeader.subscribe : subscribeNothing, visible && chromeHost && !lightView ? selectedWindowHeader.get : getNothing)
   const footer = useSyncExternalStore(visible && chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, visible && chromeHost ? selectedWindowFooter.get : getNothing)
-  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0), 1)
+  // The Session insights plugin owns the track markers and the task strip.
+  const insightsOn = !useDisabledPlugins().has('session-insights')
+  const scrollLayout = useScrollLayout(scrollRef, insightsOn && visible && allPaneCards.length > 1)
+  const taskStrip = useMemo(() => (insightsOn ? latestTaskStrip(allPaneCards) : null), [insightsOn, allPaneCards])
+  const [taskStripOpen, setTaskStripOpen] = useState(false)
+  const stripRows = taskStripRows(taskStrip, taskStripOpen)
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows, 1)
   const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   // The window holding the selected transcript reports its card window, which
@@ -1095,8 +1105,10 @@ export function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
+        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} /> : null}
         {stickyCard ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
+      {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}
       {liveText ? (
         <box paddingX={1} height={1}>
           <text fg={accent} wrapMode="none">{fitText(`● ${liveText.replace(/\s+/g, ' ')}`, innerWidth)}</text>

@@ -15,9 +15,12 @@ import { fmtTokens } from '../contextMeter'
 import { timeAgo } from '../format'
 import { sessionKey, isSessionRecentlyTouched } from '../sessionList'
 import { mixHexColor } from '../transcriptStyle'
+import { SessionRailDetail, PR_STATE_GLYPH, pullRequestMark, pullRequestColor } from '../SessionRailDetail'
 import { sessionProviderLabel } from '../pickers'
 
 export type BuildSidebarRowContext = {
+  /** The Session insights plugin is on: PR glyph and the selected row's branch/PR detail. */
+  sessionInsightsOn: boolean
   toggleDateGroup: (key: string) => void
   sidebarEntries: SidebarEntry[]
   sidebarInnerWidth: number
@@ -185,8 +188,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   const settled = Boolean(entry.session.inbox?.settledAt)
   const rowGlyph = activity ? activityGlyph : settled ? '✓' : null
   const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
+  const pr = ctx.sessionInsightsOn ? pullRequestMark(entry.session) : null
   const rowTitleWidth = Math.max(
-    sidebarInnerWidth - 3 - subagentDisclosureWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0),
+    sidebarInnerWidth - 3 - subagentDisclosureWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0) - (pr ? 2 : 0),
     4,
   )
 
@@ -243,6 +247,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           {singleRow ? (
             <>
               {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+              {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}
               {rowGlyph ? <text fg={activity ? activityColor : theme.green} wrapMode="none" selectable={false}>{` ${rowGlyph}`}</text> : null}
               {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{` ${rowMeta}`}</text> : null}
             </>
@@ -256,9 +261,13 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           {fitText(metaLine, sidebarInnerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
         </text>
         {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+        {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}
         {activityGlyph ? <text fg={activityColor} wrapMode="none" selectable={false}>{` ${activityGlyph}`}</text> : null}
       </box>
       )}
+      {ctx.sessionInsightsOn && selected && sessionKey(entry.session) !== renameSessionKey
+        ? <SessionRailDetail session={entry.session} theme={theme} width={sidebarInnerWidth} rowBg={rowBg} accent={sessionAccent} />
+        : null}
       {/* The idle recap earns a row only where the rail already spends two. */}
       {singleRow || !entry.session.recap ? null : (
         <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>

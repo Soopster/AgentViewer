@@ -125,6 +125,13 @@ export type PersistedIndexFilters = {
   provider?: AgentProvider | 'all'
   dir?: string
   includeWorktrees?: boolean
+  /** Sessions whose last message falls in [sinceMs, untilMs). */
+  sinceMs?: number
+  untilMs?: number
+  /** Only sessions in which some tool call failed. */
+  hasError?: boolean
+  /** Only sessions that edited a file whose path contains this text (case-insensitive). */
+  touchedFile?: string
 }
 
 export type PersistedSearchParams = PersistedIndexFilters & {

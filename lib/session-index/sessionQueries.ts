@@ -24,6 +24,20 @@ export async function selectFilteredSessions(readRows: IndexReader, filters: Per
     where.push('cwd = ?')
     params.push(dir)
   }
+  if (Number.isFinite(filters.sinceMs)) {
+    where.push('last_message_at >= ?')
+    params.push(filters.sinceMs)
+  }
+  if (Number.isFinite(filters.untilMs)) {
+    where.push('last_message_at < ?')
+    params.push(filters.untilMs)
+  }
+  if (filters.hasError) where.push('key IN (SELECT session_key FROM message_tools WHERE is_error = 1)')
+  const touched = filters.touchedFile?.trim()
+  if (touched) {
+    where.push('key IN (SELECT session_key FROM file_edits WHERE instr(lower(file_path), lower(?)) > 0)')
+    params.push(touched)
+  }
   const sql = where.length === 0
     ? 'SELECT * FROM sessions'
     : `SELECT * FROM sessions WHERE ${where.join(' AND ')}`

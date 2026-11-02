@@ -1,9 +1,10 @@
+import { checkDigest } from './format/checkDigest'
 import { summarizeKind, normalizeUnifiedDiff, previewDiff, previewFileChange, synthesizeEditDiff } from './format/diffs'
 import { extractMarkdownContent, extractCodeBlocksFromBlocks } from './format/code'
 import { formatAskUserQuestionTool } from './format/questions'
 import { formatTodoCounts, formatTodoChecklist, formatTodoSubtitle } from './format/todos'
 import type {
-  TuiTranscriptLineTone, TuiTranscriptCardLine, TuiTranscriptCard, TuiTranscriptCardCategory,
+  TuiTranscriptLineTone, TuiTranscriptCardLine, TuiTranscriptCard, TuiTranscriptCardCategory, ToolTiming,
 } from './format/types'
 import {
   MAX_PREVIEW_CHARS, MAX_BLOCK_LINES, MAX_CARD_LINES,
@@ -45,7 +46,7 @@ import { fileEditStatsFromToolCalls, type FileEditStat } from '../lib/turnEditSt
 
 export type {
   TuiTranscriptLineTone, TuiTranscriptCardLine, TuiTranscriptCardCategory,
-  TuiTranscriptCodeBlock, TuiTranscriptCard,
+  TuiTranscriptCodeBlock, TuiTranscriptCard, ToolTiming,
 } from './format/types'
 export {
   buildTaskActiveForms, buildTranscriptTaskContext, type TaskActiveForms, type TranscriptTaskContext,
@@ -315,11 +316,12 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
       : 'running'
     const details = [
       meta.outputLineCount > 0 ? `${meta.outputLineCount} line${meta.outputLineCount === 1 ? '' : 's'}` : '',
+      checkDigest(command, raw, meta.exitCode),
       meta.durationMs != null ? formatDurationMs(meta.durationMs) : '',
     ].filter(Boolean)
     return [
       line(`tool Bash: $ ${compactOneLine(command, 120)}`, 'tool'),
-      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`, isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`, isError ? 'result_error' : (meta.durationMs ?? 0) >= SLOW_TOOL_MS ? 'system' : normalizedThread.result ? 'result_ok' : 'dim'),
     ]
   }
 
@@ -981,7 +983,24 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     resumeReason: message.resumeReason,
     pending: !asyncQuestions && blockAnalysis.pending || undefined,
     fileEdits: cardFileEdits(message),
+    toolTimings: cardToolTimings(message),
   }
+}
+
+/** A Bash call this slow is worth a second look: its status line is tinted and the timing view ranks it. */
+export const SLOW_TOOL_MS = 30_000
+
+function cardToolTimings(message: ThreadedMessage): ToolTiming[] | undefined {
+  if (message.role !== 'assistant') return undefined
+  const timings: ToolTiming[] = []
+  for (const block of message.blocks) {
+    if (block.type !== 'tool_thread' || block.toolUse.name !== 'Bash' || !block.result) continue
+    const { durationMs } = parseBashResultMeta(resultRawTextOf(block) ?? '')
+    if (durationMs == null || durationMs <= 0) continue
+    const command = toolStringParam(block.toolUse.input ?? {}, ['command', 'cmd', 'script']) ?? 'command'
+    timings.push({ name: 'Bash', label: compactOneLine(command, 160), durationMs })
+  }
+  return timings.length > 0 ? timings : undefined
 }
 
 function cardFileEdits(message: ThreadedMessage): FileEditStat[] | undefined {

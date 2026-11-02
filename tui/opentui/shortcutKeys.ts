@@ -42,15 +42,18 @@ export function isAltKey(key: ShortcutKeyEvent, char: string): boolean {
 export const PORTABLE_COMMAND_CHORDS = {
   a: { command: 'coord-board', label: 'Agent Operations', short: 'ops' },
   b: { command: 'desk', label: 'Bloomberg-style desk', short: 'desk' },
+  f: { command: 'changed-files', label: 'Files touched by this session', short: 'files' },
   g: { command: 'pull-requests', label: 'Pull requests', short: 'PRs' },
+  h: { command: 'index-search', label: 'Search the session index', short: 'find' },
   l: { command: 'processes', label: 'Processes and logs', short: 'logs' },
   n: { command: 'coord-start', label: 'New coordinated run', short: 'run' },
-  s: { command: 'daily-summary', label: 'Daily summary of agent work', short: 'summary' },
-  t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'teammates' },
+  p: { command: 'tool-timing', label: 'Tool timing by turn', short: 'time' },
+  s: { command: 'daily-summary', label: 'Daily summary of agent work', short: 'sum' },
+  t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'team' },
   o: { command: 'window-switcher', label: 'Workspace overview', short: 'tree' },
-  q: { command: 'window-identify', label: 'Identify windows', short: 'identify' },
-  w: { command: 'window-manage', label: 'Manage windows', short: 'windows' },
-  v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'pager' },
+  q: { command: 'window-identify', label: 'Identify windows', short: 'id' },
+  w: { command: 'window-manage', label: 'Manage windows', short: 'win' },
+  v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'page' },
 } as const
 
 export type PortableCommandChord = keyof typeof PORTABLE_COMMAND_CHORDS

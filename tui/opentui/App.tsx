@@ -3280,13 +3280,14 @@ function OpenTuiWorkspace() {
   // here changed. `timeAgo` output refreshes whenever sidebarEntries does (the
   // 5s sessions poll produces a new array), which is frequent enough.
   const firstSidebarEntryKey = sidebarEntries[0]?.key ?? null
+  const sessionInsightsOn = !useDisabledPlugins().has('session-insights')
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
-    toggleDateGroup, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    sessionInsightsOn, toggleDateGroup, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
     showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
-  }, entry, selected), [collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, entry, selected), [sessionInsightsOn, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -4533,6 +4534,12 @@ function OpenTuiWorkspace() {
       selectedMessageCount: fleetDetailOwned ? sessionDetail?.rawMessages.length ?? null : null,
       select: (session: Session) => selectTabSession(session),
       open: (session: Session) => {
+        // A session found outside the sidebar's page (an index search hit) has no list entry to resolve
+        // from, so it is a tab first; the selection falls back to the open tabs.
+        const key = sessionKey(session)
+        if (!sessions.some((listed) => sessionKey(listed) === key)) {
+          setOpenTabSessions((current) => (current.some((tab) => sessionKey(tab) === key) ? current : [...current, session]))
+        }
         selectTabSession(session)
         setFocusedPane('messages')
       },
