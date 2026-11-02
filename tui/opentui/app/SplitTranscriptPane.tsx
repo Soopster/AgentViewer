@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { indexComposerMessages, visibleComposerMessages } from '../../../lib/composerTranscript'
 import { foldTurnActivity } from './turnActivity'
+import { toggleFullToolOutput } from './fullToolOutput'
 import { transcriptMeasure } from '../engineeringLayout'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { WindowButton } from '../WindowButton'
@@ -104,6 +105,8 @@ export type SplitPaneHandle = {
   moveCursor: (delta: number) => void
   cursorToEdge: (edge: 'first' | 'last') => void
   toggleExpandedAtCursor: () => void
+  /** Shows or clips the full tool output of the cursor card, or of the tool selected inside an expanded group. */
+  toggleFullOutputAtCursor: () => void
   collapseAll: () => void
   getCursorCard: () => TuiTranscriptCard | null
   getSession: () => Session
@@ -606,6 +609,14 @@ export function SplitTranscriptPaneInner({
         const sb = scrollRef.current
         if (sb) scrollTo(edge === 'first' ? 0 : maxScroll(sb), edge === 'last')
         if (edge === 'first') loadEarlier()
+      },
+      toggleFullOutputAtCursor: () => {
+        const card = cardsRef.current[cursorIndexNow()]
+        if (!card) return
+        const nested = nestedToolRef.current
+        const tools = nested.expanded.has(card.key) ? agentToolCardsFor(card) : []
+        const selected = tools.find(tool => tool.key === nested.cursors[card.key])
+        toggleFullToolOutput((selected ?? card).key)
       },
       toggleExpandedAtCursor: () => {
         const list = cardsRef.current

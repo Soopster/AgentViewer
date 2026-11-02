@@ -1,5 +1,4 @@
 /** @jsxImportSource @opentui/react */
-import { toggleFullToolOutput } from '../fullToolOutput'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { KeyEvent } from '@opentui/core'
@@ -233,7 +232,7 @@ export function handleGlobalChordKeys({
               case 'focusReader': focusReaderFromSplit(); break
               case 'toggleAll': paneHandle?.toggleScrollbackAll(); break
               case 'toggleExpanded': paneHandle?.toggleExpandedAtCursor(); break
-              case 'fullOutput': { const card = paneHandle?.getCursorCard(); if (card) toggleFullToolOutput(card.key); break }
+              case 'fullOutput': paneHandle?.toggleFullOutputAtCursor(); break
               case 'copy': void copySelectedMessage(paneHandle?.getCursorCard() ?? undefined); break
               case 'bookmark':
                 void paneHandle?.toggleBookmarkAtCursor().then(added => showNotice('info', added ? 'Bookmarked message' : 'Removed bookmark'))
