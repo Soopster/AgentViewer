@@ -242,6 +242,36 @@ export function buildSidebarEntries(
   return entries
 }
 
+export const NEEDS_YOU_KEY = 'project:NEEDS YOU'
+
+/**
+ * Moves sessions waiting on the user into one group at the top, with their subagent rows.
+ * Moved, not copied: a session listed twice would have two rows sharing one key and one highlight.
+ * A project left with no sessions loses its header.
+ */
+export function liftNeedsInput(entries: SidebarEntry[], needsInput: (session: Session) => boolean): SidebarEntry[] {
+  const lifted: SidebarEntry[] = []
+  const rest: SidebarEntry[] = []
+  let header: Extract<SidebarEntry, { type: 'project' }> | null = null
+  let kept: SidebarEntry[] = []
+  const closeGroup = () => {
+    const sessions = kept.filter(entry => entry.type === 'session').length
+    if (header && sessions > 0) rest.push({ ...header, count: sessions }, ...kept)
+    else if (!header) rest.push(...kept)
+  }
+  let liftingChildren = false
+  for (const entry of entries) {
+    if (entry.type === 'project') { closeGroup(); header = entry; kept = []; liftingChildren = false; continue }
+    if (entry.type === 'session' && needsInput(entry.session)) { lifted.push(entry); liftingChildren = true; continue }
+    if (entry.type === 'subagent' && liftingChildren) { lifted.push(entry); continue }
+    liftingChildren = false
+    kept.push(entry)
+  }
+  closeGroup()
+  if (lifted.length === 0) return entries
+  return [{ type: 'project', key: NEEDS_YOU_KEY, projectName: 'NEEDS YOU', count: lifted.filter(entry => entry.type === 'session').length }, ...lifted, ...rest]
+}
+
 /** Coordinator-run projects (`COORD-ORION`) hold dozens of identical chat rows; fold them until asked. */
 export const isCollapsedByDefaultProject = (projectName: string) => /^COORD-/i.test(projectName)
 
@@ -282,7 +312,7 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
     } else if (projectHidden) {
       continue
     } else if (entry.type === 'session') {
-      if ((bucketsByProject.get(project)?.size ?? 0) < 2) { result.push(entry); continue }
+      if (project === NEEDS_YOU_KEY || (bucketsByProject.get(project)?.size ?? 0) < 2) { result.push(entry); continue }
       const label = bucketLabel(entry)
       const key = `${project}:date:${label}`
       if (key !== bucketKey) {

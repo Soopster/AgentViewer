@@ -258,7 +258,7 @@ import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOu
 import { formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
-import { isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
+import { liftNeedsInput, isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
 
 
@@ -1325,9 +1325,11 @@ function OpenTuiWorkspace() {
 
   const sidebarFolderBySessionRef = useRef<Map<string, string>>(new Map())
   const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
-  const sidebarEntries = useMemo(() => {
   const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
-    const rawEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
+  const sidebarEntries = useMemo(() => {
+    const builtEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
+    // Sessions waiting on the user lead the rail; a search shows results in place.
+    const rawEntries = normalizedSessionQuery ? builtEntries : liftNeedsInput(builtEntries, session => sidebarSessionActivity.get(sessionKey(session)) === 'needs-input')
     // Folding hides a session's row, so remember each session's folder from the unfolded list.
     const folders = new Map<string, string>()
     let folderKey = ''
@@ -1337,15 +1339,15 @@ function OpenTuiWorkspace() {
     }
     sidebarFolderBySessionRef.current = folders
     const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
-    const originalIndex = new Map<string, number>()
     if (filteredSessionsForSidebar === sessions) return entries
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
+    const originalIndex = new Map<string, number>()
     return entries.map((entry) => {
       if (entry.type !== 'session') return entry
       const idx = originalIndex.get(sessionKey(entry.session))
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
-  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId, collapsedSubagentSet, normalizedSessionQuery, collapsedDateGroups])
+  }, [filteredSessionsForSidebar, sessions, sidebarSort, childrenByParentId, collapsedSubagentSet, normalizedSessionQuery, collapsedDateGroups, sidebarSessionActivity])
   // Keep keyboard navigation and neighbour prefetch on the same flattened
   // session order as the rendered sidebar. Rebuilding this array inside every
   // j/k handler was needlessly allocating one wrapper array per keypress.
@@ -1471,9 +1473,9 @@ function OpenTuiWorkspace() {
     composerAccentColor, composerModelLookupSettled, tuiEffort, tuiOpenCodeAgent,
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
-  })
     selectedRawMessages: sessionDetail?.rawMessages,
   useEffect(() => runComposerGitSummaryEffect({
+  })
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {

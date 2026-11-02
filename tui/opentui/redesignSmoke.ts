@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { groupSidebarDates } from './app/sessionList'
+import { groupSidebarDates, liftNeedsInput } from './app/sessionList'
 import { transcriptMeasure } from './engineeringLayout'
 import { resolveExpandedCardKeys } from './app/transcriptRows'
 import type { SidebarEntry } from './app/types'
@@ -12,6 +12,10 @@ assert.equal(grouped.filter(e => e.type === 'session').length, 3)
 const folded = groupSidebarDates(entries, new Set(['project:test:date:Older']), now)
 assert.equal(folded.filter(e => e.type === 'session').length, 2)
 assert.equal(entries.length, 4)
+const lifted = liftNeedsInput(entries, session => session.sessionId === 's1')
+assert.deepEqual(lifted.map(e => e.type === 'project' ? `${e.projectName}/${e.count}` : e.key), ['NEEDS YOU/1', 's1', 'test/2', 's0', 's5'], 'a waiting session moves to its own group, once')
+assert.deepEqual(liftNeedsInput(entries, () => false), entries, 'nothing waiting leaves the list alone')
+assert.deepEqual(liftNeedsInput(entries, () => true).map(e => e.type), ['project', 'session', 'session', 'session'], 'an emptied project loses its header')
 const coordHeader = { type: 'project' as const, key: 'project:COORD-ORION', projectName: 'COORD-ORION', count: 3 }
 const coordEntries: SidebarEntry[] = [coordHeader, ...entries.slice(1)]
 const coordFolded = groupSidebarDates(coordEntries, new Set(), now)
