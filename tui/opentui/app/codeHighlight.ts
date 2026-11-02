@@ -3,6 +3,8 @@ import type { TuiTranscriptCard } from '../../format'
 import type { InlineTextSegment } from './inlineText'
 import { agentsToolSummaryLine } from './transcriptRows'
 import { summarizeShellCommand } from './shellSummary'
+import type { SyntaxStyle } from '@opentui/core'
+import { peekToolOutputSyntax, treeSitterFiletype } from './toolOutputSyntax'
 
 // Syntax colour for the code a tool prints (a file it read, lines a search matched). Line by line and
 // stateless: a transcript row is one line, and a multi-line comment or string only colours its own lines.
@@ -67,7 +69,7 @@ export function highlightCodeLine(text: string, lang: Lang, theme: TuiThemePalet
 }
 
 /** What a tool's output lines are: a file's text, or `path:line:text` search hits. */
-export type ToolOutputContext = { kind: 'code'; lang: Lang } | { kind: 'search' }
+export type ToolOutputContext = { kind: 'code'; lang: Lang; ext: string } | { kind: 'search' }
 
 const contextCache = new WeakMap<TuiTranscriptCard, ToolOutputContext | null>()
 export function toolOutputContext(card: TuiTranscriptCard): ToolOutputContext | null {
@@ -84,16 +86,17 @@ function readToolOutputContext(card: TuiTranscriptCard): ToolOutputContext | nul
   if (name === 'grep') return { kind: 'search' }
   if (name === 'read' || name === 'view') {
     const lang = languageForPath(detail.split(/\s+/)[0] ?? '')
-    return lang ? { kind: 'code', lang } : null
+    return lang ? { kind: 'code', lang, ext: extensionOf(detail.split(/\s+/)[0] ?? '') } : null
   }
   if (name === 'bash') {
     const human = summarizeShellCommand(detail)
     if (human?.verb === 'Searched') return { kind: 'search' }
     const lang = human?.verb === 'Read' && human.path ? languageForPath(human.path) : null
-    return lang ? { kind: 'code', lang } : null
+    return lang && human?.path ? { kind: 'code', lang, ext: extensionOf(human.path) } : null
   }
   return null
 }
+const extensionOf = (path: string) => /\.([A-Za-z0-9]+)(?:[:#]\d+.*)?$/.exec(path)?.[1]?.toLowerCase() ?? ''
 
 const SEARCH_HIT = /^(\s*)([^\s:][^:]*?\.[A-Za-z0-9]+)([:-])(\d+)([:-])(.*)$/
 const LINE_NUMBER_PREFIX = /^(\s*\d+[→\t:|]\s?)(.*)$/
@@ -114,4 +117,35 @@ export function highlightToolOutputLine(text: string, context: ToolOutputContext
   const numbered = LINE_NUMBER_PREFIX.exec(text)
   if (numbered) return [{ text: numbered[1]!, fg: theme.dim }, ...highlightCodeLine(numbered[2]!, context.lang, theme)]
   return highlightCodeLine(text, context.lang, theme)
+}
+
+const EXTENSION_OF = /\.([A-Za-z0-9]+)$/
+
+/**
+ * A tool's output line coloured by tree-sitter, falling back to the regex tokenizer while the parse is outstanding
+ * (or when there is no syntax style / grammar). A file's lines are parsed together as one document; each search
+ * hit is parsed on its own, since neighbouring hits are not neighbouring code.
+ */
+export function highlightToolOutput(card: TuiTranscriptCard, text: string, theme: TuiThemePalette, syntaxStyle: SyntaxStyle | null): InlineTextSegment[] | null {
+  const context = toolOutputContext(card)
+  if (!context) return null
+  const fallback = highlightToolOutputLine(text, context, theme)
+  if (!syntaxStyle || !fallback) return fallback
+  if (context.kind === 'search') {
+    const hit = SEARCH_HIT.exec(text)
+    const filetype = hit ? treeSitterFiletype(EXTENSION_OF.exec(hit[2]!)?.[1] ?? '') : null
+    if (!hit || !filetype) return fallback
+    const lines = peekToolOutputSyntax(hit[6]!, filetype, syntaxStyle, theme.text)
+    return lines?.[0] ? [{ text: hit[1]! + hit[2]!, fg: theme.cyan }, { text: `${hit[3]}${hit[4]}${hit[5]}`, fg: theme.dim }, ...lines[0]] : fallback
+  }
+  const filetype = treeSitterFiletype(context.ext)
+  if (!filetype) return fallback
+  const rows = card.expandedLines.filter(line => line.tone !== 'tool' && line.tone !== 'result_error').map(line => line.text)
+  const parsed = rows.map(row => LINE_NUMBER_PREFIX.exec(row))
+  const index = rows.indexOf(text)
+  if (index < 0) return fallback
+  const lines = peekToolOutputSyntax(parsed.map((match, i) => match ? match[2]! : rows[i]!).join('\n'), filetype, syntaxStyle, theme.text)
+  const segments = lines?.[index]
+  if (!segments) return fallback
+  return parsed[index] ? [{ text: parsed[index]![1]!, fg: theme.dim }, ...segments] : segments
 }

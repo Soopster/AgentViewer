@@ -3,7 +3,7 @@ import { transcriptMeasure } from '../engineeringLayout'
 import { TranscriptImages } from '../TranscriptImages'
 import { toolOutputPreview } from './toolOutputPreview'
 import { toggleFullToolOutput, useFullToolOutput } from './fullToolOutput'
-import React, { useMemo } from 'react'
+import React, { useMemo, useSyncExternalStore } from 'react'
 import { getAssistantDisplayName } from '../../../lib/provider'
 import { hasTuiLinkTarget } from '../../../lib/tuiLinkTargets'
 import { CardSelectionVariants } from '../cardSelectionVariants'
@@ -27,13 +27,16 @@ import { extractDiffText } from './diffCache'
 import { cardDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, agentToolCardsFor, streamToolSummaryName, agentToolCardIsExpanded, nestedAgentToolDisplay, streamActivitySummarySegments, isStreamActivityToolCard, transcriptToolLineSegments, streamToolSummarySegments, streamToolDetailLine, agentsToolSummaryLine, coordinatorResultSegments, countCodeBlockLines, codeBlockHeight, sliceCodeBlockLines, codeBlockLabel, isCompactSystemCard, codeBlockHiddenLineCount } from './transcriptRows'
 import { streamDiffPreviewData, StreamDiffPreview } from './StreamDiffPreview'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './transcriptDiffSelection'
-import { highlightToolOutputLine, toolOutputContext } from './codeHighlight'
+import { highlightToolOutput, toolOutputContext } from './codeHighlight'
+import { subscribeToolOutputSyntax, toolOutputSyntaxVersion } from './toolOutputSyntax'
 
-/** Code a tool printed, coloured; null for any line that is not plainly code or a search hit. */
-function highlightedToolOutput(card: TuiTranscriptCard, line: TuiTranscriptCardLine, theme: TuiThemePalette): InlineTextSegment[] | null {
+const noopSubscribe = () => () => {}
+const zeroVersion = () => 0
+
+/** Code a tool printed, coloured by tree-sitter once parsed (the regex tokenizer until then); null for any line that is not plainly code or a search hit. */
+function highlightedToolOutput(card: TuiTranscriptCard, line: TuiTranscriptCardLine, theme: TuiThemePalette, syntaxStyle: SyntaxStyle | null): InlineTextSegment[] | null {
   if (line.tone !== 'result_ok' && line.tone !== 'default' && line.tone !== 'muted') return null
-  const context = toolOutputContext(card)
-  return context ? highlightToolOutputLine(line.text, context, theme) : null
+  return highlightToolOutput(card, line.text, theme, syntaxStyle)
 }
 
 /** Lines of a tool's own output shown when one row is opened on its own. */
@@ -270,6 +273,10 @@ export function TranscriptCardInner({
     isInsight,
     markdownFallbackLines,
   } = display
+
+  // A card that prints code redraws when its tree-sitter parse lands; every other card never subscribes.
+  const wantsToolSyntax = Boolean(syntaxStyle) && agentToolCardsFor(card).some(toolCard => toolOutputContext(toolCard) !== null)
+  useSyncExternalStore(wantsToolSyntax ? subscribeToolOutputSyntax : noopSubscribe, wantsToolSyntax ? toolOutputSyntaxVersion : zeroVersion)
 
   const diffTextForComposer = card.category === 'diff' ? cardDiffText(card, isExpanded) : null
   const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
@@ -696,7 +703,7 @@ export function TranscriptCardInner({
                             <text key={lineIndex} fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                               {renderInlineTextSegments([
                                 { text: isActivityTool ? (isLastActivityTool ? '      ' : '  │   ') : '    ', fg: theme.dim },
-                                ...(highlightedToolOutput(toolCard, line, theme) ?? [{ text: line.text, fg: transcriptColor(line, theme) }]),
+                                ...(highlightedToolOutput(toolCard, line, theme, syntaxStyle) ?? [{ text: line.text, fg: transcriptColor(line, theme) }]),
                               ], agentBodyWidth, theme.dim)}
                             </text>
                           ))}
@@ -712,7 +719,7 @@ export function TranscriptCardInner({
                             },
                             ...(/^tool\s+coordinator |^coordinator /i.test(agentsToolSummaryLine(toolCard).text.trim()) && /^[✓✗]/.test(detailLine.text.trim())
                               ? coordinatorResultSegments(detailLine.text.trim(), theme)
-                              : (highlightedToolOutput(toolCard, detailLine, theme) ?? [{ text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) }])),
+                              : (highlightedToolOutput(toolCard, detailLine, theme, syntaxStyle) ?? [{ text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) }])),
                           ], agentBodyWidth, theme.dim)}
                         </text>
                       ) : null}
@@ -810,8 +817,8 @@ export function TranscriptCardInner({
                   <text fg={transcriptColor(line, theme)} width={agentBodyWidth} wrapMode={wrapProse ? 'word' : 'none'} selectable {...selectionColors}>
                     {toolLine
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamMode ? '  └ ' : '› ', theme.dim, streamMode), agentBodyWidth, theme.dim)
-                      : operationalCard && highlightedToolOutput(card, line, theme)
-                        ? renderInlineTextSegments(highlightedToolOutput(card, line, theme)!, agentBodyWidth, theme.dim)
+                      : operationalCard && highlightedToolOutput(card, line, theme, syntaxStyle)
+                        ? renderInlineTextSegments(highlightedToolOutput(card, line, theme, syntaxStyle)!, agentBodyWidth, theme.dim)
                       : wrapProse
                         ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:agent-md:${lineIndex}`, linkCwd)
                         : hasInlineSpans(line.text)
@@ -1063,7 +1070,8 @@ export function TranscriptCardInner({
           // so a long indented line wraps under itself. Left in the text, the
           // wrapped part fell back to the block's edge — a teammate's quoted
           // reply lost its indent halfway through every long sentence.
-          const hang = line.tone === 'tool'
+          const colored = highlightedToolOutput(card, line, theme, syntaxStyle)
+          const hang = line.tone === 'tool' || colored
             ? 0
             : Math.min(line.text.length - line.text.trimStart().length, 16, Math.max(streamChildTextWidth - 12, 0))
           const continuationMarker = `${continuousMode ? '  ' : streamContinuationMarker(line)}${' '.repeat(hang)}`
@@ -1085,6 +1093,8 @@ export function TranscriptCardInner({
               >
                 {line.tone === 'tool'
                   ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), lineWidth, theme.dim)
+                  : colored
+                    ? renderInlineTextSegments(colored, lineWidth, theme.dim)
                   : hasInlineSpans(lineText)
                     ? renderInlineMarkdownSpans(lineText, theme, lineColor, `${card.key}:s:${lineIndex}`, linkCwd)
                     : lineText}
