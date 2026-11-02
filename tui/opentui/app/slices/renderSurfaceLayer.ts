@@ -107,6 +107,8 @@ export type UseRenderSurfaceLayerGroupContext = {
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
   tabWidth: number
   visibleTabSessions: Session[]
+  /** Leading tabs drawn on the dedicated pinned row, not in the strip. */
+  pinnedRowCount: number
   popoverTabs: string[]
 }
 
@@ -129,7 +131,7 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     splitPaneShouldYield, sessionDragImplRef, activateWindowTab, windowKeyTitle, closeWindowTab,
     setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows, surfacePanelExpanded,
     effectiveSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth,
-    effectiveSurfacePanelWidth, surfacePanelMaxWidth, tabSelectRef, tabWidth, visibleTabSessions,
+    effectiveSurfacePanelWidth, surfacePanelMaxWidth, tabSelectRef, tabWidth, visibleTabSessions, pinnedRowCount,
     popoverTabs,
   } = ctx
 
@@ -195,7 +197,7 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     const instance = tabSelectRef.current
     if (!instance) return null
     const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
-    const index = scrollOffset + Math.floor((x - instance.x) / tabWidth) - visibleTabSessions.length
+    const index = scrollOffset + Math.floor((x - instance.x) / tabWidth) - (visibleTabSessions.length - pinnedRowCount)
     return index >= 0 ? popoverTabs[index] ?? null : null
   }
   // The open tab under a column of the tab strip.
@@ -203,7 +205,7 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     const instance = tabSelectRef.current
     if (!instance) return null
     const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
-    return visibleTabSessions[scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
+    return visibleTabSessions[pinnedRowCount + scrollOffset + Math.floor((x - instance.x) / tabWidth)] ?? null
   }
 
   return {

@@ -19,6 +19,10 @@ import { recordVoice } from './voiceRecorder'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
 import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
+import { createSessionAlertTracker, sessionAlertDelivery, sessionAlertText } from './sessionAlerts'
+import { loadSessionAlertMode, readSessionAlertMode } from './sessionAlertsStore'
+import { readPinnedTabs, readPinnedTabsRow, togglePinnedTab, togglePinnedTabsRow, usePinnedTabs, usePinnedTabsRow } from './tabPinsStore'
+import { moveTabKey } from './tabOrder'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
@@ -2169,7 +2173,7 @@ function OpenTuiWorkspace() {
   const livePreviewContentWidth = Math.max(width - 8, 14)
   const {
     liveAssistantPreviewLines, liveReasoningPreviewLines, isPreviewMode, visibleTabSessions,
-    showTabs, showHorizontalTabs,
+    showTabs, showHorizontalTabs, pinnedRowCount,
   } = useLiveAssistantPreviewLinesGroup({
     composerLiveText, livePreviewContentWidth, composerLiveReasoning, selectedSessionKey,
     laidOutWindowKeys, openTabSessions, selectedSession, fullscreenMode, tabsEnabled, popoverTabs,
@@ -2196,6 +2200,7 @@ function OpenTuiWorkspace() {
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
     - (fullscreenMode && !presentationFocusMode && isCopilotView ? 1 : 0)
     - (showHorizontalTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
+    - (pinnedRowCount > 0 ? 1 : 0)
     // Fleet strip is one header row when visible.
     - (fleetStripVisible ? 1 : 0)
     - streamActionFooterRows
@@ -2212,7 +2217,7 @@ function OpenTuiWorkspace() {
   const {
     transcriptViewportRows, activeTabIndex, runningTabKeys, tabWidth, tabOptions,
   } = useTranscriptViewportRowsGroup({
-    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions,
+    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
     windowSurfaceMeta, openTabByKey, sessions,
@@ -2546,6 +2551,8 @@ function OpenTuiWorkspace() {
   // Close a tab in the strip, and its window if it has one.
   const closeSessionTab = useStableEvent((session: Session) => {
     const key = sessionKey(session)
+    // A pinned tab is closed on purpose: unpin it first.
+    if (isPluginEnabled('tab-manager') && readPinnedTabs().has(key)) { showNotice('info', 'Pinned tab — unpin it to close'); return }
     const pane = windowItems.findIndex(item => windowItemKey(item) === key)
     if (windowStackFor(key)) closeWindowTab(key)
     else if (floatingKey === key) closeFloatingWindow()
@@ -3186,6 +3193,27 @@ function OpenTuiWorkspace() {
     }
   })
 
+  // Session alerts (plugin): a session that needs an answer, or finished a long turn, tells the user
+  // when they are away. The tracker always observes, so turning the plugin on never replays what
+  // already happened; it only delivers while the plugin is on.
+  const [sessionAlertTracker] = useState(() => createSessionAlertTracker())
+  const alertContextRef = useRef({ sessions, openTabSessions, selectedSessionKey })
+  alertContextRef.current = { sessions, openTabSessions, selectedSessionKey }
+  useEffect(() => {
+    loadSessionAlertMode()
+    const alerts = sessionAlertTracker.observe(sidebarSessionActivity, Date.now())
+    if (alerts.length === 0 || !isPluginEnabled('session-alerts')) return
+    const context = alertContextRef.current
+    for (const alert of alerts) {
+      const session = context.sessions.find((entry) => sessionKey(entry) === alert.key) ?? context.openTabSessions.find((entry) => sessionKey(entry) === alert.key)
+      const title = session ? formatSessionTitle(session) : 'A session'
+      const delivery = sessionAlertDelivery(readSessionAlertMode(), context.selectedSessionKey === alert.key, terminalFocusedRef.current)
+      const text = sessionAlertText(alert.kind, title)
+      if (delivery.notice) showNotice('info', `${title} ${text.title}`, 6000)
+      if (delivery.desktop) notifyTeamEvent(text.title, text.body.slice(0, 160))
+    }
+  }, [sidebarSessionActivity])
+
   // Interactive teammates notify on transitions, not on what a read already
   // held (the store baselines each conversation's first read). Herdr's rule for
   // quiet: the user is looking at that team AND the terminal is not known to be
@@ -3280,6 +3308,8 @@ function OpenTuiWorkspace() {
   // here changed. `timeAgo` output refreshes whenever sidebarEntries does (the
   // 5s sessions poll produces a new array), which is frequent enough.
   const firstSidebarEntryKey = sidebarEntries[0]?.key ?? null
+  const pinnedTabs = usePinnedTabs()
+  const pinnedTabsRowOption = usePinnedTabsRow()
   const sessionInsightsOn = !useDisabledPlugins().has('session-insights')
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
     sessionInsightsOn, toggleDateGroup, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
@@ -3746,9 +3776,10 @@ function OpenTuiWorkspace() {
   useEffect(() => {
     if (!tabSelectRef.current || activeStripIndex < 0) return
     syncingTabSelectionRef.current = true
-    try { tabSelectRef.current.setSelectedIndex(activeStripIndex) }
+    // The strip holds the tabs after the pinned row's.
+    try { tabSelectRef.current.setSelectedIndex(Math.max(activeStripIndex - pinnedRowCount, 0)) }
     finally { syncingTabSelectionRef.current = false }
-  }, [activeStripIndex, showHorizontalTabs])
+  }, [activeStripIndex, showHorizontalTabs, pinnedRowCount])
 
   // Animate the running tabs' spinner IMPERATIVELY, through the renderable's
   // own setOptions. Driving it from state would re-render the root — and the
@@ -4150,6 +4181,27 @@ function OpenTuiWorkspace() {
     showNotice, setSplitPaneCount, setError,
   }, wanted, label))
 
+  // Tab manager: reorder within the pinned or unpinned group, and pin.
+  const moveSessionTab = useStableEvent((session: Session, delta: -1 | 1) => {
+    const key = sessionKey(session)
+    setOpenTabSessions((current) => {
+      const next = moveTabKey(current.map(sessionKey), key, delta, readPinnedTabs())
+      if (next.every((entry, index) => entry === sessionKey(current[index]!))) return current
+      const byKey = new Map(current.map((tab) => [sessionKey(tab), tab]))
+      return next.map((entry) => byKey.get(entry)!)
+    })
+  })
+  const toggleSessionTabsRow = useStableEvent((): boolean => {
+    const on = togglePinnedTabsRow()
+    showNotice('info', on ? 'Pinned tabs on their own row' : 'Pinned tabs back in the strip')
+    return on
+  })
+  const toggleSessionTabPin = useStableEvent((session: Session): boolean => {
+    const pinned = togglePinnedTab(sessionKey(session))
+    showNotice('info', pinned ? 'Pinned tab' : 'Unpinned tab')
+    return pinned
+  })
+
   // What a right-click on a session offers, depending on where it is now.
   const openSessionMenu = useStableEvent((session: Session, source: 'rail' | 'tab' | 'pane', point: { x: number; y: number }, paneIndex?: number) => {
     const key = sessionKey(session)
@@ -4161,6 +4213,14 @@ function OpenTuiWorkspace() {
       { label: 'Open as a pane on the right', run: () => dropSessionInWindow(session, 'right', null) },
       { label: 'Open as a pane below', run: () => dropSessionInWindow(session, 'bottom', null) },
     )
+    if (source === 'tab' && isPluginEnabled('tab-manager')) {
+      items.push(
+        { label: readPinnedTabs().has(key) ? 'Unpin tab' : 'Pin tab', run: () => toggleSessionTabPin(session) },
+        { label: 'Move tab left', run: () => moveSessionTab(session, -1) },
+        { label: 'Move tab right', run: () => moveSessionTab(session, 1) },
+        { label: readPinnedTabsRow() ? 'Pinned tabs: back in the strip' : 'Pinned tabs: own row', run: () => toggleSessionTabsRow() },
+      )
+    }
     if (source === 'tab') items.push({ label: 'Close tab', hint: '×', danger: true, run: () => closeSessionTab(session) })
     setContextMenu({ ...point, title, items })
   })
@@ -4532,6 +4592,16 @@ function OpenTuiWorkspace() {
       selectedContext: fleetDetailOwned ? sessionDetail?.contextUsage ?? null : null,
       selectedModel: fleetDetailOwned ? sessionDetail?.info?.currentModel ?? null : null,
       selectedMessageCount: fleetDetailOwned ? sessionDetail?.rawMessages.length ?? null : null,
+      tabs: {
+        sessions: visibleTabSessions,
+        pinned: pinnedTabs,
+        selectedKey: selectedSessionKey,
+        row: pinnedTabsRowOption,
+        toggleRow: toggleSessionTabsRow,
+        togglePin: toggleSessionTabPin,
+        move: moveSessionTab,
+        close: closeSessionTab,
+      },
       select: (session: Session) => selectTabSession(session),
       open: (session: Session) => {
         // A session found outside the sidebar's page (an index search hit) has no list entry to resolve
@@ -4550,7 +4620,7 @@ function OpenTuiWorkspace() {
         return true
       },
     },
-  } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems])
+  } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems, visibleTabSessions, pinnedTabs, pinnedTabsRowOption, toggleSessionTabsRow, selectedSessionKey, toggleSessionTabPin, moveSessionTab, closeSessionTab])
   const pluginServicesFor = (surfaceId: PluginSurfaceId): TuiProvidedPluginServices => (
     pluginSurfaceWants(surfaceId, 'session-fleet') ? fleetPluginServices : pluginServices
   )
@@ -5889,7 +5959,7 @@ function OpenTuiWorkspace() {
     splitPaneShouldYield, sessionDragImplRef, activateWindowTab, windowKeyTitle, closeWindowTab,
     setSurfacePanelExpanded, surfacePanelAtBottom, setSurfacePanelRows, surfacePanelExpanded,
     effectiveSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth,
-    effectiveSurfacePanelWidth, surfacePanelMaxWidth, tabSelectRef, tabWidth, visibleTabSessions,
+    effectiveSurfacePanelWidth, surfacePanelMaxWidth, tabSelectRef, tabWidth, visibleTabSessions, pinnedRowCount,
     popoverTabs,
   })
 
@@ -6047,6 +6117,7 @@ function OpenTuiWorkspace() {
         selectStripIndex={selectStripIndex}
         readerAreaWidth={readerAreaWidth}
         showHorizontalTabs={showHorizontalTabs}
+        pinnedRowCount={pinnedRowCount}
         TAB_BAR_HEIGHT={TAB_BAR_HEIGHT}
         tabSelectRef={tabSelectRef}
         tabWidth={tabWidth}

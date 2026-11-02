@@ -25,5 +25,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   desk: async () => (await import('../../../plugins/desk/tui')).module,
   github: async () => (await import('../../../plugins/github/tui')).module,
   'session-insights': async () => (await import('../../../plugins/session-insights/tui')).module,
+  'tab-manager': async () => (await import('../../../plugins/tab-manager/tui')).module,
+  'session-alerts': async () => (await import('../../../plugins/session-alerts/tui')).module,
   recaps: async () => (await import('../../../plugins/recaps/tui')).module,
 }, TUI_PLUGIN_SERVICES)

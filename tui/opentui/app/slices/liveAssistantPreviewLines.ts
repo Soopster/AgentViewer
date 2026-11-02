@@ -1,4 +1,7 @@
 /** @jsxImportSource @opentui/react */
+import { usePinnedTabs, usePinnedTabsRow } from '../../tabPinsStore'
+import { orderTabs } from '../../tabOrder'
+import { useDisabledPlugins } from '../../../../lib/plugins/useDisabledPlugins'
 import { useMemo } from 'react'
 import { type Session } from '../../../../lib/types'
 import { wrapLivePreviewTail, LIVE_PREVIEW_BODY_LINES } from '../inlineText'
@@ -35,17 +38,24 @@ export function useLiveAssistantPreviewLinesGroup(ctx: UseLiveAssistantPreviewLi
   )
 
   const isPreviewMode = !!selectedSessionKey && laidOutWindowKeys.has(selectedSessionKey) && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
-  const visibleTabSessions = useMemo(() => (
-    isPreviewMode && selectedSession
-      ? [...openTabSessions, selectedSession]
-      : openTabSessions
-  ), [isPreviewMode, openTabSessions, selectedSession])
+  // The Tab manager plugin keeps pinned tabs at the front.
+  const pinnedTabs = usePinnedTabs()
+  const tabManagerOn = !useDisabledPlugins().has('tab-manager')
+  const visibleTabSessions = useMemo(() => {
+    const tabs = isPreviewMode && selectedSession ? [...openTabSessions, selectedSession] : openTabSessions
+    return tabManagerOn ? orderTabs(tabs, sessionKey, pinnedTabs) : tabs
+  }, [isPreviewMode, openTabSessions, selectedSession, pinnedTabs, tabManagerOn])
   const showTabs = !fullscreenMode && tabsEnabled && (visibleTabSessions.length > 0 || popoverTabs.length > 0)
 
   const showHorizontalTabs = showTabs && verticalTabsWidth === 0
+  // Pinned tabs lead visibleTabSessions; with the row option they are drawn above the strip instead of in it.
+  const pinnedRowOption = usePinnedTabsRow()
+  const pinnedRowCount = showHorizontalTabs && tabManagerOn && pinnedRowOption
+    ? visibleTabSessions.filter((session) => pinnedTabs.has(sessionKey(session))).length
+    : 0
 
   return {
     liveAssistantPreviewLines, liveReasoningPreviewLines, isPreviewMode, visibleTabSessions,
-    showTabs, showHorizontalTabs,
+    showTabs, showHorizontalTabs, pinnedRowCount,
   }
 }

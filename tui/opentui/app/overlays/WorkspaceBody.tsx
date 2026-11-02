@@ -13,6 +13,7 @@ import type { OpenCodeTodo } from '../../../../lib/taskRegistry'
 import type { PaletteCommand } from '../types'
 import type { Toast } from '../../toastStore'
 import { VerticalTabs } from '../../VerticalTabs'
+import { PinnedTabRow } from '../../PinnedTabRow'
 import { tabStripWidth } from '../../tabStrip'
 import { SessionTabConnection } from '../../SessionTabConnection'
 import React from 'react'
@@ -88,6 +89,8 @@ type WorkspaceBodyProps = {
   selectStripIndex: (index: number) => void
   readerAreaWidth: number
   showHorizontalTabs: boolean
+  /** Leading tabs of `visibleTabSessions` drawn on the dedicated pinned row, not in the strip. */
+  pinnedRowCount: number
   TAB_BAR_HEIGHT: 2
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
   tabWidth: number
@@ -229,7 +232,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     sidebarRowElements, showTabs, verticalTabsWidth, tabOptions, activeStripIndex, runningTabKeys,
     visibleTabSessions, closeSessionTab, popoverTabs, closePopoverTab, setTabOrientation, setError,
     splitPaneActions, openPopoverTabMenu, sessionDragHandlers, selectStripIndex, readerAreaWidth,
-    showHorizontalTabs, TAB_BAR_HEIGHT, tabSelectRef, tabWidth, popoverTabAt, tabCloseHit,
+    showHorizontalTabs, pinnedRowCount, TAB_BAR_HEIGHT, tabSelectRef, tabWidth, popoverTabAt, tabCloseHit,
     showPopoverTab, tabAt, selectTabSession, showPreviewBar, selectedSession, previewBarText,
     windowOverflowRows, windowOverflowRef, overflowWindowItems, badgeForWindow, pickWindowTarget,
     showNotice, windowAreaRef, workspaceLaunched, workspaceCwd, setWorkspaceLaunched,
@@ -259,6 +262,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     chordHelp, composerDockHeight, composerStatusBlockHeight, toasts, bookmarksOverlayOpen,
     bookmarksOverlay, bookmarksOverlayIndex,
   } = props
+  // The selected tab is on the pinned row: the strip below then highlights none of its own.
+  const activeInPinnedRow = pinnedRowCount > 0 && activeStripIndex >= 0 && activeStripIndex < pinnedRowCount
   return (
     (
 <box
@@ -298,6 +303,20 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           onRelease={event => { if (event.button === 0) sessionDragHandlers.release(event) }}
         /> : null}
         <box width={readerAreaWidth} flexDirection="column">
+          {showHorizontalTabs && pinnedRowCount > 0 ? (
+            <PinnedTabRow
+              sessions={visibleTabSessions.slice(0, pinnedRowCount)}
+              selectedKey={selectedSessionKey}
+              running={runningTabKeys}
+              theme={theme}
+              width={tabStripWidth(readerAreaWidth)}
+              onSelect={selectTabSession}
+              onMenu={(session, point) => splitPaneActions.sessionMenu(session, 'tab', point)}
+              onPress={(session, event, onClick) => sessionDragHandlers.press(session, null, event, onClick)}
+              onMove={(event) => sessionDragHandlers.move(event)}
+              onRelease={(event) => sessionDragHandlers.release(event)}
+            />
+          ) : null}
           {showHorizontalTabs ? (
             <box
               id="session-tab-strip"
@@ -319,8 +338,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                 focusedBackgroundColor={theme.bg}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
-                selectedBackgroundColor={theme.surface}
-                selectedTextColor={theme.cyan}
+                selectedBackgroundColor={activeInPinnedRow ? theme.bg : theme.surface}
+                selectedTextColor={activeInPinnedRow ? theme.muted : theme.cyan}
                 selectedDescriptionColor={theme.dim}
                 showDescription={false}
                 showUnderline={false}
@@ -357,7 +376,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   if (event.button !== 0) return
                   sessionDragHandlers.release(event)
                 }}
-                onChange={(index: number) => selectStripIndex(index)}
+                onChange={(index: number) => selectStripIndex(index + pinnedRowCount)}
               />
             </box>
           ) : showPreviewBar && selectedSession ? (

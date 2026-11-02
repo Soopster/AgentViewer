@@ -137,6 +137,18 @@ export type TuiPluginServices = {
     readonly selectedContext: ContextUsage | null
     readonly selectedModel: string | null
     readonly selectedMessageCount: number | null
+    /** The open tabs in strip order, for the Tab manager: pin, move and close act on the host's strip. */
+    readonly tabs?: {
+      readonly sessions: readonly Session[]
+      readonly pinned: ReadonlySet<string>
+      readonly selectedKey: string | null
+      /** Pinned tabs on a dedicated row above the strip, and the switch for it. */
+      readonly row: boolean
+      readonly toggleRow: () => boolean
+      readonly togglePin: (session: Session) => boolean
+      readonly move: (session: Session, delta: -1 | 1) => void
+      readonly close: (session: Session) => void
+    }
     /** Select a session without leaving the view. */
     readonly select: (session: Session) => void
     /** Select a session and give the reader the keyboard. */

@@ -61,6 +61,7 @@ export const COMMAND_CHORD_MAP: ChordMap = {
           keys: key,
           label: entry.label,
           short: entry.short,
+          ...('hint' in entry ? { hint: entry.hint } : {}),
         })),
         { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
       ],

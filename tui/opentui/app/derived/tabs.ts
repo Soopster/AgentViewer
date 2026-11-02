@@ -15,6 +15,8 @@ export type TabOptionsContext = {
   teamAttention: TeamAttention
   coordinatorBadges: Map<string, string>
   tabStateGlyphs: Map<string, string>
+  /** Pinned tabs, drawn with a leading mark (empty when the Tab manager plugin is off). */
+  pinnedTabs?: ReadonlySet<string>
   isPreviewMode: boolean
   selectedSessionKey: string | null
   tabWidth: number
@@ -28,7 +30,7 @@ export function runTabOptions(ctx: TabOptionsContext) {
   const {
     visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
     tabStateGlyphs, isPreviewMode, selectedSessionKey, tabWidth, popoverTabs, windowSurfaceMeta,
-    openTabByKey, sessions,
+    openTabByKey, sessions, pinnedTabs,
   } = ctx
 return (
   visibleTabSessions.map((s) => {
@@ -41,7 +43,7 @@ return (
     const team = teamAttention.get(sessionKey(s))
     const teamPrefix = (coordinatorBadges.has(sessionKey(s)) ? `${coordinatorBadges.get(sessionKey(s))} ` : '') + (team ? (team.waiting > 0 ? `!${team.waiting} ` : `✓${team.finished} `) : '')
     const stateGlyph = tabStateGlyphs.get(sessionKey(s))
-    const label = (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
+    const label = (pinnedTabs?.has(sessionKey(s)) ? '◆ ' : '') + (stateGlyph ? `${stateGlyph} ` : '') + teamPrefix + (isPreviewMode && selectedSessionKey === sessionKey(s)
       ? `PREVIEW · ${formatSessionTitle(s)}`
       : formatSessionTitle(s))
     return {

@@ -185,6 +185,9 @@ type TuiState = {
   tabOrientation?: unknown
   tabsEnabled?: unknown
   teammateNotifications?: unknown
+  pinnedTabs?: unknown
+  pinnedTabsRow?: unknown
+  sessionAlerts?: unknown
   splitPanes?: unknown
   splitOrientation?: unknown
   splitReaderShare?: unknown
@@ -460,6 +463,40 @@ export async function getConfiguredTuiTeammateNotifications(): Promise<TuiTeamma
 
 export async function setConfiguredTuiTeammateNotifications(teammateNotifications: TuiTeammateNotifications): Promise<void> {
   await writeTuiState({ teammateNotifications })
+}
+
+/** Tabs kept at the front of the strip and protected from a stray close, as session keys. */
+export async function getConfiguredTuiPinnedTabs(): Promise<string[]> {
+  const parsed = await readTuiState()
+  return Array.isArray(parsed.pinnedTabs)
+    ? [...new Set(parsed.pinnedTabs.filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 300))].slice(0, 50)
+    : []
+}
+
+export async function setConfiguredTuiPinnedTabs(pinnedTabs: readonly string[]): Promise<void> {
+  await writeTuiState({ pinnedTabs: [...pinnedTabs].slice(0, 50) })
+}
+
+/** Pinned tabs on their own row above the strip, instead of leading it. Off by default. */
+export async function getConfiguredTuiPinnedTabsRow(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.pinnedTabsRow === true
+}
+
+export async function setConfiguredTuiPinnedTabsRow(pinnedTabsRow: boolean): Promise<void> {
+  await writeTuiState({ pinnedTabsRow })
+}
+
+/** How a session's finished turn or question reaches you: a desktop notification when the terminal is blurred, an in-app notice, or nothing. */
+export type TuiSessionAlerts = 'off' | 'in-app' | 'desktop'
+
+export async function getConfiguredTuiSessionAlerts(): Promise<TuiSessionAlerts> {
+  const parsed = await readTuiState()
+  return parsed.sessionAlerts === 'off' || parsed.sessionAlerts === 'in-app' ? parsed.sessionAlerts : 'desktop'
+}
+
+export async function setConfiguredTuiSessionAlerts(sessionAlerts: TuiSessionAlerts): Promise<void> {
+  await writeTuiState({ sessionAlerts })
 }
 
 export type TuiTabOrientation = 'horizontal' | 'vertical'

@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { usePinnedTabs } from '../../tabPinsStore'
+import { useDisabledPlugins } from '../../../../lib/plugins/useDisabledPlugins'
 import type { TeamAttention } from '../../teamAttentionStore'
 import { tabStripWidth } from '../../tabStrip'
 import { useMemo } from 'react'
@@ -11,6 +13,8 @@ export type UseTranscriptViewportRowsGroupContext = {
   estimatedTranscriptViewportRows: number
   selectedSessionKey: string | null
   visibleTabSessions: Session[]
+  /** Leading tabs drawn on the dedicated pinned row, not in the strip. */
+  pinnedRowCount: number
   sidebarSessionActivity: Map<string, 'waiting' | 'needs-input' | 'running'>
   attentionDone: { key: string; sessionId: string; provider: AgentProvider; sessionKey: string; title: string; createdAt: number; }[]
   recentlyWrittenKeys: ReadonlySet<string>
@@ -29,7 +33,7 @@ export type UseTranscriptViewportRowsGroupContext = {
 
 export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGroupContext) {
   const {
-    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions,
+    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
     windowSurfaceMeta, openTabByKey, sessions,
@@ -84,14 +88,16 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
     // The strip spans the reader area (reader box plus any split panes), so
     // tabs get the full width instead of being squeezed into the reader column.
     const available = tabStripWidth(readerAreaWidth)
-    const fill = Math.floor(available / Math.max(1, visibleTabSessions.length + popoverTabs.length))
+    const fill = Math.floor(available / Math.max(1, visibleTabSessions.length - pinnedRowCount + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
-  }, [readerAreaWidth, visibleTabSessions.length, popoverTabs.length, verticalTabsWidth])
+  }, [readerAreaWidth, visibleTabSessions.length, pinnedRowCount, popoverTabs.length, verticalTabsWidth])
+  const pinnedTabs = usePinnedTabs()
+  const tabManagerOn = !useDisabledPlugins().has('tab-manager')
   const tabOptions = useMemo(() => runTabOptions({
-    visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
+    visibleTabSessions: pinnedRowCount > 0 ? visibleTabSessions.slice(pinnedRowCount) : visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
     tabStateGlyphs, isPreviewMode, selectedSessionKey, tabWidth, popoverTabs, windowSurfaceMeta,
-    openTabByKey, sessions,
-  }), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
+    openTabByKey, sessions, pinnedTabs: tabManagerOn ? pinnedTabs : undefined,
+  }), [pinnedRowCount, pinnedTabs, tabManagerOn, isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
 
   return {
     transcriptViewportRows, activeTabIndex, runningTabKeys, tabWidth, tabOptions,
