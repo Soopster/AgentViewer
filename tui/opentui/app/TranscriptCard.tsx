@@ -2,7 +2,8 @@
 import { transcriptMeasure } from '../engineeringLayout'
 import { TranscriptImages } from '../TranscriptImages'
 import { toolOutputPreview } from './toolOutputPreview'
-import React, { useMemo, useState } from 'react'
+import { toggleFullToolOutput, useFullToolOutput } from './fullToolOutput'
+import React, { useMemo } from 'react'
 import { getAssistantDisplayName } from '../../../lib/provider'
 import { hasTuiLinkTarget } from '../../../lib/tuiLinkTargets'
 import { CardSelectionVariants } from '../cardSelectionVariants'
@@ -1605,7 +1606,7 @@ export function TranscriptCardInner({
 }
 
 export const TranscriptCard = React.memo(function TranscriptCardWithImages(props: TranscriptCardProps) {
-  const [showAll, setShowAll] = useState(false)
+  const showAll = useFullToolOutput(props.card.key)
   const preview = useMemo(() => props.isExpanded ? toolOutputPreview(props.card, props.display.bodyLines) : null,
     [props.card, props.display.bodyLines, props.isExpanded])
   const clippedProps = useMemo(() => preview && !showAll ? {
@@ -1617,8 +1618,8 @@ export const TranscriptCard = React.memo(function TranscriptCardWithImages(props
   return <box id={`card:${props.card.key}`} flexDirection="column" flexShrink={0}>
     <TranscriptCardInner {...clippedProps} />
     {preview ? <box id={`tool-output-toggle:${props.card.key}`} height={1} paddingLeft={2}
-      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setShowAll(value => !value) } }}>
-      <text fg={props.theme.cyan} wrapMode="none">{showAll ? '▴ Show less output' : `▸ Show all output (${preview.hidden} more lines)`}</text>
+      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); toggleFullToolOutput(props.card.key) } }}>
+      <text fg={props.theme.cyan} wrapMode="none">{showAll ? '▴ Show less output · o' : `▸ Show all output (${preview.hidden} more lines) · o`}</text>
     </box> : null}
     {props.card.images?.length ? <TranscriptImages sources={props.card.images} width={Math.max(1, props.rightPaneWidth - 8)} muted={props.theme.muted} /> : null}
   </box>

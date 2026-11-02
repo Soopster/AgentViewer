@@ -1087,7 +1087,7 @@ export function SplitTranscriptPaneInner({
       <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface} visible={!frameless && !focused}>
         <text fg={theme.dim} wrapMode="none">
           {` ${(focused
-            ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ zoom  esc focus' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ zoom  esc focus', innerWidth - 2)
+            ? fitText(running ? 'j/k card  e fold  o output  y copy  b mark  c send  ⌃C stop  ↵ zoom  esc focus' : 'j/k card  e fold  o output  y copy  b mark  Q reply  c send  ↵ zoom  esc focus', innerWidth - 2)
             // An unfocused pane says how to reach it.
             : fitText(`⌃B ${paneNumber} focus  ·  ⌃B n next session`, innerWidth - 2)).trimEnd()} `}
         </text>

@@ -1,6 +1,6 @@
 import { isCtrlKey, isCtrlShiftKey, isShiftedKey, type ShortcutKeyEvent } from './shortcutKeys'
 
-type Action = 'search' | 'unread' | 'resume' | 'focusReader' | 'toggleAll' | 'toggleExpanded'
+type Action = 'search' | 'unread' | 'resume' | 'focusReader' | 'toggleAll' | 'toggleExpanded' | 'fullOutput'
   | 'copy' | 'bookmark' | 'reply' | 'compose' | 'thinking' | 'open' | 'tab' | 'close'
   | 'git' | 'diagnostics' | 'coordination' | 'interrupt' | 'swallow'
 export type TranscriptWindowCommand =
@@ -14,7 +14,7 @@ export function isTranscriptLocalKey(key: Pick<ShortcutKeyEvent, 'name' | 'ctrl'
   if (key.meta) return false
   if (key.ctrl) return key.name === 'd' || key.name === 'u'
   if (['up', 'down', 'pageup', 'pagedown', 'home', 'end', 'return'].includes(key.name)) return true
-  return sequence.length === 1 && 'jkgGefumbQyYs()[]{}/'.includes(sequence)
+  return sequence.length === 1 && 'jkgGefoumbQyYs()[]{}/'.includes(sequence)
 }
 
 /** The focused transcript's key policy, independent of app state setters and
@@ -55,6 +55,7 @@ export function transcriptWindowCommand(key: ShortcutKeyEvent, context: {
   if (letter === 'G' || letter === 'f') return { type: 'edge', edge: 'last' }
   if (letter === 'g') return { type: 'edge', edge: 'first' }
   if (letter === 'e') return action('toggleExpanded')
+  if (letter === 'o') return action('fullOutput')
   if (letter === 'y') return action('copy')
   if (letter === 'b') return action('bookmark')
   if (isShiftedKey(key, 'q')) return action('reply')
