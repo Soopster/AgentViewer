@@ -41,7 +41,7 @@ export function handleOverlayAndMenuKeys({
   filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex,
   setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
   themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-  toggleThemeFollowsTerminal, toggleBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
+  toggleThemeFollowsTerminal, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
   toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
   filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
   transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -121,6 +121,7 @@ export function handleOverlayAndMenuKeys({
   closeThemeMenu: () => void
   toggleThemeFollowsTerminal: () => void
   toggleBorders: () => void
+  toggleRoundedBorders: () => void
   transcriptViewMenuOpen: boolean
   closeTranscriptViewMenu: () => void
   toggleLightweightWindows: () => void
@@ -429,6 +430,10 @@ export function handleOverlayAndMenuKeys({
       }
       if (isCtrl('b')) {
         handled(toggleBorders)
+        return true
+      }
+      if (isCtrl('r')) {
+        handled(toggleRoundedBorders)
         return true
       }
       if (isCtrl('c')) {

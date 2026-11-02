@@ -5,10 +5,11 @@ import type { SetStateAction } from 'react'
 import React from 'react'
 import { type WindowGroupKey, type WindowArrangement } from '../../windowLayout'
 import { readTuiSurfacePanelPlacement, readTuiWindowArrangement } from '../../../../lib/tui/service'
+import { setRoundedBorders } from '../../roundedBorders'
 import { type RefObject } from 'react'
 import { type CliRenderer } from '@opentui/core'
 import { setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../../../theme'
-import { readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiBorders, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSidebarSort, readTuiHideScratchSessions, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../../../lib/tui/service'
+import { readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiBorders, readTuiRoundedBorders, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSidebarSort, readTuiHideScratchSessions, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../../../lib/tui/service'
 import { type ProviderSelection } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
 import { type PaneFocus, type NoticeTone } from '../types'
@@ -131,6 +132,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
         configuredThemeFollow,
         configuredLightweightWindows,
         configuredBorders,
+        configuredRoundedBorders,
       ] = await Promise.all([
         readTuiTheme(),
         readTuiProvider(),
@@ -154,6 +156,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
         readTuiThemeFollow(),
         readTuiLightweightWindows(),
         readTuiBorders(),
+        readTuiRoundedBorders(),
       ])
       if (cancelled) return
       // Attached to a daemon that may be older than this client: say so once,
@@ -191,6 +194,7 @@ export function runThemeFollowEffect(ctx: ThemeFollowEffectContext) {
       setStickyHeaders(configuredStickyHeaders)
       setLightweightWindows(configuredLightweightWindows)
       setShowBorders(configuredBorders)
+      setRoundedBorders(configuredRoundedBorders, renderer.root)
       setDensity(configuredDensity)
       setDiffLayout(configuredDiffLayout)
       setTranscriptView(configuredTranscriptView)

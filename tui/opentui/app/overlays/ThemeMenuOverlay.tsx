@@ -3,8 +3,9 @@ import React from 'react'
 import { getThemePalette, type TuiThemeMode } from '../../../theme'
 import { type ThemeMenuGroup, THEMES, isLightThemeMode, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from '../themes'
 import { SectionFrame } from '../borders'
+import { roundedBordersEnabled, subscribeRoundedBorders } from '../../roundedBorders'
 
-export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, themeMenuGroup, themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode, chooseTheme, themeFollowsTerminal, showBorders, toggleBorders }: {
+export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, themeMenuGroup, themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode, chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders }: {
   themeMenuOpen: boolean
   themeMenuOriginRef: React.RefObject<TuiThemeMode | null>
   height: number
@@ -19,7 +20,9 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
   themeFollowsTerminal: boolean
   showBorders: boolean
   toggleBorders: () => void
+  toggleRoundedBorders: () => void
 }) {
+  const rounded = React.useSyncExternalStore(subscribeRoundedBorders, roundedBordersEnabled)
   return (
     themeMenuOpen ? (() => {
           const originTheme = themeMenuOriginRef.current
@@ -28,7 +31,7 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
           const overlayTheme = originTheme && !isLightThemeMode(originTheme)
             ? getThemePalette(originTheme)
             : getThemePalette('dark')
-          const menuHeight = Math.max(15, Math.min(height - 4, 33))
+          const menuHeight = Math.max(16, Math.min(height - 4, 34))
           const allGroupThemes = themeGroupModes(themeMenuGroup)
           const groupThemes = filterThemeModes(allGroupThemes, themeMenuQuery)
           const currentTheme = THEMES[themeMenuIndex]
@@ -93,7 +96,7 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
                   <text fg={overlayTheme.dim} wrapMode="none">No matching themes</text>
                 ) : (
                   <select
-                    style={{ height: menuHeight - 9 }}
+                    style={{ height: menuHeight - 10 }}
                     focused={false}
                     options={groupOptions}
                     selectedIndex={localIndex}
@@ -132,6 +135,12 @@ export function ThemeMenuOverlay({ themeMenuOpen, themeMenuOriginRef, height, th
                     {showBorders ? 'borders ✓' : 'borders'}
                   </text>
                 </box>
+              </box>
+              <box height={1} paddingX={2} flexDirection="row" onMouseDown={(event) => { if (event.button === 0) { event.stopPropagation(); toggleRoundedBorders() } }}>
+                <text fg={overlayTheme.cyan} wrapMode="none">⌃R </text>
+                <text fg={rounded ? overlayTheme.text : overlayTheme.muted} wrapMode="none">
+                  {rounded ? 'rounded borders ✓' : 'rounded borders'}
+                </text>
               </box>
             </SectionFrame>
           )

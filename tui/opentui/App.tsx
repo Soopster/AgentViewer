@@ -114,6 +114,7 @@ import { TranscriptDetailCache } from './transcriptDetailCache'
 import { mainTranscriptBudget } from './sessionCacheBudget'
 
 
+import { roundedBordersEnabled, setRoundedBorders } from './roundedBorders'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -138,7 +139,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -1340,8 +1341,8 @@ function OpenTuiWorkspace() {
     sidebarFolderBySessionRef.current = folders
     const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
     if (filteredSessionsForSidebar === sessions) return entries
-    sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
     const originalIndex = new Map<string, number>()
+    sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
     return entries.map((entry) => {
       if (entry.type !== 'session') return entry
       const idx = originalIndex.get(sessionKey(entry.session))
@@ -1474,8 +1475,8 @@ function OpenTuiWorkspace() {
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
     selectedRawMessages: sessionDetail?.rawMessages,
-  useEffect(() => runComposerGitSummaryEffect({
   })
+  useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
@@ -2358,6 +2359,14 @@ function OpenTuiWorkspace() {
     })
   })
 
+  const toggleRoundedBorders = useStableEvent(() => {
+    const next = !roundedBordersEnabled()
+    setRoundedBorders(next, renderer.root)
+    void writeTuiRoundedBorders(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store border setting')
+    })
+  })
+
   const openTranscriptViewMenu = useStableEvent(() => {
     transcriptViewMenuOriginRef.current = transcriptView
     setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
@@ -2995,6 +3004,7 @@ function OpenTuiWorkspace() {
     if (!action) return
     event.stopPropagation()
     if (action === 'model') void openModelPicker()
+    else if (action === 'analytics') runPluginCommandId('analytics', composerTargetSession)
     else if (action === 'path') showNotice('info', composerWorkingDirectory ?? 'No working directory', 10_000)
     else runPluginCommandId('git', composerTargetSession)
   })
@@ -3004,7 +3014,6 @@ function OpenTuiWorkspace() {
       ? (selectedSession?.provider ?? 'claude')
       : provider
     const choices = enabledNewSessionProviders()
-    else if (action === 'analytics') runPluginCommandId('analytics', composerTargetSession)
     setNewSessionProvider(choices.includes(defaultProvider) ? defaultProvider : (choices[0] ?? 'claude'))
     setNewSessionCwd(selectedSession?.cwd ?? process.cwd())
     setNewSessionBusy(false)
@@ -5718,7 +5727,7 @@ function OpenTuiWorkspace() {
       modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey,
       themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef,
       setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-      toggleThemeFollowsTerminal, toggleBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
+      toggleThemeFollowsTerminal, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
       toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
       filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
       transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -6254,6 +6263,7 @@ function OpenTuiWorkspace() {
         themeFollowsTerminal={themeFollowsTerminal}
         showBorders={showBorders}
         toggleBorders={toggleBorders}
+        toggleRoundedBorders={toggleRoundedBorders}
         transcriptViewMenuOpen={transcriptViewMenuOpen}
         transcriptViewMenuOriginRef={transcriptViewMenuOriginRef}
         transcriptViewMenuIndex={transcriptViewMenuIndex}
