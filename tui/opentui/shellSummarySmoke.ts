@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { summarizeShellCommand as s } from './app/shellSummary'
+import { summarizeShellCommand } from './app/shellSummary'
+// The path rides along for colouring; these checks are about what a row says.
+const s = (command: string) => { const result = summarizeShellCommand(command); return result ? { verb: result.verb, detail: result.detail } : null }
+assert.equal(summarizeShellCommand('sed -n 1,2p lib/a.py')?.path, 'lib/a.py')
 assert.deepEqual(s("sed -n 2335,2355p tui/opentui/App.tsx; sed -n 420,435p tui/opentui/App.tsx; grep -n x y"), { verb: 'Read', detail: 'App.tsx:2335–2355 · 2 more' })
 assert.deepEqual(s('grep -rn "borderStyle" tui plugins -r | sort | head'), { verb: 'Searched', detail: '"borderStyle"' })
 assert.deepEqual(s('cat tui/opentui/app/borders.tsx | head -80; grep -rn "a;b" lib'), { verb: 'Read', detail: 'borders.tsx · 1 more' })

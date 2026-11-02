@@ -1,9 +1,9 @@
 /** One-line, human reading of a shell command made only of read-only lookups. */
 import { shellWrittenFiles } from '../../../lib/turnEditStats'
 
-export interface ShellSummary { verb: 'Read' | 'Searched' | 'Listed' | 'Edited'; detail: string }
+export interface ShellSummary { verb: 'Read' | 'Searched' | 'Listed' | 'Edited'; detail: string; /** The file a Read or Edited summary names, in full. */ path?: string }
 
-type Step = { verb: ShellSummary['verb']; detail: string }
+type Step = { verb: ShellSummary['verb']; detail: string; path?: string }
 
 /** Splits on whitespace outside quotes; returns null on constructs we do not model (heredocs, redirects, substitutions). */
 function tokenize(statement: string): string[] | null {
@@ -61,11 +61,11 @@ function stepFor(statement: string): Step | null {
       const range = /^(\d+)(?:,(\d+))?p$/.exec(operands[0] ?? '')
       const file = operands[1]
       if (!range || !file) return null
-      return { verb: 'Read', detail: `${baseName(file)}:${range[1]}${range[2] ? `–${range[2]}` : ''}` }
+      return { verb: 'Read', detail: `${baseName(file)}:${range[1]}${range[2] ? `–${range[2]}` : ''}`, path: file }
     }
     case 'cat': case 'head': case 'tail': case 'bat': case 'less': case 'nl': {
       const file = [...operands].reverse().find(t => !/^[+-]?\d+$/.test(t))
-      return file ? { verb: 'Read', detail: baseName(file) } : null
+      return file ? { verb: 'Read', detail: baseName(file), path: file } : null
     }
     case 'grep': case 'rg': case 'ag': {
       const pattern = operands[0]
@@ -114,7 +114,7 @@ export function summarizeShellCommand(rawCommand: string): ShellSummary | null {
   }
   const first = steps[0]!
   const more = steps.length - 1 + (cut ? 1 : 0)
-  return { verb: first.verb, detail: `${first.detail}${more > 0 ? ` · ${more} more` : ''}` }
+  return { verb: first.verb, detail: `${first.detail}${more > 0 ? ` · ${more} more` : ''}`, path: first.path }
 }
 
 /** A command that visibly rewrites files reads as the edit it is. */

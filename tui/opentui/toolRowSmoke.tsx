@@ -15,7 +15,7 @@ const tool = (key: string, command: string, output: string[]): TuiTranscriptCard
   expandedLines: [{ text: `tool Bash: $ ${command}`, tone: 'tool' }, ...output.map(text => ({ text, tone: 'result_ok' as const }))],
   searchText: '', searchHaystackLower: '',
 })
-const first = tool('t1', 'grep -n alpha lib', ['ONE_FIRST', 'ONE_SECOND'])
+const first = tool('t1', 'grep -n alpha lib', ['lib/a.ts:3:const alpha = "ONE_FIRST"', 'ONE_SECOND'])
 const second = tool('t2', 'cat lib/b.ts', ['TWO_FIRST', 'TWO_SECOND'])
 const lines = [{ text: 'tool Bash: $ grep -n alpha lib', tone: 'tool' as const }]
 const card = { key: 'group', role: 'assistant', label: 'Bash', category: 'technical', autoFold: true, compactSummary: 'group', lines, expandedLines: lines, searchText: '', searchHaystackLower: '', agentToolCards: [first, second] } as TuiTranscriptCard
@@ -39,11 +39,15 @@ const frame = async () => {
     const text = setup.captureCharFrame()
     const ids = ['tool-row:t1', 'tool-row:t2', 'tool-row-open:t1', 'tool-row-open:t2'].filter(id => setup.renderer.root.findDescendantById(id))
     const row = findToolRow(setup.renderer.root.findDescendantById('card:group') ?? setup.renderer.root, setup.renderer.root.findDescendantById(ids[0] ?? '')?.y ?? 0)
-    return { text, ids, row }
+    const spans = setup.captureSpans().lines.flatMap(line => line.spans)
+    return { text, ids, row, spans }
   } finally { await act(async () => { setup.renderer.destroy() }) }
 }
 const closed = await frame()
+assert(closed.text.includes('const alpha'))
 assert(!closed.text.includes('ONE_SECOND') && !closed.text.includes('TWO_SECOND'), 'every tool starts as one row plus its first output line')
+const colourOfWord = (spans: Array<{ text: string; fg: unknown }>, word: string) => spans.find(span => span.text.includes(word))?.fg
+assert.notEqual(colourOfWord(closed.spans, 'const'), colourOfWord(closed.spans, 'ONE_FIRST'), 'search hits are syntax coloured: keyword and string differ')
 assert.deepEqual(closed.ids, ['tool-row:t1', 'tool-row:t2'], 'each tool row is addressable on its own')
 OPEN = new Set(['t2'])
 const opened = await frame()
