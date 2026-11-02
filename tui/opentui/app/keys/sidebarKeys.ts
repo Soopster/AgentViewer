@@ -42,7 +42,7 @@ export function handleSidebarKeys({
       handled(toggleDateGroups)
       return true
     }
-    if (effectiveFocus === 'sessions' && sidebarSubagentCursor && !key.ctrl && !key.meta
+    if (effectiveFocus === 'sessions' && sidebarSubagentCursor?.startsWith('subagent:') && !key.ctrl && !key.meta
       && ['x', 'd', 'r', 't', 'b'].includes(key.name.toLowerCase())) {
       handled(() => showNotice('info', 'Captured subagent transcripts are read only · Enter to view'))
       return true

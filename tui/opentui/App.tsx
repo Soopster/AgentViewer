@@ -1323,12 +1323,11 @@ function OpenTuiWorkspace() {
     return map
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
-  const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
   const sidebarFolderBySessionRef = useRef<Map<string, string>>(new Map())
   const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
+  const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
   const sidebarEntries = useMemo(() => {
     const rawEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
-    const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
     // Folding hides a session's row, so remember each session's folder from the unfolded list.
     const folders = new Map<string, string>()
     let folderKey = ''
@@ -1338,6 +1337,7 @@ function OpenTuiWorkspace() {
     }
     sidebarFolderBySessionRef.current = folders
     if (filteredSessionsForSidebar === sessions) return entries
+    const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
     const originalIndex = new Map<string, number>()
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
     return entries.map((entry) => {
@@ -5779,7 +5779,8 @@ function OpenTuiWorkspace() {
       toggleDateGroups: () => {
         // `e` folds the folder the cursor is in; with nothing selected, it folds every group.
         const selectedEntryKey = selectedSession ? `session:${sessionKey(selectedSession)}` : null
-        const folderKey = selectedEntryKey ? sidebarFolderBySessionRef.current.get(selectedEntryKey) : undefined
+        const cursorHeader = sidebarSubagentCursor ? sidebarEntries.find(entry => entry.key === sidebarSubagentCursor && entry.type === 'project') : undefined
+        const folderKey = cursorHeader?.key ?? (selectedEntryKey ? sidebarFolderBySessionRef.current.get(selectedEntryKey) : undefined)
         const folder = folderKey ? { key: folderKey } : undefined
         if (folder) { toggleDateGroup(folder.key); return }
         setCollapsedDateGroups(() => {
@@ -5803,7 +5804,7 @@ function OpenTuiWorkspace() {
       setCollapsedSubagentParents, sidebarEntries, selectedSidebarEntryIndex,
       setSubagentTranscriptSelection, setPluginOverlay, promotePreviewToTab, setFocusedPane,
       showTabs, selectStripIndex, activeStripIndex, tabStripLength, shownPopoverTab,
-      closePopoverTab, closeWindowSessionTab,
+      closePopoverTab, closeWindowSessionTab, sidebarSubagentCursor, toggleSidebarGroup: toggleDateGroup,
     })) return
     if (handleReaderKeys({
       effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep,

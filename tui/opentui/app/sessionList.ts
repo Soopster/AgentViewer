@@ -144,7 +144,7 @@ export function createSidebarRowElements<Entry extends { key: string} , Element>
 }
 export function sidebarEntrySessionKey(entry: SidebarEntry): string | null {
   const session = sidebarEntrySession(entry)
-  return session ? sessionKey(session) : entry.type === 'subagent' ? entry.key : null
+  return session ? sessionKey(session) : entry.type === 'subagent' || entry.type === 'project' ? entry.key : null
 }
 export function buildSidebarEntries(
   sessions: Session[],

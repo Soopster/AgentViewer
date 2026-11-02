@@ -205,7 +205,7 @@ export function useRefreshSelectedSessionDetailGroup(ctx: UseRefreshSelectedSess
 
   const focusSidebarEntry = useStableEvent((entry: SidebarEntry | undefined) => {
     if (!entry) return
-    if (entry.type === 'subagent' && entry.entry.kind === 'summary') setSidebarSubagentCursor(entry.key)
+    if (entry.type === 'project' || (entry.type === 'subagent' && entry.entry.kind === 'summary')) setSidebarSubagentCursor(entry.key)
     else {
       setSidebarSubagentCursor(null)
       const session = sidebarEntrySession(entry)
@@ -214,7 +214,7 @@ export function useRefreshSelectedSessionDetailGroup(ctx: UseRefreshSelectedSess
     setError(null)
   })
   const moveSelection = useStableEvent((delta: number) => {
-    const rows = sidebarEntries.filter(entry => entry.type === 'session' || entry.type === 'subagent')
+    const rows = sidebarEntries.filter(entry => entry.type === 'session' || entry.type === 'subagent' || entry.type === 'project')
     if (!rows.length) return
     const current = sidebarSubagentCursor ?? (selectedSession ? sessionKey(selectedSession) : null)
     const at = rows.findIndex(entry => sidebarEntrySessionKey(entry) === current)

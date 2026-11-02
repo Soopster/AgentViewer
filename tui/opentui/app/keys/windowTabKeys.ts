@@ -17,8 +17,10 @@ export function handleWindowAndTabKeys({
   workspaceContext, sidebarView, selectedSession, childrenByParentId, setCollapsedSubagentParents,
   sidebarEntries, selectedSidebarEntryIndex, setSubagentTranscriptSelection, setPluginOverlay,
   promotePreviewToTab, setFocusedPane, showTabs, selectStripIndex, activeStripIndex,
-  tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab,
+  tabStripLength, shownPopoverTab, closePopoverTab, closeWindowSessionTab, sidebarSubagentCursor, toggleSidebarGroup,
 }: {
+  sidebarSubagentCursor: string | null
+  toggleSidebarGroup: (key: string) => void
   effectiveFocus: PaneFocus
   sequence: string
   handled: (action: () => void) => void
@@ -86,6 +88,14 @@ export function handleWindowAndTabKeys({
       }
     }
 
+    // A project or date header under the cursor: ← folds it, → opens it, Enter flips it.
+    const headerEntry = sidebarSubagentCursor ? sidebarEntries.find(entry => entry.key === sidebarSubagentCursor) : undefined
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && headerEntry?.type === 'project'
+      && (key.name === 'left' || key.name === 'right' || key.name === 'return')) {
+      if (key.name === 'return' || (key.name === 'left') !== Boolean(headerEntry.collapsed)) handled(() => toggleSidebarGroup(headerEntry.key))
+      else handled(() => {})
+      return true
+    }
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && selectedSession
       && (key.name === 'left' || key.name === 'right') && (childrenByParentId.get(sessionKey(selectedSession))?.length ?? 0) > 0) {
       handled(() => {

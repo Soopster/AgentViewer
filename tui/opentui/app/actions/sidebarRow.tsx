@@ -67,9 +67,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
         // A blank row separates groups; the first has the rail's own title
         // above it and nothing to be separated from.
         marginTop={entry.dateGroup || entry.key === firstSidebarEntryKey ? 0 : 1}
-        backgroundColor={theme.surface}
+        backgroundColor={selected ? theme.surface3 : theme.surface}
       >
-        <text fg={theme.dim} wrapMode="none">
+        <text fg={selected ? theme.text : theme.dim} wrapMode="none">
           {fitText(`${entry.dateGroup || entry.collapsible ? entry.collapsed ? "▸ " : "▾ " : ""}${projectLabel} / ${countLabel}`, sidebarInnerWidth - (entry.dateGroup ? 3 : 2))}
         </text>
       </box>
