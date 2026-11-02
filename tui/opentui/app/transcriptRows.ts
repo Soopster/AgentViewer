@@ -379,8 +379,12 @@ export function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] 
   return isAgentsToolOnlyCard(card) ? [card] : []
 }
 // Activity stays expanded until the user folds it; explicit fold-all remains available.
-export function cardFoldsByDefault(_card: TuiTranscriptCard, _transcriptView: TuiTranscriptView, _chatLike: boolean, foldAll = false): boolean {
-  return foldAll
+export function cardFoldsByDefault(card: TuiTranscriptCard, _transcriptView: TuiTranscriptView, _chatLike: boolean, foldAll = false): boolean {
+  if (foldAll) return true
+  // Tool and thinking cards start folded to their heading; a pending question or
+  // a failure stays open because the reader has to act on or see it.
+  if (card.category !== 'technical' && !card.thinkingTranscript) return false
+  return !card.asyncQuestions?.length && !card.lines.some(line => line.tone === 'result_error')
 }
 export function resolveExpandedCardKeys(
   cards: TuiTranscriptCard[], transcriptView: TuiTranscriptView, chatLike: boolean,

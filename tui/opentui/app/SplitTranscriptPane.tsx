@@ -418,6 +418,8 @@ export function SplitTranscriptPaneInner({
   const [foldedTurns, setFoldedTurns] = useState<ReadonlySet<string>>(() => new Set())
   const runningRef = useRef(running)
   runningRef.current = running
+  const foldedTurnsRef = useRef(foldedTurns)
+  foldedTurnsRef.current = foldedTurns
   useEffect(() => setFoldedTurns(new Set()), [session.sessionId, session.provider, session.providerInstanceId])
   const fullPaneCards = useMemo(() => {
     const liveKeys = new Set(liveCards.map(card => card.key))
@@ -596,12 +598,24 @@ export function SplitTranscriptPaneInner({
         const list = cardsRef.current
         const card = list[cursorIndexNow()]
         if (!card) return
+        const summaryPrefix = 'activity-summary:'
+        if (card.key.startsWith(summaryPrefix)) {
+          // The folded-activity row stands in for its turn: e on it unfolds the turn.
+          const promptKey = card.key.slice(summaryPrefix.length)
+          setFoldedTurns(previous => { const next = new Set(previous); next.delete(promptKey); return next })
+          return
+        }
         if (card.role === 'user') {
           const index = list.indexOf(card)
-          if (runningRef.current && !list.slice(index + 1).some(item => item.role === 'user')) return
-          setFollowTail(false)
-          setFoldedTurns(previous => { const next = new Set(previous); if (!next.delete(card.key)) next.add(card.key); return next })
-          return
+          const liveTurn = runningRef.current && !list.slice(index + 1).some(item => item.role === 'user')
+          const hasActivity = list.slice(index + 1).findIndex(item => item.role === 'user') !== 0
+          // A live turn is never folded, and a prompt with no activity has nothing to fold:
+          // e then keeps its old job of expanding the prompt card itself.
+          if (!liveTurn && hasActivity && (foldedTurnsRef.current.has(card.key) || list.slice(index + 1).some(item => item.category === 'technical' || item.thinkingTranscript))) {
+            setFollowTail(false)
+            setFoldedTurns(previous => { const next = new Set(previous); if (!next.delete(card.key)) next.add(card.key); return next })
+            return
+          }
         }
         jumpCursor(card.key)
         const { expandedKeys: open, view, chatLike, foldAll } = expansionRef.current
