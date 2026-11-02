@@ -9,6 +9,45 @@ import { extractFileEditsFromToolUse, type ExtractedFileEdit } from './provenanc
 
 export type FileEditStat = { path: string; added: number; removed: number }
 
+const SHELL_TOOLS = new Set(['bash', 'shell', 'exec_command', 'run_shell_command'])
+const PATH_LITERAL = /['"]((?:\.{0,2}\/)?[\w.-]+(?:\/[\w.-]+)+\.[A-Za-z][\w]{0,5})['"]/g
+const tidyPath = (path: string) => path.replace(/^\.\//, '')
+
+/**
+ * Files a shell command visibly writes: `sed -i`, `> file` / `>> file` / `tee`, and a
+ * script that calls a write API on path-like string literals. Line counts are only known
+ * for a heredoc's body (`cat > f <<EOF`); every other write counts the file with 0 lines,
+ * because the transcript does not say how many changed. A heuristic, so it lives here
+ * (a summary) and not in the provenance extractor, where a wrong file would mis-attribute code.
+ */
+export function shellWrittenFiles(command: string): FileEditStat[] {
+  const byPath = new Map<string, FileEditStat>()
+  const note = (path: string, added = 0) => {
+    const key = tidyPath(path)
+    if (!key || key.startsWith('/dev/') || key.startsWith('/tmp/')) return
+    const entry = byPath.get(key)
+    if (entry) entry.added += added
+    else byPath.set(key, { path: key, added, removed: 0 })
+  }
+  const redirect = /(?:^|[\s;&|(])(?:\d?>>?|>>?)\s*['"]?([\w./~-]+\.[A-Za-z]\w{0,5})['"]?([^\n]*)\n?/g
+  for (let match = redirect.exec(command); match; match = redirect.exec(command)) {
+    const heredoc = /^[^\n]*<<-?\s*\\?['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\s*\1\b/.exec(command.slice(match.index))
+    note(match[1]!, heredoc ? heredoc[2]!.split('\n').length : 0)
+  }
+  for (const line of command.split(/\n|;|&&|\|\|/)) {
+    if (/\bsed\b/.test(line) && /\s(?:-[a-zA-Z]*i\S*|--in-place\S*)(?:\s|$)/.test(line)) {
+      const file = [...line.matchAll(/(?:^|\s)['"]?([\w./~-]+\.[A-Za-z]\w{0,5})['"]?(?=\s|$)/g)].map(m => m[1]!).pop()
+      if (file) note(file)
+    }
+    const tee = /\btee\s+(?:-a\s+)?['"]?([\w./~-]+\.[A-Za-z]\w{0,5})/.exec(line)
+    if (tee) note(tee[1]!)
+  }
+  if (/\.write\(|write_text\(|write_bytes\(|writeFile(?:Sync)?\(|\.write_all\(/.test(command)) {
+    for (const match of command.matchAll(PATH_LITERAL)) note(match[1]!)
+  }
+  return [...byPath.values()]
+}
+
 /**
  * Lines an edit actually changed. An edit's old and new text share their
  * unchanged context, so counting both whole reads a one-word change in a
@@ -37,8 +76,18 @@ export function fileEditStatsFromToolCalls(
   calls: Iterable<{ name: string; input: Record<string, unknown>; failed: boolean }>,
 ): FileEditStat[] {
   const byPath = new Map<string, FileEditStat>()
+  const add = (path: string, added: number, removed: number) => {
+    const entry = byPath.get(path)
+    if (entry) { entry.added += added; entry.removed += removed } else byPath.set(path, { path, added, removed })
+  }
   for (const call of calls) {
     if (call.failed) continue
+    if (SHELL_TOOLS.has(call.name.toLowerCase())) {
+      const command = call.input.command
+      const text = typeof command === 'string' ? command : Array.isArray(command) ? command.join(' ') : ''
+      for (const stat of shellWrittenFiles(text)) add(stat.path, stat.added, stat.removed)
+      continue
+    }
     for (const edit of extractFileEditsFromToolUse(call.name, call.input, null)) {
       if (!edit.filePath) continue
       const { added, removed } = editLineCounts(edit)
@@ -80,5 +129,7 @@ export function formatFileEditSummary(stats: readonly FileEditStat[]): string | 
     added += stat.added
     removed += stat.removed
   }
-  return `${stats.length} file${stats.length === 1 ? '' : 's'} · +${added} −${removed}`
+  const files = `${stats.length} file${stats.length === 1 ? '' : 's'}`
+  // A shell write names the file but not its line counts; say only what is known.
+  return added === 0 && removed === 0 ? files : `${files} · +${added} −${removed}`
 }

@@ -27,6 +27,33 @@ export function priceForModel(model: string | undefined | null): Price {
   return { in: 3, out: 15 }
 }
 
+/**
+ * Estimated list-price spend of a transcript, from each assistant message's own usage.
+ * Null when no message reports usage (so a provider that does not say is never shown as free).
+ * A Claude message written as several blocks repeats one API message's usage, so it counts once per API id.
+ */
+export function estimateSessionCostUsd(
+  messages: ReadonlyArray<{ type?: string; message?: unknown }>,
+  fallbackModel?: string | null,
+): number | null {
+  let total = 0
+  let any = false
+  const seen = new Set<string>()
+  for (const entry of messages) {
+    const api = entry.message as { id?: unknown; model?: unknown; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } } | undefined
+    const usage = api?.usage
+    if (!usage || entry.type !== 'assistant') continue
+    if (typeof api?.id === 'string') { if (seen.has(api.id)) continue; seen.add(api.id) }
+    const price = priceForModel(typeof api?.model === 'string' ? api.model : fallbackModel)
+    const cacheRead = usage.cache_read_input_tokens ?? 0
+    const cacheWrite = usage.cache_creation_input_tokens ?? 0
+    total += ((usage.input_tokens ?? 0) * price.in + (usage.output_tokens ?? 0) * price.out
+      + cacheRead * (price.cacheRead ?? price.in) + cacheWrite * (price.cacheWrite ?? price.in)) / 1_000_000
+    any = true
+  }
+  return any ? total : null
+}
+
 export type ModelBucket = {
   model: string
   inputTokens: number

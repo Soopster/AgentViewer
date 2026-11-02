@@ -1,4 +1,5 @@
 import { type ScrollBoxRenderable, type Renderable, TextAttributes } from '@opentui/core'
+import { summarizeShellCommand } from './shellSummary'
 import type { TuiTranscriptWidth } from '../../../lib/tuiState'
 import { mergeFileEditStats } from '../../../lib/turnEditStats'
 import type { ProviderSelection } from '../../../lib/types'
@@ -538,6 +539,14 @@ export function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThe
     const name = colon >= 0 ? cleaned.slice(0, colon).trim() : toolNameFromTranscriptLine(summary.text)
     const detail = colon >= 0 ? cleaned.slice(colon + 1).trim() : ''
     if (name.toLowerCase() === 'bash') {
+      const human = detail ? summarizeShellCommand(detail) : null
+      if (human) {
+        return [
+          { text: `${marker} `, fg: markerColor },
+          { text: human.verb, fg: transcriptToolColor('bash', theme), attributes: TextAttributes.BOLD },
+          { text: ` ${human.detail}`, fg: theme.dim },
+        ]
+      }
       return [
         { text: `${marker} `, fg: markerColor },
         { text: 'Ran', fg: transcriptToolColor('bash', theme), attributes: TextAttributes.BOLD },

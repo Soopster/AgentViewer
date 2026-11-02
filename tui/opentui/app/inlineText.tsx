@@ -6,7 +6,7 @@ import type { TuiThemePalette } from '../../theme'
 import type { QuietWorkspaceState } from '../workspaceContext'
 
 /** What clicking a composer status segment does. */
-type ComposerStatusAction = 'model' | 'path' | 'git'
+type ComposerStatusAction = 'model' | 'path' | 'git' | 'analytics'
 export type InlineTextSegment = {
   text: string
   fg: string

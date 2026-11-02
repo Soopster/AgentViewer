@@ -4,6 +4,7 @@ import { type ClaudePlanLimits } from '../../../../lib/claudePlanLimits'
 import { type ContextUsage, type Session } from '../../../../lib/types'
 import { type TuiEffort, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier } from '../types'
 import { type InlineTextSegment } from '../inlineText'
+import { fmtCost } from '../../../../lib/analytics'
 import { contextBarColor, formatContextUsageChip, planLimitSegment } from '../contextMeter'
 import { PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL } from '../pickers'
 import { type PendingPermission } from '../../../../lib/permissions'
@@ -22,6 +23,8 @@ export type ComposerKnobSegmentsContext = {
   composerModelLookupSettled: boolean
   composerContextUsage: ContextUsage | null
   composerPlanLimits: ClaudePlanLimits | null
+  /** List-price estimate for the session on screen; null when its provider reports no usage. */
+  sessionCostUsd: number | null
   tuiEffort: TuiEffort
   tuiOpenCodeAgent: string
   composerCodexMode: 'default' | 'plan'
@@ -36,7 +39,7 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   const {
     composerTargetSession, composerPermissionMode, theme, composerCurrentModel,
     composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits,
-    tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
+    sessionCostUsd, tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
     composerCopilotPermissionMode, composerCopilotContextTier, composerEnableWorkflow,
   } = ctx
   const parts: InlineTextSegment[] = []
@@ -67,12 +70,14 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   if (composerContextUsage) {
     const pct = Number.isFinite(composerContextUsage.percentage) ? composerContextUsage.percentage : 0
     metersUrgent ||= pct >= 60
-    meters.push({ text: `ctx:${formatContextUsageChip(composerContextUsage)}`, fg: contextBarColor(pct, theme) })
+    meters.push({ text: `ctx:${formatContextUsageChip(composerContextUsage)}`, fg: contextBarColor(pct, theme), action: 'analytics' })
   }
+  // Spend is an estimate at list price, so it is marked `~` and stays quiet (dim).
+  if (sessionCostUsd != null && sessionCostUsd >= 0.005) meters.push({ text: `cost:~${fmtCost(sessionCostUsd)}`, fg: theme.dim, action: 'analytics' })
   const limitSegment = planLimitSegment(composerPlanLimits, theme)
   if (limitSegment) {
     metersUrgent ||= limitSegment.fg !== theme.dim
-    meters.push(limitSegment)
+    meters.push({ ...limitSegment, action: 'analytics' })
   }
   if (metersUrgent) parts.splice(afterMode, 0, ...meters)
   else parts.push(...meters)

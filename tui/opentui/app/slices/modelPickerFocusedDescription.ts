@@ -9,6 +9,7 @@ import { type ContextUsage, type Session } from '../../../../lib/types'
 import { type GitSummary } from '../../../../lib/gitProvider'
 import { type TuiEffort, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier } from '../types'
 import { sessionKey } from '../sessionList'
+import { estimateSessionCostUsd } from '../../../../lib/analytics'
 import { runComposerKnobSegments } from '../derived/composerStatus'
 
 export type UseModelPickerFocusedDescriptionGroupContext = {
@@ -31,6 +32,8 @@ export type UseModelPickerFocusedDescriptionGroupContext = {
   composerCopilotContextTier: TuiCopilotContextTier
   composerEnableWorkflow: boolean
   composerTargetSessionInfo: SessionInfo | null
+  /** Messages of the session on screen, for the cost estimate. */
+  selectedRawMessages: ReadonlyArray<{ type?: string; message?: unknown; uuid?: string }> | undefined
 }
 
 export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocusedDescriptionGroupContext) {
@@ -39,7 +42,7 @@ export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocused
     sessionContextUsageCacheRef, composerPermissionMode, theme, composerCurrentModel,
     composerAccentColor, composerModelLookupSettled, tuiEffort, tuiOpenCodeAgent,
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
-    composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
+    composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo, selectedRawMessages,
   } = ctx
 
   const modelPickerFocusedDescription = modelPickerFocusedOption?.description
@@ -52,15 +55,21 @@ export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocused
       : sessionContextUsageCacheRef.current.get(targetKey) ?? null
     return usage ?? null
   }, [composerTargetSession, contextUsage, selectedSessionKey])
+  // Re-priced only when the transcript's length or last message changes, not on every render.
+  const costTail = selectedRawMessages?.[selectedRawMessages.length - 1]?.uuid
+  const sessionCostUsd = useMemo(
+    () => composerTargetSession && selectedSessionKey === sessionKey(composerTargetSession) && selectedRawMessages
+      ? estimateSessionCostUsd(selectedRawMessages, composerCurrentModel) : null,
+    [composerTargetSession, selectedSessionKey, selectedRawMessages?.length, costTail, composerCurrentModel])
   const [composerPlanLimits, setComposerPlanLimits] = useState<ClaudePlanLimits | null>(null)
   // One-line chip summarising the active model, explicit effort, and any
   // provider-specific send knobs.
   const composerKnobSegments = useMemo(() => runComposerKnobSegments({
     composerTargetSession, composerPermissionMode, theme, composerCurrentModel,
-    composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits,
+    composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits, sessionCostUsd,
     tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
     composerCopilotPermissionMode, composerCopilotContextTier, composerEnableWorkflow,
-  }), [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }), [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, sessionCostUsd, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
   const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)

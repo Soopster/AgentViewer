@@ -1324,9 +1324,9 @@ function OpenTuiWorkspace() {
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
   const sidebarFolderBySessionRef = useRef<Map<string, string>>(new Map())
-  const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
   const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
   const sidebarEntries = useMemo(() => {
+  const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
     const rawEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
     // Folding hides a session's row, so remember each session's folder from the unfolded list.
     const folders = new Map<string, string>()
@@ -1336,9 +1336,9 @@ function OpenTuiWorkspace() {
       else if (entry.type === 'session') folders.set(entry.key, folderKey)
     }
     sidebarFolderBySessionRef.current = folders
-    if (filteredSessionsForSidebar === sessions) return entries
     const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
     const originalIndex = new Map<string, number>()
+    if (filteredSessionsForSidebar === sessions) return entries
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
     return entries.map((entry) => {
       if (entry.type !== 'session') return entry
@@ -1472,6 +1472,7 @@ function OpenTuiWorkspace() {
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
   })
+    selectedRawMessages: sessionDetail?.rawMessages,
   useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
@@ -3001,6 +3002,7 @@ function OpenTuiWorkspace() {
       ? (selectedSession?.provider ?? 'claude')
       : provider
     const choices = enabledNewSessionProviders()
+    else if (action === 'analytics') runPluginCommandId('analytics', composerTargetSession)
     setNewSessionProvider(choices.includes(defaultProvider) ? defaultProvider : (choices[0] ?? 'claude'))
     setNewSessionCwd(selectedSession?.cwd ?? process.cwd())
     setNewSessionBusy(false)
