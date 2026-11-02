@@ -341,13 +341,15 @@ export function groupStreamToolCards(cards: TuiTranscriptCard[]): TuiTranscriptC
 }
 export function visibleCardsForTranscriptView(cards: TuiTranscriptCard[], view: TuiTranscriptView): TuiTranscriptCard[] {
   if (view === 'continue') return cards.filter(card => !card.autoFold)
-  // Agents view groups tool calls but must still drop the empty assistant shells
-  // a tool-only message leaves behind, or each one costs a header and a
-  // "No visible content" row.
-  if (view === 'agents') return groupAgentsToolCards(cards).filter(card => !isStreamGhostCard(card))
+  // Agents view drops the empty assistant shells a tool-only message leaves
+  // behind (a header and a "No visible content" row each) before grouping, so
+  // the tool calls either side of one merge into a single group.
+  if (view === 'agents') return groupAgentsToolCards(cards.filter(card => !isStreamGhostCard(card)))
   if (view === 'stream' || view === 'chat' || view === 'transcript' || view === 'scrollback'
     || view === 'codex' || view === 'claude-code' || view === 'copilot' || view === 'opencode') {
-    return groupStreamToolCards(cards.filter(card => card.category !== 'system')).filter(card => !isStreamGhostCard(card))
+    // Ghosts go first: an empty assistant shell between two tool calls would
+    // otherwise split them into two groups.
+    return groupStreamToolCards(cards.filter(card => card.category !== 'system' && !isStreamGhostCard(card)))
   }
   return cards
 }

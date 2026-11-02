@@ -251,6 +251,22 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
   let bucketKey = ''
   let hidden = false
   let header: Extract<SidebarEntry, { type: 'project' }> | undefined
+  // A project whose sessions all fall in one bucket gains nothing from a bucket
+  // header: it would only add a row under the project's own.
+  const bucketLabel = (entry: Extract<SidebarEntry, { type: 'session' }>) => {
+    const time = sessionActivityMs(entry.session)
+    return time >= today ? 'Today' : time >= yesterday ? 'Yesterday' : 'Older'
+  }
+  const bucketsByProject = new Map<string, Set<string>>()
+  let scanning = ''
+  for (const entry of entries) {
+    if (entry.type === 'project') scanning = entry.key
+    else if (entry.type === 'session') {
+      const set = bucketsByProject.get(scanning) ?? new Set<string>()
+      set.add(bucketLabel(entry))
+      bucketsByProject.set(scanning, set)
+    }
+  }
   for (const entry of entries) {
     if (entry.type === 'project') {
       project = entry.key
@@ -258,8 +274,8 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
       hidden = false
       result.push(entry)
     } else if (entry.type === 'session') {
-      const time = sessionActivityMs(entry.session)
-      const label = time >= today ? 'Today' : time >= yesterday ? 'Yesterday' : 'Older'
+      if ((bucketsByProject.get(project)?.size ?? 0) < 2) { result.push(entry); continue }
+      const label = bucketLabel(entry)
       const key = `${project}:date:${label}`
       if (key !== bucketKey) {
         bucketKey = key

@@ -67,7 +67,9 @@ export function useStatusLabelGroup(ctx: UseStatusLabelGroupContext) {
   const composerPlaceholder = composerTargetSession
     ? (visibleComposerSending
         ? 'Follow-up…'
-        : composerExample)
+        // A conversation that has begun needs no suggestion; the example only
+        // helps in an empty one.
+        : (composerTargetSession.firstPrompt || composerTargetSession.summary) ? '' : composerExample)
     : composerConfig.placeholderNoSession
   const composerActiveAttachments = useMemo(
     () => prepareComposerSubmission(composerDraft, composerMentionAttachments, composerPromptParts).attachments,

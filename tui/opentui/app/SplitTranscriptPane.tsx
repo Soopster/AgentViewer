@@ -469,6 +469,8 @@ export function SplitTranscriptPaneInner({
   const expansionRef = useRef({ expandedKeys, view: transcriptView, chatLike: paneStreamLike, foldAll: lightView })
   expansionRef.current = { expandedKeys, view: transcriptView, chatLike: paneStreamLike, foldAll: lightView }
   const cardsRef = useRef(allPaneCards)
+  const nestedToolRef = useRef({ expanded: expandedKeys, cursors: agentToolCursorByGroupKey, select: onSelectAgentTool })
+  nestedToolRef.current = { expanded: expandedKeys, cursors: agentToolCursorByGroupKey, select: onSelectAgentTool }
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
   const paneScrollbackLike = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
@@ -574,6 +576,17 @@ export function SplitTranscriptPaneInner({
       moveCursor: (delta) => {
         const list = cardsRef.current
         if (list.length === 0) return
+        // j/k step through the tools of an expanded group before leaving it.
+        if (delta === 1 || delta === -1) {
+          const group = list[cursorIndexNow()]
+          const nested = nestedToolRef.current
+          const tools = group && nested.expanded.has(group.key) ? agentToolCardsFor(group) : []
+          if (tools.length > 0) {
+            const at = tools.findIndex(tool => tool.key === nested.cursors[group!.key])
+            const target = at === -1 ? (delta > 0 ? 0 : -1) : at + delta
+            if (target >= 0 && target < tools.length) { nested.select(group!.key, tools[target]!.key); return }
+          }
+        }
         const next = clamp(cursorIndexNow() + delta, 0, list.length - 1)
         const nextCard = list[next]
         if (!nextCard) return
