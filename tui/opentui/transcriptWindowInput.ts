@@ -1,6 +1,6 @@
 import { isCtrlKey, isCtrlShiftKey, isShiftedKey, type ShortcutKeyEvent } from './shortcutKeys'
 
-type Action = 'search' | 'unread' | 'resume' | 'focusReader' | 'toggleAll' | 'toggleExpanded' | 'fullOutput'
+type Action = 'search' | 'unread' | 'resume' | 'focusReader' | 'toggleAll' | 'toggleExpanded' | 'foldParent' | 'fullOutput'
   | 'copy' | 'bookmark' | 'reply' | 'compose' | 'thinking' | 'open' | 'tab' | 'close'
   | 'git' | 'diagnostics' | 'coordination' | 'interrupt' | 'swallow'
 export type TranscriptWindowCommand =
@@ -14,7 +14,7 @@ export function isTranscriptLocalKey(key: Pick<ShortcutKeyEvent, 'name' | 'ctrl'
   if (key.meta) return false
   if (key.ctrl) return key.name === 'd' || key.name === 'u'
   if (['up', 'down', 'pageup', 'pagedown', 'home', 'end', 'return'].includes(key.name)) return true
-  return sequence.length === 1 && 'jkgGefoumbQyYs()[]{}/'.includes(sequence)
+  return sequence.length === 1 && 'jkgGefoumbQyYsx()[]{}/'.includes(sequence)
 }
 
 /** The focused transcript's key policy, independent of app state setters and
@@ -61,7 +61,10 @@ export function transcriptWindowCommand(key: ShortcutKeyEvent, context: {
   if (isShiftedKey(key, 'q')) return action('reply')
   if (letter === 'c') return action('compose')
   if (letter === 'i') return action('thinking')
-  if (key.name === 'return') return action('open')
+  // Enter folds or expands the parent card (or opens its follow-up questions);
+  // x zooms the window and restores the layout.
+  if (key.name === 'return') return action('foldParent')
+  if (letter === 'x') return action('open')
   if (key.name === 'tab') return action('tab')
   if (key.name === 'w' && !key.ctrl && !key.shift && !key.meta && context.hasSession) return action('close')
   if (!context.primaryFrame && !key.ctrl && !key.shift && (key.name === 'left' || key.name === 'right')) return { type: 'stripStep', direction: key.name === 'left' ? -1 : 1 }

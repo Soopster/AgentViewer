@@ -29,7 +29,7 @@ export function handleGlobalChordKeys({
   fleetPageCount, transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch,
   jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex,
   tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage,
-  replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane,
+  replySelectedMessage, openSelectedAsyncQuestionsOrFold, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane,
   closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard, splitPaneRunningKeys,
   requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane,
   tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand,
@@ -83,6 +83,7 @@ export function handleGlobalChordKeys({
   jumpToResumeMarker: () => void
   copySelectedMessage: (cardOverride?: TuiTranscriptCard) => Promise<void>
   replySelectedMessage: (cardOverride?: TuiTranscriptCard) => void
+  openSelectedAsyncQuestionsOrFold: () => void
   setThinkingMode: React.Dispatch<React.SetStateAction<boolean>>
   showToggleOutcome: (label: string, outcome: string | boolean) => void
   openFocusedSplitPane: () => void
@@ -242,6 +243,12 @@ export function handleGlobalChordKeys({
               case 'compose': if (paneSession) composeToSplitPaneSession(paneSession); break
               case 'thinking': setThinkingMode(current => { const next = !current; showToggleOutcome('Thinking mode', next); return next }); break
               case 'open': openFocusedSplitPane(); break
+              case 'foldParent': {
+                const card = paneHandle?.getCursorCard()
+                if (card?.asyncQuestions?.length) openSelectedAsyncQuestionsOrFold()
+                else paneHandle?.toggleExpandedAtCursor()
+                break
+              }
               case 'tab': tabFromSplitPane(); break
               case 'close': if (paneSession) closeWindowSessionTab(paneSession); break
               case 'git': openSplitPaneOverlay('git', paneSession); break

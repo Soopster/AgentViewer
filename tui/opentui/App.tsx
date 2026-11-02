@@ -5677,7 +5677,7 @@ function OpenTuiWorkspace() {
       splitPaneHandlesRef, searchMatches, fleetStripVisible, fleetPageCount,
       transcriptViewportRows, hasPrimaryFrame, velocityScrollStep, jumpToSearchMatch,
       jumpToMatchingCard, jumpToBookmark, visibleTabSessions, selectStripIndex, activeStripIndex,
-      tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage,
+      tabStripLength, setSearchMode, jumpToUnreadBoundary, jumpToResumeMarker, copySelectedMessage, openSelectedAsyncQuestionsOrFold,
       replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane,
       tabFromSplitPane, closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard,
       splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer,
@@ -5689,6 +5689,7 @@ function OpenTuiWorkspace() {
       openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
     })) return
     if (handleSidebarKeys({
+      transcriptView,
       toggleDateGroups: () => setCollapsedDateGroups(previous => previous.size ? new Set() : new Set(sidebarEntries.filter(entry => entry.type === 'project' && entry.dateGroup).map(entry => entry.key))),
       effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
       showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection,
