@@ -36,7 +36,7 @@ export function transcriptViewportPosition(sb: ScrollBoxRenderable) {
         const findBlock = (parent: Renderable): Renderable | undefined => {
           for (const child of parent.getChildren() as Renderable[]) {
             if (child.height <= 0 || child.y - sb.content.y + child.height <= scrollTop) continue
-            if (child.id.startsWith('virtual-row:')) return child
+            if (child.id?.startsWith('virtual-row:')) return child
             const block = findBlock(child)
             if (block) return block
           }
