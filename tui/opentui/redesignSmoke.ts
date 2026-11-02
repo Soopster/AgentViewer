@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { groupSidebarDates } from './app/sessionList'
 import { transcriptMeasure } from './engineeringLayout'
-import { resolveExpandedCardKeys, agentToolCardIsExpanded } from './app/transcriptRows'
+import { resolveExpandedCardKeys } from './app/transcriptRows'
 import type { SidebarEntry } from './app/types'
 import type { TuiTranscriptCard } from '../format'
 const now = new Date(2026, 10, 1, 12)
@@ -15,11 +15,11 @@ assert.equal(entries.length, 4)
 assert.equal(transcriptMeasure(200, 'readable'), 104)
 assert.equal(transcriptMeasure(70, 'readable'), 70)
 assert.equal(transcriptMeasure(200, 'full'), 200)
-const card = { key: 'activity', autoFold: true, thinkingTranscript: true } as TuiTranscriptCard
-assert(resolveExpandedCardKeys([card], 'conversation', false, new Set(), new Set()).has(card.key))
-assert(!resolveExpandedCardKeys([card], 'conversation', false, new Set(), new Set([card.key])).has(card.key))
-assert(agentToolCardIsExpanded(card, new Set(), new Set()))
-console.log('Redesign rules passed: calendar grouping, folding, reading width, expanded activity defaults.')
+const card = { key: 'activity', autoFold: true, thinkingTranscript: true, lines: [] } as unknown as TuiTranscriptCard
+// Tool and thinking cards start folded; the reader opens them.
+assert(!resolveExpandedCardKeys([card], 'conversation', false, new Set(), new Set()).has(card.key))
+assert(resolveExpandedCardKeys([card], 'conversation', false, new Set([card.key]), new Set()).has(card.key))
+console.log('Redesign rules passed: calendar grouping, folding, reading width, folded activity defaults.')
 const { foldTurnActivity } = await import('./app/turnActivity')
 const prompt = { key: 'prompt', role: 'user', timestampMs: 1000, lines: [], searchText: '' } as unknown as TuiTranscriptCard
 const tool = { ...card, thinkingTranscript: undefined, category: 'technical', lines: [{ text: 'ran', tone: 'tool' }], timestampMs: 2000 } as TuiTranscriptCard

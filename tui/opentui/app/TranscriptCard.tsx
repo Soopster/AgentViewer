@@ -305,8 +305,8 @@ export function TranscriptCardInner({
     headerMeta,
     card.category === 'diff' ? `s ${diffLayout}` : null,
     isSearchHit ? 'match' : null,
-    isExpanded || hasCursor ? card.usageSummary ?? null : null,
-    (isExpanded || hasCursor) && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
+    hasCursor ? card.usageSummary ?? null : null,
+    hasCursor && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
     hasCursor ? 'y copy  b bookmark  Q reply' : null,
   ])
   const cardTitleColor = hasCursor || isSearchHit
@@ -509,8 +509,8 @@ export function TranscriptCardInner({
       headerMeta,
       isSearchHit ? 'match' : null,
       bookmarked ? 'bookmarked' : null,
-      hasCursor || isExpanded ? card.usageSummary ?? null : null,
-      (hasCursor || isExpanded) && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
+      hasCursor ? card.usageSummary ?? null : null,
+      hasCursor && card.durationLabel ? `⏱ ${card.durationLabel}` : null,
       hasCursor ? 'y copy  b bookmark  Q reply' : null,
     ])
     const agentsMaxTitleWidth = Math.max(agentWidth - 4, 20)

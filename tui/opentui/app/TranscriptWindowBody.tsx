@@ -588,6 +588,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       isExpanded: boolean
       isLatest: boolean
       isAutoFoldedTechnical: boolean
+      isCursor: boolean
       landmarks: CardLandmark[]
       stable: StableCardData
       providerKey: ProviderSelection
@@ -606,6 +607,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       // may end before it.
       const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
       const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold && !isExpanded
+      const isCursor = card.key === transcriptCursorKey
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
         bodyLines: [],
@@ -620,6 +622,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
         && prev.inputs.isExpanded === isExpanded
         && prev.inputs.isLatest === isLatest
         && prev.inputs.isAutoFoldedTechnical === isAutoFoldedTechnical
+        && prev.inputs.isCursor === isCursor
         && prev.inputs.landmarks === landmarks
         && prev.inputs.stable === stable
         && prev.inputs.providerKey === providerKey
@@ -633,7 +636,9 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
         card.timestamp ?? null,
         isLatest ? 'latest' : null,
         isAutoFoldedTechnical ? 'folded' : null,
-        `e ${isExpanded ? 'collapse' : 'expand'}`,
+        // The key hint belongs to the card the cursor is on, as in the stream
+        // header; repeating it on every card is noise.
+        isCursor ? `e ${isExpanded ? 'collapse' : 'expand'}` : null,
       ])
       const accent = transcriptAccent(card.role, providerKey)
       const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
@@ -668,6 +673,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
           isExpanded,
           isLatest,
           isAutoFoldedTechnical,
+          isCursor,
           landmarks,
           stable,
           providerKey,
@@ -694,6 +700,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     transcriptRenderStart,
     totalTranscriptCards,
     expandedKeysForRender,
+    transcriptCursorKey,
     transcriptView,
     provider,
     shouldEnableSyntaxHighlighting,
