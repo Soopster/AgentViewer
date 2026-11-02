@@ -242,6 +242,9 @@ export function buildSidebarEntries(
   return entries
 }
 
+/** Coordinator-run projects (`COORD-ORION`) hold dozens of identical chat rows; fold them until asked. */
+export const isCollapsedByDefaultProject = (projectName: string) => /^COORD-/i.test(projectName)
+
 /** Calendar buckets preserve parent/child adjacency and the existing project order. */
 export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date()): SidebarEntry[] {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -250,6 +253,7 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
   let project = ''
   let bucketKey = ''
   let hidden = false
+  let projectHidden = false
   let header: Extract<SidebarEntry, { type: 'project' }> | undefined
   // A project whose sessions all fall in one bucket gains nothing from a bucket
   // header: it would only add a row under the project's own.
@@ -271,8 +275,12 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
     if (entry.type === 'project') {
       project = entry.key
       bucketKey = ''
-      hidden = false
-      result.push(entry)
+      // Coordinator-run groups are collapsed unless toggled open: a toggle flips the default.
+      projectHidden = collapsed.has(entry.key) !== isCollapsedByDefaultProject(entry.projectName)
+      hidden = projectHidden
+      result.push({ ...entry, collapsed: projectHidden, collapsible: true })
+    } else if (projectHidden) {
+      continue
     } else if (entry.type === 'session') {
       if ((bucketsByProject.get(project)?.size ?? 0) < 2) { result.push(entry); continue }
       const label = bucketLabel(entry)
@@ -284,7 +292,7 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
         result.push(header)
       }
       if (header?.type === 'project') header.count++
-      if (!hidden) result.push(entry)
+      if (!hidden) result.push({ ...entry, indented: true })
     } else if (!hidden) result.push(entry)
   }
   return result

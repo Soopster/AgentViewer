@@ -258,7 +258,7 @@ import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOu
 import { formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
-import { sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
+import { isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
 import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
 
 
@@ -1324,10 +1324,19 @@ function OpenTuiWorkspace() {
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
   const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
+  const sidebarFolderBySessionRef = useRef<Map<string, string>>(new Map())
   const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
   const sidebarEntries = useMemo(() => {
     const rawEntries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort, childrenByParentId, collapsedSubagentSet)
     const entries = normalizedSessionQuery ? rawEntries : groupSidebarDates(rawEntries, collapsedDateGroups)
+    // Folding hides a session's row, so remember each session's folder from the unfolded list.
+    const folders = new Map<string, string>()
+    let folderKey = ''
+    for (const entry of rawEntries) {
+      if (entry.type === 'project') folderKey = entry.key
+      else if (entry.type === 'session') folders.set(entry.key, folderKey)
+    }
+    sidebarFolderBySessionRef.current = folders
     if (filteredSessionsForSidebar === sessions) return entries
     const originalIndex = new Map<string, number>()
     sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
@@ -5767,7 +5776,22 @@ function OpenTuiWorkspace() {
     })) return
     if (handleSidebarKeys({
       transcriptView,
-      toggleDateGroups: () => setCollapsedDateGroups(previous => previous.size ? new Set() : new Set(sidebarEntries.filter(entry => entry.type === 'project' && entry.dateGroup).map(entry => entry.key))),
+      toggleDateGroups: () => {
+        // `e` folds the folder the cursor is in; with nothing selected, it folds every group.
+        const selectedEntryKey = selectedSession ? `session:${sessionKey(selectedSession)}` : null
+        const folderKey = selectedEntryKey ? sidebarFolderBySessionRef.current.get(selectedEntryKey) : undefined
+        const folder = folderKey ? { key: folderKey } : undefined
+        if (folder) { toggleDateGroup(folder.key); return }
+        setCollapsedDateGroups(() => {
+          const headers = sidebarEntries.filter((entry): entry is Extract<SidebarEntry, { type: 'project' }> => entry.type === 'project')
+          const foldAll = headers.some(entry => !entry.collapsed)
+          const next = new Set<string>()
+          for (const entry of headers) {
+            if (entry.dateGroup ? foldAll : foldAll !== isCollapsedByDefaultProject(entry.projectName)) next.add(entry.key)
+          }
+          return next
+        })
+      },
       effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
       showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection,
       isShifted, openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,
