@@ -11,12 +11,13 @@
 // A request is one JSON line, the reply one JSON line. The stores are loaded on the
 // first request that needs them, so a TUI nobody scripts never pays for the PTY bridge.
 
-import { chmodSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { encodeTerminalKey, type TerminalKey } from '../../lib/terminalKeys'
 import { shellQuoteArgv } from './userKeys'
+import { shellDialectFor } from '../../lib/shellQuote'
 import { encodeTerminalPrompt } from './terminalPrompt'
 
 export type ControlRequest = {
@@ -132,7 +133,7 @@ async function handle(request: ControlRequest): Promise<ControlReply> {
     return { ok: true, id: shell.id, sent: request.keys.length }
   }
   if (request.op === 'run') {
-    const line = typeof request.command === 'string' ? request.command : Array.isArray(request.argv) && request.argv.length > 0 ? shellQuoteArgv(request.argv) : ''
+    const line = typeof request.command === 'string' ? request.command : Array.isArray(request.argv) && request.argv.length > 0 ? shellQuoteArgv(request.argv, shellDialectFor(shell.name)) : ''
     if (!line.trim()) return { ok: false, error: 'argv or command is required' }
     if (/[\r\n]/.test(line)) return { ok: false, error: 'a command is one line; use send for text' }
     shells.writeShell(shell.id, `${line}\r`)
@@ -149,17 +150,29 @@ export async function respondToControlRequest(line: string): Promise<ControlRepl
 
 const MAX_REQUEST_BYTES = 1_000_000
 
+/**
+ * Where a TUI listens. POSIX: a Unix socket in the 0700 directory. Windows has no Unix sockets
+ * worth relying on, so it listens on a named pipe (private to the user by default) and leaves a
+ * `terminal-<pid>.json` naming it, which is what the CLI finds.
+ */
+export function controlEndpoint(dir: string, pid: number, platform: NodeJS.Platform = process.platform): { listenPath: string; registryFile: string } {
+  return platform === 'win32'
+    ? { listenPath: `\\\\.\\pipe\\agent-viewer-terminal-${pid}`, registryFile: path.join(dir, `terminal-${pid}.json`) }
+    : { listenPath: path.join(dir, `terminal-${pid}.sock`), registryFile: path.join(dir, `terminal-${pid}.sock`) }
+}
+
 export async function startTerminalControl(dir = terminalControlDir()): Promise<{ socketPath: string; close: () => void }> {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  chmodSync(dir, 0o700)
+  if (process.platform !== 'win32') chmodSync(dir, 0o700)
   // A socket left by a TUI that died is dead weight; a live one answers and is left alone.
   for (const entry of readdirSync(dir)) {
-    if (!/^terminal-\d+\.sock$/.test(entry)) continue
+    if (!/^terminal-\d+\.(sock|json)$/.test(entry)) continue
     const pid = Number(/\d+/.exec(entry)?.[0])
     try { process.kill(pid, 0) } catch { rmSync(path.join(dir, entry), { force: true }) }
   }
-  const socketPath = path.join(dir, `terminal-${process.pid}.sock`)
-  rmSync(socketPath, { force: true })
+  const { listenPath: socketPath, registryFile } = controlEndpoint(dir, process.pid)
+  const windows = process.platform === 'win32'
+  if (!windows) rmSync(socketPath, { force: true })
   const server = net.createServer((socket) => {
     let buffer = ''
     socket.setEncoding('utf8')
@@ -175,8 +188,9 @@ export async function startTerminalControl(dir = terminalControlDir()): Promise<
     })
   })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve) })
-  chmodSync(socketPath, 0o600)
-  const close = () => { server.close(); rmSync(socketPath, { force: true }) }
-  process.once('exit', () => rmSync(socketPath, { force: true }))
+  if (windows) writeFileSync(registryFile, JSON.stringify({ pid: process.pid, pipe: socketPath }), { mode: 0o600 })
+  else chmodSync(socketPath, 0o600)
+  const close = () => { server.close(); rmSync(registryFile, { force: true }) }
+  process.once('exit', () => rmSync(registryFile, { force: true }))
   return { socketPath, close }
 }

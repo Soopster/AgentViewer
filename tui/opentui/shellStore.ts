@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import { hostShell } from '../../lib/hostShell'
+import { killProcessTree } from './processTree'
 import { updateWorkspaceResource, forgetWorkspaceResource, isWorkspaceClosed } from './workspaceResources'
 // Interactive shells: a login shell on a real PTY (`lib/ptyBridge.ts`), its
 // output parsed by a headless terminal emulator (`@wterm/core`, the same core
@@ -79,9 +82,7 @@ export function shellTerminal(id: string): WasmBridge | null {
 }
 
 function killGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
-  const pid = proc.pid
-  if (!pid) return
-  try { process.kill(-pid, signal) } catch { try { proc.kill(signal) } catch { /* gone */ } }
+  killProcessTree(proc, signal)
 }
 
 function installExitHook(): void {
@@ -93,10 +94,7 @@ function installExitHook(): void {
 }
 
 function shellCommand(): { exec: string; args: string[]; name: string } {
-  const exec = process.env.SHELL || '/bin/sh'
-  const name = exec.split('/').pop() || 'sh'
-  // A login shell reads the profile that sets PATH, as a new terminal tab does.
-  return { exec, args: ['-l'], name }
+  return hostShell(process.env, process.platform, existsSync)
 }
 
 export async function startShell(options: { cwd: string; cols: number; rows: number; ownerId?: string }): Promise<string> {

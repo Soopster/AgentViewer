@@ -1,3 +1,4 @@
+import { killProcessTree, commandShell } from './processTree'
 import { updateWorkspaceResource, forgetWorkspaceResource, isWorkspaceClosed } from './workspaceResources'
 // Long-running processes the TUI hosts for the user — a dev server, a test
 // watcher, `docker compose logs -f` — and the output each has written.
@@ -140,11 +141,9 @@ function flushPartial(entry: Entry): void {
 }
 
 function signalGroup(entry: Entry, signal: NodeJS.Signals): void {
-  const pid = entry.child?.pid
-  if (!pid) return
-  // The shell's whole group: `npm run dev` is three processes deep, and
+  // The shell's whole tree: `npm run dev` is three processes deep, and
   // signalling the shell alone leaves the server holding its port.
-  try { process.kill(-pid, signal) } catch { try { entry.child?.kill(signal) } catch { /* gone */ } }
+  killProcessTree(entry.child, signal)
 }
 
 function installExitHook(): void {
@@ -186,12 +185,15 @@ export function startProcess(id: string): void {
   const entry = entries.get(id)
   if (!entry || entry.child) return
   installExitHook()
-  const shell = process.env.SHELL || '/bin/sh'
+  const shell = commandShell(entry.command)
   let child: ChildProcess
   try {
-    child = spawn(shell, ['-lc', entry.command], {
+    child = spawn(shell.file, shell.args, {
       cwd: entry.cwd,
-      detached: true,
+      // A process group is a POSIX idea; on Windows a detached child gets its own console window.
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+      windowsVerbatimArguments: shell.windowsVerbatimArguments,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Most tools print colour only to a terminal; those that force it anyway are stripped.
       env: { ...process.env, FORCE_COLOR: '0' },

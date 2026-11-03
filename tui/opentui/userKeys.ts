@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PORTABLE_COMMAND_CHORDS } from './shortcutKeys'
+import { quoteArgv, type ShellDialect } from '../../lib/shellQuote'
 
 export type ChordBinding = { command: string; label: string; short?: string; hint?: false }
 export type UserCommand = { key: string; name: string; run: string[] }
@@ -125,8 +126,7 @@ export const userKeyProblems = (): readonly string[] => active?.problems ?? []
 export const userCommandForChordId = (id: string): UserCommand | null =>
   id.startsWith(USER_COMMAND_PREFIX) ? active?.commands.get(id.slice(USER_COMMAND_PREFIX.length)) ?? null : null
 
-const SAFE_WORD = /^[A-Za-z0-9_\/.:=@%+,-]+$/
-/** One shell line from argv: every word that is not plainly safe is single-quoted. */
-export function shellQuoteArgv(argv: readonly string[]): string {
-  return argv.map((word) => SAFE_WORD.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`).join(' ')
+/** One command line from argv for the shell that will read it (POSIX unless told otherwise). */
+export function shellQuoteArgv(argv: readonly string[], dialect: ShellDialect = 'posix'): string {
+  return quoteArgv(argv, dialect)
 }

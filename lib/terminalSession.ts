@@ -17,7 +17,7 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { hostedTerminalEnv } from './inheritedIdentityEnv.mjs'
-import { PTY_SUPPORTED, resizePty, spawnPty } from './ptyBridge'
+import { ConPtyProcess, PTY_SUPPORTED, resizePty, spawnPty } from './ptyBridge'
 
 /** Lifecycle events streamed to SSE clients alongside terminal output. */
 export type TerminalState =
@@ -204,7 +204,10 @@ export function killTerminalSession(id: string): void {
   }
   const proc = session.proc
   const pid = proc?.pid
-  if (pid != null) {
+  if (proc instanceof ConPtyProcess) {
+    // Windows: no process groups or signals; the pseudoconsole's own kill ends its tree.
+    proc.kill()
+  } else if (pid != null) {
     try {
       process.kill(-pid, 'SIGTERM')
     } catch {

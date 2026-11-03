@@ -255,7 +255,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
   if (userCommand) {
     // A managed process in the Terminal view, in the focused session's folder.
     const cwd = (focusedSession ?? selectedSession)?.cwd || process.cwd()
-    startProcess(addProcess({ name: userCommand.name, command: shellQuoteArgv(userCommand.run), cwd }))
+    startProcess(addProcess({ name: userCommand.name, command: shellQuoteArgv(userCommand.run, process.platform === 'win32' ? 'cmd' : 'posix'), cwd }))
     openSurfaceWindow('terminal')
     return
   }

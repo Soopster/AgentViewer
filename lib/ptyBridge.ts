@@ -1,15 +1,53 @@
-// A real PTY without a native module: a small python3 shim (`pty.fork`) that
-// macOS and Linux both ship. Shared by the web's embedded terminal
+// A real PTY. macOS and Linux use a small python3 shim (`pty.fork`) that both
+// ship, so no native module is needed there. Windows has no `pty.fork`; it uses
+// ConPTY through `@lydell/node-pty` (an optional dependency with prebuilt
+// binaries), wrapped to look like the shim's child process so neither consumer
+// has to know which it got. Shared by the web's embedded terminal
 // (`lib/terminalSession.ts`) and the TUI's interactive shell, so there is one
 // PTY implementation to get right.
 
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { Writable } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
+import { resolveWindowsExecutable } from './hostShell'
 
-export const PTY_SUPPORTED = process.platform !== 'win32'
+/** The slice of node-pty this file uses, so the ConPTY path is testable without Windows. */
+export type ConPtyHandle = {
+  pid: number
+  onData(listener: (data: string) => void): unknown
+  onExit(listener: (event: { exitCode: number; signal?: number }) => void): unknown
+  write(data: string): void
+  resize(cols: number, rows: number): void
+  kill(signal?: string): void
+}
+export type ConPtyModule = {
+  spawn(file: string, args: string[], options: { name: string; cols: number; rows: number; cwd?: string; env: Record<string, string | undefined>; useConpty?: boolean }): ConPtyHandle
+}
+
+const CONPTY_PACKAGE = '@lydell/node-pty'
+let conPtyLoader: () => ConPtyModule = () => {
+  // A variable name keeps the bundler from trying to trace a native module.
+  const name = CONPTY_PACKAGE
+  return createRequire(import.meta.url)(name) as ConPtyModule
+}
+
+/** Tests supply a fake; returns the previous loader so a test can restore it. */
+export function setConPtyLoaderForTest(loader: () => ConPtyModule): () => ConPtyModule {
+  const previous = conPtyLoader
+  conPtyLoader = loader
+  return previous
+}
+
+function conPtyInstalled(): boolean {
+  try { createRequire(import.meta.url).resolve(CONPTY_PACKAGE); return true } catch { return false }
+}
+
+/** POSIX always has the shim; Windows has a PTY exactly when the ConPTY package installed. */
+export const PTY_SUPPORTED = process.platform !== 'win32' || conPtyInstalled()
 
 /** The python3 PTY shim, materialized to the temp dir on first use so neither
  * dev nor packaged builds need to bundle extra resources. Selected forks:
@@ -132,7 +170,9 @@ export type PtySpawnOptions = {
   cols: number
   rows: number
   cwd?: string
-  env?: NodeJS.ProcessEnv
+  env?: Record<string, string | undefined>
+  /** Which backend; defaults to this machine's. A test sets it to drive the other one. */
+  platform?: NodeJS.Platform
 }
 
 /**
@@ -142,10 +182,72 @@ export type PtySpawnOptions = {
  * Throws when the shim cannot be written; a missing python3 arrives as the
  * child's 'error' event.
  */
+/**
+ * What a ConPTY child looks like to the code that drives a shim child: `stdin` is
+ * the keyboard, `stdout` the output as Buffers, `pid`, `kill`, and `exit`/`close`
+ * events. `stderr` is null — a pseudoconsole has one stream, so a consumer's
+ * `stderr?.on(...)` is simply skipped.
+ */
+export class ConPtyProcess extends EventEmitter {
+  readonly pid: number
+  readonly stdout = new PassThrough()
+  readonly stderr = null
+  readonly stdin: Writable
+  killed = false
+  exitCode: number | null = null
+  private ended = false
+
+  constructor(private readonly handle: ConPtyHandle) {
+    super()
+    this.pid = handle.pid
+    this.stdin = new Writable({
+      write: (chunk: Buffer | string, _encoding, done) => {
+        try { handle.write(typeof chunk === 'string' ? chunk : chunk.toString('utf8')); done() } catch (error) { done(error as Error) }
+      },
+    })
+    handle.onData((data) => { this.stdout.write(Buffer.from(data, 'utf8')) })
+    handle.onExit(({ exitCode, signal }) => {
+      if (this.ended) return
+      this.ended = true
+      this.exitCode = exitCode
+      this.stdout.end()
+      this.emit('exit', exitCode, signal ? `SIG${signal}` : null)
+      this.emit('close', exitCode, signal ? `SIG${signal}` : null)
+    })
+  }
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    if (this.ended) return false
+    this.killed = true
+    // Windows has no signals; node-pty rejects one it does not know.
+    try { this.handle.kill() } catch { return false }
+    void signal
+    return true
+  }
+
+  resizePty(cols: number, rows: number): boolean {
+    if (this.ended) return false
+    try { this.handle.resize(clampPtySize(cols, 80), clampPtySize(rows, 24)); return true } catch { return false }
+  }
+}
+
+function spawnConPty(options: PtySpawnOptions, cols: number, rows: number): ChildProcess {
+  const env: Record<string, string | undefined> = {
+    ...(options.env ?? process.env),
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+  }
+  const file = resolveWindowsExecutable(options.exec, env, existsSync)
+  if (!file) throw new Error(`Could not find "${options.exec}" on PATH`)
+  const handle = conPtyLoader().spawn(file, options.args, { name: 'xterm-256color', cols, rows, cwd: options.cwd, env, useConpty: true })
+  return new ConPtyProcess(handle) as unknown as ChildProcess
+}
+
 export function spawnPty(options: PtySpawnOptions): ChildProcess {
-  const shim = ensureShim()
   const cols = clampPtySize(options.cols, 80)
   const rows = clampPtySize(options.rows, 24)
+  if ((options.platform ?? process.platform) === 'win32') return spawnConPty(options, cols, rows)
+  const shim = ensureShim()
   const spawnOptions = {
     detached: true,
     cwd: options.cwd,
@@ -157,12 +259,13 @@ export function spawnPty(options: PtySpawnOptions): ChildProcess {
       COLUMNS: String(cols),
     },
     stdio: ['pipe', 'pipe', 'pipe', 'pipe'] as const,
-  } as SpawnOptions
+  } as unknown as SpawnOptions
   return spawn('python3', [shim, String(cols), String(rows), options.exec, ...options.args], spawnOptions)
 }
 
 /** Updates the PTY geometry (TIOCSWINSZ + SIGWINCH in the shim). */
 export function resizePty(proc: ChildProcess, cols: number, rows: number): boolean {
+  if (proc instanceof ConPtyProcess) return proc.resizePty(cols, rows)
   const control = proc.stdio[3] as Writable | null
   if (!control || control.destroyed) return false
   control.write(`R:${clampPtySize(rows, 24)}:${clampPtySize(cols, 80)}\n`)

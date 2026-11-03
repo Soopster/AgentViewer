@@ -7,7 +7,7 @@
 // daemon: the shells live in the TUI process. JSON on stdout; a failure is JSON on
 // stderr with exit 1, a usage error exits 2, a `wait` that timed out exits 3.
 
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -81,9 +81,13 @@ export function findControlSockets(dir) {
   let names = []
   try { names = readdirSync(dir) } catch { return [] }
   return names.flatMap((name) => {
-    const match = /^terminal-(\d+)\.sock$/.exec(name)
+    const match = /^terminal-(\d+)\.(sock|json)$/.exec(name)
     if (!match) return []
     try { process.kill(Number(match[1]), 0) } catch { return [] }
+    // Windows: the file names a pipe; elsewhere the file is the socket.
+    if (match[2] === 'json') {
+      try { return [{ pid: Number(match[1]), socketPath: JSON.parse(readFileSync(path.join(dir, name), 'utf8')).pipe }] } catch { return [] }
+    }
     return [{ pid: Number(match[1]), socketPath: path.join(dir, name) }]
   })
 }
