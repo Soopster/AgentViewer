@@ -225,7 +225,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           href="/analytics"
           transitionTypes={['route']}
           title="Cross-session analytics"
-          className="av-hover-control"
+          className="av-hover-control av-ghost"
           style={{
             flexShrink: 0,
             display: 'inline-flex',
@@ -233,7 +233,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             height: 26,
             padding: '0 10px',
             background: 'transparent',
-            border: '1px solid var(--border)',
+            border: '1px solid transparent',
             borderRadius: 5,
             color: 'var(--text-2)',
             fontSize: 12,
@@ -248,7 +248,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           href="/terminal"
           transitionTypes={['route']}
           title="Embedded TUI terminal"
-          className="av-hover-control"
+          className="av-hover-control av-ghost"
           style={{
             flexShrink: 0,
             display: 'inline-flex',
@@ -257,7 +257,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             height: 26,
             padding: '0 10px',
             background: 'transparent',
-            border: '1px solid var(--border)',
+            border: '1px solid transparent',
             borderRadius: 5,
             color: 'var(--text-2)',
             fontSize: 12,
@@ -276,13 +276,13 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             title={command.label}
             variant="outline"
             size="sm"
-            className="av-hover-control"
+            className="av-hover-control av-ghost"
             style={{
               flexShrink: 0,
               height: 26,
               padding: '0 10px',
               background: 'transparent',
-              border: '1px solid var(--border)',
+              border: '1px solid transparent',
               borderRadius: 5,
               color: 'var(--text-2)',
               fontSize: 12,
@@ -307,11 +307,11 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           <button
             type="button"
             onClick={() => { setViewDropdownOpen(v => !v); setActionsDropdownOpen(false) }}
-            className="av-hover-control"
+            className="av-hover-control av-ghost"
             style={{
               height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
               background: viewDropdownOpen ? 'var(--surface-3)' : 'transparent',
-              border: '1px solid var(--border)',
+              border: '1px solid transparent',
               color: 'var(--text-2)',
               fontSize: 12,
             }}
@@ -471,14 +471,14 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             aria-label="Maximize transcript"
             variant="outline"
             size="sm"
-            className="av-hover-control"
+            className="av-hover-control av-ghost"
             style={{
               flexShrink: 0,
               width: 28,
               height: 26,
               padding: 0,
               background: 'transparent',
-              border: '1px solid var(--border)',
+              border: '1px solid transparent',
               borderRadius: 5,
               color: 'var(--text-2)',
               cursor: 'pointer',
@@ -522,14 +522,14 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             aria-label="Enter fullscreen"
             variant="outline"
             size="sm"
-            className="av-hover-control"
+            className="av-hover-control av-ghost"
             style={{
               flexShrink: 0,
               width: 28,
               height: 26,
               padding: 0,
               background: 'transparent',
-              border: '1px solid var(--border)',
+              border: '1px solid transparent',
               borderRadius: 5,
               color: 'var(--text-2)',
               cursor: 'pointer',
@@ -545,11 +545,11 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             <button
               type="button"
               onClick={() => { setActionsDropdownOpen(v => !v); setViewDropdownOpen(false) }}
-              className="av-hover-control"
+              className="av-hover-control av-ghost"
               style={{
                 height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
                 background: actionsDropdownOpen ? 'var(--surface-3)' : 'transparent',
-                border: '1px solid var(--border)',
+                border: '1px solid transparent',
                 color: 'var(--text-2)',
                 fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 13,
               }}
@@ -622,7 +622,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           aria-pressed={autoFollow}
           variant="outline"
           size="sm"
-          className="av-hover-control"
+          className="av-hover-control av-ghost"
           style={{
             flexShrink: 0,
             display: 'inline-flex',
