@@ -125,7 +125,7 @@ function CommandEmpty({ ref, className, ...props }: React.ComponentProps<'div'>)
       ref={ref}
       data-slot="command-empty"
       className={cn(
-        'px-3 py-8 text-center font-mono text-[12px] tracking-[0.04em] text-[var(--text-3)]',
+        'px-3 py-8 text-center font-mono text-[12px] text-[var(--text-3)]',
         className,
       )}
       {...props}
@@ -146,7 +146,7 @@ function CommandGroup({
     <div ref={ref} data-slot="command-group" className={cn('mb-2.5', className)} style={style} {...props}>
       {heading ? (
         <div
-          className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--text-3)]"
+          className="font-mono text-[10px] text-[var(--text-3)]"
           style={{ padding: '1px 8px 6px' }}
         >
           {heading}
@@ -200,7 +200,7 @@ function CommandShortcut({ ref, className, ...props }: React.ComponentProps<'spa
     <span
       ref={ref}
       data-slot="command-shortcut"
-      className={cn('ml-auto font-mono text-[10px] tracking-[0.05em] text-[var(--text-3)]', className)}
+      className={cn('ml-auto font-mono text-[10px] text-[var(--text-3)]', className)}
       {...props}
     />
   )

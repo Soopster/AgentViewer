@@ -308,7 +308,7 @@ function SidebarGroupLabel({
     <div
       data-slot="sidebar-group-label"
       className={cn(
-        "flex h-5 items-center text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-3)]",
+        "flex h-5 items-center text-[10px] font-semibold text-[var(--text-3)]",
         className
       )}
       {...props}
@@ -325,7 +325,7 @@ function SidebarGroupAction({
       type="button"
       data-slot="sidebar-group-action"
       className={cn(
-        "inline-flex h-6 items-center justify-center rounded-md border border-border bg-[var(--surface-2)] px-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--text-3)] transition-colors hover:bg-[var(--surface-3)]",
+        "inline-flex h-6 items-center justify-center rounded-md border border-border bg-[var(--surface-2)] px-2 text-[10px] font-medium text-[var(--text-3)] transition-colors hover:bg-[var(--surface-3)]",
         className
       )}
       {...props}

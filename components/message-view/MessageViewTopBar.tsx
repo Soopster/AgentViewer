@@ -125,10 +125,9 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           <>
             <span
               style={{
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 10,
                 fontWeight: 600,
-                letterSpacing: '0.1em',
                 color: 'var(--violet)',
                 background: 'rgba(139,128,240,0.1)',
                 border: '1px solid rgba(139,128,240,0.25)',
@@ -141,10 +140,9 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             </span>
             <span
               style={{
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 10,
                 fontWeight: 600,
-                letterSpacing: '0.1em',
                 color: projectView.providerMode === 'all' ? 'var(--green)' : 'var(--text-3)',
                 background: projectView.providerMode === 'all' ? 'rgba(45,212,160,0.1)' : 'var(--surface-2)',
                 border: `1px solid ${projectView.providerMode === 'all' ? 'rgba(45,212,160,0.25)' : 'var(--border)'}`,
@@ -162,7 +160,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
         {!isProject && session?.cwd && (
           <span
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 11,
               color: 'var(--text-3)',
               overflow: 'hidden',
@@ -194,10 +192,9 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
             }}
           >
             <span style={{
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 10,
               color: contextUsage.percentage > 80 ? 'var(--red, #f87171)' : 'var(--text-3)',
-              letterSpacing: '0.03em',
             }}>
               {Math.round(contextUsage.percentage)}%
             </span>
@@ -298,7 +295,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
 
         {/* Stats */}
         {!loading && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
             {isProject
               ? `${projectView!.sessionCount} sessions · ${threaded.length} turns`
               : `${threaded.length} turns · ${messages.length} events`}
@@ -453,7 +450,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                 ] as const).map((opt) => (
                   <button key={opt.key} type="button" className="av-hover-control"
                     onClick={opt.toggle}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, textAlign: 'left', whiteSpace: 'nowrap' }}>
                     {opt.active ? '☑' : '☐'} {opt.label}
                   </button>
                 ))}
@@ -554,7 +551,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                 background: actionsDropdownOpen ? 'var(--surface-3)' : 'transparent',
                 border: '1px solid var(--border)',
                 color: 'var(--text-2)',
-                fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: '0.05em',
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 13,
               }}
             >
               ···
@@ -582,7 +579,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                     {cliPopoverOpen && (
                       <div style={{ position: 'absolute', top: 0, right: 170, zIndex: 70, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 320, boxShadow: '0 4px 24px rgba(0,0,0,0.35)' }}>
                         <code style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--cyan)', wordBreak: 'break-all', userSelect: 'all' }}>{cliCommand}</code>
-                        <button type="button" className="av-hover-control" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
+                        <button type="button" className="av-hover-control" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}
                           onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>Copy</button>
                       </div>
                     )}

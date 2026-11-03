@@ -155,27 +155,27 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 /* ── Design tokens ── dark (default) ────────────────────────────────────── */
 :root,
 [data-theme="dark"] {
-  --radius:      0.8rem;
+  --radius:      0.5rem;
   /* Backgrounds */
-  --bg:          #07091c;
-  --surface:     #0c1028;
-  --surface-2:   #101530;
-  --surface-3:   #151c38;
+  --bg:          #0f0f11;
+  --surface:     #151517;
+  --surface-2:   #1b1b1e;
+  --surface-3:   #222226;
 
   /* Borders */
-  --border:      #1e2a44;
-  --border-2:    #2d3f66;
+  --border:      #26262b;
+  --border-2:    #34343b;
 
   /* Text */
-  --text:        #dde3f5;
-  --text-2:      #91a0bd;
-  --text-3:      #6d7f9d;
+  --text:        #e6e6e8;
+  --text-2:      #a0a0a8;
+  --text-3:      #75757e;
 
   /* Primary accents */
-  --violet:      #8b80f0;
-  --violet-glow: rgba(139, 128, 240, 0.18);
-  --cyan:        #38d9f5;
-  --cyan-glow:   rgba(56, 217, 245, 0.12);
+  --violet:      #8a94d6;
+  --violet-glow: transparent;
+  --cyan:        #5cc4dc;
+  --cyan-glow:   transparent;
 
   /* Semantic */
   --green:       #2dd4a0;
@@ -201,25 +201,25 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 /* ── Design tokens ── light ──────────────────────────────────────────────── */
 [data-theme="light"] {
   /* Backgrounds */
-  --bg:          #f0f2fa;
+  --bg:          #fafafa;
   --surface:     #ffffff;
-  --surface-2:   #eaeef8;
-  --surface-3:   #e2e8f4;
+  --surface-2:   #f4f4f5;
+  --surface-3:   #ebebed;
 
   /* Borders */
-  --border:      #cdd6ea;
-  --border-2:    #aab8d4;
+  --border:      #e1e1e5;
+  --border-2:    #c9c9d0;
 
   /* Text */
-  --text:        #111827;
-  --text-2:      #4b5a78;
-  --text-3:      #8792af;
+  --text:        #18181b;
+  --text-2:      #52525b;
+  --text-3:      #8a8a94;
 
   /* Primary accents */
-  --violet:      #6352d4;
-  --violet-glow: rgba(99, 82, 212, 0.14);
-  --cyan:        #0891b2;
-  --cyan-glow:   rgba(8, 145, 178, 0.12);
+  --violet:      #5b64c4;
+  --violet-glow: transparent;
+  --cyan:        #0e7f9a;
+  --cyan-glow:   transparent;
 
   /* Semantic */
   --green:       #059669;
@@ -1551,11 +1551,6 @@ html, body { height: 100%; overflow: hidden; }
 /* ── Base ────────────────────────────────────────────────────────────────── */
 body {
   background-color: var(--bg);
-  background-image:
-    radial-gradient(ellipse at 16% 50%, rgba(139, 128, 240, 0.055) 0%, transparent 52%),
-    radial-gradient(ellipse at 84% 14%, rgba(56, 217, 245, 0.035) 0%, transparent 44%),
-    radial-gradient(circle, rgba(50, 70, 140, 0.13) 1px, transparent 1px);
-  background-size: auto, auto, 28px 28px;
   color: var(--text);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 15px;
@@ -1642,15 +1637,14 @@ body {
 }
 
 .timeline-row-action {
-  height: 18px;
-  padding: 0 6px;
+  height: 22px;
+  padding: 0 8px;
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-2);
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.05em;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
@@ -2659,7 +2653,7 @@ body {
 }
 
 .av-session-row.av-selected {
-  background: linear-gradient(to right, rgba(139,128,240,0.13) 0%, transparent 65%);
+  background: var(--surface-3);
   border-left-color: var(--violet);
 }
 
@@ -2701,7 +2695,7 @@ body {
 }
 
 .av-project-header.av-selected {
-  background: linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%);
+  background: var(--surface-3);
   border-left-color: var(--violet);
 }
 
@@ -2729,7 +2723,7 @@ body {
 }
 
 .av-tool-header {
-  --tool-header-opacity: 0.14;
+  --tool-header-opacity: 0.07;
 }
 
 /* ── Shared control hover affordance ────────────────────────────────────── */
@@ -2740,11 +2734,7 @@ body {
 }
 
 .av-hover-control:not(:disabled):hover {
-  filter: brightness(1.12);
-  transform: translateY(-1px);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--violet) 18%, transparent),
-    0 8px 18px color-mix(in srgb, var(--violet) 13%, transparent);
+  filter: brightness(1.08);
 }
 
 .av-hover-control:not(:disabled):active {
@@ -2866,7 +2856,7 @@ body {
   align-items: center;
   gap: 10px;
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 21px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2960,7 +2950,7 @@ body {
 .av-messaging-panel-head h2 {
   margin-top: 2px;
   color: var(--text);
-  font: 700 14px "Oxanium", monospace;
+  font: 700 14px 'IBM Plex Sans', system-ui, sans-serif;
   letter-spacing: 0.05em;
 }
 
@@ -3673,7 +3663,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 16px;
   font-weight: 700;
   color: var(--text);
@@ -5613,7 +5603,7 @@ button.av-session-viz-graph-node:disabled {
   gap: 10px;
   margin: 0;
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 21px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -5792,7 +5782,7 @@ button.av-session-viz-graph-node:disabled {
 
 .av-run-title-line strong {
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 13px;
 }
 
@@ -6016,7 +6006,7 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-section-title h3 {
   margin: 0;
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 16px;
   letter-spacing: 0.02em;
 }
@@ -6476,7 +6466,7 @@ button.av-session-viz-graph-node:disabled {
 
 .av-coord-toolbar strong {
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 18px;
 }
 
@@ -6595,7 +6585,7 @@ button.av-session-viz-graph-node:disabled {
 
 .av-coord-metric strong {
   color: var(--text);
-  font-family: "Oxanium", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 17px;
   font-variant-numeric: tabular-nums;
 }
@@ -7573,7 +7563,7 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-throughput-chart svg { width: 100%; height: 70px; overflow: visible; }
 .av-coord-throughput-chart polyline { fill: none; stroke: var(--cyan); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .av-coord-throughput > div:not(.av-coord-throughput-chart) { display: grid; align-content: center; gap: 3px; border-left: 1px solid var(--av-coord-line); padding: 14px 18px; }
-.av-coord-throughput strong { color: var(--text); font: 700 21px "Oxanium", monospace; }
+.av-coord-throughput strong { color: var(--text); font: 700 21px 'IBM Plex Sans', system-ui, sans-serif; }
 .av-coord-throughput span, .av-coord-throughput small { color: var(--text-3); font: 11px "IBM Plex Mono", monospace; }
 
 .av-coord-events-panel { border-right: 0; }
@@ -7606,7 +7596,7 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-start-mark svg { width: 20px; height: 20px; }
 .av-coord-start-hero > div:nth-child(2) { display: grid; gap: 3px; }
 .av-coord-start-hero span { color: var(--cyan); font: 700 11px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: capitalize; }
-.av-coord-start-hero h3 { margin: 0; color: var(--text); font: 700 24px "Oxanium", monospace; letter-spacing: .025em; }
+.av-coord-start-hero h3 { margin: 0; color: var(--text); font: 700 24px 'IBM Plex Sans', system-ui, sans-serif; letter-spacing: .025em; }
 .av-coord-start-hero p { margin: 0; color: var(--text-3); font: 11px/1.5 "IBM Plex Mono", monospace; }
 .av-coord-start-back { color: var(--text-3); }
 
@@ -7954,8 +7944,6 @@ button.av-session-viz-graph-node:disabled {
   color: var(--text-3);
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .av-coord-ask textarea,

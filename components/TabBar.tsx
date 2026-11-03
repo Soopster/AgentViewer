@@ -69,7 +69,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
               maxWidth: 200,
               color: isActive ? 'var(--cyan)' : 'var(--text-2)',
               fontSize: 12,
-              fontFamily: 'var(--font-mono, "IBM Plex Mono", monospace)',
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               whiteSpace: 'nowrap',
               flexShrink: 0,
               outline: 'none',

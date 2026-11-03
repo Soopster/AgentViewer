@@ -342,7 +342,7 @@ function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentProp
     return <FencedCodeBlock language={language} codeString={codeString} />
   }
   return (
-    <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--violet)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
+    <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--text)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
       {children}
     </code>
   )

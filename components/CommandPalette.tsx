@@ -34,7 +34,7 @@ function PaletteMetaChip({ children, title }: { children: React.ReactNode; title
   return (
     <span
       title={title}
-      className="ml-auto inline-flex min-w-6 max-w-16 shrink-0 items-center justify-center truncate rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.04em] text-[var(--text-3)]"
+      className="ml-auto inline-flex min-w-6 max-w-16 shrink-0 items-center justify-center truncate rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--text-3)]"
     >
       {children}
     </span>
@@ -737,14 +737,14 @@ export default function CommandPalette({
           style={{ padding: '14px 16px' }}
         >
           <div className="min-w-0">
-            <div className="font-[Oxanium] text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text)]">
+            <div className="font-sans text-[12px] font-semibold text-[var(--text)]">
               Command Palette
             </div>
             <div className="mt-1 truncate font-mono text-[11px] text-[var(--text-3)]">
               Search sessions, projects, message text, providers, and view controls.
             </div>
           </div>
-          <div className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          <div className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 font-mono text-[9px] text-[var(--text-3)]">
             Ctrl K
           </div>
         </div>
@@ -855,7 +855,7 @@ export default function CommandPalette({
                       title={item.description}
                     >
                       <span
-                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold uppercase tracking-[-0.02em]"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold"
                         style={{ color: style.color, background: style.background, borderColor: style.border }}
                         title={provider}
                       >
@@ -877,7 +877,7 @@ export default function CommandPalette({
             <>
               <CommandSeparator />
               <CommandGroup heading="Messages">
-                <div className="px-3 py-3 font-mono text-[11px] tracking-[0.04em] text-[var(--text-3)]">
+                <div className="px-3 py-3 font-mono text-[11px] text-[var(--text-3)]">
                   Searching indexed messages...
                 </div>
               </CommandGroup>
@@ -901,7 +901,7 @@ export default function CommandPalette({
                       title={`${item.label} · ${item.meta}\n${item.description}`}
                     >
                       <span
-                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold uppercase tracking-[-0.02em]"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold"
                         style={{ color: style.color, background: style.background, borderColor: style.border }}
                         title={item.provider}
                       >
@@ -910,7 +910,7 @@ export default function CommandPalette({
                       <span className="min-w-0 flex-1">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
-                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[10px] uppercase tracking-[0.06em] text-[var(--text-3)]">
+                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[10px] text-[var(--text-3)]">
                             {item.meta}
                           </span>
                         </span>

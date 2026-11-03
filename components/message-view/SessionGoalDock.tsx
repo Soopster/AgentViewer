@@ -231,8 +231,6 @@ export function SessionGoalDock({ session, draft, disabled, onStart }: Props) {
               color: tone,
               fontFamily: mono,
               fontSize: 10,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
             }}
           >
             <Target size={12} aria-hidden="true" />
@@ -296,7 +294,6 @@ export function SessionGoalDock({ session, draft, disabled, onStart }: Props) {
               color: 'var(--text-3)',
               fontFamily: mono,
               fontSize: 10,
-              letterSpacing: '0.05em',
               cursor: disabled ? 'not-allowed' : 'pointer',
               opacity: disabled ? 0.5 : 1,
             }}
@@ -357,7 +354,7 @@ export function SessionGoalDock({ session, draft, disabled, onStart }: Props) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Target size={15} style={{ color: 'var(--cyan)' }} aria-hidden="true" />
-              <span style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text)' }}>
+              <span style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 13, color: 'var(--text)' }}>
                 {goal ? 'Session goal' : 'Start a goal'}
               </span>
               <span style={{ flex: 1 }} />
@@ -366,7 +363,7 @@ export function SessionGoalDock({ session, draft, disabled, onStart }: Props) {
               </GoalIconButton>
             </div>
             <label style={{ display: 'grid', gap: 5 }}>
-              <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: 'var(--text-3)' }}>
                 Objective — what does done look like?
               </span>
               <textarea
@@ -392,7 +389,7 @@ export function SessionGoalDock({ session, draft, disabled, onStart }: Props) {
               />
             </label>
             <label style={{ display: 'grid', gap: 5 }}>
-              <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
+              <span style={{ fontFamily: mono, fontSize: 10, color: 'var(--text-3)' }}>
                 Token budget (optional)
               </span>
               <input
@@ -508,7 +505,6 @@ function dialogButtonStyle(disabled: boolean, destructive: boolean): React.CSSPr
     color: destructive ? 'var(--red, #f87171)' : 'var(--text-2)',
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 10,
-    letterSpacing: '0.08em',
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.55 : 1,
   }

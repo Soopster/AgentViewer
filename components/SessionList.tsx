@@ -83,7 +83,7 @@ function SessionListInner({
   const [collapsedPanel, setCollapsedPanel] = useState<CollapsedPanel | null>(null)
   const providerSelectClassName = colorTreatment === 'flat'
     ? cn(nativeSelectBaseClassName,
-      'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-[var(--surface-2)] bg-none px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]')
+      'av-hover-control h-9 rounded-md border-[var(--border)] bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium')
     : providerNativeSelectClassName
   const providerSelectRef = useRef<HTMLSelectElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -862,11 +862,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
               {!collapsed && (
                 <div
                   style={{
-                    fontFamily: "'Oxanium', monospace",
-                    fontSize: 15,
-                    fontWeight: 700,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    letterSpacing: 0,
                     color: 'var(--text)',
                     display: 'flex',
                     alignItems: 'center',

@@ -237,7 +237,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               onClick={handleBookmark}
               title={bookmarked ? 'Remove bookmark' : 'Bookmark this message'}
             >
-              {bookmarked ? '★ SAVED' : '☆ BOOKMARK'}
+              {bookmarked ? '★ Saved' : '☆ Bookmark'}
             </button>
           )}
           {row.showForkControls && row.allowFork && (
@@ -247,7 +247,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               onClick={() => onForkFromMessage(row.message.providerMessageId ?? row.message.uuid)}
               disabled={forking}
             >
-              {forking ? 'FORKING…' : 'FORK HERE'}
+              {forking ? 'Forking…' : 'Fork here'}
             </button>
           )}
           {row.showForkControls && row.allowResume && (
@@ -256,7 +256,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               className={`timeline-row-action av-hover-control timeline-row-action--resume${resumeTarget ? ' timeline-row-action--resume-active' : ''}`}
               onClick={() => onToggleResume(row.message.uuid)}
             >
-              {resumeTarget ? 'RESUME TARGET' : 'RESUME HERE'}
+              {resumeTarget ? 'Resume target' : 'Resume here'}
             </button>
           )}
           {canEdit && (
@@ -286,7 +286,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               onClick={handleQuote}
               title="Quote selection (or this message) in the composer"
             >
-              QUOTE
+              Quote
             </button>
           )}
           {canReply && (
@@ -296,7 +296,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               onClick={handleReply}
               title="Reply to this message in the composer"
             >
-              REPLY
+              Reply
             </button>
           )}
           {canCopy && (
@@ -306,7 +306,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               onClick={handleCopy}
               title="Copy message text"
             >
-              {copied ? 'COPIED' : 'COPY'}
+              {copied ? 'Copied' : 'Copy'}
             </button>
           )}
           {canCopyRaw && (
@@ -319,7 +319,7 @@ export const TimelineMessageRow = memo(function TimelineMessageRow({
               {rawState === 'copied' ? 'COPIED'
                 : rawState === 'missing' ? 'NO FRAME'
                   : rawState === 'denied' ? 'DENIED'
-                    : 'RAW'}
+                    : 'Raw'}
             </button>
           )}
         </div>

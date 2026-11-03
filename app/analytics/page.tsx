@@ -53,8 +53,6 @@ const ROLE_MIX_SEGMENTS: Array<{
 
 const LABEL_STYLE: React.CSSProperties = {
   fontSize: 10,
-  letterSpacing: '0.1em',
-  textTransform: 'uppercase',
   color: 'var(--text-3)',
   marginBottom: 8,
 }
@@ -145,7 +143,7 @@ function Kpi({ label, value, sub, accent }: { label: string; value: string; sub?
     >
       <span aria-hidden="true" style={{ width: 4, borderRadius: 999, background: accent, flexShrink: 0 }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
-        <span style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: accent }}>
+        <span style={{ fontSize: 10, color: accent }}>
           {label}
         </span>
         <span style={{ fontSize: 22, color: 'var(--text)', fontWeight: 500, lineHeight: 1.1 }}>{value}</span>
@@ -590,8 +588,6 @@ function SubHeader({ label }: { label: string }) {
       style={{
         gridColumn: '1 / -1',
         fontSize: 11,
-        letterSpacing: '0.18em',
-        textTransform: 'uppercase',
         color: 'var(--text-2)',
         marginTop: 8,
         paddingBottom: 4,
@@ -822,7 +818,7 @@ export default function AnalyticsPage() {
       <div style={{ maxWidth: 1280, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <h1 style={{ fontSize: 22, fontWeight: 500, letterSpacing: '0.02em', margin: 0 }}>
+            <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>
               Cross-session analytics
             </h1>
             <span style={{ color: 'var(--text-3)', fontSize: 12 }}>
@@ -1473,5 +1469,5 @@ function presetButtonStyle(active: boolean): React.CSSProperties {
   }
 }
 
-const modelTh: React.CSSProperties = { padding: '4px 8px', fontWeight: 400, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }
+const modelTh: React.CSSProperties = { padding: '4px 8px', fontWeight: 400, fontSize: 10, }
 const modelTd: React.CSSProperties = { padding: '6px 8px', color: 'var(--text-2)', fontFamily: FONT_MONO }
