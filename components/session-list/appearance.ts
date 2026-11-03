@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 export const providerNativeSelectClassName = cn(
   nativeSelectBaseClassName,
-  'av-hover-control h-9 rounded-md border-transparent bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium shadow-none'
+  'av-hover-control h-8 rounded-md border-transparent bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium shadow-none'
 )
 
 const collapsedIconButtonBaseStyle: React.CSSProperties = {

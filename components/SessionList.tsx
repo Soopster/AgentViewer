@@ -83,7 +83,7 @@ function SessionListInner({
   const [collapsedPanel, setCollapsedPanel] = useState<CollapsedPanel | null>(null)
   const providerSelectClassName = colorTreatment === 'flat'
     ? cn(nativeSelectBaseClassName,
-      'av-hover-control h-9 rounded-md border-[var(--border)] bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium')
+      'av-hover-control h-8 rounded-md border-transparent bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium shadow-none')
     : providerNativeSelectClassName
   const providerSelectRef = useRef<HTMLSelectElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -886,7 +886,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
               )}
               <SidebarTrigger
                 title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="ml-auto size-7 shrink-0 rounded-md border-border bg-[var(--surface-2)] px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)]"
+                className="ml-auto size-7 shrink-0 rounded-md border-transparent bg-transparent px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)]"
               />
             </div>
             {!collapsed && (

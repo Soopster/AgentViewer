@@ -125,10 +125,7 @@ export function SessionRowMetadata({ session, selected, hovered, editor }: {
               fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 11,
               color: 'var(--text-3)',
-              padding: '1px 4px',
-              borderRadius: 3,
-              border: '1px dashed var(--border-2)',
-              letterSpacing: '0.03em',
+              padding: '1px 0',
               cursor: 'text',
             }}
           >
