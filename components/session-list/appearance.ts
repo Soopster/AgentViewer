@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 export const providerNativeSelectClassName = cn(
   nativeSelectBaseClassName,
-  'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+  'av-hover-control h-9 rounded-md border-transparent bg-[var(--surface-2)] bg-none px-3 text-[12px] font-medium shadow-none'
 )
 
 const collapsedIconButtonBaseStyle: React.CSSProperties = {
@@ -34,12 +34,12 @@ export const sidebarHeaderPrimaryActionStyle: React.CSSProperties = {
   height: 30,
   padding: '0 11px',
   borderRadius: 8,
-  border: '1px solid color-mix(in srgb, var(--green) 40%, var(--border))',
-  background: 'color-mix(in srgb, var(--green) 11%, var(--surface-2))',
-  color: 'var(--green)',
-  fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 11,
-  letterSpacing: '0.05em',
+  border: '1px solid transparent',
+  background: 'var(--surface-3)',
+  color: 'var(--text)',
+  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+  fontSize: 12,
+  fontWeight: 500,
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
@@ -50,9 +50,9 @@ const sidebarHeaderIconActionBaseStyle: React.CSSProperties = {
   width: 30,
   height: 30,
   padding: 0,
-  borderRadius: 8,
-  border: '1px solid var(--border)',
-  background: 'color-mix(in srgb, var(--surface-2) 82%, transparent)',
+  borderRadius: 6,
+  border: '1px solid transparent',
+  background: 'transparent',
   color: 'var(--text-3)',
   display: 'inline-grid',
   placeItems: 'center',
@@ -74,10 +74,10 @@ export function sidebarHeaderIconActionStyle(options: { active?: boolean; accent
   return {
     ...sidebarHeaderIconActionBaseStyle,
     border: options.active
-      ? `1px solid color-mix(in srgb, ${accent} 42%, var(--border))`
+      ? '1px solid transparent'
       : sidebarHeaderIconActionBaseStyle.border,
     background: options.active
-      ? `color-mix(in srgb, ${accent} 13%, var(--surface-2))`
+      ? 'var(--surface-3)'
       : sidebarHeaderIconActionBaseStyle.background,
     color: options.disabled ? 'var(--text-4, var(--text-3))' : options.active ? accent : sidebarHeaderIconActionBaseStyle.color,
     cursor: options.disabled ? 'not-allowed' : 'pointer',
@@ -89,9 +89,8 @@ export function segmentStyle(active: boolean, position: 'first' | 'last', enable
   return {
     flex: 1,
     height: 28,
-    borderRadius: position === 'first' ? '6px 0 0 6px' : '0 6px 6px 0',
-    border: '1px solid var(--border)',
-    borderLeftWidth: position === 'last' ? 0 : 1,
+    borderRadius: 6,
+    border: '1px solid transparent',
     background: active ? 'var(--surface-3)' : 'transparent',
     color: active ? 'var(--text)' : 'var(--text-3)',
     fontSize: 12,
@@ -108,7 +107,7 @@ export function inboxButtonStyle(active: boolean): React.CSSProperties {
     background: active ? 'var(--surface-3)' : 'transparent',
     color: active ? 'var(--violet)' : 'var(--text-3)',
     cursor: 'pointer',
-    fontFamily: "'IBM Plex Mono', monospace",
+    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
     fontSize: 12,
     lineHeight: 1,
     padding: '2px 4px',

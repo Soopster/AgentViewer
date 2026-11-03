@@ -55,7 +55,6 @@ export const SessionRow = memo(function SessionRow({
       data-session-key={sessionTabKey(session)}
       style={{
         padding: '9px 16px 9px 24px',
-        borderBottom: '1px solid var(--border)',
         contentVisibility: 'auto',
         // `auto 96px` lets the browser remember the real measured row height
         // after the row has been painted once, instead of forcing the layout
@@ -135,7 +134,7 @@ export const SessionRow = memo(function SessionRow({
           title={`Subagent of ${session.parentSessionId}`}
           style={{
             marginTop: 3,
-            fontFamily: "'IBM Plex Mono', monospace",
+            fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
             fontSize: 10,
             color: 'var(--text-3)',
           }}

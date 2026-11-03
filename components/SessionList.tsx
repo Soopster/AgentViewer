@@ -434,7 +434,7 @@ function SessionListInner({
                       <div style={{ flex: 1 }} />
                       <div
                         style={{
-                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                           fontSize: 10,
                           color: 'var(--text-3)',
                           background: 'var(--surface-3)',
@@ -504,11 +504,11 @@ function SessionListInner({
                               </span>
                               <span
                                 style={{
-                                  fontFamily: "'IBM Plex Mono', monospace",
+                                  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                                   fontSize: 11,
                                   color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
                                   background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
-                                  border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                                  border: `1px solid ${isProjectSelected ? 'var(--border-2)' : 'var(--border)'}`,
                                   borderRadius: 3,
                                   padding: '1px 6px',
                                   flexShrink: 0,
@@ -558,7 +558,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         <NativeSelectOption value="all">All providers</NativeSelectOption>
                       </NativeSelect>
                     </div>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                    <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
                       Choose the provider to scope the session list. This panel behaves like the shadcn sidebar pop-out pattern.
                     </div>
                   </>
@@ -609,7 +609,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         </Button>
                       )}
                     </div>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                    <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
                       Search the current provider and scope. Popular tags stay available in the filter panel.
                     </div>
                   </>
@@ -686,7 +686,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           display: 'flex',
                           alignItems: 'center',
                           gap: 6,
-                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                           fontSize: 11,
                           color: 'var(--text-3)',
                           cursor: 'pointer',
@@ -730,10 +730,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                                 height: 26,
                                 padding: '0 8px',
                                 borderRadius: 999,
-                                border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                                border: `1px solid ${selected ? 'var(--border-2)' : 'var(--border)'}`,
                                 background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
                                 color: selected ? 'var(--violet)' : 'var(--text-3)',
-                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                                 fontSize: 10,
                                 letterSpacing: '0.04em',
                                 cursor: 'pointer',
@@ -745,12 +745,12 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                           )
                         })
                       ) : (
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                        <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)' }}>
                           No tags available.
                         </div>
                       )}
                     </div>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                    <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
                       Filter by the most common tags in the current session set.
                     </div>
                   </>
@@ -771,7 +771,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
                         {summaryText}
                       </div>
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
                         {provider === 'all' ? 'All providers' : providerLabel(provider)} · {sortMode === 'time' ? 'sorted by time' : 'grouped by project'}
                         {scopeMode === 'project' && scopeProjectName ? ` · ${scopeProjectName}` : ''}
                       </div>
@@ -787,7 +787,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         border: '1px solid var(--border)',
                         background: 'var(--surface-2)',
                         color: 'var(--text)',
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 11,
                         letterSpacing: '0.06em',
                         cursor: 'pointer',
@@ -995,17 +995,17 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
         {!collapsed && (
           <Card
             style={{
-              margin: '10px 14px 8px',
-              borderRadius: 10,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
+              margin: '6px 14px 8px',
+              borderRadius: 0,
+              border: 'none',
+              background: 'transparent',
               boxShadow: 'none',
             }}
           >
             <CardHeader className="sr-only">
               <CardTitle>Session filters</CardTitle>
             </CardHeader>
-            <CardContent style={{ padding: 12 }}>
+            <CardContent style={{ padding: 0 }}>
               <div style={{ display: 'grid', gap: 5 }}>
                   <NativeSelect
                     ref={providerSelectRef}
@@ -1038,7 +1038,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       flex: 1,
                       height: 30,
                       borderRadius: 6,
-                      border: '1px solid var(--border)',
+                      border: '1px solid transparent',
                       background: 'var(--surface-2)',
                       color: 'var(--text)',
                       padding: '0 10px',
@@ -1085,10 +1085,10 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                             height: 24,
                             padding: '0 8px',
                             borderRadius: 999,
-                            border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                            border: `1px solid ${selected ? 'var(--border-2)' : 'var(--border)'}`,
                             background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
                             color: selected ? 'var(--violet)' : 'var(--text-3)',
-                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                             fontSize: 10,
                             letterSpacing: '0.04em',
                             cursor: 'pointer',
@@ -1149,7 +1149,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                   <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span
                       style={{
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 11,
                         color: 'var(--text-3)',
                         letterSpacing: '0.04em',
@@ -1163,7 +1163,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                         display: 'flex',
                         alignItems: 'center',
                         gap: 6,
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 11,
                         color: 'var(--text-3)',
                         cursor: 'pointer',
@@ -1195,7 +1195,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                 fontSize: 12,
                 color: 'var(--red)',
                 borderBottom: '1px solid var(--border)',
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               }}
             >
               {error}
@@ -1252,11 +1252,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     </span>
                     <span
                       style={{
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 11,
                         color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
                         background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
-                        border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                        border: `1px solid ${isProjectSelected ? 'var(--border-2)' : 'var(--border)'}`,
                         borderRadius: 3,
                         padding: '1px 6px',
                         flexShrink: 0,
@@ -1283,7 +1283,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
             <div
               style={{
                 padding: '18px',
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 11,
                 color: 'var(--text-3)',
                 lineHeight: 1.6,
@@ -1300,7 +1300,7 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
             style={{
               padding: '12px 14px 14px',
               borderTop: '1px solid var(--border)',
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 11,
               color: 'var(--text-3)',
               letterSpacing: '0.03em',

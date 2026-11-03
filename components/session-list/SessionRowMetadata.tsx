@@ -75,7 +75,7 @@ export function SessionRowMetadata({ session, selected, hovered, editor }: {
             autoFocus
             placeholder="tag1, tag2"
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 11,
               background: 'var(--surface-3)',
               border: '1px solid var(--violet)',
@@ -101,7 +101,7 @@ export function SessionRowMetadata({ session, selected, hovered, editor }: {
               <span
                 key={tag}
                 style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                   fontSize: 11,
                   background: selected ? 'rgba(139,128,240,0.16)' : 'rgba(139,128,240,0.08)',
                   color: 'var(--violet)',
@@ -122,7 +122,7 @@ export function SessionRowMetadata({ session, selected, hovered, editor }: {
             onClick={e => { e.stopPropagation(); startEdit('tag', '')(e) }}
             title="Click to add tags"
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 11,
               color: 'var(--text-3)',
               padding: '1px 4px',
