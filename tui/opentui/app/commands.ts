@@ -79,6 +79,8 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'window-terminal', label: 'Shell and processes in a window', key: '', category: 'View' },
   { id: 'window-diff', label: 'Diff in a window', key: '', category: 'View' },
   { id: 'window-files', label: 'Files in a window', key: '', category: 'View' },
+  { id: 'composer-target', label: 'Composer sends to… (session or terminal)', key: '', category: 'View' },
+  { id: 'surface-to-tab', label: 'Move focused window or panel to a tab', key: '', category: 'View' },
   { id: 'window-terminal-new', label: 'Another shell in a window', key: '', category: 'View' },
   { id: 'window-browser', label: 'Browser in a window', key: '', category: 'View' },
   { id: 'window-pull-request', label: 'Pull request in a window', key: '', category: 'View' },

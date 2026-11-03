@@ -67,7 +67,7 @@ export function handleWindowControlKeys({
   pluginOverlay: PluginSurfaceId | null
   gitRepoCwd: string
   setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
   focusedWindowSurfaceKind: WindowSurfaceKind | null
   focusedWindowSurface: string | null
   popoverTabs: string[]

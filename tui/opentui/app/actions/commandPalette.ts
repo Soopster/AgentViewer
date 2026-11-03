@@ -45,6 +45,8 @@ import { type PluginServiceId } from '../../../../lib/plugins/types'
 import { type RightPanelSurfaceKind } from '../../../../lib/rightPanel'
 
 export type ExecuteCommandPaletteContext = {
+  surfaceToTab: () => void
+  openComposerTargetMenu: () => void
   focusedWindowItem: WindowItem | null
   composerTargetSession: Session | null
   closeCommandPalette: () => void
@@ -68,7 +70,7 @@ export type ExecuteCommandPaletteContext = {
   setDailySummaryOpen: React.Dispatch<React.SetStateAction<boolean>>
   toggleSurfacePanelPlacement: () => void
   setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
   gitRepoCwd: string
   toggleFloatingFocused: (target?: number | null) => void
   floatNewShell: () => void
@@ -309,6 +311,12 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       break
     case 'window-layout':
       setWindowPickerOpen(true)
+      break
+    case 'composer-target':
+      ctx.openComposerTargetMenu()
+      break
+    case 'surface-to-tab':
+      ctx.surfaceToTab()
       break
     case 'window-terminal':
       openSurfaceWindow('terminal')

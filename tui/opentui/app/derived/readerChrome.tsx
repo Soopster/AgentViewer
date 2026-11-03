@@ -401,7 +401,7 @@ export type SurfacePanelElementContext = {
   setSurfacePanel: React.Dispatch<React.SetStateAction<SurfacePanelState>>
   setSurfacePanelFocused: React.Dispatch<React.SetStateAction<boolean>>
   toggleSurfacePanelPlacement: () => void
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
   setSurfacePanelExpanded: React.Dispatch<React.SetStateAction<boolean>>
   setSurfacePanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   surfacePanelResizeFromRef: React.RefObject<number | null>

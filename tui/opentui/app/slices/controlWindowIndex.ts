@@ -109,7 +109,7 @@ export type UseControlWindowIndexGroupContext = {
   openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
   setPopoverOpen: (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => void
   moveSurfaceToPanel: (surface: WindowSurfaceId) => void
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
 }
 
 export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContext) {

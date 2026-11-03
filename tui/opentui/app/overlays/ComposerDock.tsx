@@ -63,6 +63,7 @@ type ComposerDockProps = {
   footerSegments: InlineTextSegment[]
   composerDockSendingHintSegments: InlineTextSegment[] | null
   composerDockFooterHint: string
+  onComposerTargetClick?: (point: { x: number; y: number }) => void
 }
 
 export function ComposerDock(props: ComposerDockProps) {
@@ -79,7 +80,7 @@ export function ComposerDock(props: ComposerDockProps) {
     dockFooterStatsFor, composerDraftState, hoverComposerStatus, setComposerStatusHover,
     composerStatusHover, dockShowsStatusBar, selectedSession, composerDockFooterHintWidth,
     visibleComposerSending, footerSegments, composerDockSendingHintSegments,
-    composerDockFooterHint,
+    composerDockFooterHint, onComposerTargetClick,
   } = props
   return (
     !composerWindowOpen && !composerHidden && !presentationHidesComposer && !embeddedComposer ? (
@@ -99,7 +100,7 @@ export function ComposerDock(props: ComposerDockProps) {
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
           focused={composerDockEmphasized}
           title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage
-            ? fitText(composerTargetMessage, composerDockTitleWidth)
+            ? onComposerTargetClick ? undefined : fitText(composerTargetMessage, composerDockTitleWidth)
             : isChatLikeView ? undefined : composerDockBorderTitle}
           titleColor={composerTargetMessage ? theme.cyan : composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
@@ -112,6 +113,12 @@ export function ComposerDock(props: ComposerDockProps) {
             composerTextareaRef.current?.focus()
           }}
         >
+          {onComposerTargetClick && composerTargetMessage && !fullscreenMode && !composerTurnStatusInBorder ? (
+            <box id="composer-target-label" position="absolute" top={-1} left={2} height={1} width={Math.max(8, composerDockTitleWidth - 4) + 4} flexDirection="row" zIndex={3}
+              onMouseUp={(event) => { if (event.button !== 0) return; event.stopPropagation(); onComposerTargetClick({ x: event.x, y: event.y }) }}>
+              <text fg={theme.cyan} selectable={false} wrapMode="none">{`${fitText(composerTargetMessage, Math.max(8, composerDockTitleWidth - 4)).trimEnd()} ▾`}</text>
+            </box>
+          ) : null}
           {composerTurnStatusInBorder ? (
             <box
               id="composer-dock-turn-status"

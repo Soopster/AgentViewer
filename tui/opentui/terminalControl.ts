@@ -15,8 +15,9 @@ import { chmodSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { encodeTerminalKey, encodeTerminalPaste, type TerminalKey } from '../../lib/terminalKeys'
+import { encodeTerminalKey, type TerminalKey } from '../../lib/terminalKeys'
 import { shellQuoteArgv } from './userKeys'
+import { encodeTerminalPrompt } from './terminalPrompt'
 
 export type ControlRequest = {
   op: 'list' | 'read' | 'send' | 'keys' | 'run' | 'state'
@@ -121,8 +122,7 @@ async function handle(request: ControlRequest): Promise<ControlReply> {
   if (request.op === 'send') {
     if (typeof request.text !== 'string') return { ok: false, error: 'text is required' }
     // A multi-line text is one paste when the program asked for brackets, so it does not run line by line.
-    const body = /\n/.test(request.text) ? encodeTerminalPaste(request.text, term?.bracketedPaste() ?? false) : request.text
-    shells.writeShell(shell.id, body + (request.enter ? '\r' : ''))
+    shells.writeShell(shell.id, encodeTerminalPrompt(request.text, term?.bracketedPaste() ?? false, Boolean(request.enter)))
     return { ok: true, id: shell.id, sent: request.text.length }
   }
   if (request.op === 'keys') {

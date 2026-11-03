@@ -447,11 +447,11 @@ export type OpenWindowControlMenuContext = {
   windowSurfaceMeta: Record<string, SurfaceMeta>
   returningPopoverRef: React.RefObject<boolean>
   closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
-  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta, from?: WindowSurfaceId) => void
   openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
   setPopoverOpen: (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => void
   moveSurfaceToPanel: (surface: WindowSurfaceId) => void
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
   setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; title: string; items: ContextMenuItem[]; } | null>>
   windowSurfaceTitle: (surface: WindowSurfaceId) => string
   windowKeyTitle: (key: string) => string
@@ -519,6 +519,7 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
         { label: 'Open full screen', run: wrap(() => { closeSurfaceWindow(item.surface, true); setPopoverOpen(kind, true) }) },
         { label: 'Open as a tab here', run: wrap(() => { closeSurfaceWindow(item.surface, true); openPopoverTab(kind, {}) }) },
       )
+      else items.push({ label: 'Open as a tab here', run: wrap(() => { const pin = windowSurfaceMeta[item.surface] ?? {}; const from = item.surface; closeSurfaceWindow(from, true); openPopoverTab(kind, pin, from) }) })
       items.push({ label: 'Move to side panel', run: wrap(() => moveSurfaceToPanel(item.surface)) })
       if (MULTI_INSTANCE_SURFACES.has(kind)) items.push({ label: `Open another ${WINDOW_SURFACE_TITLES[kind].slice(2)} window`, run: wrap(() => openSurfaceWindow(kind, { another: true })) })
     }
@@ -720,7 +721,7 @@ export type OpenSurfaceWindowContext = {
   splitReaderLast: boolean
 }
 
-export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string }) {
+export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) {
   const {
     showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
     setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
@@ -736,7 +737,7 @@ export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: Window
   const activePanel = activeSurface(surfacePanel)
   const movingPanel = options.fromPanelId ? surfacePanel.surfaces.find(entry => entry.id === options.fromPanelId && entry.kind === kind) : !options.another && activePanel?.kind === kind ? activePanel : null
   const existing = windowSurfaces.find((entry) => surfaceKindOf(entry) === kind)
-  if (existing && !movingPanel && !(options.another && MULTI_INSTANCE_SURFACES.has(kind))) {
+  if (existing && !movingPanel && !(MULTI_INSTANCE_SURFACES.has(kind) && (options.another || options.fromTab))) {
     pendingSurfaceFocusRef.current = existing
     setFocusedPane('messages')
     setWindowSurfaces((current) => [...current])
@@ -759,7 +760,12 @@ export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: Window
   if (movingPanel && remaining.length === 0) setSurfacePanelOpen(false)
   setSurfacePanelFocused(false)
   setWindowSurfaces((current) => (current.includes(surface) ? current : [...current, surface]))
-  setWindowSurfaceMeta(current => ({ ...current, [surface]: { ...current[surface], cwd: movingPanel?.cwd ?? gitRepoCwd } }))
+  if (options.fromTab) {
+    copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, options.fromTab), surfaceViewNamespace(kind, surface))
+    const selected = workspaceContext.runtime.values.get(`${surfaceViewNamespace(kind, surface)}:process:selectedId`)
+    if (typeof selected === 'string') windowShellSelectionRef.current.set(surface, selected)
+  }
+  setWindowSurfaceMeta(current => ({ ...current, [surface]: { ...current[surface], cwd: movingPanel?.cwd ?? options.cwd ?? gitRepoCwd } }))
   // A split holds two windows; a surface beyond that needs a stack or grid to appear.
   if (!windowSplitTree && splitArrangement === 'split' && splitPaneCount + windowSurfaces.length + 1 > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
   // Focused once the layout has placed it: until then its index is unknown,
@@ -1432,7 +1438,7 @@ export type OpenPopoverWindowContext = {
   openTeammatesPanel: () => void
   setPopoverOpen: (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => void
   openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
-  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
+  openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta, from?: WindowSurfaceId) => void
   parkedWindowKeysRef: React.RefObject<Set<string>>
   windowSurfaces: string[]
   windowSurfaceMeta: Record<string, SurfaceMeta>

@@ -317,6 +317,7 @@ import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
 import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments, runFetchComposerAffordances } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
+import { sendTerminalPrompt, listComposerTerminals, readTerminalAgentState, terminalAnswerBytes, sendTerminalAnswer, queueTerminalPrompt, cancelQueuedTerminalPrompts, queuedTerminalPromptCount, releaseQueuedTerminalPrompts, parseTerminalAddressing, terminalHandle } from './terminalPrompt'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes, runSwapWindowInDirection, runEndFloatGesture } from './app/actions/windows'
@@ -364,6 +365,7 @@ import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
+import { TerminalTargetStrip } from './app/overlays/TerminalTargetStrip'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
 import { runProjectedWindowGeometry } from './app/derived/windowGeometry'
@@ -3410,7 +3412,7 @@ function OpenTuiWorkspace() {
 
   const composerViewActions = { setComposerDraft, setComposerMentionAttachments, setComposerPromptParts, setComposerMention, setComposerMentionResults, setComposerMentionDismissedStart, setComposerSlashIndex, setComposerSlashDismissed, setComposerHistoryIndex, setComposerHistoryOpen, setDraftBeforeHistory, setFollowTail, setPendingNewCount, setUnreadBoundaryKey, setHistoryIndex, setPermissionOptionIndex, setContextUsage, setSessionDetail, setTuiCopilotMode }
   const composerViewRefs = { textarea: composerTextareaRef, storage: composerDraftStorageKeyRef, attachments: composerMentionAttachmentsRef, parts: composerPromptPartsRef }
-  const sendComposerMessage = useStableEvent(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => runSendComposerMessage({
+  const sendSessionComposerMessage = useStableEvent(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => runSendComposerMessage({
     composerTargetSessionRef, composerTargetSession, composerSessions, composerViewActions,
     composerViewRefs, showNotice, composerDraft, prepareComposerSubmission,
     composerMentionAttachments, composerPromptParts, composerPaneTargetKey,
@@ -3441,6 +3443,71 @@ function OpenTuiWorkspace() {
     readWorkspaceDraftParts, restoreComposerPromptPartExtmarks, clearSessionRunning,
     exitInProgressRef,
   }, draftOverride, attachmentsOverride, isRetry, promptPartsOverride, retryTurnRequestId))
+  // The composer's targets are terminals while this is non-empty: the prompt goes
+  // to each of those shells instead of a session, and none of the session
+  // machinery (turn stream, permissions, queue) is involved.
+  type ComposerTerminalTarget = { id: string; name: string }
+  const [composerTerminalTargets, setComposerTerminalTargets] = useState<ComposerTerminalTarget[]>([])
+  const composerTerminalTargetsRef = useRef(composerTerminalTargets)
+  composerTerminalTargetsRef.current = composerTerminalTargets
+  const sendComposerMessage = useStableEvent(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => {
+    let targets = composerTerminalTargetsRef.current
+    let text = (draftOverride ?? composerDraft).trim()
+    // Leading @handles address terminals for this prompt alone, whatever the composer targets.
+    if (text.startsWith('@') && !isRetry) {
+      const addressed = parseTerminalAddressing(text, await listComposerTerminals())
+      if (addressed) { targets = addressed.targets; text = addressed.text }
+    }
+    if (targets.length === 0) return sendSessionComposerMessage(draftOverride, attachmentsOverride, isRetry, promptPartsOverride, retryTurnRequestId)
+    const clearDraft = () => { setComposerDraft(''); if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, '') }
+    // Each target is judged on its own state: one may be blocked, another working.
+    const outcomes = await Promise.all(targets.map(async (target): Promise<{ target: ComposerTerminalTarget; ok: boolean; what: string }> => {
+      const state = await readTerminalAgentState(target.id)
+      if (state === 'blocked') {
+        const bytes = terminalAnswerBytes(text)
+        if (bytes === null) return { target, ok: false, what: 'is waiting on an answer · 1-9, y or n, or Enter for the default' }
+        const answered = await sendTerminalAnswer(target.id, bytes)
+        return { target, ok: answered.ok, what: answered.ok ? 'answered' : answered.error }
+      }
+      if (!text) return { target, ok: false, what: 'nothing to send' }
+      if (state === 'working') {
+        const position = queueTerminalPrompt(target.id, text, (result) => showNotice(result.ok ? 'info' : 'error', result.ok ? `Sent to ${target.name} · it finished its turn` : result.error))
+        return { target, ok: true, what: `queued${position > 1 ? ` (${position})` : ''} until idle` }
+      }
+      const result = await sendTerminalPrompt(target.id, text)
+      return { target, ok: result.ok, what: result.ok ? 'sent' : result.error }
+    }))
+    if (outcomes.some(outcome => outcome.ok)) clearDraft()
+    const summary = outcomes.length === 1
+      ? `${outcomes[0]!.target.name} ${outcomes[0]!.what}`
+      : outcomes.map(outcome => `${outcome.target.name}: ${outcome.what}`).join(' · ')
+    showNotice(outcomes.every(outcome => outcome.ok) ? 'info' : outcomes.some(outcome => outcome.ok) ? 'info' : 'error', summary)
+  })
+  const openComposerTargetMenu = useStableEvent(async (point?: { x: number; y: number }) => {
+    const terminals = await listComposerTerminals()
+    const glyph = (state: string | null) => state === 'working' ? '●' : state === 'blocked' ? '▲' : state === 'idle' ? '○' : state === 'done' ? '✓' : ' '
+    const current = composerTerminalTargetsRef.current
+    const at = point ?? { x: Math.max(0, Math.floor(width / 3)), y: Math.max(1, height - 12) }
+    const reopen = () => { void openComposerTargetMenu(at) }
+    const queuedCount = current.reduce((total, target) => total + queuedTerminalPromptCount(target.id), 0)
+    const items = [
+      { label: `${current.length === 0 ? '✓' : ' '} A session — the selected one`, run: () => { cancelQueuedTerminalPrompts(); setComposerTerminalTargets([]) } },
+      ...terminals.map(terminal => {
+        const on = current.some(target => target.id === terminal.id)
+        return {
+          label: `${on ? '✓' : ' '} ${glyph(terminal.agentState)} ${terminal.name} @${terminalHandle(terminal.name)}${terminal.agent ? ` · ${terminal.agent}${terminal.agentState ? ` ${terminal.agentState}` : ''}` : ''}`,
+          // Picking toggles, so several terminals can be addressed at once.
+          run: () => { setComposerTerminalTargets(list => on ? list.filter(target => target.id !== terminal.id) : [...list, { id: terminal.id, name: terminal.name }]); setFocusedPane('messages'); setTimeout(reopen, 0) },
+        }
+      }),
+    ]
+    if (terminals.length === 0) items.push({ label: '  No terminal is open · o in the Terminal tab starts one', run: () => {} })
+    if (queuedCount > 0) items.push(
+      { label: `  Send ${queuedCount} queued now`, run: () => { for (const target of current) void releaseQueuedTerminalPrompts(target.id) } },
+      { label: `  Cancel ${queuedCount} queued`, run: () => { cancelQueuedTerminalPrompts() } },
+    )
+    setContextMenu({ x: at.x, y: at.y, title: current.length > 1 ? `Composer sends to ${current.length} terminals` : 'Composer sends to', items })
+  })
 
   // Flush queued prompt once the active turn lands (CLI-style queueing).
   // Gate on === 'idle' (not !== 'sending'): the prior turn can settle into
@@ -4361,7 +4428,7 @@ function OpenTuiWorkspace() {
   // A surface into the layout: out of the side panel, into a window, focused.
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
-  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string } = {}) => runOpenSurfaceWindow({
+  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string } = {}) => runOpenSurfaceWindow({
     showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
     setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
     workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
@@ -4467,18 +4534,41 @@ function OpenTuiWorkspace() {
     setWindowSurfacePeek(null)
     setFocusedPane('messages')
   })
-  const openPopoverTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
+  // `from` is a window being turned into the tab: its view state (a shell's
+  // scrollback selection, a browser's page) goes with it, and a kind that may
+  // have several instances gets a fresh tab rather than reusing the first.
+  const openPopoverTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta, from?: WindowSurfaceId) => {
     setPopoverOpen(kind, false)
     const existing = isPopoverWindowKind(kind)
       ? findPopoverWindow(popoverTabs, windowSurfaceMeta, kind, pin)
-      : popoverTabs.find((id) => surfaceKindOf(id) === kind) ?? null
+      : MULTI_INSTANCE_SURFACES.has(kind) && from ? null : popoverTabs.find((id) => surfaceKindOf(id) === kind) ?? null
     if (existing) { showPopoverTab(existing); return }
     const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
     const id = nextSurfaceId(kind, new Set([...windowSurfaces, ...parked, ...popoverTabs]))
     if (isPluginSurfaceId(kind) && (!isPopoverWindowKind(kind) || !POPOVER_WINDOWS[kind].single)) copySurfaceViewState(workspaceContext.runtime, 'root', surfaceViewNamespace(kind, id), getPluginSurface(kind).pluginId)
+    if (from && from !== id) {
+      copySurfaceViewState(workspaceContext.runtime, surfaceViewNamespace(kind, from), surfaceViewNamespace(kind, id))
+      const selected = workspaceContext.runtime.values.get(`${surfaceViewNamespace(kind, id)}:process:selectedId`) ?? windowShellSelectionRef.current.get(from)
+      if (typeof selected === 'string') windowShellSelectionRef.current.set(id, selected)
+    }
     setWindowSurfaceMeta((current) => ({ ...current, [id]: pin }))
     setPopoverTabs((current) => [...current, id])
     showPopoverTab(id)
+  })
+  // The focused window, else the side panel's active surface, becomes a tab of the strip.
+  const surfaceToTab = useStableEvent(() => {
+    if (focusedWindowSurface && !popoverTabs.includes(focusedWindowSurface)) {
+      const from = focusedWindowSurface
+      const pin = windowSurfaceMeta[from] ?? {}
+      closeSurfaceWindow(from, true)
+      openPopoverTab(surfaceKindOf(from), pin, from)
+      return
+    }
+    const entry = surfacePanelOpen ? activeSurface(surfacePanel) : null
+    if (!entry) { showNotice('info', 'Focus a window or open the side panel first'); return }
+    setSurfacePanel(current => closeSurfaceIn(current, entry.id))
+    if (surfacePanel.surfaces.length <= 1) setSurfacePanelOpen(false)
+    openPopoverTab(entry.kind, { cwd: entry.cwd ?? gitRepoCwd }, `panel:${entry.id}`)
   })
   // `keep` leaves a store-backed popover open (it is moving, not closing).
   const closePopoverTab = useStableEvent((id: WindowSurfaceId, keep = false) => {
@@ -4511,7 +4601,7 @@ function OpenTuiWorkspace() {
     const meta = windowSurfaceMeta[id] ?? {}
     closePopoverTab(id, true)
     if (isPopoverWindowKind(kind)) openPopoverWindow(kind, meta)
-    else openSurfaceWindow(kind as RightPanelSurfaceKind)
+    else openSurfaceWindow(kind as RightPanelSurfaceKind, { fromTab: id, cwd: meta.cwd })
   })
   const openPopoverTabMenu = useStableEvent((id: WindowSurfaceId, point: { x: number; y: number }) => {
     setContextMenu({ ...point, title: windowSurfaceTitle(id), items: [
@@ -5432,7 +5522,7 @@ function OpenTuiWorkspace() {
   })
 
   const executeCommandPalette = useStableEvent((id: string) => runExecuteCommandPalette({
-    focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
+    surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
     runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
@@ -6395,6 +6485,7 @@ function OpenTuiWorkspace() {
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
+      {composerTerminalTargets.length > 0 && !composerWindowOpen && !composerHidden && !presentationHidesComposer ? <TerminalTargetStrip targets={composerTerminalTargets} theme={theme} left={composerAreaOffset} width={composerAreaWidth} bottom={composerDockHeight} /> : null}
       <ComposerDock
         composerWindowOpen={composerWindowOpen}
         composerHidden={composerHidden}
@@ -6410,7 +6501,8 @@ function OpenTuiWorkspace() {
         composerAccentColor={composerAccentColor}
         theme={theme}
         composerTurnStatusInBorder={composerTurnStatusInBorder}
-        composerTargetMessage={composerTargetMessage}
+        onComposerTargetClick={openComposerTargetMenu}
+        composerTargetMessage={composerTerminalTargets.length > 0 ? `To: ${composerTerminalTargets.length === 1 ? `terminal ${composerTerminalTargets[0]!.name}` : `${composerTerminalTargets.length} terminals · ${composerTerminalTargets.map(target => target.name).join(', ')}`}` : composerTargetMessage}
         composerDockTitleWidth={composerDockTitleWidth}
         composerDockBorderTitle={composerDockBorderTitle}
         composerDockHeight={composerDockHeight}

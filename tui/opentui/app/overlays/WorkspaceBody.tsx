@@ -116,7 +116,7 @@ type WorkspaceBodyProps = {
   setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
   setNewSessionCwd: React.Dispatch<React.SetStateAction<string>>
   setNewSessionModalOpen: React.Dispatch<React.SetStateAction<boolean>>
-  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; }) => void
+  openSurfaceWindow: (kind: WindowSurfaceKind, options?: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string }) => void
   setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
   windowSurfacePeek: string | null
   readerFrameNode: () => React.ReactNode
