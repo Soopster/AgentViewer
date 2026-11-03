@@ -156,3 +156,11 @@ export function readAllScreenText(source: ScreenSource): string[] {
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines
 }
+
+/** Only the rows on screen — what an agent's own UI is drawn in, without paying for the scrollback. */
+export function readVisibleScreenText(source: ScreenSource): string[] {
+  const cols = source.getCols()
+  const lines: string[] = []
+  for (let row = 0; row < source.getRows(); row += 1) lines.push(sourceRowText((col) => source.getCell(row, col), cols).text)
+  return lines
+}

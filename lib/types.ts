@@ -105,6 +105,9 @@ export type SessionInboxState = {
   pinOrder?: number
   settledAt?: number
   snoozedUntil?: number
+  /** When a person last looked at this session, on any client. A finished turn older
+   *  than this is not news to anyone, so every surface drops its "done" mark together. */
+  seenAt?: number
   /** The pull request this session's work became. Recorded so the session can
    *  settle itself when that PR merges instead of sitting in the active list
    *  long after the work landed. */

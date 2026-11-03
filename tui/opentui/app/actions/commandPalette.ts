@@ -18,6 +18,8 @@ import { SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { TASK_PANEL_RESIZE_STEP, SIDEBAR_RESIZE_STEP } from '../layoutConstants'
 import { sessionKey } from '../sessionList'
+import { userCommandForChordId, shellQuoteArgv } from '../../userKeys'
+import { addProcess, startProcess } from '../../processStore'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 import { cycleDensityValue } from '../viewHelpers'
 import { type MutableRefObject } from 'react'
@@ -245,6 +247,14 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
   if (id.startsWith('popwin:')) {
     const kind = id.slice('popwin:'.length)
     if (isPopoverWindowKind(kind)) openPopoverWindow(kind)
+    return
+  }
+  const userCommand = userCommandForChordId(id)
+  if (userCommand) {
+    // A managed process in the Terminal view, in the focused session's folder.
+    const cwd = (focusedSession ?? selectedSession)?.cwd || process.cwd()
+    startProcess(addProcess({ name: userCommand.name, command: shellQuoteArgv(userCommand.run), cwd }))
+    openSurfaceWindow('terminal')
     return
   }
   const pluginCommand = getPluginCommand(id)

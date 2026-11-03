@@ -521,7 +521,7 @@ export async function writeTuiShowSettledSessions(show: boolean): Promise<void> 
  */
 export async function updateTuiSessionInbox(
   session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>,
-  action: 'settle' | 'reopen',
+  action: 'settle' | 'reopen' | 'seen',
 ): Promise<SessionInboxState> {
   const provider = session.provider ?? 'claude'
   if (isRemoteAttached()) {

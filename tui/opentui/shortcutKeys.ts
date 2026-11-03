@@ -1,4 +1,5 @@
 import type { KeyEvent } from '@opentui/core'
+import { activeChordBindings } from './userKeys'
 
 export type ShortcutKeyEvent = Pick<
   KeyEvent,
@@ -59,9 +60,15 @@ export const PORTABLE_COMMAND_CHORDS = {
 
 export type PortableCommandChord = keyof typeof PORTABLE_COMMAND_CHORDS
 
-export function portableCommandChord(sequence: string): PortableCommandChord | null {
+/** The command id a ⌃K key runs — the built-in table, or the user's keys.json over it. */
+export function portableCommandChord(sequence: string): string | null {
   const normalized = sequence.toLowerCase()
-  return normalized in PORTABLE_COMMAND_CHORDS
-    ? normalized as PortableCommandChord
-    : null
+  const bindings = activeChordBindings()
+  if (bindings) return bindings.has(normalized) ? normalized : null
+  return normalized in PORTABLE_COMMAND_CHORDS ? normalized : null
+}
+
+export function portableChordCommand(chord: string): string {
+  return activeChordBindings()?.get(chord)?.command
+    ?? PORTABLE_COMMAND_CHORDS[chord as PortableCommandChord].command
 }

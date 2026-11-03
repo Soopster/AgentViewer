@@ -13,7 +13,7 @@ import { interruptTuiSessionTurn } from '../../../../lib/tui/service'
 import { transcriptWindowCommand } from '../../transcriptWindowInput'
 import { type Session } from '../../../../lib/types'
 import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, type ChordMap } from '../../chordHelp'
-import { PORTABLE_COMMAND_CHORDS, portableCommandChord } from '../../shortcutKeys'
+import { portableChordCommand, portableCommandChord } from '../../shortcutKeys'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { TASK_PANEL_RESIZE_STEP } from '../layoutConstants'
 import { sessionKey } from '../sessionList'
@@ -139,7 +139,7 @@ export function handleGlobalChordKeys({
         }
         const chord = portableCommandChord(sequence || key.name)
         if (chord) {
-          executeCommandPalette(PORTABLE_COMMAND_CHORDS[chord].command)
+          executeCommandPalette(portableChordCommand(chord))
           return
         }
         if (sequence === '?') { setChordHelp({ map: COMMAND_CHORD_MAP, dismissOnKey: true }); return }

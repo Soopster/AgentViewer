@@ -6,7 +6,7 @@ import { readSessionInboxState, updateSessionInboxState, type SessionInboxAction
 import type { LinkedPullRequest } from '@/lib/types'
 
 const ACTIONS = new Set<SessionInboxAction>([
-  'pin', 'unpin', 'settle', 'reopen', 'snooze', 'unsnooze', 'link-pr', 'unlink-pr',
+  'pin', 'unpin', 'settle', 'reopen', 'snooze', 'unsnooze', 'seen', 'link-pr', 'unlink-pr',
 ])
 
 /** Accepts only the fields a client is allowed to set; `state`/`checkedAt` are

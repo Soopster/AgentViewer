@@ -9,6 +9,10 @@ import { CALLER_PROVIDER_ENV, callerAgentProvider, scrubInheritedAgentIdentity }
 // Mirrors COORD_CLI_VERBS in agent-viewer-coord-cli.mjs (coordCliSmoke pins it):
 // importing that module here would load the tool contract on every launch.
 const COORD_CLI_VERBS = ['run', 'join', 'runs', 'whoami', 'status', 'delegate', 'send', 'inbox', 'wait', 'tools', 'call']
+// Mirrors SESSION_CLI_VERBS in agent-viewer-session-cli.mjs (sessionCliSmoke pins it).
+// Mirrors TERMINAL_CLI_VERBS in agent-viewer-terminal-cli.mjs (terminalControlSmoke pins it).
+const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait']
+const SESSION_CLI_VERBS = ['list', 'get', 'read', 'prompt', 'wait', 'interrupt', 'report', 'explain']
 
 // Agent Viewer is not the agent session it was launched from, and nothing it
 // spawns is either — see lib/inheritedIdentityEnv.mjs.
@@ -192,6 +196,8 @@ Modes:
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
+  terminal   Drive the running TUI's terminals: list, read, send, keys, run, wait
+  session    Script ordinary chats: list, get, read, prompt --wait, wait --until, interrupt, report, explain
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
   coord workers List persistent Coordinator worker registrations
@@ -619,6 +625,18 @@ if (command === '-h' || command === '--help' || command === 'help') {
     stdio: 'inherit',
     env: callerProvider ? { ...process.env, [CALLER_PROVIDER_ENV]: callerProvider } : process.env,
   })
+  child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
+} else if (command === 'session' && (args[1] === undefined || args[1] === '--help' || SESSION_CLI_VERBS.includes(args[1]))) {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-session-cli.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
+  child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
+} else if (command === 'terminal' && (args[1] === undefined || args[1] === '--help' || TERMINAL_CLI_VERBS.includes(args[1]))) {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-terminal-cli.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)

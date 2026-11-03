@@ -14,7 +14,7 @@ import { type RightPanelSurfaceKind } from '../../../../lib/rightPanel'
 import { type SendState, type Session } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
 import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
-import { PORTABLE_COMMAND_CHORDS, portableCommandChord } from '../../shortcutKeys'
+import { portableChordCommand, portableCommandChord } from '../../shortcutKeys'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
@@ -169,7 +169,7 @@ export function handleWindowControlKeys({
         setCommandChordPending(false)
         if (key.name === 'escape' || isCtrl('c') || isCtrl('g')) return
         const chord = portableCommandChord(sequence || key.name)
-        if (chord) executeCommandPalette(PORTABLE_COMMAND_CHORDS[chord].command)
+        if (chord) executeCommandPalette(portableChordCommand(chord))
         else if (sequence === '?') setChordHelp({ map: COMMAND_CHORD_MAP, dismissOnKey: true })
         else showNotice('info', chordUnknownKeyNotice(COMMAND_CHORD_MAP, sequence || key.name))
       })

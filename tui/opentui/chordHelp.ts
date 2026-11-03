@@ -12,6 +12,7 @@
 
 import { PORTABLE_COMMAND_CHORDS } from './shortcutKeys'
 import { SPLIT_CHORD_HELP } from './splitPaneState'
+import { activeChordBindings } from './userKeys'
 
 export type ChordEntry = {
   /** Display form of the key(s), ` · `-separated when several do the same thing. */
@@ -50,23 +51,33 @@ export const SPLIT_CHORD_MAP: ChordMap = {
   unprefixedSections: SPLIT_CHORD_HELP.filter((section) => section.title.includes('no ⌃B')),
 }
 
+// `sections` is read through a getter so the table follows the user's keys.json
+// (installed once at boot) without every consumer learning there are two tables.
+let commandSections: { source: unknown; sections: ChordSection[] } | null = null
+function commandChordSections(): ChordSection[] {
+  const bindings = activeChordBindings()
+  if (commandSections && commandSections.source === bindings) return commandSections.sections
+  const source = bindings ?? new Map(Object.entries(PORTABLE_COMMAND_CHORDS))
+  const sections: ChordSection[] = [{
+    title: 'commands',
+    entries: [
+      ...[...source].map(([key, entry]) => ({
+        keys: key,
+        label: entry.label,
+        short: entry.short,
+        ...('hint' in entry ? { hint: entry.hint } : {}),
+      })),
+      { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
+    ],
+  }]
+  commandSections = { source: bindings, sections }
+  return sections
+}
+
 export const COMMAND_CHORD_MAP: ChordMap = {
   prefix: '⌃K',
   title: 'command chords',
-  sections: [
-    {
-      title: 'commands',
-      entries: [
-        ...Object.entries(PORTABLE_COMMAND_CHORDS).map(([key, entry]) => ({
-          keys: key,
-          label: entry.label,
-          short: entry.short,
-          ...('hint' in entry ? { hint: entry.hint } : {}),
-        })),
-        { keys: 'esc · ⌃C · ⌃G', label: 'cancel the chord', short: 'cancel' },
-      ],
-    },
-  ],
+  get sections() { return commandChordSections() },
 }
 
 /** Every entry the next keystroke could match, in overlay order. */

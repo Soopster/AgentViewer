@@ -247,6 +247,7 @@ import {
   SPLIT_CHORD_MAP,
   type ChordMap,
 } from './chordHelp'
+import { userKeyProblems } from './userKeys'
 import { isAltKey, isCtrlKey, isCtrlShiftKey, isShiftedKey, PORTABLE_COMMAND_CHORDS, portableCommandChord } from './shortcutKeys'
 import { type RunningRegistryEntry, type MenuPoint, type WindowItem, type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
 import { NATIVE_OSC_ENABLED, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
@@ -1081,9 +1082,31 @@ function OpenTuiWorkspace() {
     return segs
   }, [activeFleetPage, fleetPageCount, fleetStripVisible, selectedSessionKey, theme, visibleFleetEntries])
 
+  // A keys.json that did not apply cleanly says so once, instead of a chord that quietly does nothing.
+  useEffect(() => {
+    const problems = userKeyProblems()
+    if (problems.length > 0) showNotice('error', `keys.json: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}`, 8000)
+  }, [])
+  // A finished-turn notice is cleared on every client at once: whoever looks first
+  // records `seenAt` on the session's inbox state, and every surface drops notices
+  // older than it. Only a real notice writes — navigating must not touch the file.
+  const attentionDoneRef = useRef(attentionDone)
+  attentionDoneRef.current = attentionDone
+  const markAttentionSeen = useStableEvent((sessionKeyToMark: string) => {
+    const session = sessionsByKeyRef.current.get(sessionKeyToMark)
+    if (session) void updateTuiSessionInbox(session, 'seen').catch(() => {})
+  })
+  useEffect(() => {
+    if (attentionDone.length === 0) return
+    const seenAtByKey = new Map(sessions.map((session) => [sessionKey(session), session.inbox?.seenAt ?? 0]))
+    const next = attentionDone.filter((done) => (seenAtByKey.get(done.sessionKey) ?? 0) < done.createdAt)
+    if (next.length !== attentionDone.length) setAttentionDone(next)
+  }, [sessions, attentionDone])
+
   // Viewing a session resolves its "turn finished" notice.
   useEffect(() => {
     if (!selectedSessionKey) return
+    if (attentionDoneRef.current.some((done) => done.sessionKey === selectedSessionKey)) markAttentionSeen(selectedSessionKey)
     setAttentionDone((prev) => {
       const next = prev.filter((done) => done.sessionKey !== selectedSessionKey)
       return next.length === prev.length ? prev : next
@@ -2794,6 +2817,7 @@ function OpenTuiWorkspace() {
     setAttentionOpen(false)
     if (item.kind === 'turn-done') {
       setAttentionDone((prev) => keepFiltered(prev, (done) => done.key !== item.key))
+      markAttentionSeen(item.sessionKey)
     }
     if (item.kind === 'viewer-note' && item.attentionId) {
       setViewerAttentionNotes((prev) => keepFiltered(prev, (note) => note.id !== item.attentionId))
@@ -2813,6 +2837,7 @@ function OpenTuiWorkspace() {
   const dismissAttentionItem = useStableEvent((item: AttentionItem) => {
     if (item.kind === 'turn-done') {
       setAttentionDone((prev) => keepFiltered(prev, (done) => done.key !== item.key))
+      markAttentionSeen(item.sessionKey)
     } else if (item.kind === 'viewer-note' && item.attentionId) {
       setViewerAttentionNotes((prev) => keepFiltered(prev, (note) => note.id !== item.attentionId))
       void dismissTuiViewerAttention(item.attentionId)

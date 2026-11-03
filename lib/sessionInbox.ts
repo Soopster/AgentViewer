@@ -167,7 +167,7 @@ export async function recordLinkedPullRequestState(args: {
   return { settled }
 }
 
-export type SessionInboxAction = 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'link-pr' | 'unlink-pr'
+export type SessionInboxAction = 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'seen' | 'link-pr' | 'unlink-pr'
 
 export async function updateSessionInboxState(args: {
   provider: AgentProvider
@@ -191,6 +191,8 @@ export async function updateSessionInboxState(args: {
     next = { ...next, snoozedUntil: until }; delete next.settledAt
   }
   if (args.action === 'unsnooze') delete next.snoozedUntil
+  // Never moves backwards: a slow client's late write must not un-see what another already saw.
+  if (args.action === 'seen') next = { ...next, seenAt: Math.max(previous.seenAt ?? 0, now) }
   if (args.action === 'link-pr' && args.linkedPr) next = { ...next, linkedPr: args.linkedPr }
   if (args.action === 'unlink-pr') delete next.linkedPr
   if (Object.keys(next).length === 0) delete file.states[key]

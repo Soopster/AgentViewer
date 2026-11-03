@@ -20,6 +20,7 @@ import { buildStackTracePrompt, findLatestStackTrace, type StackTrace } from '..
 import { encodeTerminalKey, encodeTerminalMouse, encodeTerminalPaste, type TerminalMouseButton } from '../../../lib/terminalKeys'
 import { readProcessConfig, PROCESS_CONFIG_PATH } from './processConfig'
 import { ShellView } from './ShellView'
+import { useShellAgentStates } from './shellAgentState'
 import { readAllScreenText } from './shellScreen'
 import { closeShell, getShells, shellTerminal, startShell, subscribeShells, writeShell, type ShellSession } from '../../../tui/opentui/shell/sdkTerminal'
 import {
@@ -113,6 +114,7 @@ export function ProcessPane({
   const shellIds = shellList.map((entry) => `${entry.id}:${entry.status}:${entry.name}`).join('|')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const shells = useMemo(() => shellList, [shellIds])
+  const shellAgentStates = useShellAgentStates(shells)
   const [selectedId, setSelectedId] = useWorkspaceState<string | null>('process:selectedId', initialSelectedId, false)
   const onSelectedChangeRef = useRef(onSelectedChange)
   useLayoutEffect(() => { onSelectedChangeRef.current = onSelectedChange }, [onSelectedChange])
@@ -420,7 +422,13 @@ export function ProcessPane({
           // A box per entry, with a direction, so each is its own click target.
           [
             ...processes.map((entry) => ({ id: entry.id, glyph: processStatusGlyph(entry), color: statusColor(entry), name: entry.name })),
-            ...shells.map((entry) => ({ id: entry.id, glyph: '❯', color: entry.status === 'running' ? theme.green : entry.status === 'failed' ? theme.red : theme.dim, name: entry.name })),
+            ...shells.map((entry) => {
+              // A recognised agent in the tab shows its state: ● working, ▲ needs you, ○ idle.
+              const agent = shellAgentStates.get(entry.id)
+              const glyph = agent?.state === 'working' ? '●' : agent?.state === 'blocked' ? '▲' : agent?.state === 'idle' ? '○' : '❯'
+              const color = agent?.state === 'working' ? theme.amber : agent?.state === 'blocked' ? theme.red : entry.status === 'running' ? theme.green : entry.status === 'failed' ? theme.red : theme.dim
+              return { id: entry.id, glyph, color, name: agent ? `${entry.name} · ${agent.agent}` : entry.name }
+            }),
           ].map((entry) => (
             <box
               key={entry.id}
