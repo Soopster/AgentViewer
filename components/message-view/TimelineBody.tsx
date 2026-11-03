@@ -723,11 +723,9 @@ export function TimelineBody(props: TimelineBodyProps) {
                   gap: 8,
                   padding: '6px 10px',
                   borderRadius: 999,
-                  border: '1px solid color-mix(in srgb, var(--cyan) 35%, var(--border))',
-                  background: colorTreatment === 'flat'
-                    ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))'
-                    : 'linear-gradient(110deg, color-mix(in srgb, var(--cyan) 10%, var(--surface)), color-mix(in srgb, var(--violet) 10%, var(--surface)))',
-                  boxShadow: '0 10px 30px var(--cyan-glow), inset 0 0 14px var(--violet-glow)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface-2)',
+                  boxShadow: 'none',
                 }}
               >
                 <LiveSpinner label="waiting for new messages" />

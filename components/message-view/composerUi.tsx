@@ -133,17 +133,15 @@ export function LiveSpinner({ label }: { label: string} ) {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11,
-        letterSpacing: '0.08em',
-        color: 'var(--violet)',
+        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+        fontSize: 12,
+        color: 'var(--text-3)',
       }}
     >
       <span
         aria-hidden="true"
         style={{
-          color: 'var(--cyan)',
-          filter: 'drop-shadow(0 0 5px var(--cyan))',
+          color: 'var(--text-3)',
         }}
       >
         {SPINNER_FRAMES[frame]}

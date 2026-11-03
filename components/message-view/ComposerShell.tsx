@@ -306,9 +306,9 @@ export function ComposerShell(props: ComposerShellProps) {
             padding: '1px 6px',
             borderRadius: 5,
             lineHeight: 1,
-            fontFamily: "'IBM Plex Mono', monospace",
+            fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
             fontSize: 10,
-            letterSpacing: '0.08em',
+
           }}
         >
           ▼
@@ -370,10 +370,10 @@ export function ComposerShell(props: ComposerShellProps) {
             flexWrap: 'wrap',
           }}>
             <span style={{
-              fontFamily: "'IBM Plex Mono', monospace",
+              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
               fontSize: 10,
               color: 'var(--text-3)',
-              letterSpacing: '0.08em',
+
             }}>
               SUGGESTED
             </span>
@@ -414,7 +414,7 @@ export function ComposerShell(props: ComposerShellProps) {
               onClick={dismissSuggestion}
               title="Dismiss suggestion"
               style={{
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 10,
                 color: 'var(--text-3)',
                 background: 'transparent',
@@ -430,10 +430,10 @@ export function ComposerShell(props: ComposerShellProps) {
         <Card
           className="av-web-composer-card"
           style={{
-            borderRadius: 16,
-            border: '1px solid color-mix(in srgb, var(--border-2) 82%, transparent)',
-            background: colorTreatment === 'flat' ? 'var(--surface)' : 'linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, white 1%) 0%, var(--surface) 100%)',
-            boxShadow: '0 8px 24px var(--shadow, rgba(0,0,0,0.16))',
+            borderRadius: 10,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            boxShadow: 'none',
           }}
         >
           <CardHeader className="sr-only">
@@ -593,13 +593,13 @@ export function ComposerShell(props: ComposerShellProps) {
                       minWidth: 0,
                       height: 26,
                       padding: '0 6px',
-                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 11,
                       color: 'var(--text)',
                       background: 'var(--surface)',
                       border: '1px solid var(--border)',
                       borderRadius: 5,
-                      letterSpacing: '0.04em',
+
                     }}
                   />
                 </label>
@@ -697,10 +697,10 @@ export function ComposerShell(props: ComposerShellProps) {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 10,
                 color: 'var(--cyan)',
-                letterSpacing: '0.03em',
+
               }}>
                 <span>Safe resume armed — next send forks at the selected timeline point and guards the discarded turn.</span>
                 <Button
@@ -714,9 +714,9 @@ export function ComposerShell(props: ComposerShellProps) {
                     border: '1px solid rgba(56,217,245,0.22)',
                     background: 'rgba(56,217,245,0.08)',
                     color: 'var(--cyan)',
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
-                    letterSpacing: '0.06em',
+
                     cursor: 'pointer',
                   }}
                 >
@@ -758,20 +758,20 @@ export function ComposerShell(props: ComposerShellProps) {
                   >
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
+                        <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
                           {permission.title}
                         </div>
                         {permissionMcpServerLabel(permission) ? (
-                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: permission.mcpServer?.source === 'sdk' ? 'var(--text-3)' : 'var(--cyan)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: permission.mcpServer?.source === 'sdk' ? 'var(--text-3)' : 'var(--cyan)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {permissionMcpServerLabel(permission)}
                           </div>
                         ) : null}
                         {permission.reason ? (
-                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                             {permission.reason}
                           </div>
                         ) : permission.detail ? (
-                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {permission.detail}
                           </div>
                         ) : null}
@@ -799,9 +799,9 @@ export function ComposerShell(props: ComposerShellProps) {
                               border: response === 'reject' ? '1px solid rgba(248,113,113,0.24)' : '1px solid rgba(45,212,160,0.24)',
                               background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
                               color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
-                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                               fontSize: 11,
-                              letterSpacing: '0.06em',
+
                               cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
                               opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
                             }}
@@ -823,13 +823,13 @@ export function ComposerShell(props: ComposerShellProps) {
                         href={permission.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--cyan)', wordBreak: 'break-all' }}
+                        style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: 'var(--cyan)', wordBreak: 'break-all' }}
                       >
                         {permission.url}
                       </a>
                     )}
                     {permission.paths && permission.paths.length > 0 && (
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
+                      <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
                         {permission.paths.join(', ')}
                       </div>
                     )}
@@ -877,7 +877,7 @@ export function ComposerShell(props: ComposerShellProps) {
                   borderRadius: 5,
                   color: 'var(--text)',
                   padding: '0 8px',
-                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                   fontSize: 10,
                 }}
               />
@@ -893,9 +893,9 @@ export function ComposerShell(props: ComposerShellProps) {
                   border: '1px solid rgba(56,217,245,0.22)',
                   background: 'rgba(56,217,245,0.07)',
                   color: 'var(--cyan)',
-                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                   fontSize: 10,
-                  letterSpacing: '0.06em',
+
                   cursor: !attachmentPath.trim() || sendBusy ? 'not-allowed' : 'pointer',
                   opacity: !attachmentPath.trim() || sendBusy ? 0.5 : 1,
                 }}
@@ -921,7 +921,7 @@ export function ComposerShell(props: ComposerShellProps) {
                       border: '1px solid rgba(139,128,240,0.32)',
                       background: 'rgba(139,128,240,0.10)',
                       color: 'var(--violet)',
-                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 10,
                       padding: '3px 8px 3px 3px',
                       cursor: sendBusy ? 'not-allowed' : 'pointer',
@@ -935,7 +935,7 @@ export function ComposerShell(props: ComposerShellProps) {
                       border: '1px solid rgba(139,128,240,0.22)',
                       background: 'rgba(139,128,240,0.08)',
                       color: 'var(--violet)',
-                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 10,
                       padding: '0 7px',
                       cursor: sendBusy ? 'not-allowed' : 'pointer',
@@ -966,9 +966,9 @@ export function ComposerShell(props: ComposerShellProps) {
             {activeQueuedSends.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                 <span style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                   fontSize: 11,
-                  letterSpacing: '0.02em',
+
                   textTransform: 'capitalize',
                   color: 'var(--amber, #eaaa40)',
                   opacity: 0.85,
@@ -978,7 +978,7 @@ export function ComposerShell(props: ComposerShellProps) {
                 <span
                   role="status"
                   style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
                     color: composerQueueDurability === 'memory-only'
                       ? 'var(--red, #f87171)'
@@ -1015,7 +1015,7 @@ export function ComposerShell(props: ComposerShellProps) {
                         border: '1px solid rgba(234,170,64,0.30)',
                         background: 'rgba(234,170,64,0.08)',
                         padding: '0 4px 0 8px',
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 10,
                         color: 'var(--amber, #eaaa40)',
                       }}
@@ -1216,7 +1216,7 @@ export function ComposerShell(props: ComposerShellProps) {
                   height: 34,
                   padding: 0,
                   background: attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
-                  border: `1px solid ${attachmentPanelOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'transparent'}`,
+                  border: '1px solid transparent',
                   borderRadius: 999,
                   color: attachmentPanelOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
                   cursor: 'pointer',
@@ -1237,8 +1237,8 @@ export function ComposerShell(props: ComposerShellProps) {
                   width: 34,
                   height: 34,
                   padding: 0,
-                  background: promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
-                  border: `1px solid ${promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                  background: promptLibraryOpen ? 'var(--surface-3)' : 'transparent',
+                  border: '1px solid transparent',
                   borderRadius: 6,
                   color: promptLibraryOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
                   cursor: 'pointer',
@@ -1272,8 +1272,8 @@ export function ComposerShell(props: ComposerShellProps) {
                     width: 34,
                     height: 34,
                     padding: 0,
-                    background: channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
-                    border: `1px solid ${channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    background: channelBridgeOpen || channelBridge.routeComposer ? 'var(--surface-3)' : 'transparent',
+                    border: '1px solid transparent',
                     borderRadius: 6,
                     color: channelBridgeOpen || channelBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
                     cursor: 'pointer',
@@ -1294,7 +1294,7 @@ export function ComposerShell(props: ComposerShellProps) {
                         borderRadius: 999,
                         background: `var(${composerConfig.cssAccentVar})`,
                         color: 'var(--surface)',
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 10,
                         fontWeight: 700,
                         lineHeight: '13px',
@@ -1330,8 +1330,8 @@ export function ComposerShell(props: ComposerShellProps) {
                     width: 34,
                     height: 34,
                     padding: 0,
-                    background: ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
-                    border: `1px solid ${ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    background: ideBridgeOpen || ideBridge.routeComposer ? 'var(--surface-3)' : 'transparent',
+                    border: '1px solid transparent',
                     borderRadius: 6,
                     color: ideBridgeOpen || ideBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
                     cursor: 'pointer',
@@ -1352,7 +1352,7 @@ export function ComposerShell(props: ComposerShellProps) {
                         borderRadius: 999,
                         background: `var(${composerConfig.cssAccentVar})`,
                         color: 'var(--surface)',
-                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 10,
                         fontWeight: 700,
                         lineHeight: '13px',
@@ -1388,13 +1388,13 @@ export function ComposerShell(props: ComposerShellProps) {
                       height: 34,
                       padding: 0,
                       background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
-                      border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                      border: '1px solid transparent',
                       borderRadius: 999,
                       color: `var(${composerConfig.cssAccentVar})`,
-                      fontFamily: "'Oxanium', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 10,
                       fontWeight: 600,
-                      letterSpacing: '0.1em',
+
                       cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
                       transition: 'background 0.15s, color 0.15s',
                       whiteSpace: 'nowrap',
@@ -1419,10 +1419,10 @@ export function ComposerShell(props: ComposerShellProps) {
                         border: '1px solid rgba(56,189,248,0.3)',
                         borderRadius: 6,
                         color: 'var(--cyan)',
-                        fontFamily: "'Oxanium', monospace",
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                         fontSize: 10,
                         fontWeight: 600,
-                        letterSpacing: '0.1em',
+
                         cursor: backgroundingTasks ? 'not-allowed' : 'pointer',
                         transition: 'background 0.15s',
                         whiteSpace: 'nowrap',
@@ -1446,10 +1446,10 @@ export function ComposerShell(props: ComposerShellProps) {
                       border: '1px solid rgba(248,113,113,0.3)',
                       borderRadius: 6,
                       color: 'var(--red, #f87171)',
-                      fontFamily: "'Oxanium', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 10,
                       fontWeight: 600,
-                      letterSpacing: '0.1em',
+
                       cursor: 'pointer',
                       transition: 'background 0.15s',
                       whiteSpace: 'nowrap',
@@ -1472,13 +1472,13 @@ export function ComposerShell(props: ComposerShellProps) {
                     height: 34,
                     padding: 0,
                     background: canSubmitMessage ? `var(${composerConfig.cssAccentVar})` : `rgba(${composerConfig.cssAccentRgb},0.18)`,
-                    border: `1px solid rgba(${composerConfig.cssAccentRgb},${canSubmitMessage ? '0.75' : '0.3'})`,
+                    border: '1px solid transparent',
                     borderRadius: 999,
                     color: canSubmitMessage ? 'var(--surface)' : `var(${composerConfig.cssAccentVar})`,
-                    fontFamily: "'Oxanium', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 10,
                     fontWeight: 600,
-                    letterSpacing: '0.1em',
+
                     cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
                     transition: 'background 0.15s, color 0.15s',
                     whiteSpace: 'nowrap',
@@ -1495,10 +1495,10 @@ export function ComposerShell(props: ComposerShellProps) {
               aria-live="polite"
               style={{
                 marginTop: 6,
-                fontFamily: "'IBM Plex Mono', monospace",
+                fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                 fontSize: 10,
                 color: composerStatusColor,
-                letterSpacing: '0.04em',
+
                 display: 'flex',
                 alignItems: 'center',
                 gap: 12,
@@ -1582,12 +1582,12 @@ export function ComposerShell(props: ComposerShellProps) {
             }}
           >
             <CardHeader style={{ padding: '12px 14px 0' }}>
-              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+              <CardTitle style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
                 Rewind Preview
               </CardTitle>
             </CardHeader>
             <CardContent style={{ padding: '6px 14px 0' }}>
-              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
                 {rewindPreview.contentPreview || 'Selected prompt'}
               </div>
               <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1595,7 +1595,7 @@ export function ComposerShell(props: ComposerShellProps) {
                   <div
                     key={file}
                     style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 11,
                       color: 'var(--text-2)',
                       padding: '5px 8px',
@@ -1607,7 +1607,7 @@ export function ComposerShell(props: ComposerShellProps) {
                     {file}
                   </div>
                 )) : (
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                  <div style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-3)' }}>
                     No tracked files would change.
                   </div>
                 )}
@@ -1626,9 +1626,9 @@ export function ComposerShell(props: ComposerShellProps) {
                     border: '1px solid rgba(251,191,36,0.28)',
                     borderRadius: 5,
                     color: 'var(--yellow, #fbbf24)',
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
-                    letterSpacing: '0.06em',
+
                     cursor: applyingRewind ? 'not-allowed' : 'pointer',
                     opacity: applyingRewind ? 0.5 : 1,
                   }}
@@ -1646,9 +1646,9 @@ export function ComposerShell(props: ComposerShellProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 5,
                     color: 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
-                    letterSpacing: '0.06em',
+
                     cursor: 'pointer',
                   }}
                 >
@@ -1667,12 +1667,12 @@ export function ComposerShell(props: ComposerShellProps) {
             }}
           >
             <CardHeader style={{ padding: '12px 14px 0' }}>
-              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+              <CardTitle style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
                 Rollback Preview
               </CardTitle>
             </CardHeader>
             <CardContent style={{ padding: '6px 14px 0' }}>
-              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
                 This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
               </div>
               <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1680,7 +1680,7 @@ export function ComposerShell(props: ComposerShellProps) {
                   <div
                     key={turn.turnId}
                     style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                       fontSize: 11,
                       color: 'var(--text-2)',
                       padding: '5px 8px',
@@ -1707,9 +1707,9 @@ export function ComposerShell(props: ComposerShellProps) {
                     border: '1px solid rgba(251,191,36,0.28)',
                     borderRadius: 5,
                     color: 'var(--yellow, #fbbf24)',
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
-                    letterSpacing: '0.06em',
+
                     cursor: applyingRewind ? 'not-allowed' : 'pointer',
                     opacity: applyingRewind ? 0.5 : 1,
                   }}
@@ -1727,9 +1727,9 @@ export function ComposerShell(props: ComposerShellProps) {
                     border: '1px solid var(--border)',
                     borderRadius: 5,
                     color: 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
                     fontSize: 11,
-                    letterSpacing: '0.06em',
+
                     cursor: 'pointer',
                   }}
                 >

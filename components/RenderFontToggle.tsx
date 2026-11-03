@@ -48,21 +48,20 @@ export default function RenderFontToggle() {
           alignItems: 'center',
           gap: 5,
           background: open ? 'var(--surface-3)' : 'transparent',
-          border: '1px solid var(--border)',
-          borderRadius: 5,
+          border: '1px solid transparent',
+          borderRadius: 6,
           color: 'var(--text-2)',
           cursor: 'pointer',
           padding: '4px 8px',
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 11,
-          letterSpacing: '0.05em',
+          fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+          fontSize: 12,
           transition: 'background 0.14s ease',
           whiteSpace: 'nowrap',
         }}
       >
         <span aria-hidden="true" style={{ fontFamily: current.family, fontSize: 12, lineHeight: 1 }}>Aa</span>
         <span>{current.label}</span>
-        <span aria-hidden="true" style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
+        <span aria-hidden="true" style={{ fontSize: 12, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
       {open ? (
