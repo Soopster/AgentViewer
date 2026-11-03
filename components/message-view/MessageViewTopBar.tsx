@@ -421,7 +421,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                 {(['classic', 'bars', 'none'] as const).map((style) => (
                   <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'var(--surface-3)' : 'transparent', border: '1px solid transparent', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--text)' : 'var(--text-2)', fontSize: 11 }}>
                     {style === 'classic' ? 'Classic' : style === 'bars' ? 'Bars' : 'None'}
                   </button>
                 ))}
@@ -433,7 +433,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                 {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
                   <button key={style} type="button" className="av-hover-control"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontSize: 11 }}>
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'var(--surface-3)' : 'transparent', border: '1px solid transparent', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--text)' : 'var(--text-2)', fontSize: 11 }}>
                     {style === 'word-alt' ? 'Word (alt)' : style === 'word' ? 'Word' : style === 'char' ? 'Character' : 'None'}
                   </button>
                 ))}

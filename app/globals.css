@@ -3975,12 +3975,12 @@ body {
   height: 24px;
   max-width: 280px;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: var(--surface-2);
   color: var(--text-2);
   cursor: pointer;
-  font-family: "IBM Plex Mono", monospace;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 10px;
   overflow: hidden;
   padding: 0 8px 0 10px;
@@ -3989,8 +3989,8 @@ body {
 }
 
 .av-session-viz-focus-chip {
-  border-color: color-mix(in srgb, var(--cyan) 32%, var(--border));
-  background: color-mix(in srgb, var(--cyan) 9%, var(--surface-2));
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .av-session-viz-focus-chip svg,
