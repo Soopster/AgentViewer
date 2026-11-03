@@ -235,12 +235,13 @@ export function runRenderComposerMentionPanel(ctx: RenderComposerMentionPanelCon
       {composerMentionResults.slice(start, end).map((entry, offset) => {
         const index = start + offset
         const active = index === composerMentionIndex
-        const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+        const label = entry.kind === 'agent' ? `@${entry.name}` : entry.kind === 'terminal' ? `@${entry.handle}` : entry.basename
         const detail = entry.kind === 'agent'
           ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+          : entry.kind === 'terminal' ? `terminal · ${entry.detail}`
           : entry.path
         return (
-          <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
+          <box key={entry.kind === 'agent' ? `agent:${entry.name}` : entry.kind === 'terminal' ? `terminal:${entry.handle}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
             <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
             <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
             <text fg={theme.dim} wrapMode="none">  </text>

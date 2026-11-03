@@ -32,5 +32,15 @@ assert.deepEqual(parseTerminalAddressing('@all status?', terms)!.targets.map(x =
 assert.equal(parseTerminalAddressing('@src/App.tsx explain this', terms), null, 'a file mention is not addressing')
 assert.equal(parseTerminalAddressing('@codex @src/App.tsx explain', terms)!.text, '@src/App.tsx explain', 'addressing ends at the first word that matches nothing')
 assert.equal(parseTerminalAddressing('hello @codex', terms), null, 'only leading handles address')
+import { commandShell } from './processTree'
+import { controlEndpoint } from './terminalControl'
+const win = commandShell('npm run dev', { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, 'win32')
+assert.deepEqual(win.args, ['/d', '/s', '/c', 'npm run dev'])
+assert.equal(win.file, 'C:\\Windows\\System32\\cmd.exe')
+assert.deepEqual(commandShell('ls', { SHELL: '/bin/zsh' }, 'darwin'), { file: '/bin/zsh', args: ['-lc', 'ls'] })
+const endpoint = controlEndpoint('/tmp/x', 42, 'win32')
+assert.equal(endpoint.listenPath, '\\\\.\\pipe\\agent-viewer-terminal-42', 'Windows listens on a named pipe')
+assert.ok(endpoint.registryFile.endsWith('terminal-42.json'))
+assert.ok(controlEndpoint('/tmp/x', 42, 'linux').listenPath.endsWith('terminal-42.sock'))
 console.log('terminalPromptSmoke ok')
 process.exit(0)

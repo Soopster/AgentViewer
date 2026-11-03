@@ -324,6 +324,7 @@ export function runInsertMentionAtCursor(ctx: InsertMentionAtCursorContext, entr
   const after = text.slice(cursor)
   const insertion = entry.kind === 'agent'
     ? `@${entry.name} `
+    : entry.kind === 'terminal' ? `@${entry.handle} `
     : `@${entry.path} `
   // A file you mention is a file you are working in; the next `@` ranks by it.
   if (entry.kind === 'file' && composerMentionCwd) {
@@ -333,7 +334,8 @@ export function runInsertMentionAtCursor(ctx: InsertMentionAtCursorContext, entr
   renderable.setText(next)
   renderable.cursorOffset = before.length + insertion.length
   setComposerDraft(next)
-  setComposerMentionAttachments((prev) => {
+  // A terminal handle is addressing, not an attachment: the send reads it back off the text.
+  if (entry.kind !== 'terminal') setComposerMentionAttachments((prev) => {
     if (entry.kind === 'agent') {
       if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
       return [

@@ -1,3 +1,4 @@
+import { listComposerTerminals, terminalHandle } from '../../terminalPrompt'
 import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
 import type { Dispatch } from 'react'
@@ -227,12 +228,14 @@ export type ComposerMentionSearchEffectContext = {
   composerMentionAgents: SessionComposerAgentOption[]
   composerMentionCwd: string | null
   setComposerMentionIndex: React.Dispatch<React.SetStateAction<number>>
+  /** Only a prompt's leading `@words` address terminals, so only there are they offered. */
+  mentionAddressesTerminals?: boolean
 }
 
 export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectContext) {
   const {
     composerMention, setComposerMentionResults, composerMentionProvider, composerMentionAgents,
-    composerMentionCwd, setComposerMentionIndex,
+    composerMentionCwd, setComposerMentionIndex, mentionAddressesTerminals,
   } = ctx
   if (!composerMention) {
     setComposerMentionResults(keepEmpty)
@@ -256,12 +259,25 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
         }))
     : []
   const cwd = composerMentionCwd
+  let cancelled = false
+  const terminalMatches = async (): Promise<TuiMentionResult[]> => {
+    if (!mentionAddressesTerminals) return []
+    const query = composerMention.query.toLowerCase()
+    const terminals = await listComposerTerminals()
+    const entries = terminals.map((terminal) => ({ terminal, handle: terminalHandle(terminal.name) }))
+    const matches = entries.filter(({ terminal, handle }) => !query || handle.includes(query) || terminal.id.toLowerCase().startsWith(query) || (terminal.agent ?? '').includes(query))
+    const all = !query || 'all'.startsWith(query) ? [{ kind: 'terminal' as const, name: 'all', handle: 'all', detail: 'every terminal running an agent' }] : []
+    return [
+      ...matches.map(({ terminal, handle }) => ({ kind: 'terminal' as const, name: terminal.name, handle, detail: [terminal.agent, terminal.agentState].filter(Boolean).join(' · ') || 'terminal' })),
+      ...all,
+    ].slice(0, 8)
+  }
   if (!cwd) {
     setComposerMentionResults(agentMatches)
     setComposerMentionIndex(0)
-    return
+    if (mentionAddressesTerminals) void terminalMatches().then((terminals) => { if (!cancelled && terminals.length > 0) { setComposerMentionResults([...terminals, ...agentMatches]); setComposerMentionIndex(0) } })
+    return () => { cancelled = true }
   }
-  let cancelled = false
   const handle = setTimeout(() => {
     void (async () => {
       try {
@@ -283,6 +299,7 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
         )
         if (cancelled) return
         const matches: TuiMentionResult[] = [
+          ...await terminalMatches(),
           ...agentMatches,
           ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
         ]

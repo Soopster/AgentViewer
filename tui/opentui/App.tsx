@@ -1639,6 +1639,7 @@ function OpenTuiWorkspace() {
   useEffect(() => runComposerMentionSearchEffect({
     composerMention, setComposerMentionResults, composerMentionProvider, composerMentionAgents,
     composerMentionCwd, setComposerMentionIndex,
+    mentionAddressesTerminals: composerMention ? /^(\s*@\S+\s+)*\s*$/.test(composerDraft.slice(0, composerMention.start)) : false,
   }), [composerMention, composerMentionAgents, composerMentionCwd, composerMentionProvider])
 
   const ensureComposerPastePartTypeId = useStableEvent((renderable: TextareaRenderable): number => {
