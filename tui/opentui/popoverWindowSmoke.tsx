@@ -145,6 +145,19 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
   await key('w', { ctrl: true, shift: true })
   await waitFor('analytics in a window', () => !!windowFrame('analytics') && !screen().includes('Session analytics'))
   check(titleOf('analytics').includes('Analytics · Win alpha'), `the window does not name its pinned session: ${titleOf('analytics')}`)
+  // A popover moved into a window answers to the same window menu as any other window.
+  {
+    const button = frame('surface-window-menu:analytics')
+    check(button, 'the analytics window has no ≡ menu button')
+    await click(button!.x, button!.y)
+    const menu = frame('context-menu')
+    check(menu, 'the analytics window\'s menu did not open')
+    const text = screen().split('\n').slice(menu!.y, menu!.y + menu!.height).map(line => line.slice(menu!.x, menu!.x + menu!.width)).join('\n')
+    for (const entry of ['Focus window', 'Manage windows', 'Zoom window', 'Fullscreen window', 'Float window', 'Move to workspace', 'Window layout', 'Close window', 'Open full screen', 'Split this window right', 'Split this window below', 'Resize', 'Swap direction']) {
+      check(text.includes(entry), `the analytics window's menu lacks "${entry}":\n${text}`)
+    }
+    await key('escape')
+  }
   // The reader moves on; the window keeps its session.
   // From the reader: with a window focused, a rail click opens the session as
   // a window instead. The rail's row, not a tab of the same name.

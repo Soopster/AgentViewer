@@ -88,6 +88,15 @@ mock.module('../../lib/channelBridge', () => ({
 // counts every module evaluation so laziness is observable.
 let moduleEvaluations = 0
 // React retries a failed render once synchronously, so the failure persists until the test lifts it.
+// The fixture throws on purpose and the plugin's error boundary must contain it. React
+// still reports a contained render error through the global handler, which testRender
+// treats as a crashed smoke, so this one expected message is let through.
+process.removeAllListeners('uncaughtException')
+process.on('uncaughtException', (error) => {
+  if (error instanceof Error && error.message === 'fixture render failure') return
+  console.error(error)
+  process.exit(1)
+})
 let failing = true
 mock.module(fileURLToPath(new URL('../../plugins/analytics/tui/index.tsx', import.meta.url)), () => {
   moduleEvaluations += 1
@@ -106,7 +115,7 @@ mock.module(fileURLToPath(new URL('../../plugins/analytics/tui/index.tsx', impor
 
 const { tuiPluginViews } = await import('./shell/pluginViews')
 const { default: OpenTuiApp } = await import('./App')
-const setup = await testRender(<OpenTuiApp />, { width: 180, height: 44, kittyKeyboard: true })
+const setup = await testRender(<OpenTuiApp />, { width: 230, height: 44, kittyKeyboard: true })
 const settle = async (ms = 150) => {
   for (let elapsed = 0; elapsed < ms; elapsed += 30) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
 }
@@ -152,7 +161,7 @@ await key('a', { ctrl: true })
 await waitFor('the failure view', () => screen().includes('Analytics stopped: fixture render failure'))
 check(moduleEvaluations === 1 && tuiPluginViews.isLoaded('analytics'), 'opening did not load the plugin exactly once')
 check(screen().includes('PLUG-ALPHA-BODY'), 'a plugin failure took the transcript down')
-check(screen().includes('To: Plug alpha'), 'a plugin failure took the composer down')
+check(screen().includes('To:─Plug─alpha'), 'a plugin failure took the composer down')
 // Retry remounts the view; the module is not evaluated again.
 failing = false
 await key('r')

@@ -73,7 +73,7 @@ const store = await import('./spacesStore')
 let controller: InstanceType<typeof store.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...store, SpacesController: class extends store.SpacesController { constructor() { super(); controller = this } } }))
 const { default: OpenTuiApp } = await import('./App')
-const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
+const setup = await testRender(<OpenTuiApp />, { width: 260, height: 46, kittyKeyboard: process.env.AV_WINDOW_CONTROLS_LEGACY !== '1' })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
 }
@@ -164,51 +164,56 @@ const portable = async (value: string) => {
 }
 const pickLayout = async (name: string) => { await openMenu(); const rect = frame(`window-layout:${name}`)!; await click(rect.x + 2, rect.y + 1) }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-await pickLayout('grid-six')
-await waitFor('all session tabs', () => panes().length === 5 && [0, 1, 2, 3, 4].every(index => paneName(index) !== null))
-await pickLayout('fill')
-await waitFor('reader only', () => panes().length === 0)
+// (The layout menu's arrangements are covered by windowingSmoke; this starts from one window.)
+// A split shows the next open session, so open the others as tabs first and come back to alpha.
+for (const name of ['bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'alpha']) {
+  const row = railRow(name)
+  await click(row.x + 1, row.y)
+  await waitFor(`${name} to open from a click`, () => readerShows(name))
+}
+// Every window is a pane now: split-pane:i, in window order, the selected one also answering to the reader's id.
 await chordKey('%')
-await waitFor('first split', () => panes().length === 1)
-const reader = frame('transcript-reader')!
-const right = frame('split-pane:0')!
+await waitFor('first split', () => panes().length === 2)
+const left = frame('split-pane:0')!
+const right = frame('split-pane:1')!
 await chordKey('"')
-await waitFor('local stacked split', () => panes().length === 2)
-check(same(frame('transcript-reader'), reader), 'splitting the right pane rearranged the reader')
-const top = frame('split-pane:0')!, bottom = frame('split-pane:1')!
-check(top.x === right.x && bottom.x === right.x && top.width === right.width && bottom.width === right.width && top.y + top.height === bottom.y && bottom.y + bottom.height === right.y + right.height, 'stacked children do not tile the focused pane')
+await waitFor('local stacked split', () => panes().length === 3)
+check(same(frame('split-pane:0'), left), 'splitting the right window rearranged the left one')
+const top = frame('split-pane:1')!, bottom = frame('split-pane:2')!
+check(top.x === right.x && bottom.x === right.x && top.width === right.width && bottom.width === right.width && top.y + top.height === bottom.y && bottom.y + bottom.height === right.y + right.height, 'stacked children do not tile the focused window')
+// Splitting the left window is local to it: the stacked pair keeps its geometry.
 await chordKey('1'); await chordKey('%')
-await waitFor('local horizontal split', () => panes().length === 3)
-check(same(frame('transcript-reader'), reader), 'nested horizontal split rearranged the reader')
-check(same(frame('split-pane:1'), bottom), 'nested split rearranged the neighbouring bottom pane')
-const nested = JSON.stringify([frame('transcript-reader'), ...panes()])
+await waitFor('local horizontal split', () => panes().length === 4)
+check(same(frame('split-pane:1'), top) && same(frame('split-pane:2'), bottom), 'splitting the left window rearranged the stacked pair')
+const nested = JSON.stringify(panes())
+const stable = frame('split-pane:0')!
 await chordKey('%')
-check(panes().length === 3 && JSON.stringify([frame('transcript-reader'), ...panes()]) === nested, `an undersized pane accepted a split or changed geometry: ${panes().length} / ${nested} / ${JSON.stringify([frame('transcript-reader'), ...panes()])}`)
+check(panes().length === 4 && JSON.stringify(panes()) === nested, `an undersized window accepted a split or changed geometry: ${panes().length}`)
 // Mouse resizing owns exactly its branch and is undoable.
 const divider = frame('tree-divider:1')!
 await act(async () => { await setup.mockMouse.pressDown(divider.x + 2, divider.y) }); await settle(50)
 await act(async () => { await setup.mockMouse.emitMouseEvent('drag', divider.x + 2, divider.y + 3) }); await settle(80)
 await act(async () => { await setup.mockMouse.release(divider.x + 2, divider.y + 3) }); await settle(180)
-check(same(frame('transcript-reader'), reader), 'dragging a nested divider resized the reader')
-check(frame('split-pane:1')!.y !== bottom.y, 'nested divider did not move')
+check(same(frame('split-pane:0'), stable), 'dragging a nested divider resized the neighbouring window')
+check(frame('split-pane:2')!.y !== bottom.y, 'nested divider did not move')
 await chordKey('u')
-check(JSON.stringify([frame('transcript-reader'), ...panes()]) === nested, 'undo did not restore nested divider geometry')
+check(JSON.stringify(panes()) === nested, 'undo did not restore nested divider geometry')
 await portable('w'); await key(']'); await key('u'); await escape()
-check(JSON.stringify([frame('transcript-reader'), ...panes()]) === nested, 'keyboard resize undo changed a neighbouring branch')
+check(JSON.stringify(panes()) === nested, 'keyboard resize undo changed a neighbouring branch')
 // Zoom retains the exact mounted transcript subtree.
 const paneNode = setup.renderer.root.findDescendantById('split-pane:2')!
 const content = paneNode.getChildren()[0]
 await chordKey('m'); await chordKey('m')
 check(setup.renderer.root.findDescendantById('split-pane:2')!.getChildren()[0] === content, 'zoom remounted the pane content')
-check(JSON.stringify([frame('transcript-reader'), ...panes()]) === nested, 'zoom changed custom geometry')
+check(JSON.stringify(panes()) === nested, 'zoom changed custom geometry')
 // Shrinking hides windows without rewriting the saved logical split tree.
 const firstWorkspace = controller!.activeWorkspace()!
 const logical = JSON.stringify(controller!.runtime(firstWorkspace).values.get('windowSplitTree'))
 await act(async () => { setup.resize(90, 24) }); await settle(250)
 check(panes().length < 3, 'small terminal did not hide windows')
 check(JSON.stringify(controller!.runtime(firstWorkspace).values.get('windowSplitTree')) === logical, 'terminal resize rewrote logical splits')
-await act(async () => { setup.resize(220, 46) }); await settle(250)
-check(JSON.stringify([frame('transcript-reader'), ...panes()]) === nested, 'terminal growth did not restore the custom layout')
+await act(async () => { setup.resize(260, 46) }); await settle(250)
+check(JSON.stringify(panes()) === nested, 'terminal growth did not restore the custom layout')
 // Saved layouts preserve custom geometry and preview it accurately.
 await openMenu(); await key('n')
 await act(async () => { await setup.mockInput.typeText('Nested work') }); await settle(100)
@@ -218,7 +223,7 @@ const { listSavedWindowLayouts } = await import('./windowLayoutStore')
 check(!!listSavedWindowLayouts(CWD)[0]?.splitTree, 'saved layout lost the split tree')
 await pickLayout('grid')
 await openMenu(); const saved = locate('Nested work'); await click(saved.x + 1, saved.y)
-await waitFor('custom layout restored', () => JSON.stringify([frame('transcript-reader'), ...panes()]) === nested)
+await waitFor('custom layout restored', () => JSON.stringify(panes()) === nested)
 // Turn a pane into a tab, then find that background tab through the tree.
 await chordKey('3'); const tabTitle = paneName(2)!
 await chordKey('t')

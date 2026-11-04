@@ -336,9 +336,14 @@ try {
     await settle(600)
     await press('e')
     await settle(600)
+    // Expanding everything makes the transcript longer and the view may move off the row; look for it.
+    act(() => { scroll().scrollTop = scroll().scrollHeight })
+    await settle(400)
     if (!rowWith('second-output-row')) fail('Expand-all folded an item a click had opened')
     await press('e')
     await settle(600)
+    act(() => { scroll().scrollTop = scroll().scrollHeight })
+    await settle(400)
     if (rowWith('second-output-row')) fail('Fold-all left an item a click had opened')
   }
 

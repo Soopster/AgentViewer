@@ -170,6 +170,20 @@ const escape = async () => { await act(async () => { setup.mockInput.pressEscape
 const menuPick = async (label: string) => { const point = locate(label, frame('context-menu')!); await click(point.x + 1, point.y) }
 const guide = () => setup.captureCharFrame().includes('MANAGE WINDOWS')
 const geometry = () => JSON.stringify([frame('transcript-reader'), ...panes()])
+// Every kind of window answers to the same menu: what a window can do does not
+// depend on what it shows. Entries are read off the painted menu.
+const COMMON_MENU = ['Focus window', 'Manage windows', 'Zoom window', 'Fullscreen window', 'Float window|Dock window', 'Move to workspace', 'Window layout']
+const SLOT_ENTRIES = ['Split this window right', 'Split this window below', 'Resize', 'Swap direction']
+const checkCommonMenu = (kind: string, docked = true) => {
+  const menu = frame('context-menu')
+  check(menu, `${kind} window opened no menu`)
+  const text = setup.captureCharFrame().split('\n').slice(menu!.y, menu!.y + menu!.height).map(line => line.slice(menu!.x, menu!.x + menu!.width)).join('\n')
+  for (const entry of COMMON_MENU) check(entry.split('|').some(option => text.includes(option)), `the ${kind} window's menu lacks "${entry}":\n${text}`)
+  // What acts on a slot is offered to a docked window and withheld from a floating one, whatever it shows.
+  for (const entry of SLOT_ENTRIES) check(text.includes(entry) === docked, `the ${kind} window's menu ${docked ? 'lacks' : 'should not offer'} "${entry}":\n${text}`)
+  check(/Close (pane|window|tab)/.test(text), `the ${kind} window's menu lacks a close entry:\n${text}`)
+  check(text.includes('⌃B m') && text.includes('⌃B w'), `the ${kind} window's menu does not teach its keys:\n${text}`)
+}
 const checkMenuAnchor = (point: { x: number; y: number }) => {
   const menu = frame('context-menu')!
   check(menu.x === Math.max(0, Math.min(point.x, 220 - menu.width - 1)), 'title menu is not anchored to its button or pointer')
@@ -178,6 +192,7 @@ const checkMenuAnchor = (point: { x: number; y: number }) => {
 const readerMenuButton = frame('reader-window-menu')!
 await click(readerMenuButton.x, readerMenuButton.y)
 checkMenuAnchor(readerMenuButton)
+checkCommonMenu('session')
 await escape()
 await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(50)
 await act(async () => { setup.mockInput.pressEnter() }); await settle(150)
@@ -278,6 +293,7 @@ await waitFor('floating identification', () => !!frame(`window-control:${floatin
 check(frame(`window-control:${floatingNumber}`)!.width === frame('floating-window')!.width, 'floating identification uses a docked frame')
 await act(async () => { setup.mockInput.pressKey(String(floatingNumber)) }); await settle(120)
 await portable('w'); await key(' ')
+checkCommonMenu('floating session', false)
 await menuPick('Dock window')
 await waitFor('docked window', () => !frame('floating-window'))
 // Make room for the shell and browser checks; presets preserve existing views.
@@ -323,10 +339,20 @@ await key('address-draft')
 await portable('w'); check(guide(), 'browser input swallowed the portable prefix')
 await key('h'); await key('h'); await escape()
 check(setup.captureCharFrame().includes('address-draft') && !setup.captureCharFrame().includes('address-drafth'), 'management keys reached the browser address input')
+// With no room in the layout the window is only peeked at, and its menu is the short one.
 const browserMenuButton = frame('surface-window-menu:browser')!
 await click(browserMenuButton.x, browserMenuButton.y)
 checkMenuAnchor(browserMenuButton)
+check(setup.captureCharFrame().includes('Back to the layout') && setup.captureCharFrame().includes('Window layout'), 'a peeked window\'s menu did not open with its layout entry')
 await escape()
+// Given room, the same window answers to the same menu as any other.
+await act(async () => { setup.resize(300, 46) }); await settle(400)
+await waitFor('the browser window in the layout', () => !!frame('surface-window-menu:browser'))
+const placedButton = frame('surface-window-menu:browser')!
+await click(placedButton.x, placedButton.y)
+checkCommonMenu('browser surface')
+await escape()
+await act(async () => { setup.resize(220, 46) }); await settle(400)
 // An arriving permission must end management and retain keyboard priority.
 await portable('q'); await key('1'); await portable('w')
 promptActive = true

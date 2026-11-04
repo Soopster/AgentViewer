@@ -38,8 +38,11 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
 
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
   const rightSidePanelVisible = taskPanelVisible || surfacePanelOnRight
-  const composerAreaOffset = 0
-  const composerAreaWidth = width
+  // The right-hand panels span the full column, composer rows included, so a
+  // full-width dock would be drawn over their bottom rows (the surface panel's
+  // hint row, the task panel's footer). With one open the dock sits beside it.
+  const composerAreaOffset = rightSidePanelVisible && showRail ? sidebarWidth : 0
+  const composerAreaWidth = rightSidePanelVisible ? Math.max(30, readerAreaWidth) : width
   const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
   const composerWindowWidth = Math.max(
     20,

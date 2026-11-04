@@ -42,15 +42,15 @@ if (!before || before.trim().length === 0) throw new Error('App rendered an empt
 if (before.includes('Open a surface')) throw new Error('Surface panel is visible before ⇧O')
 
 // The task panel shares the full-height side-panel frame, including the rows
-// below the transcript where the docked composer lives. The empty state should
-// use that tall area instead of sticking to its upper-left corner.
+// below the transcript where the docked composer lives. The empty state (or, when a
+// live agent on this machine has tasks running, the list) should use that tall area instead of sticking to its upper-left corner.
 type FrameGeometry = { x: number; y: number; width: number; height: number }
 act(() => { setup.mockInput.pressKey('T', { shift: true }) })
 await settle(700)
 const taskFrame = setup.renderer.root.findDescendantById('task-side-panel-frame') as unknown as FrameGeometry | null
 const taskComposerFrame = setup.renderer.root.findDescendantById('composer-dock') as unknown as FrameGeometry | null
 const taskPanel = captureCharFrame()
-if (!taskFrame || !taskComposerFrame || !taskPanel.includes('No tasks yet') || !taskPanel.includes('= expand') || taskFrame.height < 30
+if (!taskFrame || !taskComposerFrame || !(taskPanel.includes('No tasks yet') || taskPanel.includes('tasks · agents')) || !taskPanel.includes('= expand') || taskFrame.height < 30
   || taskFrame.x < taskComposerFrame.x + taskComposerFrame.width
   || taskFrame.y + taskFrame.height !== taskComposerFrame.y + taskComposerFrame.height) {
   throw new Error(`Task panel does not sit beside the full-height composer or lost its centered empty state and shortcuts (panel=${taskFrame ? `${taskFrame.x},${taskFrame.y},${taskFrame.width},${taskFrame.height}` : 'missing'}; composer=${taskComposerFrame ? `${taskComposerFrame.x},${taskComposerFrame.y},${taskComposerFrame.width},${taskComposerFrame.height}` : 'missing'}):\n${taskPanel}`)

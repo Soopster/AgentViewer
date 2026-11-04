@@ -5259,7 +5259,8 @@ export function EditorPopover({
         </box>
         <text fg={theme.cyan}>{`   ${basename(root)}${zenMode && activePath ? ` › ${basename(activePath)}` : ''} `}</text>
         {enclosingSymbols.length > 0 ? (
-          <text fg={theme.violet} wrapMode="none">
+          // The symbol is what the bar is for; when the row is short it is the folder name that gives way.
+          <text fg={theme.violet} wrapMode="none" flexShrink={0}>
             {`${fitText(enclosingSymbols.map((symbol) => symbol.name).join(' \u203a '), Math.max(12, Math.floor(editorWidth * 0.3)))}  `}
           </text>
         ) : null}

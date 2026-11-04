@@ -1454,6 +1454,11 @@ drawn in have one source; `windowLayoutSmoke.ts` checks every arrangement tiles 
   `bottomShare`, which still convert for layouts saved before. `⌃B [`/`]` move the focused pane's
   border within its group; the reader's own border stays `split-divider-handle`, and the grid's row
   split `split-secondary-divider`.
+- **Every window kind carries the same title controls** — `≡` menu, `⊞ layout`, a promote/panel button and `×` — session panes, surface windows and popover tabs alike. **A window with no room is shown over the layout on request (a "peek") and is in no slot**, so `controlWindowIndex` cannot find it: `runOpenWindowControlMenu` answers it with its own short menu (Back to the layout, Move to side panel, Close) rather than silently opening nothing, which `windowControlsSmoke` pins. Splitting while zoomed is refused with the key that restores the layout, and the menu does not offer it. Seven windows at the 46-column minimum need more than 220 columns, so the smokes that open that many resize first.
+- **The composer dock sits beside a right-hand panel, never under it.** The surface and task panels span the full-height right column, composer rows included, so a full-width dock was drawn over their bottom rows (the surface panel's hint row was unreachable). With either open, `composerAreaWidth` is the reader column's width again; `surfacePanelSmoke` and `surfacePanelMouseSmoke` pin it.
+- **The window menu teaches the keyboard.** Each entry shows its `⌃B` key beside it (`WINDOW_MENU_CHORDS` in `windowControls.ts`), and `windowingAuditSmoke` checks every hinted key exists in the chord table, so a rebound chord cannot leave a stale hint. `windowControlsSmoke` opens the menu on a session and on a placed surface window and requires the same common entries on both.
+- **`⌃B space` walks the layout menu's arrangements and "Close other windows" (window menu) is one undoable step**: it checkpoints, then `commitWindowKeys([key])` rewrites pins, surfaces and order together, so no window is closed through a stale closure one at a time. Both are pinned in `windowingSmoke`.
+- **Saved layouts delete on the second press** (`x` or `×` arms the row, which then reads `Delete "name"? x again deletes · esc keeps`; Esc or any other key disarms) — a named layout is work, and one stray key must not lose it; `windowingMoreSmoke` pins it. The window menu also carries the lightweight-view toggle (`v` Tab), so it is reachable from the window itself.
 - **Zoom hides, it does not remount** (`visible={false}` on every other window and row): a zoomed
   pane re-mounted every other transcript on restore, reloading each.
 - **Keyboard**: `⌃B ⇧`arrows swap the focused window with its neighbour (surface or session),
@@ -2513,6 +2518,14 @@ output, and allocator arenas.
   frozen-store A/B for this round (three interleaved pairs, base = the commit before it): boot
   275-281 → 211-221MB, browse 242-251 → 187-192MB, git 270-285 → 214-225MB, settled 259-267 →
   211-215MB, and the analytics-close spike (290MB) gone.
+- **The allocator's purge delay is the lever that was.** Bun's mimalloc keeps freed pages resident
+  for ~100ms before returning them, and the TUI's churn (transcript reads, formatting) leaves most of
+  its footprint as that tail. `MIMALLOC_PURGE_DELAY=0` (set by `bin/agent-viewer.mjs`, overridable
+  by the caller; it is read at allocator init, so it cannot be set from inside `main.tsx`) measured, interleaved
+  against default: `tui:memrun` peak 179-206MB → 133-136MB and settled 174-184MB → 131-136MB (3 pairs),
+  idle footprint with a session open 157-160MB → 118-130MB, with idle CPU and frame times unchanged.
+  `npm run tui` does not set it (`${VAR:-0}` breaks `cmd.exe`); export it to measure from source.
+  A bundled+minified build (`bun build --production`) was also tried and measured no better than source.
 - **Two things that look like levers and are not:** a full `Bun.gc(true)` in both isolates frees
   nothing measurable from the settled footprint (the retained arena is high-water, not garbage), and
   `--smol` changes nothing either. JSC's wasm tier flags (`BUN_JSC_useBBQJIT=0`) do shrink the

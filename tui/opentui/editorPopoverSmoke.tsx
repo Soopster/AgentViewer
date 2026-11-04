@@ -1147,10 +1147,10 @@ process.stdin.on('data', (chunk) => {
     // The watcher's poll interval is not a fixed budget; wait for the warning
     // rather than for a duration that happened to be long enough once.
     const conflictDeadline = Date.now() + 8_000
-    while (Date.now() < conflictDeadline && !setup.captureCharFrame().includes('disk changed')) {
+    while (Date.now() < conflictDeadline && !setup.captureCharFrame().includes('⚠ disk')) {
       await flush(setup, 250)
     }
-    if (!setup.captureCharFrame().includes('disk changed')) throw new Error(`Dirty external edit did not show a disk-conflict warning:\n${setup.captureCharFrame()}`)
+    if (!setup.captureCharFrame().includes('⚠ disk')) throw new Error(`Dirty external edit did not show a disk-conflict warning:\n${setup.captureCharFrame()}`)
     act(() => { handleKey?.({ name: 's', ctrl: true, shift: false, sequence: '\u0013' }) })
     await flush(setup, 300)
     if (await readFile(join(cwd, 'created.ts'), 'utf8') !== 'export const external = 2\n'

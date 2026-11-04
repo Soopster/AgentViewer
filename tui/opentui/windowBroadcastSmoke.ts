@@ -8,10 +8,10 @@ const b: Session = { sessionId: 'b', provider: 'codex', summary: 'Debugging', cw
 const c: Session = { sessionId: 'c', provider: 'pi', summary: 'Scratch', isPending: true }
 const targets: WindowTarget[] = [windowSessionTarget(a, false), windowSessionTarget(b, true), windowSessionTarget(c, false), { key: 'surface:terminal', surface: 'terminal', title: 'Terminal', detail: '/repo', hidden: true }]
 assert.deepEqual(filterWindowTargets(targets, 'codex backend').map((target) => target.key), ['codex:b'])
-assert.deepEqual(filterWindowTargets(targets, 'review').map((target) => target.key), ['claude:a'])
+assert.deepEqual(filterWindowTargets(targets, 'review').map((target) => target.key), ['claude@work-account:a'])
 assert.deepEqual(filterWindowTargets(targets, 'hidden').map((target) => target.key), ['codex:b'])
 assert.deepEqual(filterWindowTargets(targets, 'unmatched'), [])
-const selected = snapshotBroadcastTargets(targets, new Set(['claude:a', 'codex:b', 'pi:c', 'surface:terminal']))
+const selected = snapshotBroadcastTargets(targets, new Set(['claude@work-account:a', 'codex:b', 'pi:c', 'surface:terminal']))
 assert.equal(selected.length, 2)
 assert.equal(selected[0]?.providerInstanceId, 'work-account')
 assert.notEqual(selected[0], a, 'review captures identity rather than retaining a mutable target object')

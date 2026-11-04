@@ -30,7 +30,7 @@ import { type WindowLayout } from '../../windowLayout'
 import { type SplitRect, type SplitDivider } from '../../windowSplitTree'
 import { type CliRenderer } from '@opentui/core'
 import { WINDOW_SURFACE_TITLES, surfaceKindOf, type WindowSurfaceKind } from '../../windowSurfaceNames'
-import { WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, type WindowControlContext } from '../../windowControls'
+import { windowMenuHint, WINDOW_MENU_ACTIONS, WINDOW_RESIZE_ACTIONS, type WindowControlContext } from '../../windowControls'
 import { isPopoverWindowKind } from '../../popoverWindows'
 import { fitText } from '../../textLayout'
 import { MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS } from '../layoutConstants'
@@ -342,6 +342,10 @@ export type RunWindowControlActionContext = {
   setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
   splitFocusedWindow: (orientation: SplitPaneOrientation, target?: number | null) => void
   openWindowControlMenu: (key: string, point?: { x: number; y: number; }, section?: 'resize' | 'swap' | 'session') => void
+  orderedWindowKeys: string[]
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
+  showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
+  floatingKey: string | null
 }
 
 export function runRunWindowControlAction(ctx: RunWindowControlActionContext, key: string, action: WindowControlAction, direction?: WindowDirection) {
@@ -356,6 +360,7 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
     breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
     windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
     splitFocusedWindow, openWindowControlMenu,
+    orderedWindowKeys, commitWindowKeys, showNotice, floatingKey,
   } = ctx
   const index = controlWindowIndex(key)
   if (index === undefined) { setContextMenu(null); return }
@@ -401,6 +406,18 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
       case 'tab': tabFocusedWindow(index); break
       case 'detach': if (index !== null) breakOutWindowTab(key); break
       case 'float': toggleFloatingFocused(index); break
+      case 'close-others': {
+        // One key list rewrites pins, surfaces and order together, so every other window goes at
+        // once; ⌃B u brings them back, since the layout is checkpointed first.
+        if (!orderedWindowKeys.includes(key)) { showNotice('info', 'Focus a window in the layout first'); break }
+        const closing = orderedWindowKeys.length - 1 + (floatingKey && floatingKey !== key ? 1 : 0)
+        if (closing === 0) break
+        checkpointWindowLayout()
+        commitWindowKeys([key])
+        if (floatingKey && floatingKey !== key) closeFloatingWindow(false)
+        showNotice('info', `Closed ${closing} other window${closing === 1 ? '' : 's'} · ⌃B u undoes`)
+        break
+      }
       case 'close':
         if (index === null) break
         if (windowStackFor(key)) closeWindowTab(key)
@@ -446,6 +463,11 @@ export type OpenWindowControlMenuContext = {
   returnPopoverWindow: (surface: WindowSurfaceId) => void
   windowSurfaceMeta: Record<string, SurfaceMeta>
   returningPopoverRef: React.RefObject<boolean>
+  windowSurfacePeek: string | null
+  toggleWindowZoom: (target?: number | null) => void
+  lightweightWindows: boolean
+  setLightweightWindows: React.Dispatch<React.SetStateAction<boolean>>
+  setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
   closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
   openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta, from?: WindowSurfaceId) => void
   openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
@@ -467,8 +489,27 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
     popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
     closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
+    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen,
   } = ctx
   const index = controlWindowIndex(key)
+  if (index === undefined && windowSurfacePeek && key === surfaceWindowKey(windowSurfacePeek)) {
+    // A window without room in the layout is shown over it on request. It is in
+    // no slot, so only the actions that need none apply; the menu must still open.
+    const peeked = windowSurfacePeek
+    leaveWindowControls()
+    setContextMenu({
+      ...(point ?? { x: 0, y: 0 }), title: fitText(windowSurfaceTitle(peeked), 34).trimEnd(),
+      items: [
+        { label: 'Back to the layout', hint: 'm', run: () => toggleWindowZoom() },
+        { label: 'Window layout…', hint: '⌃B w', run: () => setWindowPickerOpen(true) },
+        isPopoverWindowKind(surfaceKindOf(peeked))
+          ? { label: 'Open full screen', run: () => returnPopoverWindow(peeked) }
+          : { label: 'Move to side panel', run: () => moveSurfaceToPanel(peeked) },
+        { label: 'Close window', danger: true, run: () => closeSurfaceWindow(peeked) },
+      ],
+    } as Parameters<typeof setContextMenu>[0])
+    return
+  }
   if (index === undefined) return
   leaveWindowControls()
   setControlMenuTarget(key)
@@ -477,7 +518,7 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
   const button = rectOf(index === null || (targetItem?.kind === 'session' && index === selectedWindowIndex) ? 'reader-window-menu' : targetItem?.kind === 'surface' ? `surface-window-menu:${targetItem.surface}` : `split-pane-menu:${index}`)
   const anchor = point ?? { x: button?.x ?? frame?.x ?? 0, y: button?.y ?? frame?.y ?? 0 }
   const context: WindowControlContext = { floating: index === FLOATING_PANE_INDEX,
-    tabbed: Boolean(windowStackFor(key)), canTab: index === null || index === FLOATING_PANE_INDEX ? windowItems.length > 0 : windowItems.length > 1, zoomed: windowZoom !== null }
+    tabbed: Boolean(windowStackFor(key)), canTab: index === null || index === FLOATING_PANE_INDEX ? windowItems.length > 0 : windowItems.length > 1, zoomed: windowZoom !== null, others: windowItems.length > 1 || Boolean(floatingItem) }
   const wrap = (run: () => void) => () => { if (controlWindowIndex(key) !== undefined) run() }
   const item = index === null ? null : index === FLOATING_PANE_INDEX ? floatingItem : windowItems[index]
   // A popover tab holds the reader's place: the reader's menu is its menu.
@@ -489,7 +530,7 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
     if (action.available && !action.available(context)) return []
     if (section === 'resize' && ((!treeGeometry && !fittedWindows.groups.some(group => index !== null && group.members.includes(index)) && ['shrink', 'grow'].includes(id)) || (!treeGeometry?.dividers.some(divider => divider.axis === 'y') && splitArrangement !== 'grid' && ['row-shrink', 'row-grow'].includes(id)))) return []
     return [{ label: id === 'close' ? (context.tabbed || popoverTab ? 'Close tab' : session ? 'Close pane' : 'Close window') : id === 'float' ? (context.floating ? 'Dock window' : 'Float window') : id === 'zoom' ? (context.zoomed ? 'Restore layout' : 'Zoom window') : action.label,
-      hint: id === 'manage' ? action.keys : undefined, danger: id === 'close', run: wrap(() => {
+      hint: windowMenuHint(id), danger: id === 'close', run: wrap(() => {
         if (id === 'close' && popoverTab) closePopoverTab(popoverTab)
         else if (id === 'resize' || id === 'swap') openWindowControlMenu(key, anchor, id)
         else runWindowControlAction(key, id)
@@ -503,6 +544,8 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
     { label: 'Copy session ID', run: wrap(() => { void writeClipboard(session.sessionId, renderer).catch(err => showNotice('error', String(err))) }) },
   ]
   if (!section && session) items.push({ label: 'Session actions…', run: wrap(() => openWindowControlMenu(key, anchor, 'session')) })
+  // The same toggle as Tab in the view menu: every window of every session shares it.
+  if (!section && session) items.push({ label: lightweightWindows ? 'Full transcript view' : 'Lightweight view', hint: 'v Tab', run: wrap(() => setLightweightWindows(current => !current)) })
   if (!section && popoverTab) items.push(
     { label: 'Open as a window', run: wrap(() => popoverTabToWindow(popoverTab)) },
     { label: 'Open full screen', hint: '⌃⇧W', run: wrap(() => popoverTabToFullScreen(popoverTab)) },
@@ -888,7 +931,7 @@ export function runSplitFocusedWindow(ctx: SplitFocusedWindowContext, orientatio
   if (target === undefined) target = splitFocusIndex
   if (target === FLOATING_PANE_INDEX) { showNotice('info', 'Dock the floating window before splitting it'); return }
   if (orderedWindowKeys.length >= 31) { showNotice('info', 'This workspace has reached its 32-window limit'); return }
-  if (windowZoom !== null || fullscreenMode) { showNotice('info', 'Restore the layout before splitting a window'); return }
+  if (windowZoom !== null || fullscreenMode) { showNotice('info', 'Restore the layout (⌃B m) before splitting a window'); return }
   if (visibleSplitPaneCount !== orderedWindowKeys.length) { showNotice('info', 'Enlarge the terminal to show all windows before adding a split'); return }
   const axis = orientation === 'columns' ? 'x' : 'y'
   const targetRect = rectOf(target === null ? 'transcript-reader' : `split-pane:${target}`)

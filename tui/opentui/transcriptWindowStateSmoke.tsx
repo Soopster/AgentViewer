@@ -166,7 +166,7 @@ try {
   check(restored.current.get(keys[0]!)?.scrollbackExpanded === true, 'saved workspace lost the transcript expansion state')
   // Thinking expansion must use the same body preparation in a background pane.
   await act(async () => { appController.preferences.set('transcriptView', 'conversation') }); await settle(500)
-  await press('g'); await press('i')
+  await press('i'); await press('g'); await settle(1200)
   await waitFor('thinking body in the selected transcript', () => paneHas(64, 'DETAIL-001-1'))
   await chordKey('1')
   await waitFor('thinking body in the background transcript', () => paneHas(64, 'DETAIL-001-1'))

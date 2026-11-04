@@ -245,7 +245,7 @@ await settle(150)
 await act(async () => { setup.mockInput.pressArrow('down') }); await settle(80)
 // Search includes its ancestors; navigate to the matching tab row explicitly.
 const nodes = (await import('./workspaceOverviewData')).overviewRows((await import('./workspaceOverviewData')).workspaceOverview(controller!), new Set(), `Win ${movingName}`)
-const tabIndex = nodes.findIndex(node => node.id.includes(':tab:') && node.title.includes(movingName))
+const tabIndex = nodes.findIndex(node => (node.id.includes(':tab:') || node.id.includes(':window:')) && node.title.includes(movingName))
 check(tabIndex >= 0, 'moved tab missing from overview')
 for (let i = 0; i < nodes.length + 1; i++) await key('up')
 for (let i = 0; i < tabIndex; i++) await key('down')
@@ -258,12 +258,12 @@ check((runtime.values.get('splitPinnedKeys') as string[]).length === 2, 'moving 
 check((runtime.values.get('openTabSessions') as Session[]).filter(session => session.sessionId === `win-${movingName}`).length === 1, 'moving the selected transcript back duplicated its workspace tab')
 // A floating window also docks into a nested edge using the exact preview.
 await chordKey('2'); await chordKey('f')
-await waitFor('pane floated', () => !!frame('floating-window') && panes().length === 1)
+await waitFor('pane floated', () => !!frame('floating-window') && panes().length === 2)
 const floating = frame('floating-window')!, readerTarget = frame('split-pane:0')!
 let floatPreview: Frame | null = null
 await drag({ x: floating.x + 5, y: floating.y }, { x: readerTarget.x + Math.floor(readerTarget.width / 2), y: readerTarget.y + readerTarget.height - 1 }, () => { floatPreview = frame('float-dock-zone') })
-await waitFor('floating pane split-docked', () => !frame('floating-window') && panes().length === 2)
-check(same(frame(`split-pane:${[0, 1].find(index => paneName(index) === movingName)}`), floatPreview), 'floating drop did not match its preview')
+await waitFor('floating pane split-docked', () => !frame('floating-window') && panes().length === 3)
+check(same(frame(`split-pane:${[0, 1, 2].find(index => paneName(index) === movingName)}`), floatPreview), 'floating drop did not match its preview')
 // Closing a terminal view keeps its process and reopens the same selection.
 const terminalKey = 'surface:terminal'
 await act(async () => { runtime.set('windowSurfaces', ['terminal']); runtime.set('windowOrder', [...(runtime.values.get('windowOrder') as string[]), terminalKey]) }); await settle(400)

@@ -15,7 +15,7 @@ import path from 'path'
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-composer-status-smoke-')))
 const { default: OpenTuiApp } = await import('./App')
 
-const setup = await testRender(<OpenTuiApp />, { width: 140, height: 40, kittyKeyboard: true })
+const setup = await testRender(<OpenTuiApp />, { width: 180, height: 40, kittyKeyboard: true })
 const settle = async (ms = 700) => {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)) })
   await act(async () => { await setup.flush() })

@@ -4145,7 +4145,10 @@ function OpenTuiWorkspace() {
       windowsClipboard,
     })
     if (destination === 'osc52') {
-      const copied = renderer.copyToClipboardOSC52(text)
+      // The native call can refuse (InvalidPhase while a frame is in flight); that
+      // is a failed copy, not a reason to throw out of the mouse handler.
+      let copied = false
+      try { copied = renderer.copyToClipboardOSC52(text) } catch {}
       if (copied || !windowsClipboard) return
     }
     if (destination === 'host' || windowsClipboard) {
@@ -4829,6 +4832,18 @@ function OpenTuiWorkspace() {
     }
     return arrangePaneTree(keys, false, action === 'main-stack' ? 'stack' : action === 'grid' || action === 'grid-six' ? 'grid' : 'columns', focused)
   }
+  // ⌃B space: tmux's next-layout over the menu's arrangements, remembering where it left off.
+  const cycledLayoutRef = useRef(-1)
+  const cycleWindowLayout = useStableEvent(() => {
+    const order: Array<{ action: WindowLayoutAction; label: string }> = [
+      { action: 'two', label: 'Two panes' }, { action: 'main-stack', label: 'Focused pane and a stack' },
+      { action: 'grid', label: 'Grid of four' }, { action: 'grid-six', label: 'Grid of six' },
+    ]
+    cycledLayoutRef.current = (cycledLayoutRef.current + 1) % order.length
+    const next = order[cycledLayoutRef.current]!
+    applyWindowLayout(next.action)
+    showNotice('info', `Layout · ${next.label} · ⌃B space for the next`)
+  })
   const applyWindowLayout = useStableEvent((action: WindowLayoutAction) => {
     setWindowSurfacePeek(null)
     setWindowPickerOpen(false)
@@ -5025,7 +5040,8 @@ function OpenTuiWorkspace() {
     floatWindowKey(surfaceWindowKey(surface))
   })
   const startFloatGesture = (mode: 'move' | 'resize', event: { x: number; y: number }) => {
-    if (!floatingWindow || floatGestureRef.current || windowPresentation) return
+    // A press always begins a gesture: one still recorded is a release that never arrived.
+    if (!floatingWindow || windowPresentation) return
     floatGestureRef.current = { mode, x: event.x, y: event.y, rect: clampFloatingRect(floatingWindow.rect, { width: readerAreaWidth, height: windowAreaHeight }) }
     setFloatGesturing(true)
   }
@@ -5719,6 +5735,7 @@ function OpenTuiWorkspace() {
     showNotice, popoverTabToWindow, popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta,
     returningPopoverRef, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow,
+    orderedWindowKeys, commitWindowKeys, lightweightWindows, setLightweightWindows,
   })
   useEffect(() => {
     if (!contextMenu) { if (controlMenuTarget) setControlMenuTarget(null); return }
@@ -5768,7 +5785,7 @@ function OpenTuiWorkspace() {
       setNewSessionModalOpen, splitChordPending, composerActive, composerTargetSession,
       composerSendState, reattachedRunning, isKeyRepeat, backgroundComposerTasks,
       enterWindowControls, openWindowControlMenu, toggleWorkspaces, openSpaces, addSplitPane,
-      rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader, shownPopoverTab,
+      rotateSplitOrientation, cycleWindowLayout, resizeFocusedWindow, resizeSplitReader, shownPopoverTab,
       splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane, undoWindowLayout,
       redoWindowLayout, reopenClosedWindow, openRecentWindows, jumpToNextWindowAttention,
       setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen, toggleSplitPanes,
@@ -6069,7 +6086,7 @@ function OpenTuiWorkspace() {
     windowSurfaceTitle, openSurfaceWindowMenu, surfacePanelFocused, setSurfacePanelFocused,
     focusSplitPane, renderer, startFloatGesture, surfaceTitleClicksRef, toggleWindowZoom,
     sessionDragImplRef, renderWindowTabs, openWindowControlMenu, moveSurfaceToPanel,
-    closeSurfaceWindow, renderSurfaceBody, composerActive,
+    openLayout: splitPaneActions.openLayout, closeSurfaceWindow, renderSurfaceBody, composerActive,
   }, surface, index, size, hidden, place)
 
   // A surface window in the flow is only its slot: the frame itself is drawn by

@@ -60,7 +60,7 @@ const spacesStore = await import('./spacesStore')
 let controller: InstanceType<typeof spacesStore.SpacesController> | null = null
 mock.module('./spacesStore', () => ({ ...spacesStore, SpacesController: class extends spacesStore.SpacesController { constructor() { super(); controller = this } } }))
 const { default: OpenTuiApp } = await import('./App')
-const setup = await testRender(<OpenTuiApp />, { width: 220, height: 46, kittyKeyboard: true })
+const setup = await testRender(<OpenTuiApp />, { width: 260, height: 46, kittyKeyboard: true })
 const settle = async (ms = 150) => {
   await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, ms)) })
 }
@@ -180,6 +180,29 @@ await chord('m')
 for (let count = 3; count > 0; count--) { await chord('2'); await chord('x') }
 await chord('1')
 check(panes().length === 0 && readerShows('alpha'), 'closing neighbours replaced the original session')
+// ⌃B space walks the menu's arrangements, as tmux's next-layout does.
+await chord(' ')
+await waitFor('the first layout of the cycle', () => setup.captureCharFrame().includes('Layout · Two panes'))
+await waitFor('two windows', () => panes().length === 1)
+await chord(' ')
+await waitFor('the second layout of the cycle', () => setup.captureCharFrame().includes('Layout · Focused pane and a stack'))
+await chord('u'); await chord('u')
+console.log('⌃B space cycles the layouts.')
+// "Close other windows" is one undoable step: the window stays, the rest go, and ⌃B u brings them back.
+await chord(' ')
+await waitFor('windows beside the first', () => panes().length > 0)
+const beforeClosing = panes().length
+await chord('\r')
+await waitFor('the window menu', () => !!frame('context-menu'))
+{
+  const entry = locate('Close other windows', frame('context-menu')!)
+  await click(entry.x + 1, entry.y)
+}
+await waitFor('only one window left', () => panes().length === 0)
+await chord('u')
+await waitFor('the other windows back', () => panes().length === beforeClosing)
+await chord('u')
+console.log('Close other windows leaves one window and undoes.')
 
 // Splits are local to the target frame and may mix axes.
 // A drop focuses the new window, and focus is the selection, so the frame

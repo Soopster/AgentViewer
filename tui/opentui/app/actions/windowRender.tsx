@@ -412,6 +412,7 @@ export type RenderSurfaceWindowContext = {
   renderWindowTabs: (key: string, index: number, frameWidth: number, top: number, left: number, reserve: number) => React.ReactNode
   openWindowControlMenu: (key: string, point?: { x: number; y: number; }, section?: 'resize' | 'swap' | 'session') => void
   moveSurfaceToPanel: (surface: WindowSurfaceId) => void
+  openLayout: () => void
   closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
   renderSurfaceBody: (kind: WindowSurfaceKind, box: { width: number; height: number; }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelId?: string, panelCwd?: string) => React.ReactNode
   composerActive: boolean
@@ -423,7 +424,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
     windowSurfaceTitle, openSurfaceWindowMenu, surfacePanelFocused, setSurfacePanelFocused,
     focusSplitPane, renderer, startFloatGesture, surfaceTitleClicksRef, toggleWindowZoom,
     sessionDragImplRef, renderWindowTabs, openWindowControlMenu, moveSurfaceToPanel,
-    closeSurfaceWindow, renderSurfaceBody, composerActive,
+    openLayout, closeSurfaceWindow, renderSurfaceBody, composerActive,
   } = ctx
   if (hidden === undefined) hidden = false
   const focused = !hidden && splitFocusIndex === index
@@ -477,6 +478,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
       {renderWindowTabs(surfaceWindowKey(surface), index, size.width, -1, 1, 16)}
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
         <WindowButton id={`surface-window-menu:${surface}`} label=" ≡ " theme={theme} onPress={point => openWindowControlMenu(surfaceWindowKey(surface), point)} />
+        <WindowButton id={`surface-window-layout:${surface}`} label=" ⊞ layout " theme={theme} onPress={openLayout} />
         <WindowButton id={`surface-window-to-panel:${surface}`} label={isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
         <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
       </box>

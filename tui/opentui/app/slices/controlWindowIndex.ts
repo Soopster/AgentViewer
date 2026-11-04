@@ -29,6 +29,10 @@ import { runRunWindowControlAction, runOpenWindowControlMenu } from '../actions/
 export type UseControlWindowIndexGroupContext = {
   shownPopoverTab: string | null
   floatingKey: string | null
+  orderedWindowKeys: string[]
+  lightweightWindows: boolean
+  setLightweightWindows: React.Dispatch<React.SetStateAction<boolean>>
+  commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
   windowItems: WindowItem[]
   windowItemKey: (item: WindowItem) => string
   splitFocusIndex: number | null
@@ -131,7 +135,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     splitFocusedWindow, selectedWindowIndex, selectedSession, treeGeometry, fittedWindows,
     showNotice, popoverTabToWindow, popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta,
     returningPopoverRef, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
-    openSurfaceWindow,
+    openSurfaceWindow, orderedWindowKeys, commitWindowKeys, lightweightWindows, setLightweightWindows,
   } = ctx
 
   const controlWindowIndex = (key: string): number | null | undefined => {
@@ -201,7 +205,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout, swapWindowInDirection,
     breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
     windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
-    splitFocusedWindow, openWindowControlMenu,
+    splitFocusedWindow, openWindowControlMenu, orderedWindowKeys, commitWindowKeys, showNotice, floatingKey,
   }, key, action, direction))
   const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => runOpenWindowControlMenu({
     controlWindowIndex, leaveWindowControls, setControlMenuTarget, rectOf, floatingItem,
@@ -211,6 +215,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
     closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
+    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen,
   }, key, point, section))
 
   return {

@@ -105,6 +105,11 @@ export function WindowLayoutPicker({
   const at = Math.min(cursor, targets.length - 1)
   const target = targets[at]
   const [editing, setEditing] = useState<{ id: string | null; draft: string } | null>(null)
+  // A saved layout is work the user named; one stray key must not delete it. The first x (or ×) arms it, the second deletes.
+  const [armedDelete, setArmedDelete] = useState<string | null>(null)
+  const requestDelete = useCallback((id: string) => {
+    if (armedDelete === id) { setArmedDelete(null); onDelete?.(id) } else setArmedDelete(id)
+  }, [armedDelete, onDelete])
   const previewKey = target?.kind === 'icon' ? `action:${target.action}` : target?.kind === 'saved' ? `saved:${target.id}` : target?.kind === 'fullscreen' ? 'action:fullscreen' : null
   useEffect(() => { onPreview?.(previewKey) }, [onPreview, previewKey])
   const rename = (id: string) => {
@@ -132,8 +137,10 @@ export function WindowLayoutPicker({
       }
       return false // the focused input owns typing, selection, navigation and paste
     }
+    if (armedDelete && key.name === 'escape') { setArmedDelete(null); return true }
     if (key.name === 'escape' || key.sequence === 'q') { onClose(); return true }
     const current = targets[at]
+    if (armedDelete && !((key.sequence === 'x' || key.name === 'delete') && current?.kind === 'saved' && current.id === armedDelete)) setArmedDelete(null)
     const iconAt = (section: number, column: number) => {
       const row = ICONS.filter((icon) => icon.section === section)
       return ICONS.indexOf(row[Math.min(column, row.length - 1)]!)
@@ -162,7 +169,7 @@ export function WindowLayoutPicker({
     if (key.name === 'return' || key.name === 'space') { activate(current); return true }
     if (key.sequence === 'f') { onPick('fullscreen'); return true }
     if (key.sequence === 'S' || key.sequence === 's') { onSave?.(); return true }
-    if ((key.sequence === 'x' || key.name === 'delete') && current?.kind === 'saved') { onDelete?.(current.id); return true }
+    if ((key.sequence === 'x' || key.name === 'delete') && current?.kind === 'saved') { requestDelete(current.id); return true }
     if (key.sequence === 'n' && onSave) { setEditing({ id: null, draft: '' }); return true }
     if (key.sequence === 'r' && current?.kind === 'saved') { setEditing({ id: current.id, draft: saved.find((row) => row.id === current.id)?.name ?? '' }); return true }
     if (key.sequence === 'u' && current?.kind === 'saved') { onUpdate?.(current.id); return true }
@@ -172,7 +179,7 @@ export function WindowLayoutPicker({
       if (icon) onPick(icon.action)
     }
     return true
-  }, [editing, onRename, onUpdate, saved, activate, at, onClose, onDelete, onPick, onSave, targets])
+  }, [editing, onRename, onUpdate, saved, activate, at, onClose, requestDelete, armedDelete, onPick, onSave, targets])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -282,10 +289,12 @@ export function WindowLayoutPicker({
       {saved.length > 0 || onSave ? <text fg={theme.dim} wrapMode="none">Saved layouts</text> : null}
       {saved.map((row, index) => listRow(`window-layout:saved:${row.id}`, ICONS.length + 1 + index, (
         <>
-          <text fg={theme.text} width={MENU_WIDTH - 16} flexShrink={0} wrapMode="none">{fitText(`  ${row.name} · ${row.detail}`, MENU_WIDTH - 16)}</text>
+          {armedDelete === row.id
+            ? <text fg={theme.red} width={MENU_WIDTH - 16} flexShrink={0} wrapMode="none">{fitText(`  Delete "${row.name}"? x again deletes · esc keeps`, MENU_WIDTH - 16)}</text>
+            : <text fg={theme.text} width={MENU_WIDTH - 16} flexShrink={0} wrapMode="none">{fitText(`  ${row.name} · ${row.detail}`, MENU_WIDTH - 16)}</text>}
           {onRename ? <WindowButton id={`window-layout:rename:${row.id}`} label=" r " theme={theme} onPress={() => rename(row.id)} /> : null}
           {onUpdate ? <WindowButton id={`window-layout:update:${row.id}`} label=" u " theme={theme} onPress={() => onUpdate(row.id)} /> : null}
-          {onDelete ? <WindowButton id={`window-layout:delete:${row.id}`} label=" × " theme={theme} tone="danger" onPress={() => onDelete(row.id)} /> : null}
+          {onDelete ? <WindowButton id={`window-layout:delete:${row.id}`} label=" × " theme={theme} tone="danger" onPress={() => requestDelete(row.id)} /> : null}
         </>
       ), () => onRestore?.(row.id)))}
       {onSave ? listRow('window-layout:save', ICONS.length + 1 + saved.length, (

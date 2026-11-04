@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { focusAfterWindowClose } from './windowControls'
+import { SPLIT_CHORD_HELP } from './splitPaneState'
+import { WINDOW_MENU_CHORDS, windowMenuHint, focusAfterWindowClose, WINDOW_CONTROL_ACTIONS, WINDOW_MENU_ACTIONS, type WindowControlContext } from './windowControls'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -102,3 +103,32 @@ unsubscribe(); put('windowAttention', new Map())
 await new Promise(resolve => setTimeout(resolve, 0))
 assert.equal(notifications, 2, 'closed overviews stop observing runtimes')
 console.log('Window overview model passed (restored titles, hidden tools and sessions, cached membership, attention, batched subscriptions)')
+
+// Which window-menu entries a window is offered, by the state it is in. The
+// same table serves sessions, surfaces, popover tabs and the floating window,
+// so a state that hides an entry hides it for every kind.
+const offered = (context: Partial<WindowControlContext>) => WINDOW_MENU_ACTIONS.filter(id => {
+  const action = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === id)!
+  return !action.available || action.available({ floating: false, tabbed: false, canTab: true, zoomed: false, others: true, ...context })
+})
+assert.deepEqual(WINDOW_MENU_ACTIONS.filter(id => !WINDOW_CONTROL_ACTIONS.some(entry => entry.id === id)), [], 'every menu entry is a control action')
+assert.ok(['split-columns', 'split-rows', 'resize', 'swap', 'tab'].every(id => offered({}).includes(id as never)), 'a docked window is offered the layout entries')
+assert.ok(['split-columns', 'split-rows', 'resize', 'swap'].every(id => !offered({ zoomed: true }).includes(id as never)), 'a zoomed window is offered nothing that needs the layout')
+assert.ok(['split-columns', 'split-rows', 'resize', 'swap'].every(id => !offered({ floating: true }).includes(id as never)), 'a floating window is in no slot to split, resize or swap')
+assert.ok(!offered({ canTab: false }).includes('tab') && !offered({}).includes('detach') && offered({ tabbed: true }).includes('detach'), 'tab and detach follow what there is to tab with or detach')
+for (const always of ['focus', 'zoom', 'fullscreen', 'float', 'layout', 'close', 'move-workspace'] as const) {
+  for (const context of [{}, { floating: true }, { zoomed: true }, { tabbed: true }]) assert.ok(offered(context).includes(always), `${always} is offered in every state`)
+}
+console.log('Window menu availability is one table for every window kind.')
+
+// A menu entry's keyboard hint must name a chord that exists: it is the menu's
+// way of teaching the keyboard, and a rebound key would otherwise mislead.
+const chordTokens = new Set(SPLIT_CHORD_HELP.flatMap(section => section.entries.flatMap(entry => entry.keys.split(/\s·\s|\s…\s|\s/).filter(Boolean))))
+for (const [id, chord] of Object.entries(WINDOW_MENU_CHORDS)) assert.ok(chordTokens.has(chord!), `${id} hints ⌃B ${chord}, which the chord table does not list`)
+assert.equal(windowMenuHint('zoom'), '⌃B m')
+assert.equal(windowMenuHint('manage'), '⌃K w', 'an entry without a chord keeps its own keys')
+for (const id of WINDOW_MENU_ACTIONS) {
+  const action = WINDOW_CONTROL_ACTIONS.find(entry => entry.id === id)!
+  if (['split-columns', 'split-rows', 'zoom', 'float', 'tab', 'detach', 'layout', 'close'].includes(id)) assert.ok(windowMenuHint(id), `${action.label} has a keyboard hint in the menu`)
+}
+console.log('Window menu entries teach their ⌃B keys, and every hint names a real chord.')

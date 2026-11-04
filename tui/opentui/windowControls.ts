@@ -8,11 +8,11 @@ export function focusAfterWindowClose(focused: number | null, closing: number, c
 }
 
 export type WindowControlAction =
-  | 'move-workspace' | 'focus' | 'manage' | 'zoom' | 'fullscreen' | 'resize' | 'swap' | 'tab' | 'detach' | 'float' | 'close'
+  | 'move-workspace' | 'focus' | 'manage' | 'zoom' | 'fullscreen' | 'resize' | 'swap' | 'tab' | 'detach' | 'float' | 'close' | 'close-others' | 'close-others'
   | 'layout' | 'split-columns' | 'split-rows' | 'shrink' | 'grow' | 'reader-shrink' | 'reader-grow'
   | 'row-shrink' | 'row-grow' | 'equalize' | 'undo' | 'menu'
 
-export type WindowControlContext = { floating: boolean; tabbed: boolean; canTab: boolean; zoomed: boolean }
+export type WindowControlContext = { floating: boolean; tabbed: boolean; canTab: boolean; zoomed: boolean; others: boolean }
 export const WINDOW_CONTROL_ACTIONS: ReadonlyArray<{
   id: WindowControlAction; label: string; keys?: string; resize?: true
   available?: (context: WindowControlContext) => boolean
@@ -28,9 +28,10 @@ export const WINDOW_CONTROL_ACTIONS: ReadonlyArray<{
   { id: 'detach', label: 'Detach shown tab', available: c => c.tabbed },
   { id: 'float', label: 'Float / dock' },
   { id: 'layout', label: 'Window layout…' },
-  { id: 'split-columns', label: 'Split this window right', available: c => !c.floating },
-  { id: 'split-rows', label: 'Split this window below', available: c => !c.floating },
+  { id: 'split-columns', label: 'Split this window right', available: c => !c.floating && !c.zoomed },
+  { id: 'split-rows', label: 'Split this window below', available: c => !c.floating && !c.zoomed },
   { id: 'close', label: 'Close window' },
+  { id: 'close-others', label: 'Close other windows', available: c => c.others },
   { id: 'shrink', label: 'Shrink focused pane', keys: '[', resize: true },
   { id: 'grow', label: 'Grow focused pane', keys: ']', resize: true },
   { id: 'reader-shrink', label: 'Shrink focused pane', keys: '<', resize: true },
@@ -42,8 +43,22 @@ export const WINDOW_CONTROL_ACTIONS: ReadonlyArray<{
   { id: 'menu', label: 'Window menu', keys: 'space' },
 ]
 
+/**
+ * The ⌃B key that does what a window-menu entry does, shown beside the entry so
+ * the menu teaches the keyboard. Checked against the chord table by
+ * windowingAuditSmoke, so a rebound chord cannot leave a stale hint behind.
+ */
+export const WINDOW_MENU_CHORDS: Partial<Record<WindowControlAction, string>> = {
+  'split-columns': '%', 'split-rows': '"', zoom: 'm', float: 'f', tab: 't', detach: '!', layout: 'w', close: 'x', focus: 'o', swap: '⇧←',
+  shrink: '[', grow: ']', 'reader-shrink': '<', 'reader-grow': '>', 'row-shrink': '-', 'row-grow': '+', equalize: '=', undo: 'u',
+}
+export const windowMenuHint = (id: WindowControlAction): string | undefined => {
+  const chord = WINDOW_MENU_CHORDS[id]
+  return chord ? `⌃B ${chord}` : WINDOW_CONTROL_ACTIONS.find(action => action.id === id)?.keys
+}
+
 export const WINDOW_MENU_ACTIONS: readonly WindowControlAction[] = [
-  'focus', 'manage', 'split-columns', 'split-rows', 'zoom', 'fullscreen', 'resize', 'swap', 'tab', 'detach', 'float', 'move-workspace', 'layout', 'close',
+  'focus', 'manage', 'split-columns', 'split-rows', 'zoom', 'fullscreen', 'resize', 'swap', 'tab', 'detach', 'float', 'move-workspace', 'layout', 'close-others', 'close',
 ]
 export const WINDOW_RESIZE_ACTIONS: readonly WindowControlAction[] = ['shrink', 'grow', 'reader-shrink', 'reader-grow', 'row-shrink', 'row-grow', 'equalize']
 export const WINDOW_MANAGEMENT_HINT = 'arrows focus · shift+arrows swap · tab/1–9 select'

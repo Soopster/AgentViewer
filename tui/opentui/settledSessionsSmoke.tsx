@@ -92,7 +92,7 @@ const fail = (message: string): never => {
   throw new Error(`${message}\n${frame()}`)
 }
 // Rail rows only: the tab strip carries the selected title too.
-const row = (title: string) => frame().split('\n').map((line) => line.slice(0, 32)).find((line) => line.startsWith('│') && line.includes(title)) ?? null
+const row = (title: string) => frame().split('\n').map((line) => line.slice(0, 38)).find((line) => line.startsWith('│') && line.includes(title)) ?? null
 const press = async (sequence: string) => {
   act(() => { setup.mockInput.pressKey(sequence) })
   await settle(300)
@@ -131,6 +131,8 @@ try {
 
   // ── settled, then the cursor moves on: the row leaves the resting list ──
   await press('x')
+  // The date group's heading is a stop of its own between the two rows.
+  await press('j')
   await press('j')
   await settle(5600) // through a sidebar poll, which must not put it back
   if (row('Alpha work')) fail('A settled session stayed in the list after the cursor moved on')

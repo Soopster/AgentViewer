@@ -31,7 +31,7 @@ export function handleWindowControlKeys({
   setFocusedPane, setNewSessionCwd, workspaceCwd, setNewSessionModalOpen, splitChordPending,
   composerActive, composerTargetSession, composerSendState, reattachedRunning, isKeyRepeat,
   backgroundComposerTasks, enterWindowControls, openWindowControlMenu, toggleWorkspaces,
-  openSpaces, addSplitPane, rotateSplitOrientation, resizeFocusedWindow, resizeSplitReader,
+  openSpaces, addSplitPane, rotateSplitOrientation, cycleWindowLayout, resizeFocusedWindow, resizeSplitReader,
   shownPopoverTab, splitFocusIndex, closePopoverTab, closeSurfaceWindow, closeSplitPane,
   undoWindowLayout, redoWindowLayout, reopenClosedWindow, openRecentWindows,
   jumpToNextWindowAttention, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen,
@@ -97,6 +97,7 @@ export function handleWindowControlKeys({
   openSpaces: (id?: string, close?: boolean) => void
   addSplitPane: (orientation: SplitPaneOrientation) => void
   rotateSplitOrientation: () => void
+  cycleWindowLayout: () => void
   resizeFocusedWindow: (direction: 1 | -1, focus?: number | null) => void
   resizeSplitReader: (direction: 1 | -1 | 0) => void
   shownPopoverTab: string | null
@@ -229,6 +230,8 @@ export function handleWindowControlKeys({
         if (sequence === '%' || sequence === 'v') { addSplitPane('columns'); return }
         if (sequence === '"' || sequence === 's') { addSplitPane('rows'); return }
         if (sequence === 'r') { rotateSplitOrientation(); return }
+        // tmux's next-layout: the arrangements in the layout menu, one after another.
+        if (sequence === ' ') { cycleWindowLayout(); return }
         // Ratio keys: < gives the reader less of the shared axis, > more, = even.
         if (sequence === '<') { resizeFocusedWindow(-1); return }
         if (sequence === '>') { resizeFocusedWindow(1); return }

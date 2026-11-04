@@ -58,6 +58,7 @@ export const SPLIT_CHORD_HELP: SplitChordSection[] = [
       { keys: '% · v', label: 'split side by side', short: 'split' },
       { keys: '" · s', label: 'split stacked', short: 'stacked' },
       { keys: 'r', label: 'rotate the focused split: side-by-side ↔ stacked', short: 'rotate' },
+      { keys: 'space', label: 'next layout: two panes, stack, grid of four, grid of six', hint: false },
       { keys: 'n', label: 'next session in this pane', short: 'next' },
       { keys: 'x', label: 'close pane', short: 'close' },
       // Out of the one-line hint, which these four took past its 120-column

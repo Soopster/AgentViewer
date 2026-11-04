@@ -125,7 +125,7 @@ try {
   await waitFor('vertical restored after resize', () => Boolean(rectOf('vertical-tabs')))
   // Fullscreen hides the rail; restoring brings it back with the same tabs.
   act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
-  await waitFor('vertical fullscreen', () => Boolean(rectOf('fullscreen-restore')) && !rectOf('vertical-tabs'))
+  await waitFor('vertical fullscreen', () => Boolean(rectOf('presentation-restore')) && !rectOf('vertical-tabs'))
   act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
   await waitFor('vertical restored after fullscreen', () => Boolean(rectOf('vertical-tabs')))
   await settle(250)
@@ -158,7 +158,7 @@ try {
   await waitFor('the remaining tab opened', () => Boolean(rectOf('transcript-reader')))
   act(() => { setup.mockInput.pressKey('Z', { shift: true }) })
   await waitFor('fullscreen without a tab connector', () => {
-    const restore = rectOf('fullscreen-restore')
+    const restore = rectOf('presentation-restore')
     return Boolean(restore && row(restore.y).includes('FULLSCREEN') && !row(restore.y).includes('╭'))
   })
   act(() => { setup.mockInput.pressKey('Z', { shift: true }) })

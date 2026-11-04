@@ -5,6 +5,7 @@
 //     MENU, CANCEL, and its painted colours (the frame text is the same in any
 //     palette, so the colours are read from spans);
 //   - the real App: ⌃K b opens it and Escape gives the screen back.
+import './smokeTempCwd'
 import React from 'react'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'fs'
@@ -25,7 +26,6 @@ import {
   type DeskTableInput,
 } from '../../plugins/desk/tui/deskModel'
 
-process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-desk-smoke-')))
 
 const fail = (message: string): never => {
   console.error(message)
@@ -230,7 +230,7 @@ setup.renderer.destroy()
 // `light`) and actually paint the app's background.
 const { mkdirSync, writeFileSync } = await import('fs')
 mkdirSync('.agent-viewer-data', { recursive: true })
-writeFileSync('.agent-viewer-data/tui.json', JSON.stringify({ theme: 'bloomberg-light' }))
+writeFileSync('.agent-viewer-data/tui.json', JSON.stringify({ theme: 'bloomberg-light', themeFollowsTerminal: false }))
 const { getThemePalette, BLOOMBERG_THEME, BLOOMBERG_LIGHT_THEME } = await import('../theme')
 assert.equal(getThemePalette('bloomberg-dark'), BLOOMBERG_THEME)
 assert.equal(getThemePalette('bloomberg-light'), BLOOMBERG_LIGHT_THEME)

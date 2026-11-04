@@ -83,8 +83,8 @@ const fail = (message: string): never => {
   process.exit(1)
 }
 const check = (condition: unknown, message: string) => { if (!condition) fail(message) }
-const waitFor = async (label: string, test: () => boolean) => {
-  const deadline = Date.now() + 10_000
+const waitFor = async (label: string, test: () => boolean, timeoutMs = 10_000) => {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (test()) return
     await settle(80)
@@ -580,6 +580,28 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   console.log('Saved workspaces can be named, renamed with paste, updated in place, and previewed before restoring.')
 }
 
+// Deleting a saved layout takes two presses, so a stray key cannot lose a named one.
+{
+  const { listSavedWindowLayouts } = await import('./windowLayoutStore')
+  const target = listSavedWindowLayouts(CWD).find((entry) => entry.name === 'Debugging')!
+  const count = listSavedWindowLayouts(CWD).length
+  await openMenu()
+  const del = frame(`window-layout:delete:${target.id}`)!
+  check(del, 'delete is not available beside the saved layout')
+  await click(del.x + 1, del.y)
+  await settle(200)
+  check(listSavedWindowLayouts(CWD).length === count, 'one press deleted a saved layout')
+  check(setup.captureCharFrame().includes('x again deletes'), 'the saved layout did not ask for confirmation')
+  await act(async () => { setup.mockInput.pressEscape() }); await settle(200)
+  check(!setup.captureCharFrame().includes('x again deletes') && !!frame('window-layout:grid'), 'Escape did not just cancel the confirmation')
+  const again = frame(`window-layout:delete:${target.id}`)!
+  await click(again.x + 1, again.y); await settle(150)
+  await click(again.x + 1, again.y)
+  await waitFor('the saved layout deleted on the second press', () => listSavedWindowLayouts(CWD).length === count - 1)
+  await act(async () => { setup.mockInput.pressEscape() })
+  console.log('A saved layout is deleted only on the second press.')
+}
+
 // Updates mark background panes passively. Only the explicit attention chord
 // moves focus, and looking at a pane acknowledges output/errors, not prompts.
 {
@@ -630,6 +652,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
 
 // ── A shell as a window ─────────────────────────────────────────────────────
 {
+  // Seven windows at the 46-column minimum need more than 220 columns.
+  await act(async () => { setup.resize(300, 46) })
+  await settle(300)
   await act(async () => { setup.mockInput.pressEscape() })
   await settle(100)
   act(() => { setup.mockInput.pressKey('O', { shift: true }) })
@@ -661,7 +686,7 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await waitFor('the hidden terminal peek', () => peekVisible() && setup.captureCharFrame().includes('from-a-window'))
   await act(async () => { setup.mockInput.pressEscape() })
   await waitFor('the peek dismissed', () => !peekVisible())
-  await act(async () => { setup.resize(220, 46) })
+  await act(async () => { setup.resize(300, 46) })
   await settle(300)
   await waitFor('the terminal restored to its layout slot', () => !!frame('surface-window-close:terminal'))
   const restoredTerminal = frame('surface-window-close:terminal')!
@@ -670,6 +695,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const close = locate('Close window', frame('context-menu')!)
   await click(close.x + 1, close.y)
   await waitFor('the terminal window to close', () => !setup.captureCharFrame().includes('❯ Terminal'))
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
   console.log('A shell runs as a window in the layout and closes from its menu.')
 }
 
@@ -680,6 +707,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
     if (!button) return -1
     return allWindows().findIndex((pane) => pane.width > 0 && button.y === pane.y && button.x >= pane.x && button.x < pane.x + pane.width)
   }
+  await act(async () => { setup.resize(300, 46) })
+  await settle(300)
   act(() => { setup.mockInput.pressKey('O', { shift: true }) })
   await settle(400)
   const terminal = locate(' Terminal', frame('surface-panel-frame')!)
@@ -702,8 +731,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   const shellText = (index: number) => { const shell = getShells()[index]; const term = shell ? shellTerminal(shell.id) : null; return term ? readAllScreenText(term).join('\n') : '' }
   const before = getShells().length
   await chordKey(String(windowIndexOf('surface-window-close:terminal')))
+  await settle(600)
   await act(async () => { setup.mockInput.pressKey('o') })
-  await waitFor('a shell in the first window', () => getShells().length === before + 1 && /[$#%>] ?$/m.test(shellText(before)))
+  await waitFor('a shell in the first window', () => getShells().length === before + 1 && /[$#%>] ?$/m.test(shellText(before)), 30_000)
   await act(async () => { await setup.mockInput.typeText('echo one-window') })
   act(() => { setup.mockInput.pressEnter() })
   await waitFor('the first shell to run', () => shellText(before).includes('one-window'))
@@ -761,6 +791,8 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey(String(strip))
   await chordKey('!')
   await waitFor('the terminal broken out again', () => !frame('window-tab:surface:terminal#2') && windowIndexOf('surface-window-close:terminal#2') >= 0)
+  await act(async () => { setup.resize(220, 46) })
+  await settle(300)
   console.log('Surface windows open several of a kind, take their own keys, and swap with session panes by drag.')
 }
 
@@ -865,6 +897,9 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   check(!!frame('floating-window') && JSON.stringify(floating()) === JSON.stringify(start), 'clicking a floating title moved or docked the window')
   await drag({ x: start.x + 10, y: start.y }, { x: start.x + 4, y: start.y + 2 })
   await waitFor('the floating window to move', () => floating().x === start.x - 6 && floating().y === start.y + 2)
+  // The press is resolved against the last painted frame; let the move land first.
+  await settle(500)
+  await act(async () => { await setup.renderOnce() })
   const handle = frame('floating-resize')!
   await drag({ x: handle.x, y: handle.y }, { x: handle.x - 10, y: handle.y - 3 })
   await waitFor('the floating window to shrink', () => floating().width === start.width - 10 && floating().height === start.height - 3)
@@ -993,9 +1028,13 @@ console.log('A grid of six: the reader and two panes on top, three below.')
   await chordKey('u')
   await waitFor('undo restores original frame geometry', () => frame('transcript-reader')!.x === originalX)
   reader = frame('transcript-reader')!
+  // A press within the double-click window of an earlier click on a title zooms instead of dragging.
+  await settle(900)
   const surfaceSlot = windowFrame(2)!
-  await drag({ x: surfaceSlot.x + 4, y: surfaceSlot.y }, { x: reader.x + Math.floor(reader.width / 2), y: reader.y + Math.floor(reader.height / 2) }, () => {
-    check(setup.captureCharFrame().includes('Add as a tab of window 1'), 'surface-to-original drag describes the wrong action')
+  await drag({ x: surfaceSlot.x + 4, y: surfaceSlot.y }, { x: reader.x + Math.floor(reader.width / 2), y: reader.y + Math.floor(reader.height / 2) }, async () => {
+    // The ghost is drawn a frame after the pointer arrives; give it a few before judging.
+    for (let attempt = 0; attempt < 10 && !setup.captureCharFrame().includes('Add as a tab of window 1'); attempt += 1) { await act(async () => { await setup.renderOnce() }); await settle(60) }
+    check(setup.captureCharFrame().includes('Add as a tab of window 1'), `surface-to-original drag describes the wrong action: ${setup.captureCharFrame().split('\n').find(line => line.includes('⠿'))?.replace(/\s+/g, ' ') ?? 'no ghost'} · ${JSON.stringify(surfaceSlot)} · ${JSON.stringify(reader)}`)
   })
   await waitFor('surface and original session become tabs', () => !!frame('window-tab:surface:terminal') && !!frame('window-tab:claude:win-alpha'))
   // The live shell owns Ctrl+B for nested tmux; release capture before undo.

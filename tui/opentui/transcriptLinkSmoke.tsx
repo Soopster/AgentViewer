@@ -113,7 +113,7 @@ mock.module('./terminalBrowser', () => ({
 }))
 
 const { default: OpenTuiApp } = await import('./App')
-const setup = await testRender(<OpenTuiApp />, { width: 120, height: 40, kittyKeyboard: true })
+const setup = await testRender(<OpenTuiApp />, { width: 150, height: 40, kittyKeyboard: true })
 const settle = async (ms = 150) => {
   await act(async () => {
     await setup.flush()

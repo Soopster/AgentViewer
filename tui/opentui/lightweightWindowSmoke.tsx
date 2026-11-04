@@ -112,6 +112,15 @@ const mountedCards = (): string[] => {
   if (sb) walk(sb)
   return keys
 }
+// The hint sits above the first mounted card, and a window slides to the top
+// over a few frames: scroll up until it says what is expected (or give up).
+const hintAtTop = async (expected: string | null) => {
+  for (let attempt = 0; attempt < 40 && hint() !== expected; attempt += 1) {
+    await act(async () => { scroll().scrollTop = 0 })
+    await settle(150)
+  }
+  return hint()
+}
 const toTop = async () => {
   await act(async () => { scroll().scrollTop = 0 })
   await settle(200)
@@ -135,13 +144,13 @@ try {
 
   // The tail page, and g loading one page at a time. A switch mounts a seed
   // that grows by steps, so let it reach its full page first.
-  await waitFor('the tail page to finish mounting', () => mountedCards().length >= 80)
-  await toTop()
-  if (hint() !== String(PERSISTED - 80)) fail(`the tail mounted more or less than a page: ${hint()} hidden`)
+  // A switch mounts a seed of the page (READER_OPEN_WINDOW), so the page is
+  // judged by what it says is hidden, not by how many of its cards are mounted.
+  await waitFor('the tail page to be the window', () => { scroll().scrollTop = 0; return hint() === String(PERSISTED - 80) })
+  if (await hintAtTop(String(PERSISTED - 80)) !== String(PERSISTED - 80)) fail(`the tail mounted more or less than a page: ${hint()} hidden`)
   await press('g')
   await waitFor('g to keep the cursor on the old first card', () => frame().includes(label(PERSISTED - 80)))
-  await toTop()
-  if (hint() !== String(PERSISTED - 160)) fail(`g did not load one page: ${hint()} hidden`)
+  if (await hintAtTop(String(PERSISTED - 160)) !== String(PERSISTED - 160)) fail(`g did not load one page: ${hint()} hidden`)
 
   // 3. The loaded pages survive a remount: the window shows another session's
   // tab and comes back.
@@ -154,13 +163,12 @@ try {
   await act(async () => { setup.mockInput.pressArrow('left') })
   await waitFor('the first session again', () => !frame().includes('OTHER-SESSION') && frame().includes('MESSAGE-'))
   await settle(400)
-  await toTop()
-  if (hint() !== String(PERSISTED - 160)) fail(`coming back dropped the loaded pages: ${hint()} hidden`)
+  if (await hintAtTop(String(PERSISTED - 160)) !== String(PERSISTED - 160)) fail(`coming back dropped the loaded pages: ${hint()} hidden`)
 
   await press('g')
   await waitFor('the last page', () => frame().includes(label(PERSISTED - 160)))
   await toTop()
-  if (hint() !== null) fail('the whole transcript should be loaded')
+  if (await hintAtTop(null) !== null) fail('the whole transcript should be loaded')
   // A remounted window grows its mounted slice back over a few frames.
   await waitFor('the first message once everything is loaded', () => {
     scroll().scrollTop = 0
@@ -179,6 +187,18 @@ try {
   await press('G')
   await waitFor('CONVERSATION to open the long reply', () => frame().includes('LONG-LINE-14'))
   if (!mountedCards().includes('light-system')) fail('CONVERSATION should show the bookkeeping row again')
+  // The window menu offers the same toggle, so it is not only a view-menu secret.
+  const openWindowMenu = async () => {
+    await act(async () => { setup.mockInput.pressKey('b', { ctrl: true }) }); await settle(60)
+    await act(async () => { setup.mockInput.pressEnter() }); await settle(300)
+  }
+  await openWindowMenu()
+  await waitFor('the window menu offering lightweight view', () => frame().includes('Lightweight view'))
+  const entry = frame().split('\n').findIndex((line) => line.includes('Lightweight view'))
+  await act(async () => { await setup.mockMouse.click(frame().split('\n')[entry]!.indexOf('Lightweight view') + 2, entry) }); await settle(500)
+  await openWindowMenu()
+  await waitFor('the window menu offering the full view', () => frame().includes('Full transcript view'))
+  await act(async () => { setup.mockInput.pressEscape() }); await settle(200)
   console.log('Lightweight window smoke passed (folded, shaped, tail pages kept across a remount, Tab toggles it on the current view)')
 } finally {
   setup.renderer.destroy()
