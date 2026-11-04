@@ -11,7 +11,7 @@ import { CALLER_PROVIDER_ENV, callerAgentProvider, scrubInheritedAgentIdentity }
 const COORD_CLI_VERBS = ['run', 'join', 'runs', 'whoami', 'status', 'delegate', 'send', 'inbox', 'wait', 'tools', 'call']
 // Mirrors SESSION_CLI_VERBS in agent-viewer-session-cli.mjs (sessionCliSmoke pins it).
 // Mirrors TERMINAL_CLI_VERBS in agent-viewer-terminal-cli.mjs (terminalControlSmoke pins it).
-const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait']
+const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait', 'windows', 'window']
 const SESSION_CLI_VERBS = ['list', 'get', 'read', 'prompt', 'wait', 'interrupt', 'report', 'explain']
 
 // Agent Viewer is not the agent session it was launched from, and nothing it
@@ -196,7 +196,7 @@ Modes:
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
-  terminal   Drive the running TUI's terminals: list, read, send, keys, run, wait
+  terminal   Drive the running TUI's terminals and windows: list, read, send, keys, run, wait, windows, window
   session    Script ordinary chats: list, get, read, prompt --wait, wait --until, interrupt, report, explain
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health

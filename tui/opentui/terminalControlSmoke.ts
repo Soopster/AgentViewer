@@ -88,6 +88,27 @@ try {
   await cli('run', shellId, '--command', 'exit')
   assert.equal((await cli('wait', shellId, '--until', 'exited', '--timeout', '8000')).code, 0)
   await assert.rejects(cli('send', shellId, 'x'), /not running/)
+  // Windows: the verbs exist, and with no App mounted the socket says why rather than answering nothing.
+  assert.ok(TERMINAL_CLI_VERBS.includes('windows') && TERMINAL_CLI_VERBS.includes('window'))
+  await assert.rejects(cli('windows'), /No window layout to drive/)
+  await assert.rejects(cli('window', '1', 'zoom'), /No window layout to drive/)
+  // With a bridge: a number or a key finds the window, an unknown action is refused with the list.
+  const { registerWindowBridge } = await import('./windowControlBridge')
+  const acted: string[] = []
+  registerWindowBridge({
+    list: () => [{ number: 1, key: 'claude:a', title: 'A', focused: true }, { number: 2, key: 'surface:terminal', title: 'Terminal', focused: false }],
+    act: (key, action) => { acted.push(`${key}:${action}`); return true },
+    arrange: (arrangement) => { acted.push(`layout:${arrangement}`) },
+  })
+  assert.equal(((await cli('windows')).out as { windows: unknown[] }).windows.length, 2)
+  await cli('window', '2', 'float')
+  await cli('window', 'claude:a', 'close-others')
+  await cli('window', 'layout', 'grid')
+  assert.deepEqual(acted, ['surface:terminal:float', 'claude:a:close-others', 'layout:grid'])
+  await assert.rejects(cli('window', '2', 'explode'), /Unknown window action/)
+  await assert.rejects(cli('window', '9', 'zoom'), /No window "9"/)
+  await assert.rejects(cli('window', 'layout', 'sideways'), /Unknown layout/)
+  registerWindowBridge(null)
   console.log('terminalControlSmoke ok')
 } finally {
   control.close()

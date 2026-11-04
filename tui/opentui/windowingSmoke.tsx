@@ -204,6 +204,35 @@ await waitFor('the other windows back', () => panes().length === beforeClosing)
 await chord('u')
 console.log('Close other windows leaves one window and undoes.')
 
+// A script drives the same windows through the control socket's handler (`agent-viewer terminal windows|window`).
+{
+  const { respondToControlRequest } = await import('./terminalControl')
+  const ask = async (request: Record<string, unknown>) => await respondToControlRequest(JSON.stringify(request)) as Record<string, unknown> & { ok: boolean }
+  await chord('1')
+  await chord(' ')
+  await waitFor('windows beside the first', () => panes().length > 0)
+  const count = panes().length
+  const listed = await ask({ op: 'windows' })
+  const windows = (listed.windows ?? []) as Array<{ number: number; focused: boolean }>
+  check(listed.ok && windows.length === count + 1, `windows did not list the layout: ${JSON.stringify(listed)}`)
+  check(windows.some((entry) => entry.focused), 'no listed window is focused')
+  check(!(await ask({ op: 'window', target: '1', action: 'nonsense' })).ok, 'an unknown action was accepted')
+  check(!(await ask({ op: 'window', target: '99', action: 'zoom' })).ok, 'a missing window was accepted')
+  check(!(await ask({ op: 'window', action: 'layout:sideways' })).ok, 'an unknown layout was accepted')
+  const zoomed = await ask({ op: 'window', target: '1', action: 'zoom' })
+  check(zoomed.ok, `zoom refused: ${JSON.stringify(zoomed)}`)
+  await waitFor('one window filling the area by script', () => panes().length <= 1)
+  check((await ask({ op: 'window', target: '1', action: 'zoom' })).ok, 'restoring the zoom was refused')
+  await waitFor('the layout back by script', () => panes().length === count)
+  const closed = await ask({ op: 'window', target: '1', action: 'close-others' })
+  check(closed.ok, `close-others refused: ${JSON.stringify(closed)}`)
+  await waitFor('one window left by script', () => panes().length === 0)
+  check((await ask({ op: 'window', target: '1', action: 'undo' })).ok, 'undo refused')
+  await waitFor('the windows back by script', () => panes().length === count)
+  await chord('u')
+  console.log('A script lists windows, zooms them, closes the others and undoes through the control handler.')
+}
+
 // Splits are local to the target frame and may mix axes.
 // A drop focuses the new window, and focus is the selection, so the frame
 // dropped on is found by the session it shows.
@@ -301,6 +330,7 @@ const menuClose = locate('Close tab', frame('context-menu')!)
 await click(menuClose.x + 1, menuClose.y)
 check(!tabRow().includes('Win bravo') && windowCount() === 0, 'closing the last visible tab did not leave an empty layout')
 console.log('Title controls, double-clicks, strip selection and closing use shared frame semantics.')
+
 console.log('Windowing smoke passed')
 act(() => setup.renderer.destroy())
 process.exit(0)

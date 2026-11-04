@@ -215,7 +215,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
     closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
-    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen,
+    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen, openMoveWorkspaceMenu, workspaceId, floatWindowKey,
   }, key, point, section))
 
   return {

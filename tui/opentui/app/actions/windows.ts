@@ -468,6 +468,9 @@ export type OpenWindowControlMenuContext = {
   lightweightWindows: boolean
   setLightweightWindows: React.Dispatch<React.SetStateAction<boolean>>
   setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
+  openMoveWorkspaceMenu: (sourceId: string, target: string, singleTab?: boolean, point?: { x: number; y: number; }) => void
+  workspaceId: string
+  floatWindowKey: (key: string, session?: Session) => void
   closeSurfaceWindow: (surface: WindowSurfaceId, moving?: boolean) => void
   openPopoverTab: (kind: WindowSurfaceKind, pin: SurfaceMeta, from?: WindowSurfaceId) => void
   openPopoverInNewTab: (kind: WindowSurfaceKind, pin: SurfaceMeta) => void
@@ -489,7 +492,7 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
     popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta, returningPopoverRef,
     closeSurfaceWindow, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow, setContextMenu, windowSurfaceTitle, windowKeyTitle, selectedSessionKey,
-    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen,
+    windowSurfacePeek, toggleWindowZoom, lightweightWindows, setLightweightWindows, setWindowPickerOpen, openMoveWorkspaceMenu, workspaceId, floatWindowKey,
   } = ctx
   const index = controlWindowIndex(key)
   if (index === undefined && windowSurfacePeek && key === surfaceWindowKey(windowSurfacePeek)) {
@@ -502,6 +505,9 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
       items: [
         { label: 'Back to the layout', hint: 'm', run: () => toggleWindowZoom() },
         { label: 'Window layout…', hint: '⌃B w', run: () => setWindowPickerOpen(true) },
+        // A peeked window is in no slot, but it can still leave the layout altogether.
+        { label: 'Float window', run: () => floatWindowKey(key) },
+        { label: 'Move to workspace…', run: () => openMoveWorkspaceMenu(workspaceId, key, true, point) },
         isPopoverWindowKind(surfaceKindOf(peeked))
           ? { label: 'Open full screen', run: () => returnPopoverWindow(peeked) }
           : { label: 'Move to side panel', run: () => moveSurfaceToPanel(peeked) },

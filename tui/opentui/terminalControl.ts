@@ -21,7 +21,10 @@ import { shellDialectFor } from '../../lib/shellQuote'
 import { encodeTerminalPrompt } from './terminalPrompt'
 
 export type ControlRequest = {
-  op: 'list' | 'read' | 'send' | 'keys' | 'run' | 'state'
+  op: 'list' | 'read' | 'send' | 'keys' | 'run' | 'state' | 'windows' | 'window'
+  /** `window`: the number or key of the window, and what to do (an action or `layout:<arrangement>`). */
+  target?: string
+  action?: string
   id?: string
   lines?: number
   scrollback?: boolean
@@ -76,7 +79,28 @@ export function encodeKeySpecs(specs: readonly string[], cursorKeysApp: boolean)
   }).join('')
 }
 
+async function handleWindows(request: ControlRequest): Promise<ControlReply> {
+  const { getWindowBridge, resolveScriptedWindow, SCRIPTABLE_WINDOW_ACTIONS, SCRIPTABLE_ARRANGEMENTS } = await import('./windowControlBridge')
+  const bridge = getWindowBridge()
+  if (!bridge) return { ok: false, error: 'No window layout to drive: this TUI has not mounted its windows yet.' }
+  if (request.op === 'windows') return { ok: true, windows: bridge.list() }
+  const action = String(request.action ?? '')
+  if (action.startsWith('layout:')) {
+    const arrangement = action.slice('layout:'.length)
+    if (!(SCRIPTABLE_ARRANGEMENTS as readonly string[]).includes(arrangement)) return { ok: false, error: `Unknown layout "${arrangement}". Use ${SCRIPTABLE_ARRANGEMENTS.join(', ')}.` }
+    bridge.arrange(arrangement)
+    return { ok: true, layout: arrangement }
+  }
+  if (!(SCRIPTABLE_WINDOW_ACTIONS as readonly string[]).includes(action)) return { ok: false, error: `Unknown window action "${action}". Use ${SCRIPTABLE_WINDOW_ACTIONS.join(', ')}, or layout:<${SCRIPTABLE_ARRANGEMENTS.join('|')}>.` }
+  if (!request.target) return { ok: false, error: 'target is required: a window number or key (`agent-viewer terminal windows` lists them)' }
+  const window = resolveScriptedWindow(bridge.list(), request.target)
+  if (!window) return { ok: false, error: `No window "${request.target}". \`agent-viewer terminal windows\` shows the open ones.` }
+  if (!bridge.act(window.key, action as (typeof SCRIPTABLE_WINDOW_ACTIONS)[number])) return { ok: false, error: `Window ${window.number} went away before ${action}.` }
+  return { ok: true, window: window.number, key: window.key, action }
+}
+
 async function handle(request: ControlRequest): Promise<ControlReply> {
+  if (request.op === 'windows' || request.op === 'window') return handleWindows(request)
   const shells = await import('./shellStore')
   const processes = await import('./processStore')
   const { readShellAgentState } = await import('../../plugins/terminal/tui/shellAgentState')

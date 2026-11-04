@@ -64,13 +64,32 @@ resolves a window by key, not by kind) but is not separately driven.
 - A window that cannot be placed is never silently dead: it is peeked, says so in
   a banner, and its menu opens.
 
+## Scripting
+
+`agent-viewer terminal windows` lists the TUI's windows (number, key, title,
+focus) and `agent-viewer terminal window <n|key> <action>` runs a window-menu
+action on one (`focus zoom fullscreen float tab detach split-columns split-rows
+close close-others equalize undo`); `window layout <arrangement>` applies a layout
+(`two main-stack grid grid-six fill fullscreen`). The App registers a bridge
+(`windowControlBridge.ts`) so a script runs the same `runWindowControlAction` a
+menu click does. Pinned by `terminalControlSmoke` (verbs, errors, routing, the
+no-bridge answer) and `windowingSmoke` (a script zooming, closing others and
+undoing real windows).
+
 ## Known gaps
 
-- A peeked window has no move-to-workspace, float or tab: it is in no slot, so the
-  actions that act on a slot are absent rather than half-working.
+- A peeked window can float and move to another workspace, but not tab or split:
+  it is in no slot to tab onto or split.
+- **A floating *surface* window's own title controls (`≡`, `⊞ layout`, `⇥ panel`,
+  `×`) cannot be clicked**: the transparent `floating-window` box that carries
+  its drag handling sits above them (hit test lands on `floating-window`). Its
+  menu is reachable from a session window or the keyboard. Not fixed: moving the
+  drag handling onto a title strip did not make the controls reachable, so the
+  cause is not understood yet.
 - "Close other windows" does not remember what it closed for "reopen closed
   window"; `⌃B u` is the way back.
 - Saved layouts restore windows by identity; a session deleted since is skipped
   with a notice rather than replaced.
-- Windows are not yet scriptable from `agent-viewer terminal` the way terminals
-  are (list/read/send exist for shells only).
+- The per-kind matrix above is driven on a session, a placed browser, a floating
+  session and an Analytics popover window; other surface kinds share the code path
+  but are not separately driven.

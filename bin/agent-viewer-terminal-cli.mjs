@@ -12,7 +12,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-export const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait']
+export const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait', 'windows', 'window']
 const EXIT_TIMEOUT = 3
 const POLL_MS = 500
 const WAIT_UNTIL = ['working', 'blocked', 'idle', 'exited']
@@ -32,6 +32,11 @@ const USAGE = `Usage: agent-viewer terminal <verb> [options]
   wait <id> --until working|blocked|idle|exited [--timeout ms]
                                      Exit 0 when reached, 3 on timeout. working/blocked/idle read
                                      a coding agent running in the terminal; exited is the shell's
+
+  windows                            The TUI's windows: number, key, title, which has focus
+  window <n|key> <action>            Do what the window menu does: focus zoom fullscreen float tab detach
+                                     split-columns split-rows close close-others equalize undo
+  window layout <arrangement>        two main-stack grid grid-six fill fullscreen
 
 Options:
   --pid <pid>       Which TUI, when several are running (default: the only one)
@@ -124,6 +129,11 @@ export async function runTerminalCli(argv, env = process.env) {
   let result
   let code = 0
   if (verb === 'list') result = await ask({ op: 'list' })
+  else if (verb === 'windows') result = await ask({ op: 'windows' })
+  else if (verb === 'window') {
+    if (rest[0] === 'layout') result = await ask({ op: 'window', action: `layout:${need(rest[1], 'A layout')}` })
+    else result = await ask({ op: 'window', target: need(rest[0], 'A window number or key'), action: need(rest[1], 'An action') })
+  }
   else if (verb === 'read') {
     result = await ask({ op: 'read', id: need(rest[0], 'A terminal id'), scrollback: flags.scrollback === true, ...(flags.lines !== undefined ? { lines: Number(flags.lines) } : {}) })
   } else if (verb === 'send') {

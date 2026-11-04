@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
+import { registerWindowBridge } from './windowControlBridge'
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
 import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
@@ -5737,6 +5738,15 @@ function OpenTuiWorkspace() {
     openSurfaceWindow,
     orderedWindowKeys, commitWindowKeys, lightweightWindows, setLightweightWindows,
   })
+  // The window menu's own actions, for `agent-viewer terminal windows|window` (windowControlBridge.ts).
+  useEffect(() => {
+    registerWindowBridge({
+      list: () => readControlWindows().map(({ number, key, title, focused }) => ({ number, key, title, focused })),
+      act: (key, action) => controlWindowIndex(key) !== undefined && (runWindowControlAction(key, action), true),
+      arrange: (arrangement) => applyWindowLayout(arrangement as WindowLayoutAction),
+    })
+    return () => registerWindowBridge(null)
+  }, [readControlWindows, controlWindowIndex, runWindowControlAction, applyWindowLayout])
   useEffect(() => {
     if (!contextMenu) { if (controlMenuTarget) setControlMenuTarget(null); return }
     if (controlMenuTarget && controlWindowIndex(controlMenuTarget) === undefined) { setContextMenu(null); setControlMenuTarget(null) }

@@ -344,7 +344,17 @@ const browserMenuButton = frame('surface-window-menu:browser')!
 await click(browserMenuButton.x, browserMenuButton.y)
 checkMenuAnchor(browserMenuButton)
 check(setup.captureCharFrame().includes('Back to the layout') && setup.captureCharFrame().includes('Window layout'), 'a peeked window\'s menu did not open with its layout entry')
+// Moving it to another workspace works (with one workspace it says to make another, as any window's menu does).
+await menuPick('Move to workspace')
+await waitFor('the move answer', () => setup.captureCharFrame().includes('Create another workspace first') || !!frame('context-menu'))
 await escape()
+// It can leave the layout altogether by floating, and docks from there like any floating window.
+await click(browserMenuButton.x, browserMenuButton.y)
+await menuPick('Float window')
+await waitFor('the peeked browser floating', () => !!frame('floating-window'))
+check(!!frame('floating-dock'), 'the floated browser has no dock button')
+{ const dock = frame('floating-dock')!; await click(dock.x + 1, dock.y) }
+await waitFor('the browser docked again', () => !frame('floating-window'))
 // Given room, the same window answers to the same menu as any other.
 await act(async () => { setup.resize(300, 46) }); await settle(400)
 await waitFor('the browser window in the layout', () => !!frame('surface-window-menu:browser'))
