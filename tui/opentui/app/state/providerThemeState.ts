@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { useRef, useState } from 'react'
+import { useEngineeringAppState } from '../../engineering/state'
 import { useWorkspaceState, useAppState } from '../../workspaceContext'
 import { type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../../../theme'
 import { type TuiProviderInstanceChoice, type TuiDiffLayout } from '../../../../lib/tui/service'
@@ -23,8 +24,8 @@ export function useProviderThemeState() {
   const themeFollowsTerminalRef = useRef(false)
   // The theme last chosen from each side; following the terminal switches between them.
   const themeSlotsRef = useRef<{ light: TuiThemeMode; dark: TuiThemeMode }>({ light: 'light', dark: 'dark' })
-  const [density, setDensity] = useAppState<TuiDensity>('density', 'balanced')
-  const [diffLayout, setDiffLayout] = useAppState<TuiDiffLayout>('diffLayout', 'stack')
+  const [density, setDensity] = useEngineeringAppState<TuiDensity>('density', 'balanced')
+  const [diffLayout, setDiffLayout] = useEngineeringAppState<TuiDiffLayout>('diffLayout', 'stack')
   const [transcriptDiffNotes, setTranscriptDiffNotes] = useWorkspaceState<Map<string, TranscriptDiffNote>>('transcriptDiffNotes', () => new Map())
   const [transcriptDiffDraft, setTranscriptDiffDraft] = useState<TranscriptDiffNoteDraft | null>(null)
   const [pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt] = useState<{ target: string; prompt: string } | null>(null)

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useRef, useState } from 'react'
 import { type WindowGroupKey, type WindowWeights, type WindowDropZone } from '../../windowLayout'
-import { useWorkspaceState } from '../../workspaceContext'
+import { useEngineeringWorkspaceState } from '../../engineering/state'
 import { type BoxRenderable } from '@opentui/core'
 import { type Session } from '../../../../lib/types'
 import { SPLIT_SHARE_EVEN } from '../../splitPaneState'
@@ -31,10 +31,10 @@ export function useWindowGestureState() {
   // The third, `bottom`, is between the grid's bottom-row panes.
   // `{ group, index }` is the border after member `index` of a group of panes.
   const [splitDividerDragging, setSplitDividerDragging] = useState<'primary' | 'secondary' | { group: WindowGroupKey; index: number } | null>(null)
-  const [splitSecondaryShare, setSplitSecondaryShare] = useWorkspaceState<number>('splitSecondaryShare', SPLIT_SHARE_EVEN)
-  const [splitBottomShare, setSplitBottomShare] = useWorkspaceState<number>('splitBottomShare', SPLIT_SHARE_EVEN)
+  const [splitSecondaryShare, setSplitSecondaryShare] = useEngineeringWorkspaceState<number>('splitSecondaryShare', SPLIT_SHARE_EVEN)
+  const [splitBottomShare, setSplitBottomShare] = useEngineeringWorkspaceState<number>('splitBottomShare', SPLIT_SHARE_EVEN)
   // Every shared border between panes: relative sizes per group (windowLayout.ts).
-  const [splitWeights, setSplitWeights] = useWorkspaceState<WindowWeights>('splitWeights', {})
+  const [splitWeights, setSplitWeights] = useEngineeringWorkspaceState<WindowWeights>('splitWeights', {})
   const [hoveredWindowBorder, setHoveredWindowBorder] = useState<string | null>(null)
 
   const [secondaryDividerHovered, setSecondaryDividerHovered] = useState(false)

@@ -414,7 +414,7 @@ export function SplitTranscriptPaneInner({
   // reader's shaping too: bookkeeping rows dropped, tool calls grouped into
   // activity rows, and no "No visible content" stop for every tool-only
   // message — otherwise the two halves of a split are two different apps.
-  const paneStreamLike = transcriptView === 'stream' || transcriptView === 'chat'
+  const paneStreamLike = transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat'
     || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
   // Lightweight windows draw the current view the way the old pane did:
   // bookkeeping rows dropped, tool calls grouped into activity rows and no

@@ -1,5 +1,6 @@
 import type { ScrollBoxRenderable, Renderable } from '@opentui/core'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
+import { useEngineeringStateKey } from './engineering/state'
 import { useWorkspaceRef } from './workspaceContext'
 
 export type TranscriptWindowPosition = {
@@ -22,7 +23,7 @@ export type TranscriptWindowPosition = {
 /** One workspace-owned record per transcript, independent of its renderer or placement. */
 export function useTranscriptWindowPositions() {
   // Retain the persisted key so existing workspace reading positions upgrade in place.
-  return useWorkspaceRef('readerPositions', new Map<string, TranscriptWindowPosition>(), true)
+  return useWorkspaceRef(useEngineeringStateKey('readerPositions'), new Map<string, TranscriptWindowPosition>(), true)
 }
 
 export function transcriptViewportPosition(sb: ScrollBoxRenderable) {

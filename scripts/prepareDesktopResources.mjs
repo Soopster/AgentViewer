@@ -104,6 +104,7 @@ function main() {
       'plugins/editor/tui/editorProjectSearchWorker.ts',
       'tui/opentui/composerMentionWorker.ts',
       'tui/opentui/gitDiffHighlightWorker.ts',
+      'tui/opentui/engineeringRepositoryWorker.ts',
       // Pins each embedded worker at its repository path (tui/opentui/workerUrl.ts).
       '--root',
       '.',

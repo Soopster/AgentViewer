@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react'
 import { type TuiPluginCapture } from '../../shell/pluginTypes'
 import { useWorkspaceState, useAppState } from '../../workspaceContext'
+import { useEngineeringWorkspaceState, useEngineeringAppState, useEngineeringLocalState } from '../../engineering/state'
 import { EMPTY_SURFACE_PANEL } from '../../surfacePanelState'
 import { readTuiRuntimeActivity, type TuiSidebarSort } from '../../../../lib/tui/service'
 import { type RunningSessionRef, type Session } from '../../../../lib/types'
@@ -9,25 +10,25 @@ import { type PendingInboxEdit } from '../types'
 import { DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS } from '../layoutConstants'
 
 export function useSidebarPreferenceState() {
-  const [showToolCalls, setShowToolCalls] = useAppState('showToolCalls', true)
+  const [showToolCalls, setShowToolCalls] = useEngineeringAppState('showToolCalls', true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useAppState('velocityScrollEnabled', false)
-  const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
+  const [sidebarSort, setSidebarSort] = useEngineeringLocalState<TuiSidebarSort>('sidebarSort', 'project')
   const [hideScratch, setHideScratch] = useState(false)
   const [showSettled, setShowSettled] = useState(false)
   const pendingInboxEditsRef = useRef<Map<string, PendingInboxEdit>>(new Map())
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
-  const [sidebarWidthPreference, setSidebarWidthPreference] = useAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
-  const [taskPanelWidth, setTaskPanelWidth] = useWorkspaceState('taskPanelWidth', TASK_PANEL_DEFAULT_WIDTH)
-  const [taskPanelExpanded, setTaskPanelExpanded] = useWorkspaceState('taskPanelExpanded', false)
+  const [sidebarWidthPreference, setSidebarWidthPreference] = useEngineeringAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
+  const [taskPanelWidth, setTaskPanelWidth] = useEngineeringWorkspaceState('taskPanelWidth', TASK_PANEL_DEFAULT_WIDTH)
+  const [taskPanelExpanded, setTaskPanelExpanded] = useEngineeringWorkspaceState('taskPanelExpanded', false)
   // Surface panel: the terminal half of the web's right-hand panel. Open
   // surfaces live here; the panel is only *shown* when it is open, so the
   // reader keeps the full width until the user asks for it (⇧O).
-  const [surfacePanelOpen, setSurfacePanelOpen] = useWorkspaceState('surfacePanelOpen', false)
+  const [surfacePanelOpen, setSurfacePanelOpen] = useEngineeringWorkspaceState('surfacePanelOpen', false)
   const [surfacePanelFocused, setSurfacePanelFocused] = useState(false)
-  const [surfacePanelWidth, setSurfacePanelWidth] = useWorkspaceState('surfacePanelWidth', SURFACE_PANEL_DEFAULT_WIDTH)
+  const [surfacePanelWidth, setSurfacePanelWidth] = useEngineeringWorkspaceState('surfacePanelWidth', SURFACE_PANEL_DEFAULT_WIDTH)
   // Beside the reader (a column) or under it (a row), switched with `|` and kept in tui.json.
-  const [surfacePanelPlacement, setSurfacePanelPlacement] = useWorkspaceState<'right' | 'bottom'>('surfacePanelPlacement', 'right')
-  const [surfacePanelRows, setSurfacePanelRows] = useWorkspaceState('surfacePanelRows', SURFACE_PANEL_DEFAULT_ROWS)
+  const [surfacePanelPlacement, setSurfacePanelPlacement] = useEngineeringWorkspaceState<'right' | 'bottom'>('surfacePanelPlacement', 'right')
+  const [surfacePanelRows, setSurfacePanelRows] = useEngineeringWorkspaceState('surfacePanelRows', SURFACE_PANEL_DEFAULT_ROWS)
   // A border drag in progress, and the last column/row the pointer was at.
   const [surfacePanelResizing, setSurfacePanelResizing] = useState(false)
   const surfacePanelResizeFromRef = useRef<number | null>(null)
@@ -35,8 +36,8 @@ export function useSidebarPreferenceState() {
   // leave. The reader stays mounted rather than being torn down — it keeps the
   // transcript's scroll position and its live-turn subscriptions alive, so
   // collapsing the panel again is instant instead of a full re-read.
-  const [surfacePanelExpanded, setSurfacePanelExpanded] = useWorkspaceState('surfacePanelExpanded', false)
-  const [surfacePanel, setSurfacePanel] = useWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
+  const [surfacePanelExpanded, setSurfacePanelExpanded] = useEngineeringWorkspaceState('surfacePanelExpanded', false)
+  const [surfacePanel, setSurfacePanel] = useEngineeringWorkspaceState('surfacePanel', EMPTY_SURFACE_PANEL)
   const [surfaceBrowserRecent, setSurfaceBrowserRecent] = useWorkspaceState<string[]>('surfaceBrowserRecent', [])
   const surfacePanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The side panel's plugin surface: its key handler and its claim on input

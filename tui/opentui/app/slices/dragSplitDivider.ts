@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { useAppState } from '../../workspaceContext'
+import type { TuiTranscriptView } from '../../../theme'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { WindowLayout } from '../../windowLayout'
@@ -45,6 +47,7 @@ export type UseDragSplitDividerGroupContext = {
 }
 
 export function useDragSplitDividerGroup(ctx: UseDragSplitDividerGroupContext) {
+  const [view] = useAppState<TuiTranscriptView>('transcriptView', 'conversation')
   const {
     splitDividerPoint, checkpointWindowLayout, windowAreaRect, setSplitDividerPoint,
     splitDividerDragging, fittedWindows, rectOf, setSplitWeights, splitSecondaryShare,
@@ -65,9 +68,9 @@ export function useDragSplitDividerGroup(ctx: UseDragSplitDividerGroupContext) {
     setSplitDividerDragging(null)
     setSplitDividerPoint(null)
     if (kind === 'secondary' || (kind && typeof kind === 'object')) {
-      void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
+      if (view !== 'engineering') void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
     } else {
-      void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
+      if (view !== 'engineering') void writeTuiSplitReaderShare(splitReaderShare).catch(() => {})
     }
   })
 
@@ -98,7 +101,7 @@ export function useDragSplitDividerGroup(ctx: UseDragSplitDividerGroupContext) {
       return
     }
     setSplitOrientation(next)
-    void writeTuiSplitOrientation(next).catch((err) => {
+    if (view !== 'engineering') void writeTuiSplitOrientation(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store split orientation')
     })
     if (!quiet) showNotice('info', next === 'rows' ? 'Split panes: stacked' : 'Split panes: side-by-side')

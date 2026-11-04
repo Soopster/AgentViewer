@@ -45,6 +45,7 @@ import { type PluginServiceId } from '../../../../lib/plugins/types'
 import { type RightPanelSurfaceKind } from '../../../../lib/rightPanel'
 
 export type ExecuteCommandPaletteContext = {
+  isolatedView?: boolean
   surfaceToTab: () => void
   openComposerTargetMenu: () => void
   focusedWindowItem: WindowItem | null
@@ -205,6 +206,7 @@ export type ExecuteCommandPaletteContext = {
 }
 
 export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: string) {
+  const persistPreference = (write: () => Promise<unknown>) => ctx.isolatedView ? Promise.resolve() : write()
   const {
     focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
     runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
@@ -386,21 +388,21 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       const next = !stickyHeaders
       setStickyHeaders(next)
       showToggleOutcome('Sticky headers', next)
-      void writeTuiStickyHeaders(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sticky headers'))
+      void persistPreference(() => writeTuiStickyHeaders(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sticky headers'))
       break
     }
     case 'density': {
       const next = cycleDensityValue(density)
       setDensity(next)
       showToggleOutcome('Density:', next)
-      void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
+      void persistPreference(() => writeTuiDensity(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
       break
     }
     case 'diff-layout': {
       const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
       setDiffLayout(next)
       showToggleOutcome('Diff layout:', next)
-      void writeTuiDiffLayout(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store diff layout'))
+      void persistPreference(() => writeTuiDiffLayout(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store diff layout'))
       break
     }
     case 'rail': {
@@ -408,7 +410,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       setRailVisible(nextVisible)
       showToggleOutcome('Session rail', nextVisible)
       if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
-      void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
+      void persistPreference(() => writeTuiRailVisible(nextVisible)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
       break
     }
     case 'rail-narrow':
@@ -422,7 +424,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       setFocusMode(next)
       showToggleOutcome('Focus mode', next)
       if (next) setFocusedPane('messages')
-      void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
+      void persistPreference(() => writeTuiFocusMode(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
       break
     }
     case 'fullscreen':
@@ -432,7 +434,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       setShowToolCalls((v) => {
         const next = !v
         showToggleOutcome('Tool calls', next ? 'shown' : 'hidden')
-        void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+        void persistPreference(() => writeTuiShowToolCalls(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
         return next
       })
       break
@@ -488,7 +490,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       const next = cycleTranscriptWidth(transcriptWidth)
       setTranscriptWidth(next)
       showToggleOutcome('Transcript width:', next)
-      void writeTuiTranscriptWidth(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
+      void persistPreference(() => writeTuiTranscriptWidth(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
       break
     }
     case 'move-prev':
@@ -620,7 +622,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       const next = id === 'tabs-vertical' ? 'vertical' : 'horizontal'
       setTabOrientation(next)
       setTabsEnabled(true)
-      void Promise.all([writeTuiTabOrientation(next), writeTuiTabsEnabled(true)]).catch(err => setError(String(err)))
+      void persistPreference(() => Promise.all([writeTuiTabOrientation(next), writeTuiTabsEnabled(true)])).catch(err => setError(String(err)))
       showNotice('info', `${next === 'vertical' ? 'Vertical' : 'Horizontal'} tabs enabled`)
       break
     }
@@ -628,7 +630,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       const next = !tabsEnabled
       setTabsEnabled(next)
       showToggleOutcome('Tab bar', next)
-      void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
+      void persistPreference(() => writeTuiTabsEnabled(next)).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
       break
     }
     case 'split-add':

@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useEngineeringLocalState } from '../../engineering/state'
 import { createComposerSessions } from '../../../../lib/composerSessions'
 import { useRef, useState } from 'react'
 import { type TextareaRenderable } from '@opentui/core'
@@ -99,8 +100,8 @@ export function useBridgeAttentionState() {
   const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
   const dailySummaryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
-  const [taskPanelOpen, setTaskPanelOpen] = useState(false)
-  const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
+  const [taskPanelOpen, setTaskPanelOpen] = useEngineeringLocalState('taskPanelOpen', false)
+  const [taskPanelTab, setTaskPanelTab] = useEngineeringLocalState<'tasks' | 'agents'>('taskPanelTab', 'tasks')
   const [composerSessions] = useState(createComposerSessions)
 
   return {

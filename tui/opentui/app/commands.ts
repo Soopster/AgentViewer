@@ -5,7 +5,7 @@ import type { PaletteCommand } from './types'
 import { POPOVER_WINDOWS } from '../popoverWindows'
 import { splitCommandKey } from '../splitPaneState'
 
-export const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']
+export const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'engineering']
 export const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   conversation: 'CONVERSATION',
   full: 'FULL',
@@ -19,6 +19,7 @@ export const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
   'claude-code': 'CLAUDE',
   copilot: 'COPILOT',
   opencode: 'OPENCODE',
+  engineering: 'ENGINEERING',
 }
 export const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   conversation: 'Conversation with technical details folded',
@@ -33,11 +34,13 @@ export const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
   'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
   copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
   opencode: 'OpenCode-style continuous transcript with context sidebar',
+  engineering: 'Engineering workspace with changes, checks, tasks and attention',
 }
 export const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
 export const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
 export const FLEET_PAGE_SIZE = 9
 export const COMMANDS: PaletteCommand[] = [
+  { id: 'engineering-view', label: 'Engineering view', key: '', category: 'View' },
   // Navigation
   { id: 'move-prev', label: 'Move to previous item', key: 'k / ↑', category: 'Navigation' },
   { id: 'move-next', label: 'Move to next item', key: 'j / ↓', category: 'Navigation' },

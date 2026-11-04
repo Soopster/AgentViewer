@@ -315,7 +315,7 @@ export function runRenderSplitPane(ctx: RenderSplitPaneContext, splitSession: Se
   if (hidden === undefined) hidden = false
 return (
   <box
-    key={`split:${sessionKey(splitSession)}`}
+    key={`split:${sessionKey(splitSession)}${transcriptView === 'engineering' ? ':engineering' : ''}`}
     id={`split-pane:${splitIndex}`}
     visible={!hidden}
     width={size.width}

@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/react */
 import { type WindowPresentation } from '../../windowPresentation'
 import React, { useMemo, useRef } from 'react'
-import { useWorkspaceState, useAppState } from '../../workspaceContext'
+import { useWorkspaceState } from '../../workspaceContext'
 import { coordinatorWindowBadges } from '../../coordinatorWorkspace'
 import { useCoordinatorWorkspace } from '../../useCoordinatorWorkspace'
 import { type TuiTranscriptWidth } from '../../../../lib/tui/service'
+import { useEngineeringAppState, useEngineeringWorkspaceState } from '../../engineering/state'
 import { useStableEvent } from '../../useStableEvent'
 import { useWindowOverlayState } from '../state/windowOverlayState'
 import { useWindowPanesState } from '../state/windowPanesState'
@@ -29,7 +30,7 @@ export function useProviderGroup() {
   // diverge only in composer placement (docked vs. inline-with-transcript).
   const isCopilotView = transcriptView === 'copilot'
   const isOpenCodeView = transcriptView === 'opencode'
-  const isChatLikeView = transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  const isChatLikeView = transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
   // SCROLLBACK is STREAM read the way a terminal scrollback is: the same rows,
   // but no card cursor — keys and the wheel move the text by lines, and nothing
   // is ever highlighted as "selected". The cursor key survives as an invisible
@@ -37,7 +38,7 @@ export function useProviderGroup() {
   // somewhere to start from.
   const isScrollbackView = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || isCopilotView || isOpenCodeView
   // Both draw the pane as bare stream: no reader header, no thinking preview.
-  const isStreamView = transcriptView === 'stream' || isScrollbackView
+  const isStreamView = transcriptView === 'engineering' || transcriptView === 'stream' || isScrollbackView
   // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
   // or folds everything at once, as Claude Code's ⌃O does.
   const [scrollbackExpanded, setScrollbackExpanded] = useWorkspaceState('scrollbackExpanded', false)
@@ -46,15 +47,15 @@ export function useProviderGroup() {
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
   const isContinuousView = transcriptView === 'transcript' || isOpenCodeView
-  const [transcriptWidth, setTranscriptWidth] = useAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
-  const [focusMode, setFocusMode] = useAppState('focusMode', false)
-  const [stickyHeaders, setStickyHeaders] = useAppState('stickyHeaders', false)
-  const [lightweightWindows, setLightweightWindows] = useAppState('lightweightWindows', false)
+  const [transcriptWidth, setTranscriptWidth] = useEngineeringAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
+  const [focusMode, setFocusMode] = useEngineeringAppState('focusMode', false)
+  const [stickyHeaders, setStickyHeaders] = useEngineeringAppState('stickyHeaders', false)
+  const [lightweightWindows, setLightweightWindows] = useEngineeringAppState('lightweightWindows', false)
   // Prompt card pinned under the reader's top edge while its turn scrolls past.
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
   // the user's normal rail/header layout.
-  const [windowPresentation, setWindowPresentation] = useWorkspaceState<WindowPresentation | null>('windowPresentation', null, false)
+  const [windowPresentation, setWindowPresentation] = useEngineeringWorkspaceState<WindowPresentation | null>('windowPresentation', null, false)
   const fullscreenMode = windowPresentation?.mode === 'fullscreen'
   const presentationResolverRef = useRef<(index?: number | 'reader' | null) => string | null>(() => null)
   const setFullscreenMode: React.Dispatch<React.SetStateAction<boolean>> = useStableEvent(action => {

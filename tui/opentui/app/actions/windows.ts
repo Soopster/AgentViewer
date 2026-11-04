@@ -71,6 +71,7 @@ import { swapPaneSlots } from '../../windowSplitTree'
 import { windowInDirection } from '../../windowLayout'
 
 export type PickWindowTargetContext = {
+  isolatedView?: boolean
   windowTargets: WindowTarget[]
   fallbackSessions: Session[]
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
@@ -184,6 +185,7 @@ export function runPickWindowTarget(ctx: PickWindowTargetContext, key: string) {
 }
 
 export type ApplySavedWindowLayoutContext = {
+  isolatedView?: boolean
   windowLayoutRestoreRequestRef: React.RefObject<number>
   windowLayoutProject: string
   windowPickerOpen: boolean
@@ -269,7 +271,7 @@ export function runApplySavedWindowLayout(ctx: ApplySavedWindowLayoutContext, id
   })
   setSplitPinnedKeys(panes.map((pane) => sessionKey(pane)))
   setSplitPaneCount(panes.length)
-  void writeTuiSplitPanes(panes.length).catch(() => {})
+  if (!ctx.isolatedView) void writeTuiSplitPanes(panes.length).catch(() => {})
   setWindowSurfaces(saved.surfaces.filter(surfaceRestorable))
   setWindowOrder(saved.order ?? [])
   // Background tabs' sessions must be open tabs, or their tab has nothing to show.
@@ -300,6 +302,7 @@ export function runApplySavedWindowLayout(ctx: ApplySavedWindowLayoutContext, id
 }
 
 export type RunWindowControlActionContext = {
+  isolatedView?: boolean
   controlWindowIndex: (key: string) => number | null | undefined
   setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; title: string; items: ContextMenuItem[]; } | null>>
   windowControlMode: 'identify' | 'manage' | null
@@ -398,8 +401,8 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
         setSplitSecondaryShare(SPLIT_SHARE_EVEN)
         setSplitBottomShare(SPLIT_SHARE_EVEN)
         setSplitWeights({})
-        void writeTuiSplitReaderShare(SPLIT_SHARE_EVEN).catch(() => {})
-        void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: SPLIT_SHARE_EVEN, bottomShare: SPLIT_SHARE_EVEN, weights: {} }).catch(() => {})
+        if (!ctx.isolatedView) void writeTuiSplitReaderShare(SPLIT_SHARE_EVEN).catch(() => {})
+        if (!ctx.isolatedView) void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: SPLIT_SHARE_EVEN, bottomShare: SPLIT_SHARE_EVEN, weights: {} }).catch(() => {})
         break
       case 'undo': undoWindowLayout(); break
       case 'swap': if (direction) swapWindowInDirection(direction, index); break
@@ -438,6 +441,7 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
 }
 
 export type OpenWindowControlMenuContext = {
+  isolatedView?: boolean
   controlWindowIndex: (key: string) => number | null | undefined
   leaveWindowControls: () => void
   setControlMenuTarget: React.Dispatch<React.SetStateAction<string | null>>
@@ -578,6 +582,7 @@ export function runOpenWindowControlMenu(ctx: OpenWindowControlMenuContext, key:
 }
 
 export type RestoreWindowSnapshotContext = {
+  isolatedView?: boolean
   captureWindowLayout: () => { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; presentation: import('../../windowPresentation').WindowPresentation | null; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: SurfacePanelState; panelOpen: boolean; }
   setCoordinatorWorkspace: React.Dispatch<React.SetStateAction<ProtocolRunSnapshot | null>>
   setCoordinatorWorkspaceRunId: React.Dispatch<React.SetStateAction<string | null>>
@@ -674,7 +679,7 @@ export function runRestoreWindowSnapshot(ctx: RestoreWindowSnapshotContext, prev
   setSurfacePanel(previous.panel)
   setSurfacePanelOpen(previous.panelOpen)
   setSurfacePanelFocused(false)
-  void Promise.all([
+  if (!ctx.isolatedView) void Promise.all([
     writeTuiSplitPanes(layout.count),
     writeTuiSplitOrientation(layout.orientation),
     writeTuiSplitReaderShare(layout.readerShare),
@@ -683,6 +688,7 @@ export function runRestoreWindowSnapshot(ctx: RestoreWindowSnapshotContext, prev
 }
 
 export type ApplySplitPaneCountContext = {
+  isolatedView?: boolean
   checkpointWindowLayout: () => void
   setSplitPaneCount: React.Dispatch<React.SetStateAction<number>>
   setError: React.Dispatch<React.SetStateAction<string | null>>
@@ -702,7 +708,7 @@ export function runApplySplitPaneCount(ctx: ApplySplitPaneCountContext, next: nu
   } = ctx
   checkpointWindowLayout()
   setSplitPaneCount(next)
-  void writeTuiSplitPanes(next).catch((err) => {
+  if (!ctx.isolatedView) void writeTuiSplitPanes(next).catch((err) => {
     setError(err instanceof Error ? err.message : 'Failed to store split view setting')
   })
   if (windowSplitTree) {
@@ -746,6 +752,7 @@ export function runApplySplitPaneCount(ctx: ApplySplitPaneCountContext, next: nu
 }
 
 export type OpenSurfaceWindowContext = {
+  isolatedView?: boolean
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   surfacePanel: SurfacePanelState
   windowSurfaces: string[]
@@ -825,6 +832,7 @@ export function runOpenSurfaceWindow(ctx: OpenSurfaceWindowContext, kind: Window
 }
 
 export type CloseWindowSessionTabContext = {
+  isolatedView?: boolean
   openTabSessions: Session[]
   orderedWindowKeys: string[]
   liveWindowStacks: WindowStack[]
@@ -890,6 +898,7 @@ export function runCloseWindowSessionTab(ctx: CloseWindowSessionTabContext, sess
 }
 
 export type SplitFocusedWindowContext = {
+  isolatedView?: boolean
   splitFocusIndex: number | null
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   orderedWindowKeys: string[]
@@ -963,7 +972,7 @@ export function runSplitFocusedWindow(ctx: SplitFocusedWindowContext, orientatio
     const pins = [...splitPinnedSessions.slice(0, splitPaneCount).map(sessionKey), key]
     setSplitPinnedKeys(pins)
     setSplitPaneCount(pins.length)
-    void writeTuiSplitPanes(pins.length).catch(() => {})
+    if (!ctx.isolatedView) void writeTuiSplitPanes(pins.length).catch(() => {})
   } else {
     setWindowSurfaces(current => [...current, surface!])
     pendingSurfaceFocusRef.current = surface!
@@ -975,6 +984,7 @@ export function runSplitFocusedWindow(ctx: SplitFocusedWindowContext, orientatio
 }
 
 export type TabWindowOntoContext = {
+  isolatedView?: boolean
   shownPopoverTab: string | null
   checkpointWindowLayout: () => void
   liveWindowStacks: WindowStack[]
@@ -1040,6 +1050,7 @@ export function runTabWindowOnto(ctx: TabWindowOntoContext, key: string, anchor:
 }
 
 export type ReopenClosedWindowContext = {
+  isolatedView?: boolean
   closedWindows: { key: string; snapshot: ReturnType<() => { layout: { arrangement: WindowArrangement; orientation: SplitPaneOrientation; readerLast: boolean; readerShare: number; secondaryShare: number; bottomShare: number; weights: Partial<Record<WindowGroupKey, number[]>>; splitTree: WindowSplitTree | null; count: number; panes: string[]; surfaces: string[]; order: string[]; popoverTabs: string[]; activePopoverTab: string | null; stacks: string[][]; floating: { key: string; rect: FloatingRect; slot: number; } | null; surfaceMeta: { [x: string]: SurfaceMeta; }; primaryOpen: boolean; reader: string | null; zoom: number | 'reader' | null; fullscreen: boolean; presentation: import('../../windowPresentation').WindowPresentation | null; coordinatorRunId: string | null; }; reader: Session | null; workspace: ProtocolRunSnapshot | null; workspaceRunId: string | null; tabs: Session[]; focus: number | null; panel: SurfacePanelState; panelOpen: boolean; }>; }[]
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   orderedWindowKeys: string[]
@@ -1105,6 +1116,7 @@ export function runReopenClosedWindow(ctx: ReopenClosedWindowContext) {
 }
 
 export type DropSessionOnSurfaceWindowContext = {
+  isolatedView?: boolean
   windowItems: WindowItem[]
   swapWindows: (a: number, b: number) => void
   checkpointWindowLayout: () => void
@@ -1156,7 +1168,7 @@ export function runDropSessionOnSurfaceWindow(ctx: DropSessionOnSurfaceWindowCon
   setWindowArrangement(plan.arrangement, plan.readerLast)
   applySplitOrientation(plan.orientation, true)
   setSplitPaneCount(plan.count)
-  void writeTuiSplitPanes(plan.count).catch(() => {})
+  if (!ctx.isolatedView) void writeTuiSplitPanes(plan.count).catch(() => {})
   const anchor = surfaceWindowKey(surface.surface)
   const withSession = [...shownFirstWindowKeys().filter((entry) => entry !== key), key]
   const nextOrder = moveWindowBeside(withSession, key, anchor, edge === 'left' || edge === 'top')
@@ -1167,6 +1179,7 @@ export function runDropSessionOnSurfaceWindow(ctx: DropSessionOnSurfaceWindowCon
 }
 
 export type DragSplitDividerContext = {
+  isolatedView?: boolean
   splitDividerPoint: { x: number; y: number; } | null
   checkpointWindowLayout: () => void
   windowAreaRect: () => { x: number; y: number; width: number; height: number; } | null
@@ -1224,6 +1237,7 @@ export function runDragSplitDivider(ctx: DragSplitDividerContext, event: { x: nu
 }
 
 export type ResizeSplitReaderContext = {
+  isolatedView?: boolean
   reconciledSplitTree: WindowSplitTree | null
   checkpointWindowLayout: () => void
   setWindowSplitTree: React.Dispatch<React.SetStateAction<WindowSplitTree | null>>
@@ -1266,7 +1280,7 @@ export function runResizeSplitReader(ctx: ResizeSplitReaderContext, direction: 1
     return
   }
   setSplitReaderShare(next)
-  void writeTuiSplitReaderShare(next).catch((err) => {
+  if (!ctx.isolatedView) void writeTuiSplitReaderShare(next).catch((err) => {
     setError(err instanceof Error ? err.message : 'Failed to store split ratio')
   })
   showNotice('info', next === SPLIT_SHARE_EVEN
@@ -1275,6 +1289,7 @@ export function runResizeSplitReader(ctx: ResizeSplitReaderContext, direction: 1
 }
 
 export type CancelPointerGestureContext = {
+  isolatedView?: boolean
   treeDividerDrag: string | null
   setTreeDividerDrag: React.Dispatch<React.SetStateAction<string | null>>
   treeDividerActivePathRef: React.RefObject<string | null>
@@ -1332,6 +1347,7 @@ export function runCancelPointerGesture(ctx: CancelPointerGestureContext) {
 }
 
 export type NestedDropPlanContext = {
+  isolatedView?: boolean
   windowZoom: number | 'reader' | null
   fullscreenMode: boolean
   orderedWindowKeys: string[]
@@ -1388,6 +1404,7 @@ export function runNestedDropPlan(ctx: NestedDropPlanContext, movingKey: string,
 }
 
 export type MoveFloatGestureContext = {
+  isolatedView?: boolean
   floatGestureRef: React.RefObject<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean; } | null>
   floatingWindow: { key: string; rect: FloatingRect; slot: number; } | null
   checkpointWindowLayout: () => void
@@ -1440,6 +1457,7 @@ export function runMoveFloatGesture(ctx: MoveFloatGestureContext, event: { x: nu
 }
 
 export type CycleSplitPaneSessionContext = {
+  isolatedView?: boolean
   checkpointWindowLayout: () => void
   splitPaneCount: number
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
@@ -1482,6 +1500,7 @@ export function runCycleSplitPaneSession(ctx: CycleSplitPaneSessionContext) {
 }
 
 export type OpenPopoverWindowContext = {
+  isolatedView?: boolean
   readerPin: () => { session: string | null; path: string | null; }
   teammatesOpen: boolean
   openTeammatesPanel: () => void
@@ -1543,6 +1562,7 @@ export function runOpenPopoverWindow(ctx: OpenPopoverWindowContext, kind: Popove
 }
 
 export type ResizeFocusedWindowContext = {
+  isolatedView?: boolean
   splitFocusIndex: number | null
   reconciledSplitTree: WindowSplitTree | null
   resizeTreeWindow: (slot: number, direction: 1 | -1) => void
@@ -1587,10 +1607,11 @@ export function runResizeFocusedWindow(ctx: ResizeFocusedWindowContext, directio
   extents[neighbour] = pair - next
   const weights = { ...splitWeights, [group.key]: extents }
   setSplitWeights(weights)
-  void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights }).catch(() => {})
+  if (!ctx.isolatedView) void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights }).catch(() => {})
 }
 
 export type CloseSplitPaneContext = {
+  isolatedView?: boolean
   splitFocusIndex: number | null
   closeFloatingWindow: (remember?: boolean) => void
   checkpointWindowLayout: () => void
@@ -1642,6 +1663,7 @@ export function runCloseSplitPane(ctx: CloseSplitPaneContext, paneIndex?: number
 }
 
 export type BreakOutWindowTabContext = {
+  isolatedView?: boolean
   windowStackFor: (key: string) => WindowStack | null
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   laidOutWindowKeys: Set<string>
@@ -1690,6 +1712,7 @@ export function runBreakOutWindowTab(ctx: BreakOutWindowTabContext, key: string)
 }
 
 export type RequestWindowPanesContext = {
+  isolatedView?: boolean
   splitCandidateSessions: Session[]
   openTabSessions: Session[]
   selectedSessionKey: string | null
@@ -1722,13 +1745,14 @@ export function runRequestWindowPanes(ctx: RequestWindowPanesContext, wanted: nu
   }
   const count = Math.min(wanted, available)
   setSplitPaneCount(count)
-  void writeTuiSplitPanes(count).catch((err) => {
+  if (!ctx.isolatedView) void writeTuiSplitPanes(count).catch((err) => {
     setError(err instanceof Error ? err.message : 'Failed to store split view setting')
   })
   showNotice('info', count < wanted ? `${label} · ${count} of ${wanted} panes (no more sessions to fill it)` : label)
 }
 
 export type SwapWindowInDirectionContext = {
+  isolatedView?: boolean
   splitFocusIndex: number | null
   checkpointWindowLayout: () => void
   visibleSplitPaneCount: number
@@ -1770,6 +1794,7 @@ export function runSwapWindowInDirection(ctx: SwapWindowInDirectionContext, dire
 }
 
 export type EndFloatGestureContext = {
+  isolatedView?: boolean
   floatGestureRef: React.RefObject<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean; } | null>
   setFloatGesturing: React.Dispatch<React.SetStateAction<boolean>>
   setFloatDockHint: React.Dispatch<React.SetStateAction<{ label: string; rect: { x: number; y: number; width: number; height: number; }; x: number; y: number; } | null>>

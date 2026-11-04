@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { useRef, useState } from 'react'
+import { useEngineeringWorkspaceState } from '../../engineering/state'
 import { useWorkspaceState, useQuietWorkspaceState } from '../../workspaceContext'
 import { type MessageBookmark } from '../../../../lib/messageBookmarks'
 import { type TuiSessionReaderState } from '../../../../lib/tuiState'
@@ -14,13 +15,13 @@ export function useBookmarkScrollState() {
   // When jumping to a bookmark in another session, remember where to land once
   // that session's transcript has loaded.
   const pendingBookmarkCursorRef = useRef<{ sessionKey: string; uuid: string } | null>(null)
-  const [followTail, setFollowTail] = useWorkspaceState('followTail', true)
+  const [followTail, setFollowTail] = useEngineeringWorkspaceState('followTail', true)
   // Absolute index (into visibleTranscriptCards) of the first mounted reader
   // card when the window is detached from the tail. null = pinned to the tail
   // (derived), which is also the followTail shape. See READER_CARD_WINDOW.
   const [pendingNewCount, setPendingNewCount] = useState(0)
-  const [unreadBoundaryKey, setUnreadBoundaryKey] = useWorkspaceState<string | null>('unreadBoundaryKey', null)
-  const [resumeMarkerKey, setResumeMarkerKey] = useWorkspaceState<string | null>('resumeMarkerKey', null)
+  const [unreadBoundaryKey, setUnreadBoundaryKey] = useEngineeringWorkspaceState<string | null>('unreadBoundaryKey', null)
+  const [resumeMarkerKey, setResumeMarkerKey] = useEngineeringWorkspaceState<string | null>('resumeMarkerKey', null)
   const [bootstrapped, setBootstrapped] = useState(false)
   const [restoredReaderState, setRestoredReaderState] = useState<{
     sessionKey: string | null
@@ -37,8 +38,8 @@ export function useBookmarkScrollState() {
   const [renameDraft, setRenameDraft] = useState('')
   const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useWorkspaceState('composerActive', false)
-  const [composerWindowOpen, setComposerWindowOpen] = useWorkspaceState('composerWindowOpen', false)
-  const [composerHidden, setComposerHidden] = useWorkspaceState('composerHidden', false)
+  const [composerWindowOpen, setComposerWindowOpen] = useEngineeringWorkspaceState('composerWindowOpen', false)
+  const [composerHidden, setComposerHidden] = useEngineeringWorkspaceState('composerHidden', false)
   // The draft is read, not subscribed to: a keystroke must not re-render this root (see
   // useQuietWorkspaceState). `composerDraft` is its value as of this render; whatever changes
   // per key is drawn by a child that subscribes itself, or arrives through composerDraftShape.

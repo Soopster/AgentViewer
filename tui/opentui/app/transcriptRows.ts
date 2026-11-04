@@ -346,7 +346,7 @@ export function visibleCardsForTranscriptView(cards: TuiTranscriptCard[], view: 
   // behind (a header and a "No visible content" row each) before grouping, so
   // the tool calls either side of one merge into a single group.
   if (view === 'agents') return groupAgentsToolCards(cards.filter(card => !isStreamGhostCard(card)))
-  if (view === 'stream' || view === 'chat' || view === 'transcript' || view === 'scrollback'
+  if (view === 'engineering' || view === 'stream' || view === 'chat' || view === 'transcript' || view === 'scrollback'
     || view === 'codex' || view === 'claude-code' || view === 'copilot' || view === 'opencode') {
     // Ghosts go first: an empty assistant shell between two tool calls would
     // otherwise split them into two groups.
@@ -368,7 +368,7 @@ export function usesAgentCardPresentation(
   transcriptView: TuiTranscriptView
 ): boolean {
   return transcriptView === 'agents'
-    || ((transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode') && isStreamOperationalCard(card))
+    || ((transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode') && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(

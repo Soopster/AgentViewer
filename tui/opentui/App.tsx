@@ -413,6 +413,8 @@ import { useLoadingSessionsGroup } from './app/slices/loadingSessions'
 import { usePopoverTabHostKeyGroup } from './app/slices/popoverTabHostKey'
 import { useProviderGroup } from './app/slices/provider'
 import { useWorkspaceContextGroup } from './app/slices/workspaceContext'
+import { EngineeringFrame, EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
+import { useEngineeringLayout } from './engineering/state'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -462,7 +464,11 @@ function OpenTuiWorkspace() {
 
   noteRootRender()
   const renderer = useRenderer()
-  const { width, height } = useTerminalDimensions()
+  const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions()
+  const engineeringLayout = useEngineeringLayout(terminalWidth, terminalHeight)
+  const { width, height } = engineeringLayout
+  const engineeringKeyRef = useRef<EngineeringKeyHandler | null>(null)
+  const engineeringRailKeyRef = useRef<EngineeringKeyHandler | null>(null)
 
   // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
   // every render; the effect below reads it after commit.
@@ -1494,7 +1500,7 @@ function OpenTuiWorkspace() {
       ? 'EFFORT'
       : modelPickerPermissionLabel
   const {
-    modelPickerFocusedDescription, setComposerPlanLimits, composerKnobSegments,
+    modelPickerFocusedDescription, setComposerPlanLimits, composerKnobSegments: baseComposerKnobSegments,
     composerWorkingDirectory, composerGitBranch, composerGitSummary, setComposerGitSummary,
   } = useModelPickerFocusedDescriptionGroup({
     modelPickerFocusedOption, composerTargetSession, selectedSessionKey, contextUsage,
@@ -1504,6 +1510,9 @@ function OpenTuiWorkspace() {
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
     selectedRawMessages: sessionDetail?.rawMessages,
   })
+  const composerKnobSegments = useMemo(() => engineeringLayout.active
+    ? baseComposerKnobSegments.map(segment => segment.text.startsWith('cost:') ? { ...segment, text: segment.text.replace('cost:', 'session cost:') } : segment)
+    : baseComposerKnobSegments, [baseComposerKnobSegments, engineeringLayout.active])
   useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
@@ -1904,7 +1913,7 @@ function OpenTuiWorkspace() {
     composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
     composerLiveReasoning, isStreamView, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
-    surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
+    surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference: engineeringLayout.active ? engineeringLayout.preferences.sidebarWidth : sidebarWidthPreference,
     taskPanelExpanded, taskPanelWidth, surfacePanelWidth, openTabSessions, popoverTabs,
     selectedSession, tabsEnabled, tabOrientation, splitPinnedKeys, selectedSessionKey,
     splitOrientation, measuredWindowAreaHeight, splitPaneCount, windowOrder, windowSurfaces,
@@ -2008,7 +2017,7 @@ function OpenTuiWorkspace() {
   }, [focusedSessionPaneKey, selectedSessionKey])
   // `w` closes a window's tab and shows the next one there — the nearest tab
   // no other window shows — or closes the window when every tab is on screen.
-  const closeWindowSessionTab = useStableEvent((session: Session) => runCloseWindowSessionTab({
+  const closeWindowSessionTab = useStableEvent((session: Session) => runCloseWindowSessionTab({ isolatedView: engineeringLayout.active,
     openTabSessions, orderedWindowKeys, liveWindowStacks, floatingKey, windowStackFor,
     closeWindowTab, setOpenTabSessions, floatingWindow, checkpointWindowLayout, setFloatingWindow,
     setSelectedSessionKey, closeFloatingWindow, windowItems, closeSplitPane, commitWindowKeys,
@@ -2040,7 +2049,7 @@ function OpenTuiWorkspace() {
     if (effectiveFocus !== 'sessions') { showSelectedSessionInWindow(); return }
     const timer = setTimeout(showSelectedSessionInWindow, DETAIL_OPEN_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [selectedSessionIdentity, shownPopoverTab])
+  }, [selectedSessionIdentity, shownPopoverTab, engineeringLayout.active])
   // Focus with no window under it lands on the window showing the selection.
   useEffect(() => {
     if (effectiveFocus !== 'messages' || splitFocusIndex !== null || hasPrimaryFrame || composerActive) return
@@ -2429,7 +2438,7 @@ function OpenTuiWorkspace() {
     const next = !lightweightWindows
     setLightweightWindows(next)
     showToggleOutcome('Lightweight windows', next)
-    void writeTuiLightweightWindows(next).catch((err) => {
+    if (!engineeringLayout.active) void writeTuiLightweightWindows(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store lightweight windows')
     })
   })
@@ -3687,8 +3696,8 @@ function OpenTuiWorkspace() {
     committedSessionKey, tabReaderPositionsRef, setTranscriptCursorKey, setExpandedCardKeys,
     setCollapsedCardKeys, setFollowTail, setPendingNewCount, setUnreadBoundaryKey,
     setResumeMarkerKey, setSearchMode, setScrollbackExpanded, setSearchQuery, setSearchMatchIndex,
-    setRestoredReaderState, workspaceId,
-  }), [committedSessionKey])
+    setRestoredReaderState, workspaceId: engineeringLayout.active ? `${workspaceId}:engineering` : workspaceId,
+  }), [committedSessionKey, engineeringLayout.active])
 
   useEffect(() => runExpansionResetEffect({
     transcriptCards, setExpandedCardKeys, setCollapsedCardKeys,
@@ -3742,7 +3751,7 @@ function OpenTuiWorkspace() {
   const persistReaderState = useStableEvent(() => runPersistReaderState({
     readerStateWriteTimeoutRef, selectedSessionKey, restoredReaderState, readTranscriptCursorKey,
     followTail, expandedKeysRevisionRef, collapsedKeysRevisionRef, readerStatePersistSignatureRef,
-    transcriptCards, expandedCardKeys, collapsedCardKeys, workspaceId, setError,
+    transcriptCards, expandedCardKeys, collapsedCardKeys, workspaceId: engineeringLayout.active ? `${workspaceId}:engineering` : workspaceId, setError,
   }))
   useEffect(() => { persistReaderState() }, [
     collapsedCardKeys,
@@ -3753,12 +3762,12 @@ function OpenTuiWorkspace() {
     transcriptCards,
   ])
   useEffect(() => {
-    const unsubscribe = cursorRuntime.subscribe('transcriptCursorKey', persistReaderState)
+    const unsubscribe = cursorRuntime.subscribe(engineeringLayout.active ? 'engineering:transcriptCursorKey' : 'transcriptCursorKey', persistReaderState)
     return () => {
       unsubscribe()
       if (readerStateWriteTimeoutRef.current) clearTimeout(readerStateWriteTimeoutRef.current)
     }
-  }, [cursorRuntime])
+  }, [cursorRuntime, engineeringLayout.active])
 
   useEffect(() => {
     if (searchMatches.length === 0) {
@@ -4021,7 +4030,7 @@ function OpenTuiWorkspace() {
     const next = surfacePanelPlacement === 'right' ? 'bottom' : 'right'
     setSurfacePanelPlacement(next)
     showNotice('info', next === 'bottom' ? 'Panel under the panes · | moves it back beside' : 'Panel beside the panes · | moves it under')
-    void writeTuiSurfacePanelPlacement(next).catch(() => {})
+    if (!engineeringLayout.active) void writeTuiSurfacePanelPlacement(next).catch(() => {})
   })
 
   useEffect(() => runSurfacePlacementEffect({
@@ -4266,7 +4275,7 @@ function OpenTuiWorkspace() {
   const rememberClosedWindow = useStableEvent((key: string) => {
     setClosedWindows(previous => [...previous.slice(-19), { key, snapshot: captureWindowLayout() }])
   })
-  const reopenClosedWindow = useStableEvent(() => runReopenClosedWindow({
+  const reopenClosedWindow = useStableEvent(() => runReopenClosedWindow({ isolatedView: engineeringLayout.active,
     closedWindows, showNotice, orderedWindowKeys, liveWindowStacks, floatingKey, setClosedWindows,
     checkpointWindowLayout, setOpenTabSessions, setPopoverTabs, setWindowSurfaceMeta,
     setActivePopoverTab, setSplitFocusIndex, teammatesOpen, openTeammatesPanel, setWindowStacks,
@@ -4276,7 +4285,7 @@ function OpenTuiWorkspace() {
   // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
   // so the reader's single-key namespace stays free. applySplitPaneCount is the
   // one writer of the count — it persists and narrates every change.
-  const applySplitPaneCount = useStableEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => runApplySplitPaneCount({
+  const applySplitPaneCount = useStableEvent((next: number, label?: string, orientation?: SplitPaneOrientation) => runApplySplitPaneCount({ isolatedView: engineeringLayout.active,
     checkpointWindowLayout, setSplitPaneCount, setError, windowSplitTree, showNotice,
     splitOrientation, mainContentHeight, readerAreaWidth, splitCandidateSessions, splitReaderShare,
   }, next, label, orientation))
@@ -4285,7 +4294,7 @@ function OpenTuiWorkspace() {
   // Existing branches retain their orientation, allowing mixed layouts.
   const addSplitPane = useStableEvent((orientation: SplitPaneOrientation) => splitFocusedWindow(orientation))
 
-  const closeSplitPane = useStableEvent((paneIndex?: number) => runCloseSplitPane({
+  const closeSplitPane = useStableEvent((paneIndex?: number) => runCloseSplitPane({ isolatedView: engineeringLayout.active,
     splitFocusIndex, closeFloatingWindow, checkpointWindowLayout, splitPaneCount, showNotice,
     windowItems, windowStackFor, windowItemKey, closeWindowTab, pinIndexOfWindow, splitPinnedKeys,
     rememberClosedWindow, setSplitPinnedKeys, setSplitFocusIndex, lastFocusedSplitPaneRef,
@@ -4298,11 +4307,11 @@ function OpenTuiWorkspace() {
     setWindowSplitTree(null)
     setSplitArrangement(arrangement)
     setSplitReaderLast(readerLast)
-    void writeTuiWindowArrangement({ arrangement, readerLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
+    if (!engineeringLayout.active) void writeTuiWindowArrangement({ arrangement, readerLast, secondaryShare: splitSecondaryShare, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
   })
 
   // Ask for `wanted` panes from the open tabs; say so when there are not enough.
-  const requestWindowPanes = useStableEvent((wanted: number, label: string) => runRequestWindowPanes({
+  const requestWindowPanes = useStableEvent((wanted: number, label: string) => runRequestWindowPanes({ isolatedView: engineeringLayout.active,
     splitCandidateSessions, openTabSessions, selectedSessionKey, sessions, setOpenTabSessions,
     showNotice, setSplitPaneCount, setError,
   }, wanted, label))
@@ -4410,7 +4419,7 @@ function OpenTuiWorkspace() {
     }
     applySavedWindowLayout(id, snapshot, request, project)
   })
-  const applySavedWindowLayout = useStableEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => runApplySavedWindowLayout({
+  const applySavedWindowLayout = useStableEvent((id: string, snapshot: ProtocolRunSnapshot | null, request: number, project: string) => runApplySavedWindowLayout({ isolatedView: engineeringLayout.active,
     windowLayoutRestoreRequestRef, windowLayoutProject, windowPickerOpen, setWindowSurfacePeek,
     checkpointWindowLayout, setCoordinatorWorkspace, savedWindowLayouts,
     setCoordinatorWorkspaceRunId, setWindowPickerOpen, sessions, openTabSessions,
@@ -4433,7 +4442,7 @@ function OpenTuiWorkspace() {
   // A surface into the layout: out of the side panel, into a window, focused.
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
-  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string } = {}) => runOpenSurfaceWindow({
+  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string } = {}) => runOpenSurfaceWindow({ isolatedView: engineeringLayout.active,
     showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
     setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
     workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
@@ -4501,7 +4510,7 @@ function OpenTuiWorkspace() {
   // `placement`: beside the reader (a window in the layout), filling this tab's
   // window area (that window zoomed; ⌃B m restores the layout), or a new
   // workspace tab of its own.
-  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => runOpenPopoverWindow({
+  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => runOpenPopoverWindow({ isolatedView: engineeringLayout.active,
     readerPin, teammatesOpen, openTeammatesPanel, setPopoverOpen, openPopoverInNewTab,
     openPopoverTab, parkedWindowKeysRef, windowSurfaces, windowSurfaceMeta, activateWindowTab,
     pendingSurfaceFocusRef, setFocusedPane, setWindowSurfaces, checkpointWindowLayout,
@@ -4872,7 +4881,7 @@ function OpenTuiWorkspace() {
     setWindowArrangement(plan.arrangement, plan.readerLast)
     applySplitOrientation(plan.orientation, true)
     setSplitPaneCount(plan.count)
-    void writeTuiSplitPanes(plan.count).catch(() => {})
+    if (!engineeringLayout.active) void writeTuiSplitPanes(plan.count).catch(() => {})
     showNotice('info', `${fitText(formatSessionTitle(session), 40).trimEnd()} · window moved`)
   })
 
@@ -4896,7 +4905,7 @@ function OpenTuiWorkspace() {
     setWindowSurfaces(keys.filter(isSurfaceWindowKey).map(surfaceIdOfKey))
     setSplitPinnedKeys(sessionKeys)
     setSplitPaneCount(sessionKeys.length)
-    void writeTuiSplitPanes(sessionKeys.length).catch(() => {})
+    if (!engineeringLayout.active) void writeTuiSplitPanes(sessionKeys.length).catch(() => {})
     if (tree) setWindowSplitTree(tree)
     else if (!windowSplitTree && splitArrangement === 'split' && keys.length > SPLIT_PANE_MAX) setWindowArrangement('main-stack', splitReaderLast)
   })
@@ -4904,7 +4913,7 @@ function OpenTuiWorkspace() {
     ? surfaceTitle(surfaceIdOfKey(key))
     : (() => { const session = openTabByKey.get(key) ?? sessions.find((entry) => sessionKey(entry) === key); return session ? formatSessionTitle(session) : key })())
   // `key` becomes a tab of `anchor`'s frame, and the frame shows it.
-  const tabWindowOnto = useStableEvent((key: string, anchor: string, session?: Session) => runTabWindowOnto({
+  const tabWindowOnto = useStableEvent((key: string, anchor: string, session?: Session) => runTabWindowOnto({ isolatedView: engineeringLayout.active,
     shownPopoverTab, checkpointWindowLayout, liveWindowStacks, laidOutWindowKeys, currentPaneTree,
     closePopoverTab, setWindowZoom, setWindowStacks, orderedWindowKeys, commitWindowKeys,
     setOverviewPendingTarget, openTabByKey, setOpenTabSessions, floatingKey, setFloatingWindow,
@@ -4953,7 +4962,7 @@ function OpenTuiWorkspace() {
     dropWindowSurfaceState(key)
   })
   // ⌃B ! — the tab leaves its frame and becomes a window of its own beside it.
-  const breakOutWindowTab = useStableEvent((key: string) => runBreakOutWindowTab({
+  const breakOutWindowTab = useStableEvent((key: string) => runBreakOutWindowTab({ isolatedView: engineeringLayout.active,
     windowStackFor, showNotice, laidOutWindowKeys, currentPaneTree, readerAreaWidth,
     windowAreaHeight, splitTreeLimits, checkpointWindowLayout, setWindowStacks, liveWindowStacks,
     setWindowZoom, commitWindowKeys, setOverviewPendingTarget, floatWindowKey,
@@ -5059,19 +5068,19 @@ function OpenTuiWorkspace() {
     return null
   }
   const [floatDockHint, setFloatDockHint] = useState<{ label: string; rect: { x: number; y: number; width: number; height: number }; x: number; y: number } | null>(null)
-  const moveFloatGesture = (event: { x: number; y: number }) => runMoveFloatGesture({
+  const moveFloatGesture = (event: { x: number; y: number }) => runMoveFloatGesture({ isolatedView: engineeringLayout.active,
     floatGestureRef, floatingWindow, checkpointWindowLayout, floatDockTarget, windowAreaRect,
     rectOf, dropTargetAt, nestedDropPlan, setFloatDockHint, windowNumberOffset, readerAreaWidth,
     windowAreaHeight, setFloatingWindow,
   }, event)
   floatGestureImplRef.current = { start: (event) => startFloatGesture('move', event), move: (event) => moveFloatGesture(event), end: (event) => endFloatGesture(event) }
-  const endFloatGesture = (event?: { x: number; y: number }) => runEndFloatGesture({
+  const endFloatGesture = (event?: { x: number; y: number }) => runEndFloatGesture({ isolatedView: engineeringLayout.active,
     floatGestureRef, setFloatGesturing, setFloatDockHint, floatingKey, dropTargetAt,
     nestedDropPlan, setFloatingWindow, applyNestedDrop, floatDockTarget, windowItems,
     tabWindowOnto, windowItemKey, dockFloatingWindow,
   }, event)
   // Esc during a drag puts everything back as it was when the drag started.
-  const cancelPointerGesture = () => runCancelPointerGesture({
+  const cancelPointerGesture = () => runCancelPointerGesture({ isolatedView: engineeringLayout.active,
     treeDividerDrag, setTreeDividerDrag, treeDividerActivePathRef, treeDividerCheckpointedRef,
     undoWindowLayout, floatGestureRef, setFloatGesturing, setFloatDockHint, setFloatingWindow,
     sessionPressRef, setSessionPressing, setSessionDrag, splitDividerDragging, splitDividerPoint,
@@ -5122,7 +5131,7 @@ function OpenTuiWorkspace() {
   })
   // A session dropped on a surface window: a session already in a pane trades
   // places with it; one from the rail or a tab becomes a pane beside it.
-  const dropSessionOnSurfaceWindow = useStableEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => runDropSessionOnSurfaceWindow({
+  const dropSessionOnSurfaceWindow = useStableEvent((session: Session, index: number, edge: WindowDropZone | null, fromPane: number | null) => runDropSessionOnSurfaceWindow({ isolatedView: engineeringLayout.active,
     windowItems, swapWindows, checkpointWindowLayout, applyWindowOrder, shownFirstWindowKeys,
     splitPinnedKeys, splitPaneCount, splitArrangement, splitOrientation, splitReaderLast,
     stackedSplit, showNotice, setOpenTabSessions, setWindowArrangement, applySplitOrientation,
@@ -5260,7 +5269,7 @@ function OpenTuiWorkspace() {
     setError, reconciledSplitTree, splitFocusIndex, setWindowSplitTree,
   })
 
-  const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => runResizeSplitReader({
+  const resizeSplitReader = useStableEvent((direction: 1 | -1 | 0) => runResizeSplitReader({ isolatedView: engineeringLayout.active,
     reconciledSplitTree, checkpointWindowLayout, setWindowSplitTree, resizeTreeWindow,
     visibleSplitPaneCount, showNotice, splitReaderShare, setSplitReaderShare, setError,
     splitOrientation,
@@ -5406,19 +5415,19 @@ function OpenTuiWorkspace() {
     const base = splitSecondaryShare === SPLIT_SHARE_EVEN ? 0.5 : splitSecondaryShare
     const next = Math.min(0.8, Math.max(0.2, Math.round((base + direction * SPLIT_SHARE_STEP) * 100) / 100))
     setSplitSecondaryShare(next)
-    void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: next, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
+    if (!engineeringLayout.active) void writeTuiWindowArrangement({ arrangement: splitArrangement, readerLast: splitReaderLast, secondaryShare: next, bottomShare: splitBottomShare, weights: splitWeights }).catch(() => {})
     showNotice('info', `Top row ${Math.round(next * 100)}% of the height`)
   })
 
   // ⌃B [ ]: shrink or grow the focused pane within its row or column, against its neighbour.
-  const resizeFocusedWindow = useStableEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => runResizeFocusedWindow({
+  const resizeFocusedWindow = useStableEvent((direction: 1 | -1, focus: number | null = splitFocusIndex) => runResizeFocusedWindow({ isolatedView: engineeringLayout.active,
     splitFocusIndex, reconciledSplitTree, resizeTreeWindow, fittedWindows, showNotice,
     checkpointWindowLayout, splitWeights, setSplitWeights, splitArrangement, splitReaderLast,
     splitSecondaryShare, splitBottomShare,
   }, direction, focus))
 
   // ⌃B ⇧arrows: swap the focused window with the one that way; focus moves with it.
-  const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => runSwapWindowInDirection({
+  const swapWindowInDirection = useStableEvent((direction: WindowDirection, target: number | null = splitFocusIndex) => runSwapWindowInDirection({ isolatedView: engineeringLayout.active,
     splitFocusIndex, checkpointWindowLayout, visibleSplitPaneCount, showNotice, rectOf,
     setWindowSplitTree, currentPaneTree, focusReaderFromSplit, focusSplitPane,
   }, direction, target))
@@ -5490,7 +5499,7 @@ function OpenTuiWorkspace() {
   // pane is already showing. Only that pane moves — the others keep their
   // pinned sessions, so cycling reads as "flip through the rest" instead of
   // scrambling every pane.
-  const cycleSplitPaneSession = useStableEvent(() => runCycleSplitPaneSession({
+  const cycleSplitPaneSession = useStableEvent(() => runCycleSplitPaneSession({ isolatedView: engineeringLayout.active,
     checkpointWindowLayout, splitPaneCount, showNotice, splitCandidateSessions, splitFocusIndex,
     pinIndexOfWindow, setSplitPinnedKeys: action => {
       const next = typeof action === 'function' ? action(splitPinnedKeys) : action
@@ -5510,7 +5519,7 @@ function OpenTuiWorkspace() {
   const pickWindowTarget = useStableEvent((key: string) => {
     const fallbackSessions = [...openTabSessions, ...(workspaceReaderSession ? [workspaceReaderSession] : [])]
     if (windowPresentation && (windowTargets.some(target => target.key === key) || fallbackSessions.some(session => sessionKey(session) === key))) setWindowPresentation({ ...windowPresentation, target: key })
-    runPickWindowTarget({
+    runPickWindowTarget({ isolatedView: engineeringLayout.active,
     windowTargets, fallbackSessions,
     showNotice, floatingKey, setWindowSwitcherOpen, setFocusedPane,
     setSplitFocusIndex, parkedWindowKeysRef, windowStackFor, activateWindowTab, pendingSurfaceFocusRef,
@@ -5539,7 +5548,10 @@ function OpenTuiWorkspace() {
     })
   })
 
-  const executeCommandPalette = useStableEvent((id: string) => runExecuteCommandPalette({
+  const executeCommandPalette = useStableEvent((id: string) => {
+    if (id === 'engineering-view') { closeCommandPalette(); chooseTranscriptView('engineering'); return }
+    return runExecuteCommandPalette({
+    isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
     runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
@@ -5576,7 +5588,8 @@ function OpenTuiWorkspace() {
     toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
-  }, id))
+  }, id)
+  })
 
   const [recentWindowVisits, setRecentWindowVisits] = useAppState<Array<{ workspaceId: string; target: string }>>('recentWindowVisits', [])
   const [recentWindowsOnly, setRecentWindowsOnly] = useState(false)
@@ -5781,6 +5794,12 @@ function OpenTuiWorkspace() {
         handled(() => { void sessionGoal.clear() })
       }
       return
+    }
+    if (!windowControlsBlocked) {
+      const result = engineeringKeyRef.current?.(key)
+      if (result === 'input') return
+      if (result) { handled(() => {}); return }
+      if (engineeringLayout.active && effectiveFocus === 'sessions' && engineeringRailKeyRef.current?.(key)) { handled(() => {}); return }
     }
     if (handleWindowControlKeys({
       windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls,
@@ -6249,6 +6268,30 @@ function OpenTuiWorkspace() {
   const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
   return (
     <BordersContext.Provider value={showBorders}>
+    <EngineeringFrame
+      layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
+      theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
+      session={selectedSession} cards={transcriptCards} messages={taskPanelMessages}
+      attention={attentionItems} running={runningSessions} recent={recentlyWrittenKeys} blocked={windowControlsBlocked}
+      registerKeys={handler => { engineeringKeyRef.current = handler }}
+      onFocus={() => { setComposerActive(false); setSurfacePanelFocused(false); setFocusedPane('messages') }}
+      onJump={key => { const index = visibleTranscriptCards.findIndex(card => card.key === key || agentToolCardsFor(card).some(tool => tool.key === key)); if (index >= 0) jumpToTranscriptIndex(index); else showNotice('info', 'Source is outside the loaded transcript') }}
+      onAttention={item => { openAttentionSession(item); setAttentionOpen(true) }}
+      onAcknowledge={dismissAttentionItem}
+      onPreset={preset => {
+        const candidates = preset === 'multi-agent'
+          ? [...sessions.filter(session => runningSessions.some(running => sessionKey(running) === sessionKey(session))), ...visibleTabSessions]
+          : []
+        const keys = [...new Set([...(selectedSessionKey ? [selectedSessionKey] : []), ...candidates.map(sessionKey)])].slice(0, preset === 'multi-agent' ? 3 : 1)
+        commitWindowKeys(keys)
+        setWindowSplitTree(arrangePaneTree(keys, false, 'columns'))
+      }}
+      onDiagnostics={() => runPluginCommandId('diagnostics')}
+      onReview={() => runPluginCommandId('git')}
+      onAppend={text => { appendDiffCommentPromptToComposer(text); setComposerActive(true) }}
+      onCopy={text => { void writeClipboard(text, renderer).then(() => showNotice('info', 'Handoff Markdown copied'), error => showNotice('error', String(error))) }}
+      renderTerminal={(panelWidth, panelHeight, focused, register, capture) => <PluginSurfaceHost surfaceId="terminal" placement="panel" cwd={gitRepoCwd || workspaceCwd} provided={pluginServices} theme={theme} width={panelWidth} height={panelHeight} focused={focused} onClose={() => engineeringLayout.setPreferences(previous => ({ ...previous, drawerOpen: false }))} onCaptureChange={capture} onKeyHandlerReady={handler => register(key => { handler(key); return true })} />}
+    >
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
       {workspacesEnabled && !fullscreenMode ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
@@ -6257,7 +6300,8 @@ function OpenTuiWorkspace() {
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); restoreWindowPresentation() } }}>
             <text fg={theme.cyan} selectable={false} wrapMode="none">{fullscreenMode ? ' FULLSCREEN · Shift+Z restore ' : ' ZOOM · Ctrl+B m restore '}</text>
           </box> : null}
-      <WorkspaceBody
+      <WorkspaceBody isolatedView={engineeringLayout.active}
+        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={mainContentHeight} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}
@@ -7148,6 +7192,7 @@ function OpenTuiWorkspace() {
 
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
     </box>
+    </EngineeringFrame>
     </BordersContext.Provider>
   )
 }

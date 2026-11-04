@@ -3,6 +3,7 @@ import type { WorkspaceContextValue } from '../../workspaceContext'
 import { useComposerSessionState } from '../../../../lib/composerSessions'
 import { useCallback, useRef, useState } from 'react'
 import { useWorkspaceState } from '../../workspaceContext'
+import { useEngineeringWorkspaceState, useEngineeringStateKey } from '../../engineering/state'
 import { useStableEvent } from '../../useStableEvent'
 import { type Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
@@ -60,13 +61,14 @@ export function useLastBridgeChatIdRefGroup(ctx: UseLastBridgeChatIdRefGroupCont
   // subscribe to it: a window reports every j/k here, and as root state each
   // report re-rendered the whole app with nothing on screen depending on it.
   const cursorRuntime = workspaceContext.runtime
-  const readTranscriptCursorKey = () => cursorRuntime.get<string | null>('transcriptCursorKey', null, true)
+  const cursorStorageKey = useEngineeringStateKey('transcriptCursorKey')
+  const readTranscriptCursorKey = () => cursorRuntime.get<string | null>(cursorStorageKey, null, true)
   const setTranscriptCursorKey = useStableEvent((action: string | null | ((previous: string | null) => string | null)) => {
     readTranscriptCursorKey()
-    cursorRuntime.set('transcriptCursorKey', action)
+    cursorRuntime.set(cursorStorageKey, action)
   })
-  const [expandedCardKeys, setExpandedCardKeys] = useWorkspaceState<Set<string>>('expandedCardKeys', () => new Set())
-  const [collapsedCardKeys, setCollapsedCardKeys] = useWorkspaceState<Set<string>>('collapsedCardKeys', () => new Set())
+  const [expandedCardKeys, setExpandedCardKeys] = useEngineeringWorkspaceState<Set<string>>('expandedCardKeys', () => new Set())
+  const [collapsedCardKeys, setCollapsedCardKeys] = useEngineeringWorkspaceState<Set<string>>('collapsedCardKeys', () => new Set())
   // Bookmarked message uuids (== card keys) for the active session. The ref
   // keeps the toggle handler stable across renders.
   const [bookmarkKeys, setBookmarkKeys] = useState<Set<string>>(() => new Set())

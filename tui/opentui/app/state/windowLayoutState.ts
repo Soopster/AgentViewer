@@ -2,21 +2,22 @@
 import { useRef, useState } from 'react'
 import { type FloatingRect, type WindowStack } from '../../windowTabs'
 import { type ContextMenuItem } from '../../ContextMenu'
-import { useWorkspaceState, useWorkspaceRef } from '../../workspaceContext'
+import { useEngineeringWorkspaceState } from '../../engineering/state'
+import { useWorkspaceRef } from '../../workspaceContext'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 export function useWindowLayoutState() {
   // The window a shown popover tab takes over: the one focused when it was shown.
-  const [popoverTabHostKey, setPopoverTabHostKey] = useWorkspaceState<string | null>('popoverTabHost', null)
+  const [popoverTabHostKey, setPopoverTabHostKey] = useEngineeringWorkspaceState<string | null>('popoverTabHost', null)
   const pendingSurfaceFocusRef = useRef<WindowSurfaceId | null>(null)
   const surfaceTitleClicksRef = useRef(new Map<string, { current: { x: number; y: number; at: number } | null }>())
   // Where surface windows sit among the session panes (windowOrder.ts): the
   // session pins still decide the sessions and their order.
-  const [windowOrder, setWindowOrder] = useWorkspaceState<string[]>('windowOrder', [])
+  const [windowOrder, setWindowOrder] = useEngineeringWorkspaceState<string[]>('windowOrder', [])
   // Windows sharing a frame as tabs (windowTabs.ts), and the one floating over the layout.
-  const [windowStacks, setWindowStacks] = useWorkspaceState<WindowStack[]>('windowStacks', [])
+  const [windowStacks, setWindowStacks] = useEngineeringWorkspaceState<WindowStack[]>('windowStacks', [])
   // `slot` is where it sat in the layout, so docking puts it back there.
-  const [floatingWindow, setFloatingWindow] = useWorkspaceState<{ key: string; rect: FloatingRect; slot: number } | null>('floatingWindow', null)
+  const [floatingWindow, setFloatingWindow] = useEngineeringWorkspaceState<{ key: string; rect: FloatingRect; slot: number } | null>('floatingWindow', null)
   const floatGestureRef = useRef<{ mode: 'move' | 'resize'; x: number; y: number; rect: FloatingRect; moved?: boolean } | null>(null)
   const [floatGesturing, setFloatGesturing] = useState(false)
   // Session keys held off the layout (background tabs, the floating window):
