@@ -156,6 +156,28 @@ await waitFor('the reader on alpha', () => readerShows('alpha'))
     for (const entry of ['Focus window', 'Manage windows', 'Zoom window', 'Fullscreen window', 'Float window', 'Move to workspace', 'Window layout', 'Close window', 'Open full screen', 'Split this window right', 'Split this window below', 'Resize', 'Swap direction']) {
       check(text.includes(entry), `the analytics window's menu lacks "${entry}":\n${text}`)
     }
+    // The entries work on a popover window as on a session, and a FLOATING popover window keeps its own
+    // title controls reachable: float it, open its menu from its own ≡, dock it, zoom it, restore it.
+    const pick = async (label: string) => {
+      const open = frame('context-menu')!
+      const row = screen().split('\n').findIndex((line, y) => y >= open.y && y < open.y + open.height && line.slice(open.x, open.x + open.width).includes(label))
+      check(row >= 0, `no "${label}" in the menu`)
+      await click(open.x + 2, row)
+    }
+    const openMenu = async () => { await settle(500); const b = frame('surface-window-menu:analytics')!; await click(b.x + 1, b.y); await waitFor('the analytics menu', () => !!frame('context-menu')) }
+    await pick('Float window')
+    await waitFor('analytics floating', () => !!frame('floating-window'))
+    await settle(500)
+    await openMenu()
+    await pick('Dock window')
+    await waitFor('analytics docked again', () => !frame('floating-dock') && !!windowFrame('analytics'))
+    const sizeBefore = windowFrame('analytics')!.width
+    await openMenu()
+    await pick('Zoom window')
+    await waitFor('analytics zoomed', () => (windowFrame('analytics')?.width ?? 0) > sizeBefore)
+    // (the zoomed frame's own button is found by position, which lags a frame; the chord restores it)
+    await key('b', { ctrl: true }); await key('m')
+    await waitFor('analytics restored', () => windowFrame('analytics')?.width === sizeBefore)
     await key('escape')
   }
   // The reader moves on; the window keeps its session.

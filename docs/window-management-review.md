@@ -80,12 +80,6 @@ undoing real windows).
 
 - A peeked window can float and move to another workspace, but not tab or split:
   it is in no slot to tab onto or split.
-- **A floating *surface* window's own title controls (`≡`, `⊞ layout`, `⇥ panel`,
-  `×`) cannot be clicked**: the transparent `floating-window` box that carries
-  its drag handling sits above them (hit test lands on `floating-window`). Its
-  menu is reachable from a session window or the keyboard. Not fixed: moving the
-  drag handling onto a title strip did not make the controls reachable, so the
-  cause is not understood yet.
 - "Close other windows" does not remember what it closed for "reopen closed
   window"; `⌃B u` is the way back.
 - Saved layouts restore windows by identity; a session deleted since is skipped
