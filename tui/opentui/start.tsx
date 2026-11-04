@@ -4,6 +4,7 @@ import { createCliRenderer } from '@opentui/core'
 import { createRoot } from '@opentui/react'
 import OpenTuiApp from './App'
 import { TUI_RENDER_POLICY } from './renderPolicy'
+import { createCompactingStdout } from './compactStdout'
 import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 import { installProcessWarningRouting } from '../../lib/processWarnings'
 import { installUserKeys, readUserKeyConfig, resolveChords } from './userKeys'
@@ -27,6 +28,7 @@ const renderer = await createCliRenderer({
   useMouse: !mouseDisabled,
   // Bound terminal output on Windows while preserving fast-host navigation.
   maxFps: TUI_RENDER_POLICY.maxFps,
+  ...(TUI_RENDER_POLICY.compactOutput ? { stdout: createCompactingStdout() } : {}),
   useKittyKeyboard: {
     disambiguate: true,
     alternateKeys: true,
@@ -52,6 +54,16 @@ if (process.env.AGENT_VIEWER_FULL_REPAINT === '1') {
   } else {
     console.warn('AGENT_VIEWER_FULL_REPAINT is not supported by this OpenTUI version')
   }
+}
+
+// The renderer follows resizes itself only when its stdout is process.stdout, which a
+// compacting wrapper is not (Windows emits 'resize' on the stream, POSIX SIGWINCH).
+if (TUI_RENDER_POLICY.compactOutput) {
+  const followResize = () => {
+    if (process.stdout.columns > 0 && process.stdout.rows > 0) renderer.resize(process.stdout.columns, process.stdout.rows)
+  }
+  process.stdout.on('resize', followResize)
+  if (process.platform !== 'win32') process.on('SIGWINCH', followResize)
 }
 
 // The terminals this TUI holds can be driven from a shell: `agent-viewer terminal …`.

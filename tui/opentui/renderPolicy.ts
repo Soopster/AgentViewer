@@ -10,8 +10,13 @@ export function resolveRenderPolicy(
   const maxFps = Number.isFinite(requested) && requested >= 10 && requested <= 240
     ? requested
     : windowsTerminal ? 60 : 120
+  // Compacting rewrites each frame in JS and gives up the native writer thread; it is
+  // worth it where the terminal's cost is per escape sequence (ConPTY), and opt-in elsewhere.
+  const compactRequested = env.AGENT_VIEWER_COMPACT_OUTPUT
+  const compactOutput = compactRequested === '1' ? true : compactRequested === '0' ? false : windowsTerminal
   return {
     maxFps,
+    compactOutput,
     // Never commit text faster than the terminal can present it. Preserve the
     // existing 16ms cadence on fast hosts; batch two frames on Windows to leave
     // room for input/scroll while a provider floods text.
