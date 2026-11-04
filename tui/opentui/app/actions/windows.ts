@@ -349,6 +349,7 @@ export type RunWindowControlActionContext = {
   commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   floatingKey: string | null
+  rememberClosedWindow: (key: string) => void
 }
 
 export function runRunWindowControlAction(ctx: RunWindowControlActionContext, key: string, action: WindowControlAction, direction?: WindowDirection) {
@@ -363,7 +364,7 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
     breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
     windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
     splitFocusedWindow, openWindowControlMenu,
-    orderedWindowKeys, commitWindowKeys, showNotice, floatingKey,
+    orderedWindowKeys, commitWindowKeys, showNotice, floatingKey, rememberClosedWindow,
   } = ctx
   const index = controlWindowIndex(key)
   if (index === undefined) { setContextMenu(null); return }
@@ -415,10 +416,12 @@ export function runRunWindowControlAction(ctx: RunWindowControlActionContext, ke
         if (!orderedWindowKeys.includes(key)) { showNotice('info', 'Focus a window in the layout first'); break }
         const closing = orderedWindowKeys.length - 1 + (floatingKey && floatingKey !== key ? 1 : 0)
         if (closing === 0) break
+        // Each one is remembered, so ⌃B X reopens them one at a time as it does for windows closed singly.
+        for (const other of orderedWindowKeys) if (other !== key) rememberClosedWindow(other)
         checkpointWindowLayout()
         commitWindowKeys([key])
         if (floatingKey && floatingKey !== key) closeFloatingWindow(false)
-        showNotice('info', `Closed ${closing} other window${closing === 1 ? '' : 's'} · ⌃B u undoes`)
+        showNotice('info', `Closed ${closing} other window${closing === 1 ? '' : 's'} · ⌃B u undoes, ⌃B X reopens`)
         break
       }
       case 'close':

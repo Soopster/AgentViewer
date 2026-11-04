@@ -37,7 +37,7 @@ resolves a window by key, not by kind) but is not separately driven.
 | Float / dock | ✓ | ✓ | ✓ | dock | — | `windowControlsSmoke` |
 | Move to another workspace | ✓ | ✓ | ✓ | ✓ | — | `workspaceWindowMoveSmoke`, `windowUsabilitySmoke` |
 | Layout menu (`⊞ layout`) | ✓ | ✓ | ✓ | ✓ | ✓ | `windowControlsSmoke` |
-| Close / close others (one undo step) | ✓ | ✓ | ✓ | ✓ | close | `windowingSmoke` |
+| Close / close others (one undo step, ⌃B X reopens) | ✓ | ✓ | ✓ | ✓ | close | `windowingSmoke` |
 | Drag to move, with a preview of the drop | ✓ | ✓ | ✓ | ✓ | — | `windowingSmoke`, `windowingMoreSmoke` |
 | Undo / redo / reopen closed | ✓ | ✓ | ✓ | ✓ | — | `windowUsabilitySmoke` |
 
@@ -80,10 +80,10 @@ undoing real windows).
 
 - A peeked window can float and move to another workspace, but not tab or split:
   it is in no slot to tab onto or split.
-- "Close other windows" does not remember what it closed for "reopen closed
-  window"; `⌃B u` is the way back.
 - Saved layouts restore windows by identity; a session deleted since is skipped
   with a notice rather than replaced.
-- The per-kind matrix above is driven on a session, a placed browser, a floating
-  session and an Analytics popover window; other surface kinds share the code path
-  but are not separately driven.
+- The per-kind matrix above is driven on a session, a placed browser, a placed terminal, a floating
+  session, a floating-and-docked Analytics popover window and a peeked browser;
+  files, diff, pull request and agents windows share the code path but are not
+  separately driven (their palette entries opened nothing in the smoke's
+  workspace, so they could not be).

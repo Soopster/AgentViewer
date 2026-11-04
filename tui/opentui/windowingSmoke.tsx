@@ -199,6 +199,10 @@ await waitFor('the window menu', () => !!frame('context-menu'))
   await click(entry.x + 1, entry.y)
 }
 await waitFor('only one window left', () => panes().length === 0)
+// ⌃B X reopens what it closed, one window at a time, as for windows closed singly.
+await chord('X')
+await waitFor('a closed window reopened', () => panes().length > 0)
+await chord('u')
 await chord('u')
 await waitFor('the other windows back', () => panes().length === beforeClosing)
 await chord('u')

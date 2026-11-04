@@ -5749,7 +5749,7 @@ function OpenTuiWorkspace() {
     showNotice, popoverTabToWindow, popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta,
     returningPopoverRef, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
     openSurfaceWindow,
-    orderedWindowKeys, commitWindowKeys, lightweightWindows, setLightweightWindows,
+    orderedWindowKeys, commitWindowKeys, rememberClosedWindow, lightweightWindows, setLightweightWindows,
   })
   // The window menu's own actions, for `agent-viewer terminal windows|window` (windowControlBridge.ts).
   useEffect(() => {

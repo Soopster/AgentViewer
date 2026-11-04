@@ -362,6 +362,18 @@ const placedButton = frame('surface-window-menu:browser')!
 await click(placedButton.x, placedButton.y)
 checkCommonMenu('browser surface')
 await escape()
+// Other kinds of surface window answer to the same menu: a terminal, given room.
+for (const [kind, phrase] of [['terminal', 'Terminal in a window']] as const) {
+  await key('?')
+  await act(async () => { await setup.mockInput.typeText(phrase) }); await settle()
+  await act(async () => { setup.mockInput.pressEnter() }); await settle(400)
+  await waitFor(`${kind} window`, () => !!frame(`surface-window-menu:${kind}`))
+  await settle(400)
+  const button = frame(`surface-window-menu:${kind}`)!
+  await click(button.x + 1, button.y)
+  checkCommonMenu(`${kind} surface`)
+  await escape()
+}
 await act(async () => { setup.resize(220, 46) }); await settle(400)
 // An arriving permission must end management and retain keyboard priority.
 await portable('q'); await key('1'); await portable('w')

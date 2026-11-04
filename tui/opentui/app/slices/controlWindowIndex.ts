@@ -30,6 +30,7 @@ export type UseControlWindowIndexGroupContext = {
   shownPopoverTab: string | null
   floatingKey: string | null
   orderedWindowKeys: string[]
+  rememberClosedWindow: (key: string) => void
   lightweightWindows: boolean
   setLightweightWindows: React.Dispatch<React.SetStateAction<boolean>>
   commitWindowKeys: (keys: string[], tree?: WindowSplitTree) => void
@@ -135,7 +136,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     splitFocusedWindow, selectedWindowIndex, selectedSession, treeGeometry, fittedWindows,
     showNotice, popoverTabToWindow, popoverTabToFullScreen, returnPopoverWindow, windowSurfaceMeta,
     returningPopoverRef, openPopoverTab, openPopoverInNewTab, setPopoverOpen, moveSurfaceToPanel,
-    openSurfaceWindow, orderedWindowKeys, commitWindowKeys, lightweightWindows, setLightweightWindows,
+    openSurfaceWindow, orderedWindowKeys, commitWindowKeys, rememberClosedWindow, lightweightWindows, setLightweightWindows,
   } = ctx
 
   const controlWindowIndex = (key: string): number | null | undefined => {
@@ -205,7 +206,7 @@ export function useControlWindowIndexGroup(ctx: UseControlWindowIndexGroupContex
     setSplitWeights, splitArrangement, splitReaderLast, undoWindowLayout, swapWindowInDirection,
     breakOutWindowTab, toggleFloatingFocused, windowStackFor, closeWindowTab, closeFloatingWindow,
     windowItems, closeSurfaceWindow, closeSplitPane, leaveWindowControls, setWindowPickerOpen,
-    splitFocusedWindow, openWindowControlMenu, orderedWindowKeys, commitWindowKeys, showNotice, floatingKey,
+    splitFocusedWindow, openWindowControlMenu, orderedWindowKeys, commitWindowKeys, showNotice, floatingKey, rememberClosedWindow,
   }, key, action, direction))
   const openWindowControlMenu = useStableEvent((key: string, point?: { x: number; y: number }, section?: 'resize' | 'swap' | 'session') => runOpenWindowControlMenu({
     controlWindowIndex, leaveWindowControls, setControlMenuTarget, rectOf, floatingItem,
