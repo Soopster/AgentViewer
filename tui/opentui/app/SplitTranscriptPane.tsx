@@ -878,7 +878,7 @@ export function SplitTranscriptPaneInner({
       const card = allPaneCards.find((entry) => entry.key === cardKey)
       const toolRow = findToolRow(hit, event.y)
       if (toolRow && card && toolRow.key !== cardKey) target = toolRow.open && event.y !== toolRow.y ? undefined : toolRow.node
-      else if (card && !windowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && (card.asyncQuestions?.length || card.autoFold || agentToolCardsFor(card).length > 0)) target = hit
+      else if (card && (card.asyncQuestions?.length || card.autoFold || agentToolCardsFor(card).length > 0)) target = hit
     }
     if (hoveredRowRef.current?.node === target) return
     clearTranscriptHover()
