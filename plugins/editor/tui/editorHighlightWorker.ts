@@ -4,7 +4,7 @@
 // document as of `state.seq`, and the facade drops anything older than the edit
 // it last sent. `renderRange` keeps the synchronous part of an edit to the rows
 // on screen; the tokenizer delivers the rest through `onDeferTokenize`.
-import { LiveTokenizer, isSupportedLanguage } from '@pierre/highlights'
+import { LiveTokenizer, isSupportedLanguage, tokenNames } from '@pierre/highlights'
 import type { HighlightedToken } from '@pierre/highlights'
 import {
   editorHighlightGroup,
@@ -68,7 +68,7 @@ function post(id: number, state: State, lines: EditorHighlightLine[]) {
 
 function readLines(tokenizer: LiveTokenizer, start: number, end: number): EditorHighlightLine[] {
   const lines: EditorHighlightLine[] = []
-  for (let line = start; line < end; line += 1) lines.push([line, captures(tokenizerTokens(tokenizer, line))])
+  for (let line = start; line < end; line += 1) lines.push([line, recordCaptures(tokenizer, line)])
   return lines
 }
 
@@ -125,10 +125,20 @@ function open(request: Extract<EditorHighlightRequest, { type: 'open' }>) {
   post(id, state, readLines(tokenizer, start, end))
 }
 
-function tokenizerTokens(tokenizer: LiveTokenizer, line: number): HighlightedToken[] {
-  const out: HighlightedToken[] = []
-  for (const token of tokenizer.getLineTokens(line).tokens) {
-    out.push([token.offset, token.color ?? '', token.content])
+/** Scope captures for one line, read from the tokenizer's zero-copy records:
+ * no per-token strings or colour parsing. The view is only borrowed, so it is
+ * consumed here and never kept. */
+function recordCaptures(tokenizer: LiveTokenizer, line: number): EditorHighlightLine[1] {
+  const { format, data } = tokenizer.getLineRecords(line)
+  const out: [number, number, string][] = []
+  const step = format === 'packed24' ? 1 : 2
+  let start = 0
+  for (let index = 0; index < data.length; index += step) {
+    const end = format === 'packed24' ? data[index]! & 0xffffff : data[index]!
+    const id = format === 'packed24' ? data[index]! >>> 24 : data[index + 1]!
+    const name = tokenNames[id]
+    if (name && name !== 'none' && name !== 'foreground' && end > start) out.push([start, end, name])
+    start = end
   }
   return out
 }
