@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "agentviewer": { "command": "bun", "args": ["./agentviewer-channel.ts"] }
+  }
+}
