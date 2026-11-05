@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { buildThreadedMessages, computeTurnDurationsMs, stripToolCallBlocks } from '../../lib/threading'
 import type { SessionMessage } from '../../lib/types'
-import { buildTranscriptTaskContext, deferTranscriptCardSearchText, ensureTuiMermaidRenderer, formatTranscriptCard, formatTranscriptCards, reformatTranscriptCardDensity, type TuiTranscriptCard } from '../format'
+import { buildTranscriptTaskContext, deferTranscriptCardSearchText, ensureTuiMermaidRenderer, ensureTuiAnsiHighlighter, formatTranscriptCard, formatTranscriptCards, reformatTranscriptCardDensity, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 
 // Real formatting oracle across repeated density changes: expanded code/text,
@@ -26,6 +26,8 @@ const raw: SessionMessage[] = texts.flatMap((text, i): SessionMessage[] => [
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `density-tool${i}`, content: text }] } },
 ])
 await ensureTuiMermaidRenderer()
+// The worker loads Highlights for coloured tool output; the reference side must too.
+await ensureTuiAnsiHighlighter()
 const threaded = buildThreadedMessages(raw)
 const { activeForms, taskRegistry } = buildTranscriptTaskContext(threaded)
 const durations = computeTurnDurationsMs(threaded)
