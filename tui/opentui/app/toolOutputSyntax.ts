@@ -1,7 +1,8 @@
-import { getTreeSitterClient, infoStringToFiletype, rgbToHex, treeSitterToTextChunks, type SyntaxStyle, type RGBA } from '@opentui/core'
+import { displayHighlightClient } from '../displayHighlightClient'
+import { infoStringToFiletype, rgbToHex, treeSitterToTextChunks, type SyntaxStyle, type RGBA } from '@opentui/core'
 import type { InlineTextSegment } from './inlineText'
 
-// Tree-sitter colour for the code a tool printed. The parse is async and runs in OpenTUI's parser worker, so a
+// Highlights colour for the code a tool printed. The parse is async and runs in the display worker, so a
 // row asks, draws the regex tokenizer's answer meanwhile, and redraws from here once the parse lands.
 // Parsing a block as a whole is what makes it accurate: a template string or comment spanning rows is seen as one.
 
@@ -56,7 +57,7 @@ export function peekToolOutputSyntax(text: string, filetype: string, style: Synt
   if (hit) return hit.length ? hit : null
   if (pending.has(key)) return null
   pending.add(key)
-  void getTreeSitterClient().highlightOnce(text, filetype).then(
+  void displayHighlightClient.highlightOnce(text, filetype).then(
     result => treeSitterToTextChunks(text, result.highlights ?? [], style, { enabled: false }),
     () => null,
   ).then(chunks => {

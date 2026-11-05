@@ -28,11 +28,10 @@ export type ConPtyModule = {
   spawn(file: string, args: string[], options: { name: string; cols: number; rows: number; cwd?: string; env: Record<string, string | undefined>; useConpty?: boolean }): ConPtyHandle
 }
 
-const CONPTY_PACKAGE = '@lydell/node-pty'
 let conPtyLoader: () => ConPtyModule = () => {
-  // A variable name keeps the bundler from trying to trace a native module.
-  const name = CONPTY_PACKAGE
-  return createRequire(import.meta.url)(name) as ConPtyModule
+  // Next externalizes this native package. A literal avoids generating a
+  // filesystem-wide Webpack require context (including local symlinks).
+  return createRequire(import.meta.url)('@lydell/node-pty') as ConPtyModule
 }
 
 /** Tests supply a fake; returns the previous loader so a test can restore it. */
@@ -43,7 +42,7 @@ export function setConPtyLoaderForTest(loader: () => ConPtyModule): () => ConPty
 }
 
 function conPtyInstalled(): boolean {
-  try { createRequire(import.meta.url).resolve(CONPTY_PACKAGE); return true } catch { return false }
+  try { createRequire(import.meta.url).resolve('@lydell/node-pty'); return true } catch { return false }
 }
 
 /** POSIX always has the shim; Windows has a PTY exactly when the ConPTY package installed. */

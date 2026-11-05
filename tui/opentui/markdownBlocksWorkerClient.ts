@@ -2,9 +2,9 @@ import type { MarkdownBlock } from './markdownBlocks'
 import type { MarkdownCodeChunk } from './markdownStructure'
 import type { SimpleHighlight } from '@opentui/core'
 import { tuiWorkerUrl } from './workerUrl'
-type Result = { blocks?: MarkdownBlock[]; chunks?: MarkdownCodeChunk[] }
+type Result = { blocks?: MarkdownBlock[]; chunks?: MarkdownCodeChunk[]; captures?: SimpleHighlight[] | null }
 type Consumer = { resolve: (result: Result) => void; reject: (error: Error) => void; cleanup: () => void }
-type Job = { id: number; key: string; content: string; kind?: 'code'; highlights?: SimpleHighlight[]; consumers: Set<Consumer> }
+type Job = { id: number; key: string; content: string; kind?: 'code' | 'highlight'; language?: string; highlights?: SimpleHighlight[]; consumers: Set<Consumer> }
 let worker: Worker | undefined
 let counter = 0
 let active: Job | undefined
@@ -45,7 +45,7 @@ function dispatch() {
           for (const queued of queue.splice(0)) finish(queued, undefined, new Error(event.message))
         }
       }
-      worker.postMessage({ id: job.id, content: job.content, kind: job.kind, highlights: job.highlights })
+      worker.postMessage({ id: job.id, content: job.content, kind: job.kind, highlights: job.highlights, language: job.language })
     } catch (error) {
       active = undefined
       finish(job, undefined, error instanceof Error ? error : new Error(String(error)))
@@ -65,11 +65,11 @@ export function partitionMarkdownCodeAsync(content: string, highlights: SimpleHi
   return enqueue(content, `code:${++counter}`, signal, highlights).then(result => result.chunks ?? [])
 }
 
-function enqueue(content: string, key: string, signal?: AbortSignal, highlights?: SimpleHighlight[]): Promise<Result> {
+function enqueue(content: string, key: string, signal?: AbortSignal, highlights?: SimpleHighlight[], language?: string): Promise<Result> {
   if (signal?.aborted) return Promise.reject(new Error('Markdown parse aborted'))
   let job = flights.get(key)
   if (!job) {
-    job = { id: ++counter, key, content, kind: highlights ? 'code' : undefined, highlights, consumers: new Set() }
+    job = { id: ++counter, key, content, kind: language !== undefined ? 'highlight' : highlights ? 'code' : undefined, language, highlights, consumers: new Set() }
     flights.set(key, job)
     queue.push(job)
   }
@@ -91,4 +91,9 @@ function enqueue(content: string, key: string, signal?: AbortSignal, highlights?
   })
   dispatch()
   return promise
+}
+
+/** Serializable scope captures, shared by native displays and code partitioning. */
+export function highlightDisplayCodeAsync(content: string, language: string, signal?: AbortSignal): Promise<SimpleHighlight[] | null> {
+  return enqueue(content, JSON.stringify(['highlight', language, content]), signal, undefined, language).then(result => result.captures ?? null)
 }

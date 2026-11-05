@@ -2,110 +2,20 @@
 
 import { memo, useEffect, useMemo, useState } from 'react'
 import { renderMermaidSVG } from 'beautiful-mermaid'
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
-import highlightFactory from 'react-syntax-highlighter/dist/esm/highlight'
-import { refractor } from 'refractor/core'
-import type { ReactElement, ReactNode } from 'react'
-import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
-import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
-import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
-import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
-import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
-import dart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
-import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff'
-import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
-import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
-import ini from 'react-syntax-highlighter/dist/esm/languages/prism/ini'
-import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
-import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
-import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
-import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
-import kotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
-import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
-import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
-import php from 'react-syntax-highlighter/dist/esm/languages/prism/php'
-import powershell from 'react-syntax-highlighter/dist/esm/languages/prism/powershell'
-import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
-import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
-import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
-import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
-import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
-import swift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
-import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
-import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
-import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
+import { plainCodeHighlight, renderCodeHighlight } from './renderCodeHighlight'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { PierreFileDiffView, type PierreAnnotationMetadata, type PierreDiffAnnotation, type PierreDiffPresentation } from './PierreDiffView'
 
-SyntaxHighlighter.registerLanguage('bash', bash)
-SyntaxHighlighter.registerLanguage('sh', bash)
-SyntaxHighlighter.registerLanguage('zsh', bash)
-SyntaxHighlighter.registerLanguage('shell', bash)
-SyntaxHighlighter.registerLanguage('c', c)
-SyntaxHighlighter.registerLanguage('cpp', cpp)
-SyntaxHighlighter.registerLanguage('csharp', csharp)
-SyntaxHighlighter.registerLanguage('cs', csharp)
-SyntaxHighlighter.registerLanguage('css', css)
-SyntaxHighlighter.registerLanguage('dart', dart)
-SyntaxHighlighter.registerLanguage('scss', scss)
-SyntaxHighlighter.registerLanguage('diff', diff)
-SyntaxHighlighter.registerLanguage('dockerfile', docker)
-SyntaxHighlighter.registerLanguage('docker', docker)
-SyntaxHighlighter.registerLanguage('go', go)
-SyntaxHighlighter.registerLanguage('java', java)
-SyntaxHighlighter.registerLanguage('ini', ini)
-SyntaxHighlighter.registerLanguage('toml', ini)
-SyntaxHighlighter.registerLanguage('javascript', javascript)
-SyntaxHighlighter.registerLanguage('js', javascript)
-SyntaxHighlighter.registerLanguage('json', json)
-SyntaxHighlighter.registerLanguage('jsx', jsx)
-SyntaxHighlighter.registerLanguage('kotlin', kotlin)
-SyntaxHighlighter.registerLanguage('kt', kotlin)
-SyntaxHighlighter.registerLanguage('markdown', markdown)
-SyntaxHighlighter.registerLanguage('md', markdown)
-SyntaxHighlighter.registerLanguage('html', markup)
-SyntaxHighlighter.registerLanguage('xml', markup)
-SyntaxHighlighter.registerLanguage('svg', markup)
-SyntaxHighlighter.registerLanguage('php', php)
-SyntaxHighlighter.registerLanguage('powershell', powershell)
-SyntaxHighlighter.registerLanguage('ps1', powershell)
-SyntaxHighlighter.registerLanguage('python', python)
-SyntaxHighlighter.registerLanguage('py', python)
-SyntaxHighlighter.registerLanguage('ruby', ruby)
-SyntaxHighlighter.registerLanguage('rb', ruby)
-SyntaxHighlighter.registerLanguage('rust', rust)
-SyntaxHighlighter.registerLanguage('rs', rust)
-SyntaxHighlighter.registerLanguage('sql', sql)
-SyntaxHighlighter.registerLanguage('swift', swift)
-SyntaxHighlighter.registerLanguage('tsx', tsx)
-SyntaxHighlighter.registerLanguage('typescript', typescript)
-SyntaxHighlighter.registerLanguage('ts', typescript)
-SyntaxHighlighter.registerLanguage('yaml', yaml)
-SyntaxHighlighter.registerLanguage('yml', yaml)
-
-// ── Cached / deferred syntax highlighting ────────────────────────────────────
-// react-syntax-highlighter re-tokenizes the whole code string on every mount
-// (its SyntaxHighlighter is a plain function component — see
-// node_modules/react-syntax-highlighter/dist/esm/highlight.js). Virtualized
-// rows unmount/remount as they leave/re-enter the scroll window, so scrolling
-// a code-heavy transcript re-ran Prism over every visible diff/fence each
-// pass. Mirror the factory react-syntax-highlighter uses internally
-// (highlight(refractor, {})) and cache its rendered element by
-// theme|language|code, so a remount is a Map hit instead of a re-tokenize.
-const renderSyntaxHighlight = highlightFactory(refractor, {}) as (
-  props: Record<string, unknown>,
-) => ReactElement
-
+// Cache highlighted elements across virtualized remounts. Identical requests
+// share asynchronous initialization; large cold blocks wait until the next frame.
 const CODE_ELEMENT_CACHE_MAX = 800
 const codeElementCache = new Map<string, ReactElement | null>()
 
-// Small fences highlight synchronously (cheap, cache-warm). Larger blocks
-// render unhighlighted first and hydrate one rAF later so a cold Prism pass
-// never blocks the frame that mounted the row. Above these guards we skip
-// highlighting entirely (plain block) — mirrors agentsview's HIGHLIGHT_MAX_BYTES.
+// Preserve the existing size guards and defer larger cold blocks.
 const SYNTAX_SYNC_MAX_CHARS = 6000
 const HIGHLIGHT_MAX_BYTES = 50_000
 const HIGHLIGHT_MAX_LINES = 800
@@ -120,71 +30,47 @@ function shouldHighlightSyntax(code: string): boolean {
   return true
 }
 
-function buildCachedCodeElement(key: string, build: () => ReactElement | null): ReactElement | null {
+const codeElementFlights = new Map<string, Promise<ReactElement | null>>()
+
+function buildCachedCodeElement(key: string, build: () => Promise<ReactElement | null>): Promise<ReactElement | null> {
   const cached = codeElementCache.get(key)
-  if (cached !== undefined) return cached
-  let element: ReactElement | null = null
-  try {
-    element = build()
-  } catch {
-    element = null
-  }
-  if (codeElementCache.size >= CODE_ELEMENT_CACHE_MAX) {
-    const oldestKey = codeElementCache.keys().next().value as string | undefined
-    if (oldestKey !== undefined) codeElementCache.delete(oldestKey)
-  }
-  codeElementCache.set(key, element)
-  return element
+  if (cached !== undefined) return Promise.resolve(cached)
+  const pending = codeElementFlights.get(key)
+  if (pending) return pending
+  const promise = Promise.resolve().then(build).catch(() => null).then(element => {
+    if (codeElementCache.size >= CODE_ELEMENT_CACHE_MAX) {
+      const oldest = codeElementCache.keys().next().value
+      if (oldest !== undefined) codeElementCache.delete(oldest)
+    }
+    codeElementCache.set(key, element)
+    return element
+  }).finally(() => { codeElementFlights.delete(key) })
+  codeElementFlights.set(key, promise)
+  return promise
 }
 
-/**
- * Returns a cached highlighted element for `cachedKey`. Cold-cache digs larger
- * than `SYNTAX_SYNC_MAX_CHARS` are deferred one animation frame; `eligible`
- * false (over the size guards) always yields null so callers render a plain
- * block. Returns null while a deferred build is pending.
- *
- * Callers pass `key={cachedKey}` on the leaf component so a code change
- * remounts the leaf and this state resets — no stale element lingers across
- * prop updates.
- */
 function useCachedCodeElement(
   cachedKey: string,
   code: string,
   eligible: boolean,
-  build: () => ReactElement | null,
+  build: () => Promise<ReactElement | null>,
 ): ReactElement | null {
-  const needsDefer = code.length > SYNTAX_SYNC_MAX_CHARS
-
-  const [element, setElement] = useState<ReactElement | null>(() => {
-    if (!eligible) return null
-    const cached = codeElementCache.get(cachedKey)
-    if (cached !== undefined) return cached
-    return needsDefer ? null : buildCachedCodeElement(cachedKey, build)
-  })
-
+  const [loaded, setLoaded] = useState<{ key: string; element: ReactElement | null } | null>(null)
+  // Leaves are keyed by every render input. Keep their initial builder stable
+  // across unrelated rerenders instead of restarting asynchronous highlighting.
+  const [buildElement] = useState(() => build)
   useEffect(() => {
+    if (!eligible || codeElementCache.has(cachedKey)) return
     let cancelled = false
-    if (!eligible) {
-      setElement(null)
-      return
-    }
-    const cached = codeElementCache.get(cachedKey)
-    if (cached !== undefined) {
-      setElement(cached)
-      return
-    }
-    if (!needsDefer) {
-      setElement(buildCachedCodeElement(cachedKey, build))
-      return
-    }
-    const frame = requestAnimationFrame(() => {
-      if (cancelled) return
-      setElement(buildCachedCodeElement(cachedKey, build))
-    })
-    return () => { cancelled = true; cancelAnimationFrame(frame) }
-  }, [build, cachedKey, eligible, needsDefer])
-
-  return element
+    const run = () => { void buildCachedCodeElement(cachedKey, buildElement).then(element => {
+      if (!cancelled) setLoaded({ key: cachedKey, element })
+    }) }
+    const frame = code.length > SYNTAX_SYNC_MAX_CHARS ? requestAnimationFrame(run) : undefined
+    if (frame === undefined) run()
+    return () => { cancelled = true; if (frame !== undefined) cancelAnimationFrame(frame) }
+  }, [buildElement, cachedKey, code.length, eligible])
+  if (!eligible) return null
+  return codeElementCache.get(cachedKey) ?? (loaded?.key === cachedKey ? loaded.element : null)
 }
 
 function CachedSyntaxElement({
@@ -197,7 +83,7 @@ function CachedSyntaxElement({
   eligible: boolean
   code: string
   cachedKey: string
-  build: () => ReactElement | null
+  build: () => Promise<ReactElement | null>
   fallback: ReactNode
 }) {
   const element = useCachedCodeElement(cachedKey, code, eligible, build)
@@ -278,9 +164,7 @@ function useCodeHighlighterStyle() {
   return getCodeThemeStyle(themeId)
 }
 
-// Shared wrapper styling for the highlighted fence/viewer so the cache key
-// stays stable (the SyntaxHighlighter <pre> output is identical for equal
-// language|code|style|customStyle).
+// Keep highlighted and loading states at the same measured line height.
 const FENCE_PRE_STYLE = { margin: 0, padding: '12px 16px', fontSize: 13, lineHeight: 1.65, overflowX: 'auto' } as const
 
 function PlainFence({ language, code }: { language?: string; code: string }) {
@@ -335,13 +219,13 @@ export const FencedCodeBlock = memo(function FencedCodeBlock({
         eligible={eligible}
         code={codeString}
         cachedKey={cacheKey}
-        build={() => renderSyntaxHighlight({
+        build={() => renderCodeHighlight({
           language: language || undefined,
           style: codeStyle,
           customStyle: FENCE_PRE_STYLE,
           children: normalized,
         })}
-        fallback={<PlainFence language={language} code={normalized} />}
+        fallback={eligible ? plainCodeHighlight({ children: normalized, style: codeStyle, customStyle: FENCE_PRE_STYLE }) : <PlainFence language={language} code={normalized} />}
       />
     </div>
   )
@@ -437,7 +321,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ codeString }: { cod
 
 const VIEWER_PRE_STYLE = { margin: 0, padding: '10px 14px', fontSize: 13, lineHeight: 1.6 }
 const VIEWER_CODE_TAG_STYLE = { fontFamily: "'IBM Plex Mono', monospace" }
-const VIEWER_LINE_NUMBER_STYLE = {
+const VIEWER_LINE_NUMBER_STYLE: CSSProperties = {
   minWidth: '2.6em',
   paddingRight: '0.9em',
   color: 'var(--text-3)',
@@ -475,7 +359,7 @@ export const CodeViewer = memo(function CodeViewer({
   const cacheKey = `viewer|${themeId}|${resolvedLanguage ?? ''}|${inlineOpts}|${code}`
   const eligible = shouldHighlightSyntax(code)
 
-  const customStyle = {
+  const customStyle: CSSProperties = {
     ...VIEWER_PRE_STYLE,
     width: expandToContentWidth ? 'max-content' : undefined,
     minWidth: expandToContentWidth ? '100%' : undefined,
@@ -507,7 +391,7 @@ export const CodeViewer = memo(function CodeViewer({
       eligible={eligible}
       code={code}
       cachedKey={cacheKey}
-      build={() => renderSyntaxHighlight({
+      build={() => renderCodeHighlight({
         language: resolvedLanguage || undefined,
         style: codeStyle,
         showLineNumbers,
@@ -518,7 +402,7 @@ export const CodeViewer = memo(function CodeViewer({
         lineNumberStyle: VIEWER_LINE_NUMBER_STYLE,
         children: normalized,
       })}
-      fallback={fallback}
+      fallback={eligible ? plainCodeHighlight({ children: normalized, style: codeStyle, customStyle, showLineNumbers, startingLineNumber, lineNumberStyle: VIEWER_LINE_NUMBER_STYLE, codeTagProps: { style: VIEWER_CODE_TAG_STYLE } }) : fallback}
     />
   )
 })

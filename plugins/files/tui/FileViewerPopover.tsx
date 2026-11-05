@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
 import { useWorkspaceState } from '../../../tui/opentui/shell/sdk'
+import { displayHighlightClient } from '../../../tui/opentui/displayHighlightClient'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'
@@ -636,6 +637,7 @@ export function FileViewerPopover({
                     <box flexGrow={1} flexDirection="column">
                       <box height={topSpacerH} />
                       <code
+                        treeSitterClient={displayHighlightClient}
                         content={windowContent}
                         filetype={previewFiletype}
                         syntaxStyle={syntaxStyle}

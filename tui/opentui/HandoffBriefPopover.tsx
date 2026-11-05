@@ -8,6 +8,7 @@ import type { Session } from '../../lib/types'
 import type { TuiThemePalette } from '../theme'
 import type { TuiSessionDetail } from '../../lib/tui/service'
 import { buildHandoffBriefMarkdown } from '../../lib/handoffBrief'
+import { displayHighlightClient } from './displayHighlightClient'
 
 type HandoffBriefKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -158,6 +159,7 @@ export function HandoffBriefPopover({
       >
         <box paddingX={1} paddingTop={1} paddingBottom={1}>
           <markdown
+            treeSitterClient={displayHighlightClient}
             content={briefMarkdown}
             syntaxStyle={syntaxStyle}
             fg={theme.text}

@@ -6,11 +6,11 @@ import { EditProvider, FileDiff, MultiFileDiff, WorkerPoolContextProvider } from
 import { Editor, type EditorFactory } from '@pierre/diffs/edit'
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
-import { DIFF_WORKER_POOL_OPTIONS } from '@/components/pierreDiffWorker'
+import { DIFF_WORKER_POOL_OPTIONS, DIFF_HIGHLIGHTER_OPTIONS, EDITABLE_DIFF_HIGHLIGHTER_OPTIONS } from '@/components/pierreDiffWorker'
 
 // Editable surfaces need token-level (not line-level) highlight patching so the
 // worker can re-highlight around the cursor without discarding editor state.
-const DIFF_WORKER_HIGHLIGHTER_OPTIONS = { useTokenTransformer: true }
+const DIFF_WORKER_HIGHLIGHTER_OPTIONS = EDITABLE_DIFF_HIGHLIGHTER_OPTIONS
 
 export type PierreDiffStyle = 'stacked' | 'split'
 export type PierreChangeStyle = 'classic' | 'bars' | 'none'
@@ -115,7 +115,7 @@ function PierreDiffFrame({ children, maxHeight, editable }: PierreDiffFrameProps
   return (
     <WorkerPoolContextProvider
       poolOptions={DIFF_WORKER_POOL_OPTIONS}
-      highlighterOptions={editable ? DIFF_WORKER_HIGHLIGHTER_OPTIONS : {}}
+      highlighterOptions={editable ? DIFF_WORKER_HIGHLIGHTER_OPTIONS : DIFF_HIGHLIGHTER_OPTIONS}
     >
       <div
         style={{

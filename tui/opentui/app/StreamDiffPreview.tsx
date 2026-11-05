@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { displayHighlightClient } from '../displayHighlightClient'
 import { SyntaxStyle } from '@opentui/core'
 import React from 'react'
 import { detectTuiCodeFiletypeFromPath } from '../../codeFiletypes'
@@ -95,6 +96,7 @@ export function StreamDiffPreview({
         </box>
         {syntaxStyle ? (
           <code
+            treeSitterClient={displayHighlightClient}
             content={codeContent}
             filetype={preview.filetype}
             syntaxStyle={syntaxStyle}

@@ -175,9 +175,9 @@ export async function highlightDiffFile(file: FileDiffMetadata, appearance: 'dar
   const options = RENDER_OPTIONS[appearance]
   // The highlighter is the whole package (Shiki and its grammars); building a
   // card never needs it, so it loads the first time a highlight is asked for.
-  const { getFiletypeFromFileName, getHighlighterOptions, getSharedHighlighter, renderDiffWithHighlighter } = await import('@pierre/diffs')
+  const { canUseWASM, getFiletypeFromFileName, getHighlighterOptions, getSharedHighlighter, renderDiffWithHighlighter } = await import('@pierre/diffs')
   const lang = file.lang ?? getFiletypeFromFileName(diffDisplayPath(file)) ?? 'text'
-  const highlighter = await getSharedHighlighter({ ...getHighlighterOptions(lang, { theme: options.theme }), preferredHighlighter: 'shiki-wasm' })
+  const highlighter = await getSharedHighlighter({ ...getHighlighterOptions(lang, { theme: options.theme }), preferredHighlighter: canUseWASM() ? 'highlights' : 'shiki-js' })
   const highlighted = renderDiffWithHighlighter(file, highlighter, options)
   return { deletionLines: highlighted.code.deletionLines as Array<HastNode | undefined>, additionLines: highlighted.code.additionLines as Array<HastNode | undefined> }
 }

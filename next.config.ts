@@ -27,6 +27,7 @@ const nextConfig: NextConfig = {
   // Keep agent SDKs as server-side externals — they use Node.js APIs and native
   // modules (filesystem, process spawning, Koffi) that Turbopack cannot bundle.
   serverExternalPackages: [
+    '@lydell/node-pty',
     '@anthropic-ai/claude-agent-sdk',
     '@earendil-works/pi-coding-agent',
     '@earendil-works/pi-agent-core',

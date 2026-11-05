@@ -1,11 +1,12 @@
-import { getTreeSitterClient, infoStringToFiletype } from '@opentui/core'
+import { infoStringToFiletype } from '@opentui/core'
+import { displayHighlightClient } from './displayHighlightClient'
 import { partitionMarkdownCodeAsync } from './markdownBlocksWorkerClient'
 import { MarkdownCodeQueue } from './markdownCodeQueue'
 
 const queue = new MarkdownCodeQueue(async (content, language) => {
   const filetype = infoStringToFiletype(language)
   if (!filetype) return []
-  try { return (await getTreeSitterClient().highlightOnce(content, filetype)).highlights ?? [] }
+  try { return (await displayHighlightClient.highlightOnce(content, filetype)).highlights ?? [] }
   catch { return [] }
 }, partitionMarkdownCodeAsync)
 

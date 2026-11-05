@@ -6,9 +6,10 @@ import { testRenderWithSyntaxStyle, act } from './testRender'
 import { TranscriptCard, type TranscriptCardProps } from './app/TranscriptCard'
 import { densityConfig } from './app/transcriptStyle'
 import { DARK_THEME } from '../theme'
+import { highlightDisplayCodeAsync } from './markdownBlocksWorkerClient'
 import type { TuiTranscriptCard } from '../format'
 
-// Colours the grammar assigns, distinct from the theme's fallback so a tree-sitter row is recognisable.
+// Colours the syntax style assigns, distinct from the regex fallback.
 const STRING = '#11cc77'
 const KEYWORD = '#ee3399'
 const definitions = {
@@ -18,6 +19,8 @@ const definitions = {
 }
 // The second row is inside a template literal opened on the first; only a real parse knows that.
 const source = ['const a = `first', 'const b = 1', 'last`', 'return 2']
+const captures = await highlightDisplayCodeAsync(source.join('\n'), 'ts')
+assert(captures?.some(([start, end, scope]) => scope === 'string' && source.join('\n').slice(start, end).includes('const b')), 'real Highlights worker preserves multiline string state')
 const lines = [{ text: 'tool Read: lib/a.ts', tone: 'tool' as const }, ...source.map(text => ({ text, tone: 'result_ok' as const }))]
 const card: TuiTranscriptCard = { key: 'read', role: 'assistant', label: 'Read', category: 'technical', autoFold: true, compactSummary: 'Read a.ts', lines, expandedLines: lines, searchText: '', searchHaystackLower: '' }
 const noop = () => {}
@@ -40,9 +43,9 @@ try {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); await setup.flush() })
   }
   assert(setup.captureCharFrame().includes('const b = 1'))
-  // Tree-sitter sees `const b = 1` as the inside of the template string, not as code: the regex tokenizer cannot.
+  // Highlights sees the whole template string; the regex fallback cannot.
   assert.equal(fgOf('const b'), RGBA.fromHex(STRING).toString(), 'a row inside a multi-line string is coloured as string')
   assert.equal(fgOf('return'), RGBA.fromHex(KEYWORD).toString(), 'code after it is a keyword again')
-  console.log('Tool output syntax smoke passed: tree-sitter parse lands and replaces the regex fallback, multi-line strings are seen whole.')
+  console.log('Tool output syntax smoke passed: Highlights worker replaces the regex fallback and preserves multiline strings and scene colors.')
 } finally { await act(async () => { setup.renderer.destroy() }) }
 process.exit(0)

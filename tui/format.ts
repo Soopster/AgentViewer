@@ -1009,7 +1009,7 @@ function cardToolTimings(message: ThreadedMessage): ToolTiming[] | undefined {
  */
 export function tidyTaskSummary(text: string): string {
   const decoded = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
-  const quoted = /^(.*?")([^"]*)("[^"]*)$/s.exec(decoded)
+  const quoted = /^([\s\S]*?")([^"]*)("[^"]*)$/.exec(decoded)
   if (!quoted) return decoded.includes('\n') ? `${decoded.split('\n')[0]!.trimEnd()}…` : decoded
   const lines = quoted[2]!.split('\n')
   return lines.length > 1 ? `${quoted[1]}${lines[0]!.trimEnd()}…${quoted[3]}` : decoded

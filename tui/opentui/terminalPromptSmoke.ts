@@ -34,10 +34,10 @@ assert.equal(parseTerminalAddressing('@codex @src/App.tsx explain', terms)!.text
 assert.equal(parseTerminalAddressing('hello @codex', terms), null, 'only leading handles address')
 import { commandShell } from './processTree'
 import { controlEndpoint } from './terminalControl'
-const win = commandShell('npm run dev', { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, 'win32')
+const win = commandShell('npm run dev', { NODE_ENV: 'test', ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, 'win32')
 assert.deepEqual(win.args, ['/d', '/s', '/c', 'npm run dev'])
 assert.equal(win.file, 'C:\\Windows\\System32\\cmd.exe')
-assert.deepEqual(commandShell('ls', { SHELL: '/bin/zsh' }, 'darwin'), { file: '/bin/zsh', args: ['-lc', 'ls'] })
+assert.deepEqual(commandShell('ls', { NODE_ENV: 'test', SHELL: '/bin/zsh' }, 'darwin'), { file: '/bin/zsh', args: ['-lc', 'ls'] })
 const endpoint = controlEndpoint('/tmp/x', 42, 'win32')
 assert.equal(endpoint.listenPath, '\\\\.\\pipe\\agent-viewer-terminal-42', 'Windows listens on a named pipe')
 assert.ok(endpoint.registryFile.endsWith('terminal-42.json'))

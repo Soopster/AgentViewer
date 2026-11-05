@@ -122,7 +122,7 @@ export function highlightToolOutputLine(text: string, context: ToolOutputContext
 const EXTENSION_OF = /\.([A-Za-z0-9]+)$/
 
 /**
- * A tool's output line coloured by tree-sitter, falling back to the regex tokenizer while the parse is outstanding
+ * A tool's output line coloured by Highlights, falling back to the regex tokenizer while the parse is outstanding
  * (or when there is no syntax style / grammar). A file's lines are parsed together as one document; each search
  * hit is parsed on its own, since neighbouring hits are not neighbouring code.
  */

@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { displayHighlightClient } from './displayHighlightClient'
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { MarkdownRenderable, SyntaxStyle } from '@opentui/core'
 import { useWindowVisible } from './windowActivity'
@@ -34,6 +35,7 @@ export function NativeSelectableMarkdown({
 
   return (
     <markdown
+      treeSitterClient={displayHighlightClient}
       ref={markdownRef}
       content={content}
       syntaxStyle={syntaxStyle}

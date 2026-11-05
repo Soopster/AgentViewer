@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import { DIFF_HIGHLIGHTER_OPTIONS } from '@/components/pierreDiffWorker'
 import { CodeView, type CodeViewAnnotationArgs, type CodeViewHandle, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import {
   parsePatchFiles,
@@ -1257,7 +1258,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
               )}
               <main style={{ display: 'flex', minWidth: 0, minHeight: 0, flex: 1, flexDirection: 'column', background: 'var(--surface)' }}>
                 {pr && items.length > 0 ? (
-                  <WorkerPoolContextProvider poolOptions={DIFF_WORKER_POOL_OPTIONS} highlighterOptions={{}}>
+                  <WorkerPoolContextProvider poolOptions={DIFF_WORKER_POOL_OPTIONS} highlighterOptions={DIFF_HIGHLIGHTER_OPTIONS}>
                     <CodeView<ReviewMeta>
                       key={mountKey}
                       ref={viewerRef}

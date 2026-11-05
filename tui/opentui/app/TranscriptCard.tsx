@@ -3,6 +3,7 @@ import { transcriptMeasure } from '../engineeringLayout'
 import { TranscriptImages } from '../TranscriptImages'
 import { toolOutputPreview } from './toolOutputPreview'
 import { toggleFullToolOutput, useFullToolOutput } from './fullToolOutput'
+import { displayHighlightClient } from '../displayHighlightClient'
 import React, { useMemo, useSyncExternalStore } from 'react'
 import { getAssistantDisplayName } from '../../../lib/provider'
 import { hasTuiLinkTarget } from '../../../lib/tuiLinkTargets'
@@ -1113,6 +1114,7 @@ export function TranscriptCardInner({
               </text>
               {syntaxStyle ? (
                 <code
+                  treeSitterClient={displayHighlightClient}
                   content={visibleCode}
                   filetype={codeBlock.filetype}
                   syntaxStyle={syntaxStyle}
@@ -1332,6 +1334,7 @@ export function TranscriptCardInner({
                               ))}
                             </box>
                             <code
+                              treeSitterClient={displayHighlightClient}
                               content={visibleCode}
                               filetype={cb.filetype}
                               syntaxStyle={syntaxStyle}
@@ -1344,6 +1347,7 @@ export function TranscriptCardInner({
                           </box>
                         ) : (
                           <code
+                            treeSitterClient={displayHighlightClient}
                             content={visibleCode}
                             filetype={cb.filetype}
                             syntaxStyle={syntaxStyle}
