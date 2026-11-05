@@ -27,9 +27,12 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
   const branchList = remoteBranches ? snapshot?.remoteBranches.map(branch => branch.name) ?? [] : snapshot?.branches ?? []
   const [split, setSplit] = useState(false)
   const [selecting, setSelecting] = useState(false)
-  const [workflowTarget, setWorkflowTarget] = useState<{ snapshot: WorkspaceSnapshot; context: Inspection | null; path: string | null } | null>(null)
+  const [workflowTarget, setWorkflowTarget] = useState<{ snapshot: WorkspaceSnapshot; context: Inspection | null; path: string | null; initialChoice?: string } | null>(null)
   const [conflictPath, setConflictPath] = useState<string | null>(null)
   const openActions = () => { if (snapshot) { setConflictPath(null); setWorkflowTarget({ snapshot, context: inspection, path: workspace.path }) } }
+  // A merge, rebase, pull or stash pop that stopped on conflicts: resolve each file, then continue or abort.
+  const conflictedPaths = snapshot?.files.filter(file => file.conflict).map(file => file.path) ?? []
+  const openOperation = (initialChoice: 'operation-continue' | 'operation-abort') => { if (snapshot) { setConflictPath(null); setWorkflowTarget({ snapshot, context: null, path: null, initialChoice }) } }
   const closeAction = () => { setWorkflowTarget(null); setConflictPath(null); setInspection(null) }
   const rows = workspace.rows
   const stagedCount = filesForSide(snapshot?.files ?? [], 'staged').length
@@ -58,7 +61,15 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
           <section className="git-workspace-section">
             <h3>1 · Status</h3><strong>{snapshot?.branch ?? 'Loading repository…'}</strong>
             <span>{snapshot?.upstream ?? 'No upstream'} · ↑{snapshot?.ahead ?? 0} ↓{snapshot?.behind ?? 0}</span>
-            {snapshot?.operation ? <p role="status">{snapshot.operation} in progress · resolve files, then use Git actions to continue or abort</p> : null}
+            {snapshot?.operation ? <div role="status" className="git-operation-banner">
+              <p>{snapshot.operation} in progress · {conflictedPaths.length > 0 ? `${conflictedPaths.length} conflicted file${conflictedPaths.length === 1 ? '' : 's'} to resolve` : 'all conflicts resolved'}</p>
+              <div className="git-workspace-actions">
+                {conflictedPaths.length > 0
+                  ? <Button size="sm" disabled={busy} onClick={() => { setWorkflowTarget(null); setConflictPath(conflictedPaths[0]!) }}>Resolve next conflict</Button>
+                  : snapshot.operation !== 'bisect' ? <Button size="sm" disabled={busy} onClick={() => openOperation('operation-continue')}>Continue {snapshot.operation}</Button> : null}
+                {snapshot.operation !== 'bisect' ? <Button size="sm" variant="outline" disabled={busy} onClick={() => openOperation('operation-abort')}>Abort {snapshot.operation}</Button> : null}
+              </div>
+            </div> : null}
           </section>
           <section className="git-workspace-section files">
             <h3>2 · Changes <span>{snapshot?.files.length ?? 0}</span></h3>

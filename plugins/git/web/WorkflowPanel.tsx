@@ -16,10 +16,11 @@ function WorkflowInput({ field, value, change, disabled }: { field: WorkflowFiel
   }
   return <label htmlFor={id} className="git-workflow-field">{field.label}{field.kind === 'choice' ? <NativeSelect id={id} value={value} disabled={disabled} onChange={event => change(event.target.value)}>{field.options?.map(option => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}</NativeSelect> : <Input id={id} value={value} disabled={disabled} onChange={event => change(event.target.value)} />}</label>
 }
-export function WorkflowPanel({ snapshot, context, path, busy, error, onRun, onClose }: { snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; busy: boolean; error: string | null; onRun: (action: WorkflowDraft, revision: string) => Promise<boolean>; onClose: () => void }) {
+export function WorkflowPanel({ snapshot, context, path, busy, error, onRun, onClose, initialChoice }: { initialChoice?: string; snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; busy: boolean; error: string | null; onRun: (action: WorkflowDraft, revision: string) => Promise<boolean>; onClose: () => void }) {
   const choices = workflowChoices(snapshot, context, path)
-  const [selected, setSelected] = useState<WorkflowChoice | null>(null)
-  const [values, setValues] = useState<Record<string, string>>({})
+  const preselected = initialChoice ? choices.find(choice => choice.id === initialChoice) ?? null : null
+  const [selected, setSelected] = useState<WorkflowChoice | null>(preselected)
+  const [values, setValues] = useState<Record<string, string>>(() => (preselected ? initialWorkflowValues(preselected) : {}))
   const [review, setReview] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const prepare = () => {

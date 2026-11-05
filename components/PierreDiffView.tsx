@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { EditProvider, FileDiff, MultiFileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import { Editor, type EditorFactory } from '@pierre/diffs/edit'
-import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
+import { UnresolvedFile as UnresolvedFileClass, parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
 import { DIFF_WORKER_POOL_OPTIONS, DIFF_HIGHLIGHTER_OPTIONS, EDITABLE_DIFF_HIGHLIGHTER_OPTIONS } from '@/components/pierreDiffWorker'
 
@@ -185,6 +185,49 @@ export function PierreFileDiffView({
   )
 }
 
+/**
+ * A file with git conflict markers, drawn as current/incoming sections with a
+ * per-conflict choice (current, incoming, both). `contents` is read once: the
+ * view owns the file from there, and every choice reports the resolved text
+ * through `onContentsChange`. Remount it (change `key`) to load another file.
+ *
+ * This drives the vanilla `UnresolvedFile`, not the React component: the React
+ * wrapper keeps the resolved file private, and the caller needs it to save.
+ */
+export function PierreUnresolvedFileView({
+  filePath,
+  contents,
+  maxHeight = 480,
+  onContentsChange,
+}: {
+  filePath: string
+  contents: string
+  maxHeight?: number | null
+  onContentsChange: (contents: string) => void
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const changeRef = useRef(onContentsChange)
+  useEffect(() => { changeRef.current = onContentsChange }, [onContentsChange])
+  const initial = useRef({ filePath, contents })
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const instance = new UnresolvedFileClass({
+      ...DIFF_OPTIONS,
+      mergeConflictActionsType: 'default',
+      onMergeConflictResolve: (file: { contents: string }) => changeRef.current(file.contents),
+    } as never)
+    instance.render({ file: { name: initial.current.filePath, contents: initial.current.contents }, containerWrapper: host })
+    return () => instance.cleanUp()
+  }, [])
+  return (
+    <div style={{ maxHeight: maxHeight ?? undefined, overflow: maxHeight != null ? 'auto' : undefined, borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+      <PierreBuiltInIconSprite />
+      <div ref={hostRef} />
+    </div>
+  )
+}
+
 const MultiFileDiffEditable = MultiFileDiff as unknown as (props: Record<string, unknown>) => React.JSX.Element
 
 /**
@@ -350,7 +393,7 @@ function ReviewRevealMarker({ token, onReveal }: { token: string; onReveal?: (to
 function parsePatchDiffFiles(patch: string): FileDiffMetadata[] {
   if (!patch.trim()) return []
   try {
-    const files = parsePatchFiles(patch, 'web-diff', false).flatMap((entry) => entry.files)
+    const files = parsePatchFiles(patch, { cacheKeyPrefix: 'web-diff' }).flatMap((entry) => entry.files)
     if (files.length <= 1) return files
 
     const prepared = prepareFileTreeInput(files.map((file) => displayPath(file)), {
