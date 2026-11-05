@@ -54,6 +54,10 @@ export function useGitWorkspace(cwd: string, transport: WorkspaceTransport) {
   }), [])
   const stageFiles = useCallback((paths: string[]) => snapshot ? run({ kind: side === 'staged' ? 'unstage' : 'stage', paths, revision: snapshot.revision }) : Promise.resolve(false), [snapshot, run, side])
   const stageSelection = useCallback(() => preview?.path ? run({ kind: 'patch', path: preview.path, side: preview.side, revision: preview.revision, patch: preview.patch, lines: [...selected] }) : Promise.resolve(false), [preview, run, selected])
+  // One hunk (its changed rows) staged, unstaged or discarded in a single step.
+  const actOnLines = useCallback((kind: 'patch' | 'discard', lines: number[]) => preview?.path && lines.length > 0
+    ? run({ kind, path: preview.path, side: preview.side, revision: preview.revision, patch: preview.patch, lines })
+    : Promise.resolve(false), [preview, run])
   const prepareCommit = useCallback(async () => {
     if (operation.current) return false
     const scope = generation.current
@@ -71,5 +75,5 @@ export function useGitWorkspace(cwd: string, transport: WorkspaceTransport) {
     ? run({ kind: 'commit', message, amend, head: commitPreview.snapshot.head, indexRevision: commitPreview.snapshot.indexRevision })
     : Promise.resolve(false), [commitPreview, run])
   return { snapshot, side, setSide, path: activePath, setPath, files, preview, rows, selected, toggleLines,
-    busy, error, output, refresh, workflow, stageFiles, stageSelection, commitPreview, prepareCommit, commit, closeCommit: () => setCommitPreview(null) }
+    busy, error, output, refresh, workflow, stageFiles, stageSelection, actOnLines, commitPreview, prepareCommit, commit, closeCommit: () => setCommitPreview(null) }
 }

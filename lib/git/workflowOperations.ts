@@ -6,7 +6,7 @@ import { readWorkspace, validateWorkspacePath } from './workspaceService'
 import type { ConflictPreview, ConflictVersion, WorkflowAction, WorkspaceAction, WorkspaceBranch, WorkspaceRemoteBranch, WorkspaceResult, WorkspaceSnapshot } from './workspaceTypes'
 
 export function isWorkflowAction(action: WorkspaceAction): action is WorkflowAction {
-  return !['stage', 'unstage', 'patch', 'commit'].includes(action.kind)
+  return !['stage', 'unstage', 'patch', 'discard', 'commit'].includes(action.kind)
 }
 export async function readWorkflowFacts(root: string) {
   const [refs, remotesRaw, rebaseMerge, rebaseApply, remoteConfig] = await Promise.all([

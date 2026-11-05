@@ -163,7 +163,7 @@ async function mutate(root: string, action: WorkspaceAction): Promise<WorkspaceR
   } else {
     if (typeof action.revision !== 'string' || action.revision !== state.revision) throw new Error('Repository changed. Refresh and select the changes again.')
     return withIndexTransaction(root, action.revision, async env => {
-      if (action.kind === 'patch') {
+      if (action.kind === 'patch' || action.kind === 'discard') {
         validateWorkspacePath(action.path)
         if (action.side !== 'staged' && action.side !== 'unstaged') throw new Error('Invalid index side')
         if (typeof action.patch !== 'string' || !Array.isArray(action.lines) || action.lines.length === 0 || action.lines.some(line => !Number.isInteger(line) || line < 0)) throw new Error('Invalid patch selection')
@@ -171,8 +171,15 @@ async function mutate(root: string, action: WorkspaceAction): Promise<WorkspaceR
         if (!file || file.conflict || file.previousPath || file.x === 'T' || file.y === 'T') throw new Error('Use the whole-file action for this file.')
         const preview = await previewWorkspace(root, action.side, action.path)
         if (preview.revision !== action.revision || preview.patch !== action.patch) throw new Error('The selected diff changed. Refresh and select it again.')
-        const patch = partialPatch(preview.patch, action.lines, action.side === 'staged')
-        output = await git(root, ['apply', '--cached', '--whitespace=nowarn', '-'], patch, env)
+        if (action.kind === 'discard') {
+          // Reject: put the selected changes back to what the index holds. Only for
+          // tracked, unstaged changes — an untracked file has nothing to go back to.
+          if (action.side !== 'unstaged' || file.x === '?') throw new Error('Only unstaged changes to tracked files can be discarded here.')
+          output = await git(root, ['apply', '--whitespace=nowarn', '-'], partialPatch(preview.patch, action.lines, true), env)
+        } else {
+          const patch = partialPatch(preview.patch, action.lines, action.side === 'staged')
+          output = await git(root, ['apply', '--cached', '--whitespace=nowarn', '-'], patch, env)
+        }
       } else {
         if (!Array.isArray(action.paths) || action.paths.length === 0 || action.paths.length > 10000) throw new Error('Select files first')
         const paths = [...new Set(action.paths)]
@@ -188,7 +195,7 @@ async function mutate(root: string, action: WorkspaceAction): Promise<WorkspaceR
           : state.head ? await git(root, ['--literal-pathspecs', 'reset', '-q', 'HEAD', '--', ...paths], undefined, env)
             : await git(root, ['--literal-pathspecs', 'rm', '--cached', '-r', '--', ...paths], undefined, env)
       }
-      return output.trim() || (action.kind === 'patch' ? 'Selection updated.' : action.kind === 'stage' ? 'Files staged.' : 'Files unstaged.')
+      return output.trim() || (action.kind === 'discard' ? 'Changes discarded.' : action.kind === 'patch' ? 'Selection updated.' : action.kind === 'stage' ? 'Files staged.' : 'Files unstaged.')
     })
   }
   return { output: output.trim() || 'Commit created.', snapshot: await readWorkspace(root) }

@@ -37,6 +37,7 @@ export type WorkspacePreview = { patch: string; revision: string; side: IndexSid
 export type WorkspaceAction = WorkflowAction
   | { kind: 'stage' | 'unstage'; paths: string[]; revision: string }
   | { kind: 'patch'; path: string; side: IndexSide; revision: string; patch: string; lines: number[] }
+  | { kind: 'discard'; path: string; side: IndexSide; revision: string; patch: string; lines: number[] }
   | { kind: 'commit'; message: string; amend: boolean; indexRevision: string; head: string | null }
 export type WorkspaceResult = { output: string; snapshot: WorkspaceSnapshot; error?: string }
 export type WorkspaceTransport = {

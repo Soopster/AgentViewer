@@ -8010,6 +8010,11 @@ button.av-session-viz-graph-node:disabled {
 .git-workspace-detail-header > strong { flex: 1; overflow-wrap: anywhere; }
 .git-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .git-workspace-diff { flex: 1; min-height: 80px; overflow: auto; }
+.git-hunk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; background: var(--surface-2); border-block: 1px solid var(--border); }
+.git-hunk-actions button:first-child { color: var(--green); }
+.git-hunk-actions button:nth-child(2):not([data-variant=destructive]) { color: var(--red); }
+.git-hunk-actions { padding-left: 52px; }
+.git-hunk-hint { font-size: 11px; color: var(--text-3); }
 .git-workspace-diff pre { padding: 12px; white-space: pre-wrap; font-size: 12px; }
 .git-workspace-empty { padding: 12px; color: var(--text-3); font-size: 12px; }
 .git-workspace-patch { height: 100%; overflow: auto; position: relative; font-size: 12px; line-height: 24px; font-family: 'IBM Plex Mono', monospace; }

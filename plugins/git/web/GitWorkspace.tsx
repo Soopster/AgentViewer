@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { WorkflowPanel } from './WorkflowPanel'
 import { ConflictEditor } from './ConflictEditor'
 import type { WorkspaceSnapshot } from '@/lib/git/workspaceTypes'
@@ -8,7 +8,7 @@ import { PatchSelection } from './PatchSelection'
 import { GitBranch, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { PierrePatchDiffView } from '@/components/shell/sdkDiff'
+import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreDiffAnnotation } from '@/components/shell/sdkDiff'
 import { useGitWorkspace } from '@/lib/git/useGitWorkspace'
 import { webWorkspaceTransport } from '@/lib/git/webWorkspaceTransport'
 import { filesForSide } from '@/lib/git/workspaceTypes'
@@ -33,8 +33,40 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
   // A merge, rebase, pull or stash pop that stopped on conflicts: resolve each file, then continue or abort.
   const conflictedPaths = snapshot?.files.filter(file => file.conflict).map(file => file.path) ?? []
   const openOperation = (initialChoice: 'operation-continue' | 'operation-abort') => { if (snapshot) { setConflictPath(null); setWorkflowTarget({ snapshot, context: null, path: null, initialChoice }) } }
-  const closeAction = () => { setWorkflowTarget(null); setConflictPath(null); setInspection(null) }
+  // Accept / reject beside each hunk of the diff on screen: accept stages it (or unstages it,
+  // on the staged side), reject discards it from the working tree. Anchored under the hunk's
+  // last changed row, on the side of the file that row belongs to.
   const rows = workspace.rows
+  const [armedDiscard, setArmedDiscard] = useState<number | null>(null)
+  const canDiscard = workspace.side === 'unstaged' && snapshot?.files.some(file => file.path === workspace.path && file.x !== '?' && !file.conflict) === true
+  const hunkRows = useMemo(() => {
+    const byHunk = new Map<number, number[]>()
+    for (const row of rows) if (row.changed) byHunk.set(row.hunk, [...(byHunk.get(row.hunk) ?? []), row.index])
+    return byHunk
+  }, [rows])
+  const hunkAnnotations = useMemo(() => {
+    const annotations: PierreDiffAnnotation[] = []
+    for (const [hunk, indices] of hunkRows) {
+      const row = rows[indices[indices.length - 1]!]
+      const added = row?.text.startsWith('+')
+      const lineNumber = added ? row?.newLine : row?.oldLine
+      if (lineNumber == null) continue
+      annotations.push({ side: added ? 'additions' : 'deletions', lineNumber, metadata: { noteId: `hunk:${hunk}`, text: '', rangeLabel: '', kind: 'thread' } })
+    }
+    return annotations
+  }, [rows, hunkRows])
+  const renderHunkActions = (annotation: PierreDiffAnnotation) => {
+    const hunk = Number(annotation.metadata.noteId.slice('hunk:'.length))
+    const indices = hunkRows.get(hunk)
+    if (!indices) return null
+    const armed = armedDiscard === hunk
+    return <div className="git-hunk-actions" role="group" aria-label={`Hunk ${hunk + 1} actions`}>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => { setArmedDiscard(null); void workspace.actOnLines('patch', indices) }}>{workspace.side === 'staged' ? 'Unstage hunk' : 'Accept · stage hunk'}</Button>
+      {canDiscard ? <Button size="sm" variant={armed ? 'destructive' : 'ghost'} disabled={busy} onClick={() => { if (armed) { setArmedDiscard(null); void workspace.actOnLines('discard', indices) } else setArmedDiscard(hunk) }}>{armed ? 'Confirm discard' : 'Reject · discard hunk'}</Button> : null}
+      {armed ? <span className="git-hunk-hint">Restores the file text from the index; this cannot be undone.</span> : null}
+    </div>
+  }
+  const closeAction = () => { setWorkflowTarget(null); setConflictPath(null); setInspection(null) }
   const stagedCount = filesForSide(snapshot?.files ?? [], 'staged').length
   useEffect(() => { try { localStorage.setItem(`git-commit-v1:${cwd}`, message) } catch {} }, [cwd, message])
   useEffect(() => {
@@ -101,7 +133,7 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
           </div>
           {workspace.error ? <div role="alert" className="git-workspace-error">{workspace.error}</div> : null}
           <div className="git-workspace-diff">
-            {inspection && !commitPreview ? <pre>{content}</pre> : selecting && !commitPreview ? <PatchSelection key={`${workspace.side}:${workspace.path}:${preview?.revision}`} rows={rows} selected={selected} busy={busy} toggle={workspace.toggleLines} /> : (commitPreview?.patch ?? preview?.patch) ? <PierrePatchDiffView patch={commitPreview?.patch ?? preview!.patch} maxHeight={null} presentation={{ diffStyle: split ? 'split' : 'stacked', wrap: true }} /> : <p className="git-workspace-empty">{snapshot ? 'No changes to display.' : 'Loading…'}</p>}
+            {inspection && !commitPreview ? <pre>{content}</pre> : selecting && !commitPreview ? <PatchSelection key={`${workspace.side}:${workspace.path}:${preview?.revision}`} rows={rows} selected={selected} busy={busy} toggle={workspace.toggleLines} /> : (commitPreview?.patch ?? preview?.patch) ? <PierrePatchDiffView patch={commitPreview?.patch ?? preview!.patch} maxHeight={null} presentation={{ diffStyle: split ? 'split' : 'stacked', wrap: true }} lineAnnotations={commitPreview || !workspace.path ? undefined : hunkAnnotations} renderAnnotation={renderHunkActions as never} /> : <p className="git-workspace-empty">{snapshot ? 'No changes to display.' : 'Loading…'}</p>}
           </div>
           <div className="git-workspace-commit">
             <label htmlFor="git-workspace-message">Commit message</label>
