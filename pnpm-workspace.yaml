@@ -478,3 +478,8 @@ minimumReleaseAgeExclude:
   - 'react-doctor@0.9.19'
   - 'ws@8.22.1'
   - '@github/copilot-sdk@1.0.28'
+  # 2026-11-05: @pierre/highlights 0.4.0 (ANSI output highlighting) and the
+  # @pierre/diffs 1.6.4 that pins it, adopted inside the quarantine. Registry
+  # dist.integrity checked against the lockfiles.
+  - '@pierre/diffs@1.6.4'
+  - '@pierre/highlights@0.4.0'

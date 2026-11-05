@@ -42,6 +42,7 @@ import { Separator } from '@/components/ui/separator'
 import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProtocol'
 import { readJsonResponse } from '@/lib/httpResponse'
 import type { SelectedLineRange } from '@pierre/diffs'
+import { AnsiText } from './AnsiText'
 import type { PierreAnnotationMetadata, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
 import { useDiffComments, type DiffComment } from './diffComments'
 
@@ -3923,13 +3924,13 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
       </div>
 
       {!hasReminders ? (
-        <pre style={GENERIC_RESULT_PRE_STYLE}>{processedParts[0]?.kind === 'text' ? processedParts[0].visibleLines.join('\n') : ''}</pre>
+        <pre style={GENERIC_RESULT_PRE_STYLE}>{processedParts[0]?.kind === 'text' ? <AnsiText text={processedParts[0].visibleLines.join('\n')} /> : ''}</pre>
       ) : (
         processedParts.map((part, i) =>
           part.kind === 'system_reminder'
             ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
             : part.visibleLines.length > 0
-              ? <pre key={i} style={GENERIC_RESULT_PRE_STYLE}>{part.visibleLines.join('\n')}</pre>
+              ? <pre key={i} style={GENERIC_RESULT_PRE_STYLE}><AnsiText text={part.visibleLines.join('\n')} /></pre>
               : null
         )
       )}
@@ -4550,7 +4551,7 @@ function LocalCommandStdoutCard({ block }: { block: LocalCommandStdoutBlock }) {
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {block.stdout}
+          <AnsiText text={block.stdout} />
         </span>
       </div>
     </div>
@@ -4629,7 +4630,7 @@ function BashOutputCard({ block }: { block: BashOutputBlock }) {
             maxHeight: 320,
             overflowY: 'auto',
           }}>
-            {block.stdout}
+            <AnsiText text={block.stdout} />
           </pre>
         )}
         {hasStderr && (
@@ -4643,7 +4644,7 @@ function BashOutputCard({ block }: { block: BashOutputBlock }) {
             maxHeight: 320,
             overflowY: 'auto',
           }}>
-            {block.stderr}
+            <AnsiText text={block.stderr} />
           </pre>
         )}
       </div>
