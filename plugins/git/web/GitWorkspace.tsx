@@ -8,6 +8,7 @@ import { PatchSelection } from './PatchSelection'
 import { GitBranch, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { useDiffComments } from '@/components/diffComments'
 import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreDiffAnnotation } from '@/components/shell/sdkDiff'
 import { useGitWorkspace } from '@/lib/git/useGitWorkspace'
 import { webWorkspaceTransport } from '@/lib/git/webWorkspaceTransport'
@@ -55,6 +56,10 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
     }
     return annotations
   }, [rows, hunkRows])
+  // Line comments on the diff on screen (threads, replies, resolve), beside the hunk actions.
+  const comments = useDiffComments(workspace.path ?? '')
+  const pathComments = useMemo(() => comments.lineAnnotations.filter(annotation => annotation.metadata.filePath === workspace.path), [comments.lineAnnotations, workspace.path])
+  const diffAnnotations = useMemo(() => [...hunkAnnotations, ...pathComments], [hunkAnnotations, pathComments])
   const renderHunkActions = (annotation: PierreDiffAnnotation) => {
     const hunk = Number(annotation.metadata.noteId.slice('hunk:'.length))
     const indices = hunkRows.get(hunk)
@@ -133,7 +138,7 @@ export function GitWorkspace({ cwd, variant, onClose, onReview }: { cwd: string;
           </div>
           {workspace.error ? <div role="alert" className="git-workspace-error">{workspace.error}</div> : null}
           <div className="git-workspace-diff">
-            {inspection && !commitPreview ? <pre>{content}</pre> : selecting && !commitPreview ? <PatchSelection key={`${workspace.side}:${workspace.path}:${preview?.revision}`} rows={rows} selected={selected} busy={busy} toggle={workspace.toggleLines} /> : (commitPreview?.patch ?? preview?.patch) ? <PierrePatchDiffView patch={commitPreview?.patch ?? preview!.patch} maxHeight={null} presentation={{ diffStyle: split ? 'split' : 'stacked', wrap: true }} lineAnnotations={commitPreview || !workspace.path ? undefined : hunkAnnotations} renderAnnotation={renderHunkActions as never} /> : <p className="git-workspace-empty">{snapshot ? 'No changes to display.' : 'Loading…'}</p>}
+            {inspection && !commitPreview ? <pre>{content}</pre> : selecting && !commitPreview ? <PatchSelection key={`${workspace.side}:${workspace.path}:${preview?.revision}`} rows={rows} selected={selected} busy={busy} toggle={workspace.toggleLines} /> : (commitPreview?.patch ?? preview?.patch) ? <PierrePatchDiffView patch={commitPreview?.patch ?? preview!.patch} maxHeight={null} presentation={{ diffStyle: split ? 'split' : 'stacked', wrap: true }} lineAnnotations={commitPreview || !workspace.path ? undefined : diffAnnotations} renderAnnotation={commitPreview ? undefined : ((annotation: PierreDiffAnnotation) => annotation.metadata.noteId.startsWith('hunk:') ? renderHunkActions(annotation) : comments.renderAnnotation(annotation)) as never} selectedLines={commitPreview ? undefined : comments.selectedLines} onSelectedLinesChange={commitPreview ? undefined : comments.onSelectedLinesChange} onGutterUtilityClick={commitPreview ? undefined : comments.onGutterUtilityClick} /> : <p className="git-workspace-empty">{snapshot ? 'No changes to display.' : 'Loading…'}</p>}
           </div>
           <div className="git-workspace-commit">
             <label htmlFor="git-workspace-message">Commit message</label>

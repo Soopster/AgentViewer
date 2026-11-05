@@ -108,6 +108,30 @@ const SAVE_BUTTON_STYLE: React.CSSProperties = {
   fontWeight: 600,
 }
 
+function CommentEntry({ label, age, meta, text, resolved, small }: { label: string; age: string; meta?: string; text: string; resolved?: boolean; small?: boolean }) {
+  const size = small ? 26 : 30
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `${size}px 1fr`, columnGap: 10, alignItems: 'start' }}>
+      <div aria-hidden style={{
+        width: size, height: size, borderRadius: 999, background: 'color-mix(in srgb, var(--violet) 18%, var(--surface))',
+        border: '1px solid color-mix(in srgb, var(--violet) 34%, var(--border))', color: 'var(--violet)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: small ? 10 : 11, fontWeight: 700,
+      }}>
+        {label.slice(0, 1).toUpperCase()}
+      </div>
+      <div style={{ minWidth: 0, display: 'grid', gap: 3 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          <strong style={{ color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>{label}</strong>
+          <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{age}</span>
+          {meta ? <span style={{ color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>{meta}</span> : null}
+          {resolved ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 600 }}>Resolved</span> : null}
+        </div>
+        <div style={{ color: 'var(--text)', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -293,129 +317,38 @@ export function useDiffComments(
 
     if (!thread) return null
 
+    const linkButton = (color: string): React.CSSProperties => ({
+      border: 'none', background: 'transparent', color, cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 500,
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+    })
+
+    // A thread reads as a conversation: author, age, text; replies indented beneath
+    // with their own header; the actions sit at the foot as plain links.
     return (
       <div style={{
         display: 'grid',
-        gap: 10,
-        padding: '10px 12px',
-        borderRadius: 12,
-        border: thread.resolved ? '1px solid color-mix(in srgb, var(--text-3) 24%, var(--border))' : '1px solid color-mix(in srgb, var(--violet) 24%, var(--border))',
-        background: thread.resolved ? 'color-mix(in srgb, var(--text-3) 6%, var(--surface-2))' : 'color-mix(in srgb, var(--violet) 8%, var(--surface-2))',
-        opacity: thread.resolved ? 0.72 : 1,
+        gap: 14,
+        padding: '14px 16px',
+        margin: '6px 0',
+        borderRadius: 14,
+        border: '1px solid color-mix(in srgb, var(--text-3) 22%, var(--border))',
+        background: 'var(--surface-2)',
+        opacity: thread.resolved ? 0.62 : 1,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <div style={{
-              width: 28,
-              height: 28,
-              borderRadius: 999,
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              color: 'var(--violet)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              fontSize: 12,
-              fontWeight: 700,
-            }}>
-              You
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{
-                color: 'var(--text)',
-                fontSize: 13,
-                fontWeight: 700,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                You
-              </div>
-              <div style={{
-                color: 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                whiteSpace: 'nowrap',
-              }}>
-                {metadata.rangeLabel}
-                {' · '}
-                {formatCommentAge(thread.createdAt)}
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="av-hover-control"
-            onClick={() => toggleResolved(threadKey)}
-            style={{
-              height: 28,
-              padding: '0 10px',
-              borderRadius: 999,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text-2)',
-              cursor: 'pointer',
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            {thread.resolved ? 'Reopen' : 'Resolve'}
-          </button>
-        </div>
-        <div style={{
-          color: 'var(--text)',
-          fontSize: 12,
-          lineHeight: '18px',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-          {thread.text}
-        </div>
+        <CommentEntry label="You" age={formatCommentAge(thread.createdAt)} meta={metadata.rangeLabel} text={thread.text} resolved={thread.resolved} />
         {thread.replies.length > 0 ? (
-          <div style={{ display: 'grid', gap: 8, paddingLeft: 12, borderLeft: '1px solid color-mix(in srgb, var(--border) 70%, transparent)' }}>
+          <div style={{ display: 'grid', gap: 12, paddingLeft: 38 }}>
             {thread.replies.map((reply) => (
-              <div key={reply.id} style={{ display: 'grid', gap: 4 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 999,
-                    background: 'var(--surface-3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text-2)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    flexShrink: 0,
-                  }}>
-                    R
-                  </div>
-                  <div style={{ color: 'var(--text-3)', fontSize: 11 }}>Reply · {formatCommentAge(reply.createdAt)}</div>
-                </div>
-                <div style={{ color: 'var(--text)', fontSize: 12, lineHeight: '18px', whiteSpace: 'pre-wrap' }}>
-                  {reply.text}
-                </div>
-              </div>
+              <CommentEntry key={reply.id} label="You" age={formatCommentAge(reply.createdAt)} text={reply.text} small />
             ))}
           </div>
         ) : null}
         {draft?.replyToKey === threadKey ? (
-          <div style={{
-            display: 'grid',
-            gap: 8,
-            padding: '10px 12px',
-            borderRadius: 10,
-            border: '1px solid color-mix(in srgb, var(--cyan) 28%, var(--border))',
-            background: 'color-mix(in srgb, var(--cyan) 7%, var(--surface))',
-          }}>
-            <label htmlFor="diff-comment-reply" style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
-              Add reply
-            </label>
+          <div style={{ display: 'grid', gap: 8, paddingLeft: 38 }}>
+            <label htmlFor="diff-comment-reply" style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 600 }}>Add reply</label>
             <textarea
               id="diff-comment-reply"
+              autoFocus
               value={draft?.text ?? ''}
               onChange={(event) => setDraft((current) => current ? { ...current, text: event.target.value } : current)}
               placeholder="Write a reply..."
@@ -428,56 +361,21 @@ export function useDiffComments(
             </div>
           </div>
         ) : null}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="av-hover-control"
-              onClick={() => openReplyDraft(thread)}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--cyan)',
-                cursor: 'pointer',
-                padding: 0,
-                fontSize: 11,
-                fontWeight: 600,
-              }}
-            >
-              Add reply...
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', paddingLeft: 38 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <button type="button" className="av-hover-control" onClick={() => openReplyDraft(thread)} style={linkButton('var(--cyan)')}>
+              <span aria-hidden>↳</span> Add reply…
+            </button>
+            <button type="button" className="av-hover-control" onClick={() => toggleResolved(threadKey)} style={linkButton('var(--cyan)')}>
+              {thread.resolved ? 'Reopen' : 'Resolve'}
             </button>
             {onSendToComposer ? (
-              <button
-                type="button"
-                className="av-hover-control"
-                onClick={() => onSendToComposer(thread)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--green)',
-                  cursor: 'pointer',
-                  padding: 0,
-                  fontSize: 11,
-                  fontWeight: 600,
-                }}
-              >
+              <button type="button" className="av-hover-control" onClick={() => onSendToComposer(thread)} style={linkButton('var(--green)')}>
                 Send to composer
               </button>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="av-hover-control"
-            onClick={() => deleteComment(threadKey)}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              color: 'var(--text-3)',
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: 11,
-            }}
-          >
+          <button type="button" className="av-hover-control" onClick={() => deleteComment(threadKey)} style={{ ...linkButton('var(--text-3)'), fontSize: 11 }}>
             Delete
           </button>
         </div>
