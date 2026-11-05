@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../../lib/git/command'
-import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, engineeringFileEvidence, engineeringHandoff } from './engineering/model'
+import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, engineeringFileEvidence, engineeringHandoff, engineeringSessionFiles, engineeringSessionInRepo } from './engineering/model'
 import { createEngineeringRepositoryClient } from './engineeringRepositoryWorkerClient'
 import { readEngineeringRepository } from './engineering/repository'
 import type { TuiTranscriptCard } from '../format'
@@ -13,6 +13,12 @@ assert.equal(engineeringGeometry(200, 40, ENGINEERING_DEFAULTS).inspectorWidth, 
 assert.equal(engineeringGeometry(200, 40, engineeringPreset(ENGINEERING_DEFAULTS, 'focus')).inspectorWidth, 0)
 assert.equal(engineeringGeometry(80, 24, { ...ENGINEERING_DEFAULTS, drawerOpen: true }).drawerRows, 0)
 assert.equal(ENGINEERING_DEFAULTS.preset, 'build')
+{
+  const cards = [{ key: 'd', fileEdits: [{ path: '/repo/src/a.ts' }, { path: './b.ts' }] }] as unknown as TuiTranscriptCard[]
+  assert.deepEqual([...engineeringSessionFiles(cards, '/repo/')], ['src/a.ts', 'b.ts'])
+  assert.ok(engineeringSessionInRepo({ sessionId: 's', cwd: '/repo/sub' } as never, '/repo'))
+  assert.ok(!engineeringSessionInRepo({ sessionId: 's', cwd: '/repository' } as never, '/repo'))
+}
 const changedFiles = [{ path: 'a.ts' }, { path: 'b.ts' }]
 assert.equal(engineeringSelectedFile(changedFiles, null)?.path, 'a.ts', 'First changed file previews automatically')
 assert.equal(engineeringSelectedFile(changedFiles, 'b.ts')?.path, 'b.ts', 'Keep an explicit selection through a refresh')

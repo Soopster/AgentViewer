@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { expandDiffContext, readDiffBaseLines, type DiffContextExpansion, type DiffContextGap } from '../../../tui/opentui/shell/sdkDiff'
+import { expandDiffContext, readDiffBaseLines, type DiffContextExpansion, type DiffContextGap } from '../gitDiffContext'
 
 const EMPTY_EXPANSIONS = new Map<string, DiffContextExpansion>()
 
 /** Load omitted context on demand and discard completions from replaced comparisons. */
-export function useGitDiffContext(cwd: string, scope: string) {
+export function useDiffContext(cwd: string, scope: string) {
   const [state, setState] = useState({ scope, gaps: EMPTY_EXPANSIONS })
   const scopeRef = useRef(scope)
   const pending = useRef(new Map<string, AbortController>())

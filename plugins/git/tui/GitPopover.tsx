@@ -26,17 +26,17 @@ import {
   type TuiPierreSplitRow,
   type TuiSplitRowSide,
 } from '../../../tui/opentui/shell/sdkDiff'
-import { buildDiffGeometry, diffRowAt, diffRowKeys, revealDiffScrollTop, type DiffGeometry } from './gitDiffGeometry'
+import { buildDiffGeometry, diffRowAt, diffRowKeys, revealDiffScrollTop, type DiffGeometry } from '../../../tui/opentui/shell/sdkDiff'
 import { applyDiffContext, nearestDiffContextGap } from '../../../tui/opentui/shell/sdkDiff'
-import { useGitDiffContext } from './useGitDiffContext'
+import { useDiffContext } from '../../../tui/opentui/shell/sdkDiff'
 import { fetchGitReviewStream } from './gitReviewStream'
-import { useGitDiffHighlighting } from './useGitDiffHighlighting'
-import { useGitDiffViewport } from './useGitDiffViewport'
+import { useDiffHighlights } from '../../../tui/opentui/shell/sdkDiff'
+import { useDiffViewport } from '../../../tui/opentui/shell/sdkDiff'
 import { useGitDiffReviewActions, type ReviewActionKey } from './useGitDiffReviewActions'
 import { type DiffCellSelection, sourceIndexAtCell } from '../../../tui/opentui/shell/sdkDiff'
 import { DiffReviewActionsBar } from './DiffReviewActionsBar'
 import { SELECTION_ASK_INTENTS, type SelectionAskInput } from '../../../lib/selectionAsk'
-import { DiffCodeText } from '../../../tui/opentui/shell/sdkDiff'
+import { DiffCodeText, DiffStackRow, diffAppearance, diffRowBackground, formatDiffLineNumber } from '../../../tui/opentui/shell/sdkDiff'
 import { DiffViewControls } from './DiffViewControls'
 import { DiffStickyHeader } from './DiffStickyHeader'
 import { buildDiffProgress } from './gitDiffProgress'
@@ -170,58 +170,6 @@ function PanelScrollbar({ total, viewportH, scrollTop, theme }: {
       })}
     </box>
   )
-}
-
-function diffRowColor(row: TuiPierreDiffRow, theme: TuiThemePalette): string {
-  switch (row.tone) {
-    case 'addition':
-      return theme.green
-    case 'deletion':
-      return theme.red
-    case 'file':
-    case 'hunk':
-      return theme.cyan
-    case 'tree':
-    case 'meta':
-      return theme.dim
-    default:
-      return theme.text
-  }
-}
-
-function diffRowBackground(row: TuiPierreDiffRow, theme: TuiThemePalette): string | undefined {
-  switch (row.tone) {
-    case 'addition':
-      return theme.diffAddBg
-    case 'deletion':
-      return theme.diffRemoveBg
-    case 'file':
-    case 'hunk':
-      return theme.diffMetaBg
-    default:
-      return undefined
-  }
-}
-
-function diffRowIndicator(row: TuiPierreDiffRow): string {
-  switch (row.tone) {
-    case 'addition':
-      return '+'
-    case 'deletion':
-      return '-'
-    case 'file':
-      return '>'
-    case 'hunk':
-      return '@'
-    case 'tree':
-      return '|'
-    default:
-      return ' '
-  }
-}
-
-function formatDiffLineNumber(lineNumber: number | undefined, width: number): string {
-  return lineNumber == null ? ''.padStart(width, ' ') : lineNumber.toString().padStart(width, ' ')
 }
 
 function fitTerminalText(text: string, width: number): string {
@@ -861,7 +809,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
 
   // Right-panel content is loaded in an effect so git commands do not block render.
   const [rightContent, setRightContent] = useState('Loading…')
-  const { expansions: contextExpansions, change: changeContext } = useGitDiffContext(repoCwd, rightContent)
+  const { expansions: contextExpansions, change: changeContext } = useDiffContext(repoCwd, rightContent)
   const contentKey = JSON.stringify([repoCwd, sourceKey, pane, pane === 3 ? branchIndex : null, pane === 4 ? commitIndex : null])
   const [loadedContentKey, setLoadedContentKey] = useState('')
   const loadedContentKeyRef = useRef('')
@@ -927,13 +875,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   }, [branchIndex, commitIndex, data, pane, repoCwd, sourceKey, contentKey])
 
   // Derive the Pierre appearance (dark/light) from the theme's bg luminance.
-  const pierreAppearance: 'dark' | 'light' = useMemo(() => {
-    const hex = theme.bg.replace('#', '')
-    const r = parseInt(hex.slice(0, 2), 16)
-    const g = parseInt(hex.slice(2, 4), 16)
-    const b = parseInt(hex.slice(4, 6), 16)
-    return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? 'light' : 'dark'
-  }, [theme.bg])
+  const pierreAppearance = useMemo(() => diffAppearance(theme), [theme.bg])
 
   // New comparisons reset selection; file-tree jumps keep notes attached to their source rows.
   useEffect(() => {
@@ -1611,7 +1553,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   ), [activeDiffRows, codeHeights, diffTabWidth, wrapDiffLines, rightW, diffDraftSpan, diffLines, diffNotesByEndIndex, draftNote, fileDiffMode, onSendDiffNoteToComposer, pane, plainDiffRows, rightDiffView, showHunkHeaders])
   const geometryRef = useRef<DiffGeometry>(geometry)
   useLayoutEffect(() => { geometryRef.current = geometry }, [geometry])
-  const window = useGitDiffViewport(diffScrollRef, geometry, loadedContentKey + ':' + fileDiffMode + ':filter:' + normalizedFilter,
+  const window = useDiffViewport(diffScrollRef, geometry, loadedContentKey + ':' + fileDiffMode + ':filter:' + normalizedFilter,
     rightContent !== 'Loading…' && loadedContentKey === contentKey, diffViewportHeight,
     pane === 2 && jumpFilePath ? `${jumpFilePath}\0file` : undefined, setDiffCursorRow, fileJumpRevision, loadedContentKey + ':' + fileDiffMode)
   const reviewActions = useGitDiffReviewActions({ rows: activeDiffRows, geometry, scrollRef: diffScrollRef,
@@ -1627,7 +1569,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
     onKeyCaptureChange?.(captureReviewKeys)
     return () => onKeyCaptureChange?.(false)
   }, [captureReviewKeys, onKeyCaptureChange])
-  const diffHighlights = useGitDiffHighlighting(baseDiffView?.files, activeDiffRows, window.start, window.end,
+  const diffHighlights = useDiffHighlights(baseDiffView?.files, activeDiffRows, window.start, window.end,
     pierreAppearance, pane === 2 && fileDiffMode === 'viewer')
   const progressAt = useMemo(() => buildDiffProgress(fileDiffMode === 'viewer' ? activeDiffRows : plainDiffRows, rightDiffView?.files?.map(diffDisplayPath)), [fileDiffMode, activeDiffRows, plainDiffRows, rightDiffView?.files])
   const diffProgress = useMemo(() => progressAt(diffRowAt(geometry, window.top)), [geometry, progressAt, window.top])
@@ -2029,7 +1971,6 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
                     <text fg={theme.cyan} wrapMode="none">{fitTerminalText(`${isCursor ? '▶ ' : '  '}${row.text ?? ''}`, rightW - 1)}</text>
                   </box>
                 )
-                const rowFg = diffRowColor(row, theme)
                 const anchor = stackRowAnchor(row, filePath)
                 const point = diffSelectionPointForStackRow(row)
                 const singleRowSelection = point
@@ -2049,11 +1990,12 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
                 const rowBackground = isSelectedDiffRow || isMouseSelectedDiffRow ? theme.surface3 : diffRowBackground(row, theme)
                 return (
                   <React.Fragment key={row.key}>
-                    <box
-                      width={rightW}
-                      height={codeHeights[idx]} flexShrink={0}
-                      flexDirection="row"
-                      backgroundColor={rowBackground}
+                    <DiffStackRow
+                      row={row} theme={theme} width={rightW} height={codeHeights[idx]!}
+                      gutterDigits={rightDiffGutterWidth} showLineNumbers={showLineNumbers} textColumns={rightDiffTextWidth}
+                      tabWidth={diffTabWidth} wrap={wrapDiffLines} offset={visibleHorizontalOffset}
+                      spans={row.newLine != null ? diffHighlights.get(row.filePath ?? '')?.new.get(row.newLine) : diffHighlights.get(row.filePath ?? '')?.old.get(row.oldLine!)}
+                      cursor={isCursor} background={rowBackground} searchQuery={reviewActions.query}
                       onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
                       onMouseDrag={(event) => updateDiffMouseSelection(event, idx)}
                       onMouseOver={(event) => {
@@ -2069,31 +2011,8 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
                         event.stopPropagation()
                         setDiffCursorRow(idx)
                       }}
-                    >
-                      {showLineNumbers ? (
-                        <>
-                          <text fg={theme.dim} wrapMode="none">
-                            {fitTerminalText(formatDiffLineNumber(row.oldLine, rightDiffGutterWidth), rightDiffGutterWidth)}
-                          </text>
-                          <text fg={theme.dim} wrapMode="none"> </text>
-                          <text fg={theme.dim} wrapMode="none">
-                            {fitTerminalText(formatDiffLineNumber(row.newLine, rightDiffGutterWidth), rightDiffGutterWidth)}
-                          </text>
-                        </>
-                      ) : null}
-                      <text fg={isCursor ? theme.cyan : rowFg} wrapMode="none">
-                        {fitTerminalText(
-                          isCursor
-                            ? `▶${row.indicator ?? diffRowIndicator(row)} `
-                            : ` ${row.indicator ?? diffRowIndicator(row)} `,
-                          3,
-                        )}
-                      </text>
-                      <DiffCodeText text={row.text || ' '} spans={(row.newLine != null ? diffHighlights.get(row.filePath ?? '')?.new.get(row.newLine) : diffHighlights.get(row.filePath ?? '')?.old.get(row.oldLine!)) ?? row.spans} searchQuery={row.oldLine != null || row.newLine != null ? reviewActions.query : ''} searchFg={theme.bg} searchBg={theme.amber} columns={rightDiffTextWidth} tabWidth={diffTabWidth}
-                        wrap={wrapDiffLines && (row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion')}
-                        offset={row.tone === 'context' || row.tone === 'addition' || row.tone === 'deletion' ? visibleHorizontalOffset : 0} fg={rowFg} />
-                      {/* Badge column: [+] on hover, ● on noted, blank otherwise */}
-                      {isHovered ? (
+                      // Badge column: [+] on hover, ● on noted, blank otherwise
+                      trailing={isHovered ? (
                         <box
                           width={DIFF_BADGE_WIDTH}
                           onMouseUp={(event) => {
@@ -2118,7 +2037,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
                       ) : (
                         <text fg={theme.dim} wrapMode="none">{'   '}</text>
                       )}
-                    </box>
+                    />
                     {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, draftNote.filePath, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>

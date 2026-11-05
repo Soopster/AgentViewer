@@ -4,7 +4,7 @@ Open the TUI view picker (`v`) and select **Engineering**, or choose **Engineeri
 
 - **Build** starts with a narrow session rail and a Changes inspector. **Focus** hides the inspector and terminal. **Review** widens the inspector. **Multi-agent** arranges up to three selected, running, or open sessions beside attention.
 - **F7** cycles presets, **F8** focuses the inspector, and **F9** opens or closes the terminal/process drawer. In the inspector, left/right selects a tab, up/down selects a row, Enter opens it, and Escape returns to the transcript. Narrow terminals open the inspector on demand; short terminals use an overlay for the terminal.
-- Sessions have separate search, activity filters, pins, and collapsible groups. Click `+` to pin. Recent observed writes are labelled separately from a known running turn.
+- Sessions keep a separate Running section above collapsible repo headers and Today/Yesterday/Older groups, using the same grouping as the other views. Search, activity filters, pins, and row status indicators remain available. Click a group to fold it; `e` or left/right folds or opens the selected session's group. Click `+` to pin. Recent observed writes are labelled separately from a known running turn.
 - Changes are repository-wide. The file list and selected diff scroll independently. Add a file comment to the composer, or open the existing Git surface for full review and hunk comments.
 - Pane borders use the window manager's mouse-resize pattern in every view: hover to highlight the border, drag to resize, and read the live column/row sizes beside it. Escape cancels the drag. This covers sidebars, docked and inline composers, task and surface panels, plus Engineering's inspector, terminal drawer, and file/diff divider.
 - Checks run only when requested. Application-recorded runs show their process result, duration, session identity, and pre-run working-state fingerprint. Changed files or index state make previous results stale. Transcript evidence has an unknown working state and is never promoted to a recorded pass. Process results unavailable after a restart remain explicitly unavailable.
@@ -22,6 +22,7 @@ npm run tui:check
 bun run tui/opentui/engineeringModelSmoke.ts
 bun run tui/opentui/engineeringStateSmoke.tsx
 bun run tui/opentui/engineeringPanelsSmoke.tsx
+bun run tui/opentui/engineeringSidebarSmoke.tsx
 bun run tui/opentui/engineeringViewSmoke.tsx
 bun run tui/opentui/engineeringShellSmoke.tsx
 bun run tui/opentui/paneResizeSmoke.tsx

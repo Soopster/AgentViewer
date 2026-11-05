@@ -1,13 +1,13 @@
-import { useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
+import { useWindowVisible } from '../windowActivity'
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { captureDiffAnchor, diffRowWindow, resolveDiffAnchor, type DiffGeometry, type DiffViewportAnchor } from './gitDiffGeometry'
+import { captureDiffAnchor, diffRowWindow, resolveDiffAnchor, type DiffGeometry, type DiffViewportAnchor } from './geometry'
 
 /** Keep file/source reading anchors while mounting only the current row window. */
 const SCROLL_RESTORE_RETRIES = 12
 const SCROLL_RESTORE_RETRY_MS = 16
 
-export function useGitDiffViewport(
+export function useDiffViewport(
   scrollRef: RefObject<ScrollBoxRenderable | null>,
   geometry: DiffGeometry,
   documentKey: string,

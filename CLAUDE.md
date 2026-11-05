@@ -2277,6 +2277,15 @@ is the one module both popovers read; it has no Node imports, so client componen
   minimum distance. The margin is clamped to half the viewport or the row becomes unreachable, and
   a wrapped row taller than the viewport shows its top.
 
+**Stacked diffs are one toolkit, `tui/opentui/diff/`** (exported through `shell/sdkDiff`). Pure row
+styling (`rowStyle.ts`), geometry and windowing (`geometry.ts`, `useDiffViewport`), off-thread syntax
+spans (`useDiffHighlights`), omitted-context loading (`useDiffContext`), one row (`DiffStackRow`,
+`DiffContextGapRow`), and a composed pair: `useStackDiffModel` (parse, context, heights — no
+rendering) and `StackDiffView` (the windowed scrollbox). The Git review draws its stacked rows with
+`DiffStackRow` and keeps its own selection, notes and split layout around them; the Engineering
+inspector uses the model and view whole, and drives them through `EngineeringChangesHandle`. A
+change to how a diff row looks belongs in the toolkit, or the two views drift apart.
+
 `gitWorkspaceStatusSmoke.tsx` builds a real repository with a paused merge, a staged rename and two
 sibling worktrees (one deleted from disk); eight mutations were verified to fail it. Not done: a
 sibling cannot be opened from the pane, and the web file tree does not show rename origins.

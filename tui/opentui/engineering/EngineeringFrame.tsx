@@ -12,15 +12,17 @@ import { sessionKey } from '../app/sessionList'
 import { fitText } from '../textLayout'
 import { useWorkspaceState } from '../workspaceContext'
 import { getProcesses, subscribeProcesses, addProcess, startProcess, type ManagedProcess } from '../processStore'
-import { git } from '../../../lib/git/command'
-import { browseBlob } from '../../../lib/git/browse'
+import { git, WorkspaceGitError } from '../../../lib/git/command'
 import type { EngineeringRepository } from './repository'
 import { createEngineeringRepositoryClient } from '../engineeringRepositoryWorkerClient'
-import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, type EngineeringPreset, type InspectorTab } from './model'
+import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionFiles, engineeringSessionInRepo, engineeringSessionTitle, engineeringSelectedFile, type EngineeringPreset, type InspectorTab } from './model'
+import type { EngineeringFile } from './repository'
+import { timeAgo } from '../app/format'
 import type { useEngineeringLayout } from './state'
 import { EngineeringAction as Action } from './EngineeringAction'
-import { EngineeringChanges } from './EngineeringChanges'
+import { EngineeringChanges, type EngineeringChangesHandle } from './EngineeringChanges'
 import { EngineeringHeader } from './EngineeringHeader'
+import { engineeringSidebarRows, engineeringProjectCollapsed } from './sidebar'
 import { PaneResizeHandle } from '../paneResize'
 
 export type EngineeringKey = { name: string; sequence: string; ctrl: boolean; shift: boolean; meta?: boolean }
@@ -30,6 +32,12 @@ const EMPTY_PROCESSES: readonly ManagedProcess[] = []
 const NO_SUBSCRIBE = () => () => {}
 const INSPECTORS: InspectorTab[] = ['changes', 'checks', 'tasks', 'context', 'attention', 'handoff']
 const PRESETS: EngineeringPreset[] = ['focus', 'build', 'review', 'multi-agent']
+const SHORT_INSPECTOR_LABELS: Record<InspectorTab, string> = { changes: 'chg', checks: 'chk', tasks: 'tasks', context: 'ctx', attention: 'attn', handoff: 'hand' }
+const FULL_INSPECTOR_CELLS = INSPECTORS.reduce((sum, tab) => sum + tab.length + 2, 0)
+/** The tab strip is one row: full names when they fit inside the border, short ones otherwise. */
+export function inspectorTabLabel(tab: InspectorTab, panelWidth: number): string {
+  return FULL_INSPECTOR_CELLS <= panelWidth - 2 ? tab : SHORT_INSPECTOR_LABELS[tab]
+}
 
 type Props = {
   layout: ReturnType<typeof useEngineeringLayout>
@@ -54,6 +62,8 @@ type Props = {
   onReview: () => void
   onDiagnostics: () => void
   onAppend: (text: string) => void
+  /** Open a file (absolute path) in the editor at a 1-based line. */
+  onOpenFile?: (path: string, line: number | null) => void
   onCopy: (text: string) => void
   onPreset: (preset: EngineeringPreset) => void
   renderTerminal: (width: number, height: number, focused: boolean, register: (handler: EngineeringKeyHandler) => void, capture: (value: TuiPluginCapture) => void) => ReactNode
@@ -87,12 +97,21 @@ export function EngineeringFrame(props: Props) {
   const repositoryClient = useRef<ReturnType<typeof createEngineeringRepositoryClient> | null>(null)
   const currentRef = useRef({ active, cwd })
   useLayoutEffect(() => { currentRef.current = { active, cwd } }, [active, cwd])
-  const files = repository?.files ?? []
+  const allFiles = repository?.files ?? []
+  const root = repository?.root ?? cwd
+  const sessionFiles = useMemo(() => active ? engineeringSessionFiles(props.cards, root) : new Set<string>(), [active, props.cards, root])
+  const scope = preferences.changesScope ?? 'all'
+  const files = scope === 'session' ? allFiles.filter(file => sessionFiles.has(file.path)) : allFiles
   const selectedPath = engineeringSelectedFile(files, fileSelection.cwd === cwd ? fileSelection.path : null)?.path ?? null
+  const selectedFile = files.find(file => file.path === selectedPath) ?? null
   const patch = patchState?.cwd === cwd && patchState.path === selectedPath ? patchState.text : ''
+  const changesRef = useRef<EngineeringChangesHandle | null>(null)
+  const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'error' } | null>(null)
+  const [armedRevert, setArmedRevert] = useState<string | null>(null)
+  const refreshRepository = useRef<() => void>(() => {})
   const tasks = useMemo(() => active ? [...buildTaskRegistry(props.messages).values()] : [], [active, props.messages])
   const evidence = useMemo(() => active ? engineeringEvidence(props.cards) : [], [active, props.cards])
-  const fileEvidence = useMemo(() => active && selectedPath ? engineeringFileEvidence(props.cards, selectedPath, cwd) : [], [active, selectedPath, props.cards, cwd])
+  const fileEvidence = useMemo(() => active && selectedPath ? engineeringFileEvidence(props.cards, selectedPath, root) : [], [active, selectedPath, props.cards, root])
   const checkRows = checks.filter(check => check.cwd === cwd).map(check => {
     const process = processes.find(value => value.id === check.id)
     const stale = !repository || check.fingerprint !== repository.fingerprint
@@ -103,9 +122,9 @@ export function EngineeringFrame(props: Props) {
   const handoff = useMemo(() => active ? engineeringHandoff({
     title: props.session ? engineeringSessionTitle(props.session) : 'Engineering handoff',
     identity: props.session ? sessionKey(props.session) : 'none', cwd, branch: repository?.branch,
-    cards: props.cards, files, checks: checkRows.map(row => `${row.text} · state ${row.check.fingerprint.slice(0, 12)}`),
+    cards: props.cards, files: allFiles, checks: checkRows.map(row => `${row.text} · state ${row.check.fingerprint.slice(0, 12)}`),
     attention: props.attention.map(item => `${item.sessionTitle}: ${item.title}`),
-  }) : '', [active, props.session, cwd, repository, props.cards, files, processes, checks, props.attention])
+  }) : '', [active, props.session, cwd, repository, props.cards, allFiles, processes, checks, props.attention])
 
   useEffect(() => {
     if (!active) return
@@ -129,6 +148,7 @@ export function EngineeringFrame(props: Props) {
       catch (cause) { if (!cancelled) setRepository({ cwd, value: null, error: cause instanceof Error ? cause.message : String(cause) }) }
       reading = false
     }
+    refreshRepository.current = () => { void refresh() }
     void refresh()
     const timer = setInterval(() => { void refresh() }, 5000)
     return () => { cancelled = true; clearInterval(timer); client.dispose(); if (repositoryClient.current === client) repositoryClient.current = null }
@@ -138,13 +158,9 @@ export function EngineeringFrame(props: Props) {
     if (!active || !selectedPath) return
     let cancelled = false
     const file = files.find(value => value.path === selectedPath)
-    const read = file?.status === '??'
-      ? browseBlob(repository?.root ?? cwd, { path: selectedPath, name: selectedPath.split('/').pop()!, kind: 'blob' })
-      : Promise.all([
-        git(repository?.root ?? cwd, ['diff', '--no-ext-diff', '--no-textconv', '--', `:(literal)${selectedPath}`]),
-        git(repository?.root ?? cwd, ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--', `:(literal)${selectedPath}`]),
-      ]).then(([working, staged]) => `${staged ? `STAGED\n${staged}\n` : ''}${working ? `WORKING TREE\n${working}` : ''}` || 'No textual diff (binary, rename, or no longer changed).')
-    void read.then(text => { if (!cancelled) setPatch({ cwd, path: selectedPath, text: text.length > 60000 ? `${text.slice(0, 60000)}\nPreview truncated; open full Git review.` : text }) }, cause => {
+    void engineeringFileDiff(root, selectedPath, file?.status ?? '').then(text => {
+      if (!cancelled) setPatch({ cwd, path: selectedPath, text: text || 'No textual diff (binary, rename, or no longer changed).' })
+    }, cause => {
       if (!cancelled) setPatch({ cwd, path: selectedPath, text: String(cause) })
     })
     return () => { cancelled = true }
@@ -156,6 +172,33 @@ export function EngineeringFrame(props: Props) {
     setCursor(0); setCompactOpen(true); focus('inspector')
   }
   const jump = (key: string) => { setFocused(null); props.onJump(key) }
+  const moveHunk = (step: number) => {
+    if (!changesRef.current?.moveHunk(step)) setNotice({ text: 'No hunks in this file', tone: 'info' })
+  }
+  const openSelected = () => {
+    if (!selectedPath) return
+    if (!props.onOpenFile) { props.onReview(); return }
+    props.onOpenFile(`${root.replace(/\/+$/, '')}/${selectedPath}`, changesRef.current?.hunkLine() ?? null)
+    setFocused(null)
+  }
+  const mutateFile = async (file: EngineeringFile, action: 'stage' | 'unstage' | 'revert') => {
+    const pathspec = `:(literal)${file.path}`
+    const args = action === 'stage' ? ['add', '--', pathspec]
+      : action === 'unstage' ? ['restore', '--staged', '--', pathspec]
+      : ['restore', '--source=HEAD', '--staged', '--worktree', '--', pathspec]
+    try {
+      await git(root, args)
+      setNotice({ text: `${action === 'stage' ? 'Staged' : action === 'unstage' ? 'Unstaged' : 'Reverted'} ${file.path}`, tone: 'info' })
+    } catch (cause) { setNotice({ text: cause instanceof Error ? cause.message.split('\n')[0]! : String(cause), tone: 'error' }) }
+    refreshRepository.current()
+  }
+  /** Revert discards work, so it is refused where HEAD has no version to restore and asks twice everywhere else. */
+  const requestRevert = (file: EngineeringFile) => {
+    if (file.status === '??') { setNotice({ text: 'Untracked file: nothing to restore it to (delete it yourself)', tone: 'error' }); return }
+    if (/[ARC]/.test(file.status)) { setNotice({ text: 'Not in HEAD as this path: unstage it (u) instead', tone: 'error' }); return }
+    if (armedRevert === file.path) { setArmedRevert(null); void mutateFile(file, 'revert'); return }
+    setArmedRevert(file.path)
+  }
   const runCheck = async (command: string) => {
     const ownerCwd = cwd
     try {
@@ -197,6 +240,19 @@ export function EngineeringFrame(props: Props) {
     const currentCursor = preferences.inspector === 'changes' ? Math.max(0, files.findIndex(file => file.path === selectedPath)) : cursor
     if (key.name === 'down' || key.name === 'j') { const next = Math.min(currentCursor + 1, Math.max(rowActions.length - 1, 0)); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
     if (key.name === 'up' || key.name === 'k') { const next = Math.max(currentCursor - 1, 0); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
+    if (preferences.inspector === 'changes') {
+      setArmedRevert(null); setNotice(null)
+      if (key.name === 'o') { openSelected(); return true }
+      if (key.name === 'e') { if (!changesRef.current?.expandContext()) setNotice({ text: 'No hidden context next to this hunk', tone: 'info' }); return true }
+      if (key.name === 'z') { setPreferences(previous => ({ ...previous, diffWrap: !(previous.diffWrap ?? true) })); return true }
+      if (key.name === 'n' && !key.shift) { moveHunk(1); return true }
+      if (key.name === 'p' || key.name === 'n' && key.shift) { moveHunk(-1); return true }
+      if (key.name === 'm') { setPreferences(previous => ({ ...previous, changesScope: (previous.changesScope ?? 'all') === 'all' ? 'session' : 'all' })); return true }
+      if (key.name === 'c') { setCommentEditing(true); return true }
+      if (selectedFile && key.name === 's' && !key.shift) { void mutateFile(selectedFile, 'stage'); return true }
+      if (selectedFile && key.name === 'u') { void mutateFile(selectedFile, 'unstage'); return true }
+      if (selectedFile && key.name === 'x') { requestRevert(selectedFile); return true }
+    }
     if (key.name === 'return') { rowActions[currentCursor]?.(); return true }
     if (key.name === 'r' && preferences.inspector === 'changes') { props.onReview(); return true }
     if (key.name === 'c' && preferences.inspector === 'handoff') { props.onCopy(handoff); return true }
@@ -206,12 +262,14 @@ export function EngineeringFrame(props: Props) {
   const inspector = (panelWidth: number, panelHeight: number) => <box id="engineering-inspector" zIndex={10} width={panelWidth} height={panelHeight} border flexDirection="column" borderColor={focused === 'inspector' ? theme.cyan : theme.border} backgroundColor={theme.bg} onMouseDown={() => focus('inspector')}>
     <PaneResizeHandle kind="inspector" extent={panelWidth} edge="left" inset={-1} />
     <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}> INSPECTOR </text><Action theme={theme} label="×" onPress={() => { setPreferences(previous => ({ ...previous, inspectorOpen: false })); setCompactOpen(false); setFocused(null) }} /></box>
-    <box height={2} flexShrink={0} flexDirection="row" flexWrap="wrap">{INSPECTORS.map(tab => <Action key={tab} theme={theme} label={tab} selected={preferences.inspector === tab} onPress={() => selectInspector(tab)} />)}</box>
+    <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">{INSPECTORS.map(tab => <Action key={tab} theme={theme} label={inspectorTabLabel(tab, panelWidth)} selected={preferences.inspector === tab} onPress={() => selectInspector(tab)} />)}</box>
 
     <InspectorBody scroll={preferences.inspector !== 'changes'} focused={focused === 'inspector'}>
       {error ? <text fg={theme.red}>{fitText(error, panelWidth - 4)}</text> : null}
       {preferences.inspector === 'changes' ? <EngineeringChanges
         files={files} width={panelWidth} height={panelHeight} theme={theme} selectedPath={selectedPath} listRowsPreference={preferences.fileListRows}
+        handleRef={changesRef} root={root} wrap={preferences.diffWrap ?? true} sessionFiles={sessionFiles} totalFiles={allFiles.length} scope={scope}
+        onToggleScope={() => setPreferences(previous => ({ ...previous, changesScope: (previous.changesScope ?? 'all') === 'all' ? 'session' : 'all' }))}
         patch={patch} evidence={fileEvidence} focused={focused === 'inspector'} editing={commentEditing}
         onSelect={(path, index) => { setSelectedPath(path); setCursor(index) }} onReview={props.onReview}
         onJump={jump} onBeginEdit={() => { setCommentEditing(true); focus('inspector') }}
@@ -233,7 +291,8 @@ export function EngineeringFrame(props: Props) {
       </box> : null}
       {preferences.inspector === 'handoff' ? <box flexDirection="column"><box flexDirection="row"><Action theme={theme} label="Copy / export Markdown" onPress={() => props.onCopy(handoff)} /><Action theme={theme} label="Add to composer" onPress={() => { props.onAppend(handoff); setFocused(null) }} /></box><text fg={theme.text}>{handoff}</text>{props.cards.filter(card => card.role === 'assistant' && card.category === 'conversation').slice(-3).map(card => <Action key={card.key} theme={theme} label={`Jump to source ${card.key.slice(-16)}`} onPress={() => jump(card.key)} />)}</box> : null}
     </InspectorBody>
-    <box height={2} flexShrink={0}><text fg={theme.dim} wrapMode="none"> F8 focus · ←/→ tabs · ↑/↓ select</text><text fg={theme.dim} wrapMode="none"> Enter open · Esc return to transcript</text></box>
+    <box height={1} flexShrink={0}><text fg={armedRevert || notice?.tone === 'error' ? theme.red : theme.dim} wrapMode="none">{fitText(armedRevert ? ` x again reverts ${armedRevert} · any key keeps` : notice ? ` ${notice.text}` : focused !== 'inspector' ? ' F8 focus inspector'
+      : preferences.inspector === 'changes' ? ' n/p hunk · s/u stage · x revert · e context · z wrap · o edit · c comment · m mine' : ' ←/→ tabs · ↑/↓ select · ⏎ open · esc back', panelWidth - 2)}</text></box>
   </box>
 
   return <box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
@@ -255,25 +314,42 @@ export function EngineeringFrame(props: Props) {
   </box>
 }
 
-export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys }: {
+const RAIL_FILTERS = [['repo', 'repo'], ['all', 'all'], ['attention', 'input'], ['running', 'run'], ['pinned', 'pin']] as const
+
+export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys, root }: {
   sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height?: number; theme: TuiThemePalette
   preferences: Props['layout']['preferences']; onPreferences: Props['layout']['setPreferences']; onSelect: (session: Session) => void; onNavigate: (session: Session) => void; onFocus: () => void; enabled: boolean; registerKeys: (handler: EngineeringKeyHandler | null) => void
+  /** The repository the view is scoped to; the `repo` filter keeps sessions that ran in it. */
+  root?: string | null
 }) {
   const [searchFocused, setSearchFocused] = useState(false)
   const attentionKeys = new Set(attention.map(item => item.sessionKey)), runningKeys = new Set(running.map(sessionKey))
-  const groups = new Map<string, Session[]>([['NEEDS ATTENTION', []], ['RUNNING', []], ['RECENT ACTIVITY', []], ['PINNED', []], ['RECENT', []]])
+  const filtered: Session[] = []
+  const filter = preferences.filter ?? 'repo'
   for (const session of sessions) {
     const key = sessionKey(session), title = engineeringSessionTitle(session)
     if (!`${title} ${session.summary ?? ''} ${session.cwd ?? ''}`.toLowerCase().includes(preferences.query.toLowerCase())) continue
-    if (preferences.filter === 'attention' && !attentionKeys.has(key) || preferences.filter === 'running' && !runningKeys.has(key) || preferences.filter === 'pinned' && !preferences.pinned.includes(key)) continue
-    const group = attentionKeys.has(key) ? 'NEEDS ATTENTION' : runningKeys.has(key) ? 'RUNNING' : recent.has(key) ? 'RECENT ACTIVITY' : preferences.pinned.includes(key) ? 'PINNED' : 'RECENT'
-    groups.get(group)!.push(session)
+    if (filter === 'repo' && !engineeringSessionInRepo(session, root) || filter === 'attention' && !attentionKeys.has(key) || filter === 'running' && !runningKeys.has(key) || filter === 'pinned' && !preferences.pinned.includes(key)) continue
+    filtered.push(session)
   }
-  const visible = [...groups].flatMap(([name, entries]) => preferences.collapsed.includes(name) ? [] : entries)
+  const shown = filtered.length
+  const { rows, projectBySession } = engineeringSidebarRows(filtered, preferences.collapsed, new Date(), runningKeys)
+  const visible = rows.flatMap(row => row.type === 'session' ? [row.session] : [])
+  const toggleGroup = (key: string) => onPreferences(previous => ({ ...previous, collapsed: previous.collapsed.includes(key) ? previous.collapsed.filter(value => value !== key) : [...previous.collapsed, key] }))
+  // A title shared by several rows ("Hi", "Commit and push") is told apart by a short id.
+  const titleCounts = new Map<string, number>()
+  for (const session of visible) { const title = engineeringSessionTitle(session); titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1) }
+  const mixedProviders = new Set(visible.map(session => session.provider)).size > 1
   useEffect(() => {
     registerKeys(key => {
       if (!enabled) return false
       if (key.sequence === '/') { setSearchFocused(true); onFocus(); return true }
+      const project = selected ? projectBySession.get(selected) : undefined
+      if (project && (key.name === 'e' || key.name === 'left' || key.name === 'right')) {
+        const folded = engineeringProjectCollapsed(project, preferences.collapsed)
+        if (key.name === 'e' || key.name === 'left' && !folded || key.name === 'right' && folded) toggleGroup(project)
+        return true
+      }
       const index = visible.findIndex(session => sessionKey(session) === selected)
       if (key.name === 'j' || key.name === 'down' || key.name === 'k' || key.name === 'up') {
         const step = key.name === 'j' || key.name === 'down' ? 1 : -1
@@ -288,16 +364,50 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   })
   return <box id="engineering-sessions" width={width} height={height} alignSelf="stretch" flexShrink={0} border flexDirection="column" borderColor={enabled ? theme.cyan : theme.border} onMouseDown={onFocus}>
     <PaneResizeHandle kind="sidebar" extent={width} edge="right" inset={-1} />
-    <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {sessions.length}</text></box>
+    <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {shown === sessions.length ? sessions.length : `${shown}/${sessions.length}`}</text></box>
     <box height={1} flexShrink={0} onMouseDown={() => { onFocus(); setSearchFocused(true) }}><input id="engineering-input:search" placeholder="Search sessions…" value={preferences.query} focused={searchFocused && enabled} onInput={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)} /></box>
-    <box height={1} flexShrink={0} flexDirection="row">{(['all', 'attention', 'running', 'pinned'] as const).map(filter => <Action key={filter} theme={theme} selected={preferences.filter === filter} label={filter === 'attention' ? 'input' : filter === 'running' ? 'run' : filter === 'pinned' ? 'pin' : 'all'} onPress={() => onPreferences(previous => ({ ...previous, filter }))} />)}</box>
+    <box height={1} flexShrink={0} flexDirection="row">{RAIL_FILTERS.map(([value, label]) => <Action key={value} theme={theme} selected={filter === value} label={label} onPress={() => onPreferences(previous => ({ ...previous, filter: value }))} />)}</box>
 
-    <scrollbox flexGrow={1} minHeight={0}>{[...groups].map(([name, entries]) => entries.length ? <box key={name} flexShrink={0} flexDirection="column">
-      <Action theme={theme} label={`${preferences.collapsed.includes(name) ? '▸' : '▾'} ${name} / ${entries.length}`} onPress={() => onPreferences(previous => ({ ...previous, collapsed: previous.collapsed.includes(name) ? previous.collapsed.filter(value => value !== name) : [...previous.collapsed, name] }))} />
-      {!preferences.collapsed.includes(name) ? entries.map(session => { const key = sessionKey(session); return <box key={key} flexShrink={0} flexDirection="column">
-        <box flexDirection="row"><Action theme={theme} tone={theme.text} selected={selected === key} label={fitText(engineeringSessionTitle(session), width - 7)} onPress={() => { setSearchFocused(false); onSelect(session); onFocus() }} /><Action theme={theme} label={preferences.pinned.includes(key) ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /></box>
-        <text height={1} fg={theme.dim} wrapMode="none">{fitText(` ${session.provider} · ${attentionKeys.has(key) ? 'attention' : runningKeys.has(key) ? 'running' : recent.has(key) ? 'recent activity' : 'idle'}${session.summary?.startsWith('/') ? ` · ${session.summary}` : ''}`, width - 2)}</text>
-      </box> }) : null}
-    </box> : null)}</scrollbox>
+    <scrollbox flexGrow={1} minHeight={0}>{rows.map(row => {
+      if (row.type === 'group') {
+        const suffix = ` / ${row.count}`
+        const label = `${row.dateGroup ? '  ' : ''}${row.collapsed ? '▸' : '▾'} ${fitText(row.label, Math.max(4, width - suffix.length - (row.dateGroup ? 8 : 6)))}${suffix}`
+        return <Action key={row.key} id={`engineering-group:${row.key}`} theme={theme} label={label} onPress={() => { onFocus(); toggleGroup(row.key) }} />
+      }
+      const { session, indent } = row
+      const key = sessionKey(session), pinned = preferences.pinned.includes(key), isSelected = selected === key
+      const title = engineeringSessionTitle(session)
+      const label = (titleCounts.get(title) ?? 0) > 1 ? `${title} #${session.sessionId.slice(0, 4)}` : title
+      const [glyph, tone] = attentionKeys.has(key) ? ['▲', theme.amber] : runningKeys.has(key) ? ['●', theme.green] : recent.has(key) ? ['●', theme.cyan] : [' ', theme.dim]
+      const meta = `${mixedProviders ? `${(session.provider ?? '').slice(0, 3)} ` : ''}${(session.lastModified ? timeAgo(session.lastModified) : '').padStart(3)}`
+      const showPin = pinned || isSelected
+      // One row: title, pin (only where it says something), state glyph, age.
+      const titleWidth = Math.max(4, width - 2 - 2 - indent - (showPin ? 3 : 0) - meta.length - 3)
+      return <box key={row.key} height={1} flexShrink={0} flexDirection="row" paddingLeft={indent}>
+        <Action theme={theme} tone={theme.text} selected={isSelected} label={fitText(label, titleWidth)} onPress={() => { setSearchFocused(false); onSelect(session); onFocus() }} />
+        {showPin ? <Action theme={theme} label={pinned ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /> : null}
+        <text height={1} flexShrink={0} wrapMode="none" selectable={false}><span fg={tone}>{glyph}</span><span fg={theme.dim}>{` ${meta}`}</span></text>
+      </box>
+    })}
+      {!shown ? <text fg={theme.dim}>{filter === 'repo' ? ' No sessions in this repository. Try all.' : ' No sessions match.'}</text> : null}
+    </scrollbox>
   </box>
 }
+
+/**
+ * The selected file's diff against HEAD, the unit a reviewer reads and `x` reverts to. An untracked
+ * file is diffed against /dev/null so it renders like any addition; an unborn HEAD falls back to the
+ * index and the working tree.
+ */
+async function engineeringFileDiff(root: string, path: string, status: string): Promise<string> {
+  const flags = ['--no-ext-diff', '--no-textconv']
+  const text = status === '??'
+    // `--no-index` exits 1 when the files differ, which for /dev/null is always.
+    ? await git(root, ['diff', '--no-index', ...flags, '--', '/dev/null', path]).catch(cause => cause instanceof WorkspaceGitError && cause.code === 1 ? cause.stdout : Promise.reject(cause))
+    : await git(root, ['diff', 'HEAD', ...flags, '--', `:(literal)${path}`]).catch(async () =>
+      (await Promise.all([git(root, ['diff', '--cached', ...flags, '--', `:(literal)${path}`]), git(root, ['diff', ...flags, '--', `:(literal)${path}`])])).join(''))
+  if (text.length <= ENGINEERING_DIFF_MAX_CHARS) return text
+  // Cut on a line so the last row is whole; the full review shows the rest.
+  return text.slice(0, text.lastIndexOf('\n', ENGINEERING_DIFF_MAX_CHARS) + 1)
+}
+const ENGINEERING_DIFF_MAX_CHARS = 200_000

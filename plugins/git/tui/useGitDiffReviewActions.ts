@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { copyDiffCellSelection, copyDiffRows, findDiffTextMatches, type DiffCellSelection, type ReviewRow } from '../../../tui/opentui/shell/sdkDiff'
 import { diffTextHeight, diffTextWidth } from '../../../tui/opentui/shell/sdkDiff'
-import type { DiffGeometry } from './gitDiffGeometry'
+import type { DiffGeometry } from '../../../tui/opentui/shell/sdkDiff'
 
 export type ReviewActionKey = { name: string; sequence: string; ctrl: boolean; shift: boolean }
 export function useGitDiffReviewActions({ rows, geometry, scrollRef, cursor, anchor, enabled, scope, keyRef, onCursor, onFocus, onOffset, onClipboardWrite, cellSelection, onClearCellSelection, wrap, columns, tabWidth }: {

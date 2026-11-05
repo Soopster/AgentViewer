@@ -14,7 +14,7 @@ import {
   describeStatusEntry, describeUpstream, fetchGitOperation, fetchGitWorkspaceStatus, formatGitWorkspaceStatus,
   isConflictEntry, parseBranchHeader, parseStatusEntries, parseWorktreeList, renameLabel, renameOriginLabel, siblingDisplayPath,
 } from '../../lib/gitWorkspaceStatus'
-import { DIFF_SCROLL_OFF, revealDiffScrollTop } from '../../plugins/git/tui/gitDiffGeometry'
+import { DIFF_SCROLL_OFF, revealDiffScrollTop } from './diff/geometry'
 
 const execFileAsync = promisify(execFile)
 function check(condition: unknown, message: string): asserts condition {

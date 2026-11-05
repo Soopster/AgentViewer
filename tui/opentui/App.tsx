@@ -6347,6 +6347,7 @@ function OpenTuiWorkspace() {
       }}
       onDiagnostics={() => runPluginCommandId('diagnostics')}
       onReview={() => runPluginCommandId('git')}
+      onOpenFile={(path, line) => openEditorAt(path, line)}
       onAppend={text => { appendDiffCommentPromptToComposer(text); setComposerActive(true) }}
       onCopy={text => { void writeClipboard(text, renderer).then(() => showNotice('info', 'Handoff Markdown copied'), error => showNotice('error', String(error))) }}
       renderTerminal={(panelWidth, panelHeight, focused, register, capture) => <PluginSurfaceHost surfaceId="terminal" placement="panel" cwd={gitRepoCwd || workspaceCwd} provided={pluginServices} theme={theme} width={panelWidth} height={panelHeight} focused={focused} onClose={() => engineeringLayout.setPreferences(previous => ({ ...previous, drawerOpen: false }))} onCaptureChange={capture} onKeyHandlerReady={handler => register(key => { handler(key); return true })} />}
@@ -6360,7 +6361,7 @@ function OpenTuiWorkspace() {
             <text fg={theme.cyan} selectable={false} wrapMode="none">{fullscreenMode ? ' FULLSCREEN · Shift+Z restore ' : ' ZOOM · Ctrl+B m restore '}</text>
           </box> : null}
       <WorkspaceBody isolatedView={engineeringLayout.active}
-        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
+        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail root={gitRepoCwd || workspaceCwd || process.cwd()} sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}

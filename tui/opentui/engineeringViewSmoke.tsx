@@ -3,7 +3,7 @@
 // Fixture data is deterministic; no provider sends are performed.
 import React from 'react'
 import { testRender, act } from './testRender'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { TuiTranscriptCard } from '../format'
@@ -28,6 +28,10 @@ mkdirSync(fixtureDirectory)
 process.chdir(fixtureDirectory)
 const { spawnSync: runFixture } = await import('node:child_process')
 runFixture('git', ['init', '-q'], { cwd: fixtureDirectory })
+// The app writes its own state into the cwd; keep it out of the changes list so the file under review is the fixture's.
+writeFileSync(path.join(fixtureDirectory, '.gitignore'), '.agent-viewer-data/\n')
+runFixture('git', ['add', '.gitignore'], { cwd: fixtureDirectory })
+runFixture('git', ['-c', 'user.email=smoke@example.com', '-c', 'user.name=smoke', 'commit', '-q', '-m', 'fixture'], { cwd: fixtureDirectory })
 writeFileSync(path.join(fixtureDirectory, 'review-me.ts'), 'export const fixture = true\n')
 let fixtureTheme: 'light' | 'dark' = 'dark'
 
@@ -148,6 +152,31 @@ try {
   await settle()
   if (!setup.captureCharFrame().includes('j/k review comment')) throw new Error('Inspector text input lost keys to reader shortcuts')
   await act(async () => { setup.mockInput.pressEscape() })
+  await settle()
+  if (width === 200) {
+    // Per-file git actions run against the fixture repository and report what they did.
+    await press('F8')
+    await press('s')
+    if (!setup.captureCharFrame().includes('Staged review-me.ts')) throw new Error(`Stage did not report:\n${setup.captureCharFrame()}`)
+    const staged = runFixture('git', ['status', '--porcelain'], { cwd: fixtureDirectory, encoding: 'utf8' }).stdout
+    if (!staged.startsWith('A  review-me.ts')) throw new Error(`Stage did not reach the index: ${staged}`)
+    await press('x')
+    if (!setup.captureCharFrame().includes('Not in HEAD')) throw new Error('Revert of a file absent from HEAD was not refused')
+    await press('u')
+    const unstaged = runFixture('git', ['status', '--porcelain'], { cwd: fixtureDirectory, encoding: 'utf8' }).stdout
+    if (!unstaged.startsWith('?? review-me.ts')) throw new Error(`Unstage did not reach the index: ${unstaged}`)
+    // Revert asks twice, and only the second press touches the file.
+    writeFileSync(path.join(fixtureDirectory, '.gitignore'), '.agent-viewer-data/\nlocal-edit\n')
+    await settle(); await new Promise(resolve => setTimeout(resolve, 5200)); await settle()
+    await press('k')
+    await press('x')
+    if (!setup.captureCharFrame().includes('x again reverts .gitignore')) throw new Error(`Revert did not ask first:\n${setup.captureCharFrame()}`)
+    if (!readFileSync(path.join(fixtureDirectory, '.gitignore'), 'utf8').includes('local-edit')) throw new Error('First x already reverted')
+    await press('x')
+    if (readFileSync(path.join(fixtureDirectory, '.gitignore'), 'utf8') !== '.agent-viewer-data/\n') throw new Error('Second x did not revert')
+    await act(async () => { setup.mockInput.pressEscape() })
+    await settle()
+  }
   await press('F8')
   await arrow('right')
   await settle()
