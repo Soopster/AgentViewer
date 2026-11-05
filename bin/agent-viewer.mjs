@@ -776,6 +776,11 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
     // opened) but broke running the TUI, because NODE_ENV reaches far more than
     // React: everything else the app and its dependencies load reads it too.
     const tuiEnv = { ...process.env }
+    // Bun's allocator (mimalloc) keeps freed pages resident for ~100ms before
+    // purging them, and the TUI's churn (transcript reads, formatting) leaves a
+    // large resident tail that way. Purging at once costs no measurable CPU and
+    // took physical footprint 157-160MB -> 118-130MB (interleaved A/B, 3 pairs).
+    tuiEnv.MIMALLOC_PURGE_DELAY ??= '0'
     if (attachUrl) tuiEnv.AGENT_VIEWER_ATTACH = attachUrl
     if (args.includes('--no-mouse')) tuiEnv.AGENT_VIEWER_DISABLE_MOUSE = '1'
     if (args.includes('--full-repaint')) tuiEnv.AGENT_VIEWER_FULL_REPAINT = '1'
