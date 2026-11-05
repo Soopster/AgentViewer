@@ -35,7 +35,7 @@ import { clamp } from './util'
 import { Spinner, TuiErrorBoundary } from './chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage } from './liveStream'
 import { sessionKey } from './sessionList'
-import { transcriptAccent, turnSummaryMouseProps, streamLandmarkText, streamCompletedTurnHint } from './transcriptStyle'
+import { transcriptAccent, mixHexColor, turnSummaryMouseProps, streamLandmarkText, streamCompletedTurnHint } from './transcriptStyle'
 import { readerRowCard, findReaderCard, findToolRow } from './readerRows'
 import { agentToolCardsFor, stickyPromptText, groupStreamToolCards, isStreamGhostCard, visibleCardsForTranscriptView, resolveExpandedCardKeys, cardFoldsByDefault, scrollbackParkedCursorKey } from './transcriptRows'
 import { type ReaderScrollFixup, type ReaderWindowGauge, type ReaderWindowOutput, type TranscriptWindowInputs, useReaderWindowSliding, TranscriptWindowBody } from './TranscriptWindowBody'
@@ -847,8 +847,44 @@ export function SplitTranscriptPaneInner({
   // first row only — an expanded diff has its own click targets below it.
   const transcriptPressRef = useRef<{ x: number; y: number } | null>(null)
   const pressTranscript = (event: MouseEvent) => {
+    clearTranscriptHover()
     transcriptPressRef.current = event.button === 0 ? { x: event.x, y: event.y } : null
     onTranscriptPress(event)
+  }
+  // Hover marks what a click would fold or open. It paints the renderable
+  // directly: a React state here would re-render the window per pointer move.
+  const hoveredRowRef = useRef<{ node: Renderable & { backgroundColor?: unknown }; background: unknown } | null>(null)
+  const clearTranscriptHover = () => {
+    const hovered = hoveredRowRef.current
+    hoveredRowRef.current = null
+    if (hovered) hovered.node.backgroundColor = hovered.background
+  }
+  useEffect(() => clearTranscriptHover, [])
+  const hoverTranscript = (event: MouseEvent) => {
+    if (!paneScrollbackLike || event.isDragging) return clearTranscriptHover()
+    const sb = scrollRef.current
+    if (!sb) return
+    let hit: Renderable | undefined
+    for (const row of sb.content.getChildren()) {
+      const child = readerRowCard(row as Renderable)
+      if (child && event.y >= child.y && event.y < child.y + child.height) {
+        hit = child
+        break
+      }
+    }
+    let target: (Renderable & { backgroundColor?: unknown }) | undefined
+    if (hit) {
+      const cardKey = hit.id.slice('card:'.length)
+      const card = allPaneCards.find((entry) => entry.key === cardKey)
+      const toolRow = findToolRow(hit, event.y)
+      if (toolRow && card && toolRow.key !== cardKey) target = toolRow.open && event.y !== toolRow.y ? undefined : toolRow.node
+      else if (card && !windowOutputRef.current.scrollbackExpandedKeys?.has(cardKey) && (card.asyncQuestions?.length || card.autoFold || agentToolCardsFor(card).length > 0)) target = hit
+    }
+    if (hoveredRowRef.current?.node === target) return
+    clearTranscriptHover()
+    if (!target) return
+    hoveredRowRef.current = { node: target, background: target.backgroundColor }
+    target.backgroundColor = mixHexColor(theme.cyan, theme.surface, 0.14) ?? theme.surface3
   }
   const releaseTranscript = (event: MouseEvent) => {
     const press = transcriptPressRef.current
@@ -1107,6 +1143,8 @@ export function SplitTranscriptPaneInner({
             scrollbarOptions={scrollbarOptions}
             onMouseDown={pressTranscript}
             onMouseUp={releaseTranscript}
+            onMouseMove={hoverTranscript}
+            onMouseOut={clearTranscriptHover}
           >
             <TuiErrorBoundary>
               {hiddenCount > 0 ? (

@@ -65,11 +65,11 @@ export function readerRowCard(row: Renderable): Renderable | undefined {
  * The tool row of a tool group under a screen row: ids are `tool-row:<key>` (folded) or `tool-row-open:<key>`
  * (showing its output), set on the box holding the tool's rows. Searched a few levels down — a card is shallow.
  */
-export function findToolRow(card: Renderable, y: number): { key: string; open: boolean; y: number } | undefined {
-  const visit = (node: Renderable, depth: number): { key: string; open: boolean; y: number } | undefined => {
+export function findToolRow(card: Renderable, y: number): { key: string; open: boolean; y: number; node: Renderable } | undefined {
+  const visit = (node: Renderable, depth: number): { key: string; open: boolean; y: number; node: Renderable } | undefined => {
     const id = node.id ?? ''
     if ((id.startsWith('tool-row:') || id.startsWith('tool-row-open:')) && y >= node.y && y < node.y + node.height) {
-      return { key: id.slice(id.indexOf(':') + 1), open: id.startsWith('tool-row-open:'), y: node.y }
+      return { key: id.slice(id.indexOf(':') + 1), open: id.startsWith('tool-row-open:'), y: node.y, node }
     }
     if (depth <= 0) return undefined
     for (const child of node.getChildren() as Renderable[]) {
