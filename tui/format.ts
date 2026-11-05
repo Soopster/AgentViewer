@@ -52,6 +52,8 @@ export {
   buildTaskActiveForms, buildTranscriptTaskContext, type TaskActiveForms, type TranscriptTaskContext,
 } from './format/tasks'
 export { textNeedsTuiMermaid, ensureTuiMermaidRenderer } from './format/mermaid'
+export { blocksNeedTuiAnsi, ensureTuiAnsiHighlighter } from './format/ansi'
+import { attachTuiAnsiRuns } from './format/ansi'
 
 function countNonBlankLines(value: string): number {
   let count = 0
@@ -937,6 +939,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const previewLines: TuiTranscriptCardLine[] = []
   for (const block of message.blocks) previewLines.push(...formatBlock(block, activeForms, taskRegistry))
   const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks, (block) => formatBlockExpanded(block, activeForms, taskRegistry))
+  attachTuiAnsiRuns(expandedLines, message.blocks)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
   const blockAnalysis = analyzeCardBlocks(message)
   const asyncQuestions = message.blocks.some(block => block.type === 'tool_thread' && block.toolUse.input.asyncUserInput === true)

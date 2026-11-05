@@ -14,7 +14,10 @@ export type AnsiRun = {
   underline?: boolean
   strike?: boolean
 }
-export type AnsiAppearance = 'light' | 'dark'
+// `semantic` keeps the sixteen palette colours as `var(--hls-terminal-ansi-<name>)`
+// instead of resolving them against a theme, for hosts that map them onto their own
+// palette at draw time (the TUI, whose theme changes without a re-format).
+export type AnsiAppearance = 'light' | 'dark' | 'semantic'
 
 // Anything that sets a style. Cursor movement and `ESC[K` carry no colour, so
 // output holding only those is stripped rather than tokenized.
@@ -29,6 +32,8 @@ export function hasAnsiStyle(text: string): boolean {
 export function stripAnsi(text: string): string {
   return text.includes('\x1b') ? text.replace(ESCAPES, '') : text
 }
+
+const SEMANTIC_THEME = { name: 'Agent Viewer ANSI', appearance: 'dark', cssVariables: true, style: {} } as const
 
 type Runtime = { api: typeof import('@pierre/highlights'); light: import('@pierre/highlights').Theme; dark: import('@pierre/highlights').Theme }
 let runtime: Runtime | undefined
@@ -53,7 +58,7 @@ export function ansiHighlighterReady(): boolean {
 export function ansiRuns(text: string, appearance: AnsiAppearance): AnsiRun[][] | null {
   if (!runtime) return null
   try {
-    const theme = appearance === 'light' ? runtime.light : runtime.dark
+    const theme = appearance === 'light' ? runtime.light : appearance === 'dark' ? runtime.dark : SEMANTIC_THEME
     const result = runtime.api.codeToTokens(text, { lang: 'ansi', theme })
     return result.tokens.map(line => line.map(token => toRun(token, result.fg)))
   } catch {

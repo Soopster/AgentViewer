@@ -12,6 +12,8 @@ import {
 import {
   buildTranscriptTaskContext,
   ensureTuiMermaidRenderer,
+  ensureTuiAnsiHighlighter,
+  blocksNeedTuiAnsi,
   formatTranscriptCard,
   reformatTranscriptCardDensity,
   retimeTranscriptCard,
@@ -415,6 +417,16 @@ async function ensureMermaidForTranscript(threaded: ThreadedMessage[]): Promise<
   }
 }
 
+/** Loads Highlights only for a transcript whose tool output carries terminal colours. */
+async function ensureAnsiForTranscript(threaded: ThreadedMessage[]): Promise<void> {
+  for (const msg of threaded) {
+    if (blocksNeedTuiAnsi(msg.blocks)) {
+      await ensureTuiAnsiHighlighter()
+      return
+    }
+  }
+}
+
 async function formatCards(
   sessionCacheKey: string,
   threaded: ThreadedMessage[],
@@ -424,6 +436,7 @@ async function formatCards(
   separateTurnDurations = false,
 ): Promise<TuiTranscriptCard[]> {
   await ensureMermaidForTranscript(threaded)
+  await ensureAnsiForTranscript(threaded)
   const messages = visibleMessages(threaded, showToolCalls)
   let perSession = cardCacheByKey.get(sessionCacheKey)
   if (!perSession) {
@@ -724,6 +737,7 @@ self.onmessage = async (event) => {
       // newer threading/card baselines (including an unchanged newer read).
       const threadedMessages = buildThreadedMessages(rawMessages)
       await ensureMermaidForTranscript(threadedMessages)
+      await ensureAnsiForTranscript(threadedMessages)
       const visible = visibleMessages(threadedMessages, data.showToolCalls)
       const { activeForms, taskRegistry } = buildTranscriptTaskContext(visible)
       const durations = separateTurnDurations ? null : computeTurnDurationsMs(visible)

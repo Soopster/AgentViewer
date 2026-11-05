@@ -29,6 +29,7 @@ import { cardDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, 
 import { streamDiffPreviewData, StreamDiffPreview } from './StreamDiffPreview'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './transcriptDiffSelection'
 import { highlightToolOutput, toolOutputContext } from './codeHighlight'
+import { ansiRunSegments } from './ansiSegments'
 import { subscribeToolOutputSyntax, toolOutputSyntaxVersion } from './toolOutputSyntax'
 
 const noopSubscribe = () => () => {}
@@ -37,6 +38,7 @@ const zeroVersion = () => 0
 /** Code a tool printed, coloured by tree-sitter once parsed (the regex tokenizer until then); null for any line that is not plainly code or a search hit. */
 function highlightedToolOutput(card: TuiTranscriptCard, line: TuiTranscriptCardLine, theme: TuiThemePalette, syntaxStyle: SyntaxStyle | null): InlineTextSegment[] | null {
   if (line.tone !== 'result_ok' && line.tone !== 'default' && line.tone !== 'muted') return null
+  if (line.runs) return ansiRunSegments(line.runs, theme)
   return highlightToolOutput(card, line.text, theme, syntaxStyle)
 }
 

@@ -1,3 +1,4 @@
+import type { AnsiRun } from '../../lib/ansiOutput'
 import type { ThreadedMessage } from '../../lib/threading'
 import type { FileEditStat } from '../../lib/turnEditStats'
 
@@ -18,6 +19,8 @@ export type TuiTranscriptLineTone =
 export type TuiTranscriptCardLine = {
   text: string
   tone: TuiTranscriptLineTone
+  /** Terminal colours the line's text carried (`text` is the same characters without the escapes). */
+  runs?: AnsiRun[]
 }
 
 export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system' | 'insight'
