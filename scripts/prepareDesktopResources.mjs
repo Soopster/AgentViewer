@@ -102,6 +102,7 @@ function main() {
       'tui/opentui/markdownBlocksWorker.ts',
       'plugins/analytics/tui/analyticsWorker.ts',
       'plugins/editor/tui/editorProjectSearchWorker.ts',
+      'plugins/editor/tui/editorHighlightWorker.ts',
       'tui/opentui/composerMentionWorker.ts',
       'tui/opentui/gitDiffHighlightWorker.ts',
       'tui/opentui/engineeringRepositoryWorker.ts',

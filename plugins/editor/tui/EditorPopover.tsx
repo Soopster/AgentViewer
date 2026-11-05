@@ -145,6 +145,9 @@ const MAX_HIGHLIGHTED_LINE_CHARS = 10_000
 // margin of off-screen lines painted in the first slice so a small scroll lands
 // on colour that is already there.
 const SYNTAX_BACKFILL_CHUNK_LINES = 2_000
+// Rows tokenized synchronously around the visible ones, so a small scroll after
+// an edit lands on rows that are already coloured.
+const SYNTAX_VIEWPORT_OVERSCAN_LINES = 40
 
 function longestLineLength(content: string): number {
   let longest = 0
@@ -2962,6 +2965,12 @@ export function EditorPopover({
     const buffer = openEditorSyntaxBuffer({
       content: initialContent,
       filetype,
+      getViewport: () => {
+        const current = editorRef.current
+        const top = current ? Math.floor(current.scrollY) : 0
+        const rows = current ? current.height : 40
+        return [Math.max(0, top - SYNTAX_VIEWPORT_OVERSCAN_LINES), top + rows + SYNTAX_VIEWPORT_OVERSCAN_LINES]
+      },
       onHighlights: (lines, full) => {
         const current = editorRef.current
         // Line indices are only meaningful against the content that produced
@@ -2983,7 +2992,9 @@ export function EditorPopover({
           const text = content.slice(lineStart, lineEnd)
           const plain = /^[\x20-\x7e]*$/.test(text)
           for (const range of entry.highlights) {
-            const styleId = syntaxStyle.resolveStyleId(range.group) ?? syntaxStyle.resolveStyleId('default')
+            // Highlights scopes are finer than the theme's (`keyword.declaration`),
+            // so an unregistered one inherits its parent's style.
+            const styleId = syntaxStyle.getStyleId(range.group) ?? syntaxStyle.resolveStyleId('default')
             if (styleId == null) continue
             current.addHighlight(entry.line, {
               start: plain ? range.startCol : cellColumnAt(text, range.startCol, measure),

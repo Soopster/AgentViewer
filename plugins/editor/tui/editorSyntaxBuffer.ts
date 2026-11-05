@@ -15,6 +15,9 @@
 // "apply these lines" rather than in worker protocol.
 import { getTreeSitterClient } from '@opentui/core'
 import type { HighlightResponse } from '@opentui/core'
+import { normalizeHighlightLanguage } from '../../../lib/codeHighlight'
+import { attachEditorHighlightBuffer } from './editorHighlightWorkerClient'
+import type { EditorHighlightResponse } from './editorHighlightProtocol'
 
 // The client's own per-line highlight shape: `{ line, highlights: [{ startCol,
 // endCol, group }] }`. Re-exported so callers need not import worker types.
@@ -28,6 +31,11 @@ export type EditorSyntaxBufferOptions = {
   // may clear what it had; an incremental batch names only changed lines and
   // must leave every other line's decoration alone.
   onHighlights: (lines: EditorSyntaxLine[], full: boolean) => void
+  // Rows to tokenize synchronously after an edit, `[first, end)`. Read at open
+  // and on every edit, so it follows the scroll position. Default: the first 80.
+  getViewport?: () => readonly [number, number]
+  // Force a backend; unset prefers Highlights and falls back to tree-sitter.
+  backend?: 'highlights' | 'tree-sitter'
 }
 
 export type EditorSyntaxBuffer = {
@@ -179,7 +187,7 @@ export function editorSyntaxEdit(
   }
 }
 
-export function openEditorSyntaxBuffer(options: EditorSyntaxBufferOptions): EditorSyntaxBuffer {
+function openTreeSitterBuffer(options: EditorSyntaxBufferOptions): EditorSyntaxBuffer {
   const client = getTreeSitterClient()
   const bufferId = nextBufferId++
   let content = options.content
@@ -225,6 +233,153 @@ export function openEditorSyntaxBuffer(options: EditorSyntaxBufferOptions): Edit
       disposed = true
       client.off('highlights:response', onResponse)
       void client.removeBuffer(bufferId).catch(() => {})
+    },
+  }
+}
+
+const DEFAULT_VIEWPORT: readonly [number, number] = [0, 80]
+// Responses are merged for one tick so a burst of deferred tokenization batches
+// costs one decoration pass (and one overlay pass) instead of one per batch.
+const FLUSH_MS = 8
+// The editor's buffer holds LF only; a CR would be a line break to the tokenizer
+// and not to the editor, so any CR sends the file to the tree-sitter backend.
+const HAS_CR = /\r/
+
+function openHighlightsBuffer(
+  options: EditorSyntaxBufferOptions,
+  language: string,
+  fallback: (content: string) => void,
+): EditorSyntaxBuffer | null {
+  const bufferId = nextBufferId++
+  let content = options.content
+  if (HAS_CR.test(content)) return null
+  let lineStarts: readonly number[] = editorLineStarts(content)
+  // A response from another lifetime of the worker's document can never describe
+  // this one; the document is only ever replaced by opening a new buffer.
+  const generation = 1
+  let seq = 0
+  let disposed = false
+  let stale = false
+  let sentInitial = false
+  let pending = new Map<number, EditorSyntaxLine>()
+  let pendingSeq = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let fullPending = false
+
+  const viewport = () => {
+    const [first, end] = options.getViewport?.() ?? DEFAULT_VIEWPORT
+    return [Math.max(0, first), Math.max(first + 1, end)] as const
+  }
+
+  const flush = () => {
+    timer = null
+    if (disposed || pending.size === 0) return
+    const lines = [...pending.values()]
+    const full = fullPending
+    pending = new Map()
+    fullPending = false
+    options.onHighlights(lines, full)
+  }
+
+  const attached = attachEditorHighlightBuffer(
+    bufferId,
+    (response: EditorHighlightResponse) => {
+      if (disposed || response.generation !== generation) return
+      if (response.type === 'unsupported' || response.type === 'error') {
+        disposed = true
+        attached?.detach()
+        if (timer != null) clearTimeout(timer)
+        fallback(content)
+        return
+      }
+      // A response describes the document as of its seq. Once a newer edit has
+      // been sent its line numbers no longer line up with the editor, so it is
+      // dropped, and a snapshot re-reads whatever it carried once we catch up.
+      if (response.seq < seq) { stale = true; return }
+      if (stale && response.seq === seq) {
+        stale = false
+        attached?.send({ type: 'snapshot', id: bufferId, generation, range: viewport() })
+      }
+      if (response.seq !== pendingSeq && pending.size > 0) { if (timer != null) clearTimeout(timer); flush() }
+      pendingSeq = response.seq
+      if (response.initial && !sentInitial) { sentInitial = true; fullPending = true }
+      for (const [line, captures] of response.lines) {
+        pending.set(line, {
+          line,
+          highlights: captures.map(([startCol, endCol, group]) => ({ startCol, endCol, group })),
+          droppedHighlights: [],
+        } as EditorSyntaxLine)
+      }
+      if (timer == null) timer = setTimeout(flush, FLUSH_MS)
+    },
+    () => {
+      if (disposed) return
+      disposed = true
+      if (timer != null) clearTimeout(timer)
+      fallback(content)
+    },
+  )
+  if (!attached) return null
+  attached.send({ type: 'open', id: bufferId, generation, language, code: content, range: viewport() })
+
+  return {
+    get content() { return content },
+    update(_before: string, after: string) {
+      if (disposed || after === content) return
+      const edit = editorSyntaxEdit(content, after, lineStarts)
+      if (!edit) return
+      const newText = after.slice(edit.startIndex, edit.newEndIndex)
+      if (HAS_CR.test(newText)) {
+        disposed = true
+        attached.detach()
+        if (timer != null) clearTimeout(timer)
+        fallback(after)
+        return
+      }
+      lineStarts = advanceLineStarts(lineStarts, after, edit.startIndex, edit.oldEndIndex, edit.newEndIndex, edit.startPosition.row)
+      content = after
+      seq += 1
+      attached.send({
+        type: 'edit', id: bufferId, generation, seq, range: viewport(),
+        edit: {
+          startLine: edit.startPosition.row, startCharacter: edit.startPosition.column,
+          endLine: edit.oldEndPosition.row, endCharacter: edit.oldEndPosition.column,
+          newText,
+        },
+      })
+    },
+    dispose() {
+      if (disposed) return
+      disposed = true
+      if (timer != null) clearTimeout(timer)
+      attached.detach()
+    },
+  }
+}
+
+export function openEditorSyntaxBuffer(options: EditorSyntaxBufferOptions): EditorSyntaxBuffer {
+  const language = normalizeHighlightLanguage(options.filetype)
+  // The backend may change under a live buffer (Highlights failing mid-session),
+  // so callers hold this stable facade rather than either backend.
+  let backend: EditorSyntaxBuffer | null = null
+  let disposed = false
+  const useTreeSitter = (content: string) => {
+    if (disposed) return
+    backend = openTreeSitterBuffer({ ...options, content })
+  }
+  // Markdown's structure (and its fenced children) stays on tree-sitter.
+  // `AGENT_VIEWER_EDITOR_HIGHLIGHTS=0` keeps the editor on tree-sitter (A/B and escape hatch).
+  const preferTreeSitter = options.backend === 'tree-sitter' || process.env.AGENT_VIEWER_EDITOR_HIGHLIGHTS === '0'
+  if (!preferTreeSitter && !['markdown', 'markdown_inline'].includes(options.filetype)) {
+    backend = openHighlightsBuffer(options, language, useTreeSitter)
+  }
+  if (!backend) useTreeSitter(options.content)
+  return {
+    get content() { return backend!.content },
+    update(before, after) { backend!.update(before, after) },
+    dispose() {
+      disposed = true
+      backend?.dispose()
     },
   }
 }
