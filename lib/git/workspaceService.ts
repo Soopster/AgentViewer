@@ -102,7 +102,7 @@ export async function actWorkspace(cwd: string, requestId: string, action: Works
   if (requests.size > 256) requests.delete(requests.keys().next().value!)
   return result
 }
-async function withIndexTransaction(root: string, revision: string, execute: (env: Record<string, string>) => Promise<string>): Promise<WorkspaceResult> {
+async function withIndexTransaction(root: string, revision: string, execute: (env: Record<string, string>) => Promise<string>, worktreeMayChange = false): Promise<WorkspaceResult> {
   const indexPath = resolve(root, (await git(root, ['rev-parse', '--git-path', 'index'])).trimEnd())
   const lockPath = `${indexPath}.lock`, temporary = `${indexPath}.agent-viewer-${randomUUID()}`
   const lock = await open(lockPath, 'wx').catch(() => { throw new Error('Git index is locked by another operation. Wait and refresh.') })
@@ -111,7 +111,8 @@ async function withIndexTransaction(root: string, revision: string, execute: (en
     if ((await facts(root)).revision !== revision) throw new Error('Repository changed. Refresh and select the changes again.')
     await copyFile(indexPath, temporary).catch(error => { if (error.code !== 'ENOENT') throw error })
     const output = await execute({ GIT_INDEX_FILE: temporary })
-    if ((await facts(root)).revision !== revision) throw new Error('Repository changed during staging. Refresh and select again.')
+    // A discard rewrites the working tree on purpose, so the revision is expected to move.
+    if (!worktreeMayChange && (await facts(root)).revision !== revision) throw new Error('Repository changed during staging. Refresh and select again.')
     await copyFile(temporary, lockPath)
     await lock.close()
     await rename(lockPath, indexPath)
@@ -196,7 +197,7 @@ async function mutate(root: string, action: WorkspaceAction): Promise<WorkspaceR
             : await git(root, ['--literal-pathspecs', 'rm', '--cached', '-r', '--', ...paths], undefined, env)
       }
       return output.trim() || (action.kind === 'discard' ? 'Changes discarded.' : action.kind === 'patch' ? 'Selection updated.' : action.kind === 'stage' ? 'Files staged.' : 'Files unstaged.')
-    })
+    }, action.kind === 'discard')
   }
   return { output: output.trim() || 'Commit created.', snapshot: await readWorkspace(root) }
 }

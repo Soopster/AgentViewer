@@ -35,10 +35,15 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
   const [inspection, setInspection] = useState<{ kind: 'branch' | 'remote-branch' | 'commit' | 'stash'; ref: string; label: string; selector?: string } | null>(null)
   const [content, setContent] = useState('')
   const [pan, setPan] = useState(0)
-  const [workflowTarget, setWorkflowTarget] = useState<{ snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null } | null>(null)
+  const [workflowTarget, setWorkflowTarget] = useState<{ snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; initialChoice?: string } | null>(null)
   const [conflictPath, setConflictPath] = useState<string | null>(null)
   const workflowKey = useRef<(key: GitKeyEvent) => boolean | void>(() => {})
   const openActions = useCallback(() => { if (snapshot) { setConflictPath(null); setWorkflowTarget({ snapshot, context: inspection, path }) } }, [snapshot, inspection, path])
+  // A paused merge/rebase/etc.: walk the conflicted files, then continue or abort — the same path the web banner takes.
+  const conflicted = useMemo(() => snapshot?.files.filter(file => file.conflict).map(file => file.path) ?? [], [snapshot?.files])
+  const openOperation = useCallback((initialChoice: 'operation-continue' | 'operation-abort') => { if (snapshot?.operation) { setConflictPath(null); setWorkflowTarget({ snapshot, context: null, path: null, initialChoice }) } }, [snapshot])
+  // Accept (stage / unstage) or reject (discard) the hunk under the diff cursor; discard asks twice.
+  const [armedDiscard, setArmedDiscard] = useState(false)
   const closeAction = useCallback(() => { setWorkflowTarget(null); setConflictPath(null); setInspection(null); setSection('files'); setFocus('list') }, [])
   const editor = useRef<TextareaRenderable | null>(null)
   const popW = Math.max(20, docked ? width : width - 2), popH = Math.max(8, docked ? height : height - 2)
@@ -76,6 +81,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
   const handleKey = useCallback((key: GitKeyEvent) => {
     if (workflowTarget || conflictPath) return workflowKey.current(key)
     if (busy) return
+    if (key.sequence !== 'D') setArmedDiscard(false)
     if (focus === 'confirm') {
       if (key.name === 'escape') { workspace.closeCommit(); setFocus('compose') }
       else if (key.name === 'return') void submit()
@@ -89,6 +95,19 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
       return false
     }
     if (key.sequence === ':' || key.sequence === '?') { if (!snapshot) return false; openActions(); return }
+    if (key.sequence === 'n' && snapshot?.operation && conflicted.length > 0) { workspace.setPath(conflicted[0]!); setConflictPath(conflicted[0]!); return }
+    if (key.sequence === 'C' && snapshot?.operation && conflicted.length === 0 && snapshot.operation !== 'bisect') { openOperation('operation-continue'); return }
+    if (key.sequence === 'X' && snapshot?.operation && snapshot.operation !== 'bisect') { openOperation('operation-abort'); return }
+    if ((key.sequence === 'S' || key.sequence === 'D') && focus === 'diff' && !inspection && !commitPreview && path) {
+      const row = rows[diffCursor]
+      const indices = row ? rows.filter(item => item.hunk === row.hunk && item.changed).map(item => item.index) : []
+      if (indices.length === 0) return
+      if (key.sequence === 'S') { setArmedDiscard(false); void workspace.actOnLines('patch', indices); return }
+      const tracked = snapshot?.files.some(file => file.path === path && file.x !== '?' && !file.conflict)
+      if (side !== 'unstaged' || !tracked) return
+      if (armedDiscard) { setArmedDiscard(false); void workspace.actOnLines('discard', indices) } else setArmedDiscard(true)
+      return
+    }
     if (key.sequence === 'f' && path && snapshot?.files.some(file => file.path === path && file.conflict)) { setConflictPath(path); return }
     if (key.name === 'escape') { onClose(); return }
     if (embedded && ['3', '4', '5', 'B'].includes(key.sequence)) return
@@ -127,7 +146,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
         selectItem(section, Math.max(0, Math.min(count - 1, cursor + delta)))
       }
     }
-  }, [workflowTarget, conflictPath, openActions, busy, focus, workspace, root, message, submit, reviewCommit, onClose, onReview, snapshot, embedded, side, selectItem, diffCursor, anchor, rows, section, files, path, viewH, cursor, branchList, remoteBranches])
+  }, [workflowTarget, conflictPath, openActions, busy, focus, workspace, root, message, submit, reviewCommit, onClose, onReview, snapshot, embedded, side, selectItem, diffCursor, anchor, rows, section, files, path, viewH, cursor, branchList, remoteBranches, conflicted, openOperation, armedDiscard, commitPreview])
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
   const sidebarH = Math.max(1, popH - 6)
   const overviewH = Math.max(2, Math.floor((sidebarH - 5) / 5))
@@ -151,7 +170,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
     </box>
     <box flexGrow={1} minHeight={1} flexDirection="row">
       {!narrow ? <box width={leftW} flexShrink={0} flexDirection="column" paddingX={1}>
-        {!embedded ? <box height={3} flexShrink={0} flexDirection="column"><text fg={theme.cyan}>[1] Status</text><text fg={theme.muted} wrapMode="none">{snapshot?.operation ?? snapshot?.upstream ?? 'No upstream'}</text></box> : null}
+        {!embedded ? <box height={3} flexShrink={0} flexDirection="column"><text fg={theme.cyan}>[1] Status</text><text fg={snapshot?.operation ? theme.red : theme.muted} wrapMode="none">{snapshot?.operation ? `${snapshot.operation}${conflicted.length > 0 ? ` · ${conflicted.length} conflict${conflicted.length === 1 ? '' : 's'} · n resolve` : ' · C continue'}${snapshot.operation === 'bisect' ? '' : ' · X abort'}` : snapshot?.upstream ?? 'No upstream'}</text></box> : null}
         {listSection('files', `[2] ${side === 'staged' ? 'Staged' : 'Unstaged'} · t switch`, files.map(file => `${file.x}${file.y} ${file.path}`), embedded ? sidebarH : fileH)}
         {!embedded ? <>{listSection('branches', remoteBranches ? '[3] Remotes · B local' : '[3] Branches · B remotes', branchList.map(branch => `${branch === snapshot?.branch ? '● ' : ''}${branch}`), overviewH)}
         {listSection('commits', '[4] Commits', snapshot?.commits.map(commit => `${commit.sha.slice(0, 7)} ${commit.subject}`) ?? [], overviewH)}
@@ -159,11 +178,14 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
         <box position="absolute" top={0} right={0} width={1} height={sidebarH}><GitDivider id="git-staging-divider" vertical width={1} height={sidebarH} size={leftW} theme={theme} onResize={value => setFilePaneWidth(Math.max(24, Math.min(value, Math.floor(popW * .65), popW - 24)))} /></box>
       </box> : null}
       <box flexGrow={1} minWidth={0} flexDirection="column">
-        <box height={1} flexShrink={0} paddingX={1}><text fg={theme.cyan} wrapMode="none">{commitPreview ? `${amend ? 'Amend HEAD' : 'Commit'} · staged preview` : inspection?.label ?? `${side}: ${path ?? 'clean'}`}</text></box>
+        <box height={1} flexShrink={0} paddingX={1} flexDirection="row"><box flexShrink={1} minWidth={0}><text fg={theme.cyan} wrapMode="none">{commitPreview ? `${amend ? 'Amend HEAD' : 'Commit'} · staged preview` : inspection?.label ?? `${side}: ${path ?? 'clean'} `}</text></box>
+          {!inspection && !commitPreview ? <box flexShrink={0} onMouseDown={() => { if (busy || !path) return; const row = rows[diffCursor]; const indices = row ? rows.filter(item => item.hunk === row.hunk && item.changed).map(item => item.index) : []; void workspace.actOnLines('patch', indices) }}><text fg={theme.green}>{side === 'staged' ? '[S unstage hunk] ' : '[S accept hunk] '}</text></box> : null}
+          {!inspection && !commitPreview && side === 'unstaged' ? <box flexShrink={0} onMouseDown={() => { if (busy || !path) return; const row = rows[diffCursor]; const indices = row ? rows.filter(item => item.hunk === row.hunk && item.changed).map(item => item.index) : []; if (indices.length === 0) return; if (armedDiscard) { setArmedDiscard(false); void workspace.actOnLines('discard', indices) } else setArmedDiscard(true) }}><text fg={armedDiscard ? theme.amber : theme.red}>{armedDiscard ? '[D again to discard — cannot be undone] ' : '[D reject hunk] '}</text></box> : null}
+        </box>
         <box height={1} flexShrink={0} paddingX={1} flexDirection="row">
           <box onMouseDown={() => { if (!busy) { workspace.setSide(side === 'staged' ? 'unstaged' : 'staged'); setInspection(null) } }}><text fg={theme.cyan}>[t staged/unstaged] </text></box>
           <box onMouseDown={() => { if (!busy) setFocus('compose') }}><text fg={theme.cyan}>[c commit] </text></box>
-          <text fg={theme.dim} wrapMode="none">{`${selected.size} lines selected`}</text>
+          <text fg={theme.dim} wrapMode="none">{`${selected.size} lines selected `}</text>
         </box>
         <box flexGrow={1} minHeight={1} flexDirection="column" overflow="hidden">
           {rows.slice(visibleStart, visibleStart + viewH).map((row, offset) => {
@@ -190,7 +212,7 @@ export function GitWorkspace({ cwd, theme, width, height, docked, zIndex = 50, o
       </box>
     </box>
     {workspace.error ? <box height={1} flexShrink={0} paddingX={1}><text fg={theme.red} wrapMode="none">{workspace.error}</text></box> : null}
-    <box height={1} flexShrink={0} paddingX={1}><text fg={busy ? theme.amber : theme.dim} wrapMode="none">{busy ? 'Git operation running…' : workspace.output || ': Git actions · f resolve conflict · Space stage · a all/hunk · Tab diff · s apply · c commit · A amend · r refresh'}</text></box>
+    <box height={1} flexShrink={0} paddingX={1}><text fg={busy ? theme.amber : theme.dim} wrapMode="none">{busy ? 'Git operation running…' : workspace.output || ': Git actions · f resolve conflict · Space stage · a all/hunk · Tab diff · s apply · S hunk · D discard hunk · c commit · A amend · r refresh'}</text></box>
     {workflowTarget ? <GitWorkflowMenu focused={visible && focused} {...workflowTarget} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
     {conflictPath ? <GitConflictEditor focused={visible && focused} key={conflictPath} cwd={root} path={conflictPath} theme={theme} width={popW} height={popH} busy={busy} error={workspace.error} onRun={workspace.workflow} onClose={closeAction} onKeyHandlerReady={handler => { workflowKey.current = handler }} /> : null}
   </box>

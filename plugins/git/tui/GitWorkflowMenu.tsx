@@ -5,14 +5,15 @@ import type { GitKeyEvent } from './GitPopover'
 import { initialWorkflowValues, workflowPaths, workflowChoices, workflowSummary, type WorkflowChoice, type WorkflowContext } from '../../../lib/git/workflowMenu'
 import type { WorkflowDraft, WorkspaceSnapshot } from '../../../lib/git/workspaceTypes'
 
-export function GitWorkflowMenu({ focused = true, snapshot, context, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
-  focused?: boolean; snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; theme: TuiThemePalette; width: number; height: number
+export function GitWorkflowMenu({ initialChoice, focused = true, snapshot, context, path, theme, width, height, busy, error, onRun, onClose, onKeyHandlerReady }: {
+  initialChoice?: string; focused?: boolean; snapshot: WorkspaceSnapshot; context: WorkflowContext; path: string | null; theme: TuiThemePalette; width: number; height: number
   busy: boolean; error: string | null; onRun: (action: WorkflowDraft, revision: string) => Promise<boolean>; onClose: () => void; onKeyHandlerReady: (handler: (key: GitKeyEvent) => boolean | void) => void
 }) {
   const choices = useMemo(() => workflowChoices(snapshot, context, path), [snapshot, context, path])
   const [cursor, setCursor] = useState(0), [fieldIndex, setFieldIndex] = useState(0), [optionCursor, setOptionCursor] = useState(0)
-  const [selected, setSelected] = useState<WorkflowChoice | null>(null), [values, setValues] = useState<Record<string, string>>({})
-  const [review, setReview] = useState<string | null>(null), [localError, setLocalError] = useState<string | null>(null)
+  const preselected = useMemo(() => (initialChoice ? choices.find(choice => choice.id === initialChoice) ?? null : null), []) // eslint-disable-line react-hooks/exhaustive-deps -- chosen once, when the menu opens
+  const [selected, setSelected] = useState<WorkflowChoice | null>(preselected), [values, setValues] = useState<Record<string, string>>(() => (preselected ? initialWorkflowValues(preselected) : {}))
+  const [review, setReview] = useState<string | null>(() => (preselected && preselected.fields.length === 0 ? workflowSummary(preselected, {}) : null)), [localError, setLocalError] = useState<string | null>(null)
   const w = Math.max(16, Math.min(width - 4, 92)), h = Math.max(8, Math.min(height - 4, 27))
   const field = selected?.fields[fieldIndex]
   const change = useCallback((key: string, value: string) => setValues(previous => ({ ...previous, [key]: value })), [])
