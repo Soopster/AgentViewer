@@ -12,6 +12,7 @@ import { sessionKey } from '../sessionList'
 import { filterModelPickerOptions } from '../pickers'
 
 export type UseComposerHeightGroupContext = {
+  composerHeightPreference?: number
   embeddedComposer: boolean
   composerDraftLines: number
   height: number
@@ -40,7 +41,7 @@ export function useComposerHeightGroup(ctx: UseComposerHeightGroupContext) {
     tuiModelOverride, tuiReportedModelByKey, contextUsage, modelPickerOptions, modelPickerQuery,
   } = ctx
 
-  const composerHeight = embeddedComposer
+  const naturalComposerHeight = embeddedComposer
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
         composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT,
         COMPOSER_MAX_HEIGHT,
@@ -53,6 +54,8 @@ export function useComposerHeightGroup(ctx: UseComposerHeightGroupContext) {
           composerDraftLines + composerDockChromeHeight,
         ),
       )
+  const composerHeight = ctx.composerHeightPreference === undefined ? naturalComposerHeight
+    : Math.max(embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, Math.min(ctx.composerHeightPreference, Math.floor(height * .4)))
   const presentationHidesComposer = fullscreenMode && windowPresentation?.target !== composerTargetSessionIdentity
   const composerDockHeight = composerWindowOpen || composerHidden || presentationHidesComposer ? 0 : composerHeight
   const composerDockTextareaHeight = embeddedComposer

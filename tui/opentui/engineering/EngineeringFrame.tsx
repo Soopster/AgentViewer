@@ -16,10 +16,12 @@ import { git } from '../../../lib/git/command'
 import { browseBlob } from '../../../lib/git/browse'
 import type { EngineeringRepository } from './repository'
 import { createEngineeringRepositoryClient } from '../engineeringRepositoryWorkerClient'
-import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionTitle, type EngineeringPreset, type InspectorTab } from './model'
+import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, type EngineeringPreset, type InspectorTab } from './model'
 import type { useEngineeringLayout } from './state'
 import { EngineeringAction as Action } from './EngineeringAction'
 import { EngineeringChanges } from './EngineeringChanges'
+import { EngineeringHeader } from './EngineeringHeader'
+import { PaneResizeHandle } from '../paneResize'
 
 export type EngineeringKey = { name: string; sequence: string; ctrl: boolean; shift: boolean; meta?: boolean }
 export type EngineeringKeyHandler = (key: EngineeringKey) => boolean | 'input'
@@ -66,14 +68,15 @@ function InspectorBody({ scroll, focused, children }: { scroll: boolean; focused
 export function EngineeringFrame(props: Props) {
   const { layout, theme, cwd } = props
   const renderer = useRenderer()
-  const { active, preferences, setPreferences, inspectorWidth, drawerRows } = layout
+  const { active, preferences, setPreferences, inspectorWidth, drawerRows, headerRows } = layout
   const [repositoryState, setRepository] = useState<{ cwd: string; value: EngineeringRepository | null; error: string | null }>({ cwd, value: null, error: null })
   const repository = repositoryState.cwd === cwd ? repositoryState.value : null
   const error = repositoryState.cwd === cwd ? repositoryState.error : null
   const [focused, setFocused] = useState<'inspector' | 'terminal' | null>(null)
   const [compactOpen, setCompactOpen] = useState(false)
   const [cursor, setCursor] = useState(0)
-  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [fileSelection, setFileSelection] = useState<{ cwd: string; path: string | null }>({ cwd, path: null })
+  const setSelectedPath = (path: string) => setFileSelection({ cwd, path })
   const [patchState, setPatch] = useState<{ cwd: string; path: string; text: string } | null>(null)
   const [commentEditing, setCommentEditing] = useState(false)
   const [checks, setChecks] = useWorkspaceState<EngineeringCheck[]>('engineering:checks', [])
@@ -85,6 +88,7 @@ export function EngineeringFrame(props: Props) {
   const currentRef = useRef({ active, cwd })
   useLayoutEffect(() => { currentRef.current = { active, cwd } }, [active, cwd])
   const files = repository?.files ?? []
+  const selectedPath = engineeringSelectedFile(files, fileSelection.cwd === cwd ? fileSelection.path : null)?.path ?? null
   const patch = patchState?.cwd === cwd && patchState.path === selectedPath ? patchState.text : ''
   const tasks = useMemo(() => active ? [...buildTaskRegistry(props.messages).values()] : [], [active, props.messages])
   const evidence = useMemo(() => active ? engineeringEvidence(props.cards) : [], [active, props.cards])
@@ -112,7 +116,16 @@ export function EngineeringFrame(props: Props) {
     const refresh = async () => {
       if (reading) return
       reading = true
-      try { const value = await client.read(cwd); if (!cancelled) setRepository({ cwd, value, error: null }) }
+      try {
+        const value = await client.read(cwd)
+        if (!cancelled) {
+          setRepository({ cwd, value, error: null })
+          setFileSelection(previous => {
+            const path = engineeringSelectedFile(value.files, previous.cwd === cwd ? previous.path : null)?.path ?? null
+            return previous.cwd === cwd && previous.path === path ? previous : { cwd, path }
+          })
+        }
+      }
       catch (cause) { if (!cancelled) setRepository({ cwd, value: null, error: cause instanceof Error ? cause.message : String(cause) }) }
       reading = false
     }
@@ -181,22 +194,24 @@ export function EngineeringFrame(props: Props) {
       const direction = key.name === 'left' ? -1 : 1
       selectInspector(INSPECTORS[(INSPECTORS.indexOf(preferences.inspector) + direction + INSPECTORS.length) % INSPECTORS.length]!); return true
     }
-    if (key.name === 'down' || key.name === 'j') { const next = Math.min(cursor + 1, Math.max(rowActions.length - 1, 0)); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
-    if (key.name === 'up' || key.name === 'k') { const next = Math.max(cursor - 1, 0); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
-    if (key.name === 'return') { rowActions[cursor]?.(); return true }
+    const currentCursor = preferences.inspector === 'changes' ? Math.max(0, files.findIndex(file => file.path === selectedPath)) : cursor
+    if (key.name === 'down' || key.name === 'j') { const next = Math.min(currentCursor + 1, Math.max(rowActions.length - 1, 0)); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
+    if (key.name === 'up' || key.name === 'k') { const next = Math.max(currentCursor - 1, 0); setCursor(next); if (preferences.inspector === 'changes' && files[next]) setSelectedPath(files[next]!.path); return true }
+    if (key.name === 'return') { rowActions[currentCursor]?.(); return true }
     if (key.name === 'r' && preferences.inspector === 'changes') { props.onReview(); return true }
     if (key.name === 'c' && preferences.inspector === 'handoff') { props.onCopy(handoff); return true }
     return true
   }
   useEffect(() => { props.registerKeys(active ? handler : null); return () => props.registerKeys(null) })
-  const inspector = (panelWidth: number, panelHeight: number) => <box id="engineering-inspector" width={panelWidth} height={panelHeight} border flexDirection="column" borderColor={focused === 'inspector' ? theme.cyan : theme.border} backgroundColor={theme.bg} onMouseDown={() => focus('inspector')}>
-    <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}> ENGINEERING </text><Action theme={theme} label="×" onPress={() => { setPreferences(previous => ({ ...previous, inspectorOpen: false })); setCompactOpen(false); setFocused(null) }} /></box>
+  const inspector = (panelWidth: number, panelHeight: number) => <box id="engineering-inspector" zIndex={10} width={panelWidth} height={panelHeight} border flexDirection="column" borderColor={focused === 'inspector' ? theme.cyan : theme.border} backgroundColor={theme.bg} onMouseDown={() => focus('inspector')}>
+    <PaneResizeHandle kind="inspector" extent={panelWidth} edge="left" inset={-1} />
+    <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}> INSPECTOR </text><Action theme={theme} label="×" onPress={() => { setPreferences(previous => ({ ...previous, inspectorOpen: false })); setCompactOpen(false); setFocused(null) }} /></box>
     <box height={2} flexShrink={0} flexDirection="row" flexWrap="wrap">{INSPECTORS.map(tab => <Action key={tab} theme={theme} label={tab} selected={preferences.inspector === tab} onPress={() => selectInspector(tab)} />)}</box>
-    <box height={1} flexShrink={0} flexDirection="row"><Action theme={theme} label="− width" onPress={() => setPreferences(previous => ({ ...previous, inspectorWidth: Math.max(32, previous.inspectorWidth - 4) }))} /><Action theme={theme} label="+ width" onPress={() => setPreferences(previous => ({ ...previous, inspectorWidth: Math.min(96, previous.inspectorWidth + 4) }))} /></box>
+
     <InspectorBody scroll={preferences.inspector !== 'changes'} focused={focused === 'inspector'}>
       {error ? <text fg={theme.red}>{fitText(error, panelWidth - 4)}</text> : null}
       {preferences.inspector === 'changes' ? <EngineeringChanges
-        files={files} width={panelWidth} height={panelHeight} theme={theme} selectedPath={selectedPath}
+        files={files} width={panelWidth} height={panelHeight} theme={theme} selectedPath={selectedPath} listRowsPreference={preferences.fileListRows}
         patch={patch} evidence={fileEvidence} focused={focused === 'inspector'} editing={commentEditing}
         onSelect={(path, index) => { setSelectedPath(path); setCursor(index) }} onReview={props.onReview}
         onJump={jump} onBeginEdit={() => { setCommentEditing(true); focus('inspector') }}
@@ -222,24 +237,26 @@ export function EngineeringFrame(props: Props) {
   </box>
 
   return <box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
-    {active ? <box id="engineering-header" height={2} flexShrink={0} flexDirection="column" backgroundColor={theme.surface2}>
-      <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text} wrapMode="none">{fitText(` ENGINEERING · ${cwd.split('/').pop()} · ${repository?.branch ?? 'no repository'} · ${files.length} modified · ${props.running.length} running · ${props.recent.size} recent · ${props.attention.length + checkRows.filter(row => row.process?.status === 'failed' && !acknowledgedChecks.includes(row.check.id)).length} attention`, props.terminalWidth)}</text></box>
-      <box height={1} flexShrink={0} flexDirection="row">{PRESETS.map(preset => <Action key={preset} theme={theme} selected={preferences.preset === preset} label={preset} onPress={() => { setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); setCompactOpen(false) }} />)}<Action theme={theme} label="F8 Inspector" onPress={() => selectInspector(preferences.inspector)} /><Action theme={theme} label="F9 Terminal" onPress={() => { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, preset: previous.preset === 'focus' ? 'build' : previous.preset })); setCompactOpen(false); focus('terminal') }} /></box>
-    </box> : null}
+    {active ? <EngineeringHeader width={props.terminalWidth} rows={headerRows} theme={theme} preset={preferences.preset}
+      title={` ENGINEERING · ${cwd.split('/').pop()} · ${repository?.branch ?? (error ? 'no repository' : 'loading…')}${files.length ? ` · ${files.length} change${files.length === 1 ? '' : 's'}` : ''}${props.running.length ? ` · ${props.running.length} running` : ''}${props.recent.size ? ` · ${props.recent.size} recent` : ''}${props.attention.length ? ` · ${props.attention.length} attention` : ''}`}
+      onPreset={preset => { setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); setCompactOpen(false) }}
+      onInspector={() => selectInspector(preferences.inspector)}
+      onTerminal={() => { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, preset: previous.preset === 'focus' ? 'build' : previous.preset })); setCompactOpen(false); focus('terminal') }} /> : null}
     <box height={layout.height} flexShrink={0} flexDirection="row">
       <box key="existing-workspace" onMouseDown={() => setFocused(null)} width={layout.width} height={layout.height}>{props.children}</box>
       {active && inspectorWidth ? inspector(inspectorWidth, layout.height) : null}
     </box>
-    {active && !inspectorWidth && compactOpen ? <box position="absolute" left={0} top={2} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - 3, 12))}</box> : null}
-    {active && preferences.drawerOpen && preferences.preset !== 'focus' ? <box id="engineering-terminal" position={drawerRows ? undefined : "absolute"} top={drawerRows ? undefined : 2} left={drawerRows ? undefined : 0} width={props.terminalWidth} zIndex={drawerRows ? undefined : 31} backgroundColor={theme.bg} height={drawerRows || Math.max(8, props.terminalHeight - 4)} flexShrink={0} flexDirection="column" border borderColor={focused === 'terminal' ? theme.cyan : theme.border} onMouseDown={() => focus('terminal')}>
-      <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}>TERMINAL / PROCESSES</text><Action theme={theme} label="− height" onPress={() => setPreferences(previous => ({ ...previous, drawerRows: Math.max(8, previous.drawerRows - 2) }))} /><Action theme={theme} label="+ height" onPress={() => setPreferences(previous => ({ ...previous, drawerRows: previous.drawerRows + 2 }))} /><Action theme={theme} label="Close" onPress={() => { setPreferences(previous => ({ ...previous, drawerOpen: false })); setFocused(null) }} /></box>
+    {active && !inspectorWidth && compactOpen ? <box position="absolute" left={0} top={headerRows} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - headerRows - 1, 12))}</box> : null}
+    {active && preferences.drawerOpen && preferences.preset !== 'focus' ? <box id="engineering-terminal" position={drawerRows ? undefined : "absolute"} top={drawerRows ? undefined : headerRows} left={drawerRows ? undefined : 0} width={props.terminalWidth} zIndex={drawerRows ? undefined : 31} backgroundColor={theme.bg} height={drawerRows || Math.max(8, props.terminalHeight - 4)} flexShrink={0} flexDirection="column" border borderColor={focused === 'terminal' ? theme.cyan : theme.border} onMouseDown={() => focus('terminal')}>
+      <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}>TERMINAL / PROCESSES</text><Action theme={theme} label="Close" onPress={() => { setPreferences(previous => ({ ...previous, drawerOpen: false })); setFocused(null) }} /></box>
+      <PaneResizeHandle kind="drawer" extent={drawerRows || Math.max(8, props.terminalHeight - 4)} edge="top" inset={-1} />
       {props.renderTerminal(props.terminalWidth - 2, (drawerRows || Math.max(8, props.terminalHeight - 4)) - 3, focused === 'terminal' && !props.blocked, handler => { terminalKeys.current = handler }, setTerminalCapture)}
     </box> : null}
   </box>
 }
 
 export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys }: {
-  sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height: number; theme: TuiThemePalette
+  sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height?: number; theme: TuiThemePalette
   preferences: Props['layout']['preferences']; onPreferences: Props['layout']['setPreferences']; onSelect: (session: Session) => void; onNavigate: (session: Session) => void; onFocus: () => void; enabled: boolean; registerKeys: (handler: EngineeringKeyHandler | null) => void
 }) {
   const [searchFocused, setSearchFocused] = useState(false)
@@ -269,15 +286,16 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
     })
     return () => registerKeys(null)
   })
-  return <box id="engineering-sessions" width={width} height={height} border flexDirection="column" borderColor={theme.border}>
+  return <box id="engineering-sessions" width={width} height={height} alignSelf="stretch" flexShrink={0} border flexDirection="column" borderColor={enabled ? theme.cyan : theme.border} onMouseDown={onFocus}>
+    <PaneResizeHandle kind="sidebar" extent={width} edge="right" inset={-1} />
     <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {sessions.length}</text></box>
     <box height={1} flexShrink={0} onMouseDown={() => { onFocus(); setSearchFocused(true) }}><input id="engineering-input:search" placeholder="Search sessions…" value={preferences.query} focused={searchFocused && enabled} onInput={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)} /></box>
     <box height={1} flexShrink={0} flexDirection="row">{(['all', 'attention', 'running', 'pinned'] as const).map(filter => <Action key={filter} theme={theme} selected={preferences.filter === filter} label={filter === 'attention' ? 'input' : filter === 'running' ? 'run' : filter === 'pinned' ? 'pin' : 'all'} onPress={() => onPreferences(previous => ({ ...previous, filter }))} />)}</box>
-    <box height={1} flexShrink={0} flexDirection="row"><Action theme={theme} label="−" onPress={() => onPreferences(previous => ({ ...previous, sidebarWidth: Math.max(24, previous.sidebarWidth - 2) }))} /><Action theme={theme} label="+" onPress={() => onPreferences(previous => ({ ...previous, sidebarWidth: Math.min(48, previous.sidebarWidth + 2) }))} /></box>
+
     <scrollbox flexGrow={1} minHeight={0}>{[...groups].map(([name, entries]) => entries.length ? <box key={name} flexShrink={0} flexDirection="column">
       <Action theme={theme} label={`${preferences.collapsed.includes(name) ? '▸' : '▾'} ${name} / ${entries.length}`} onPress={() => onPreferences(previous => ({ ...previous, collapsed: previous.collapsed.includes(name) ? previous.collapsed.filter(value => value !== name) : [...previous.collapsed, name] }))} />
       {!preferences.collapsed.includes(name) ? entries.map(session => { const key = sessionKey(session); return <box key={key} flexShrink={0} flexDirection="column">
-        <box flexDirection="row"><Action theme={theme} tone={theme.text} selected={selected === key} label={fitText(engineeringSessionTitle(session), width - 7)} onPress={() => { setSearchFocused(false); onSelect(session) }} /><Action theme={theme} label={preferences.pinned.includes(key) ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /></box>
+        <box flexDirection="row"><Action theme={theme} tone={theme.text} selected={selected === key} label={fitText(engineeringSessionTitle(session), width - 7)} onPress={() => { setSearchFocused(false); onSelect(session); onFocus() }} /><Action theme={theme} label={preferences.pinned.includes(key) ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /></box>
         <text height={1} fg={theme.dim} wrapMode="none">{fitText(` ${session.provider} · ${attentionKeys.has(key) ? 'attention' : runningKeys.has(key) ? 'running' : recent.has(key) ? 'recent activity' : 'idle'}${session.summary?.startsWith('/') ? ` · ${session.summary}` : ''}`, width - 2)}</text>
       </box> }) : null}
     </box> : null)}</scrollbox>

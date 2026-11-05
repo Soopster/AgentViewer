@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../../lib/git/command'
-import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringPreset, engineeringSessionTitle, engineeringFileEvidence, engineeringHandoff } from './engineering/model'
+import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, engineeringFileEvidence, engineeringHandoff } from './engineering/model'
 import { createEngineeringRepositoryClient } from './engineeringRepositoryWorkerClient'
 import { readEngineeringRepository } from './engineering/repository'
 import type { TuiTranscriptCard } from '../format'
@@ -13,6 +13,11 @@ assert.equal(engineeringGeometry(200, 40, ENGINEERING_DEFAULTS).inspectorWidth, 
 assert.equal(engineeringGeometry(200, 40, engineeringPreset(ENGINEERING_DEFAULTS, 'focus')).inspectorWidth, 0)
 assert.equal(engineeringGeometry(80, 24, { ...ENGINEERING_DEFAULTS, drawerOpen: true }).drawerRows, 0)
 assert.equal(ENGINEERING_DEFAULTS.preset, 'build')
+const changedFiles = [{ path: 'a.ts' }, { path: 'b.ts' }]
+assert.equal(engineeringSelectedFile(changedFiles, null)?.path, 'a.ts', 'First changed file previews automatically')
+assert.equal(engineeringSelectedFile(changedFiles, 'b.ts')?.path, 'b.ts', 'Keep an explicit selection through a refresh')
+assert.equal(engineeringSelectedFile(changedFiles.slice(0, 1), 'b.ts')?.path, 'a.ts', 'Fall back when the selected change disappears')
+assert.equal(engineeringSelectedFile([], 'a.ts'), null, 'A clean repository has no preview selection')
 assert.equal(engineeringSessionTitle({ sessionId: 'a', summary: '/goal', firstPrompt: 'Fix reconnect', lastModified: 0 }), 'Fix reconnect')
 const edit: TuiTranscriptCard = { key: 'edit-source', role: 'assistant', label: 'Edit', category: 'diff', autoFold: true, compactSummary: 'Edited a.ts', lines: [], expandedLines: [], searchText: '', searchHaystackLower: '', fileEdits: [{ path: '/repo/a.ts', added: 1, removed: 0 }] }
 assert.deepEqual(engineeringFileEvidence([edit], 'a.ts', '/repo').map(card => card.key), ['edit-source'])

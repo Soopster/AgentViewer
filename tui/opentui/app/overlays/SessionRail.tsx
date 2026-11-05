@@ -11,6 +11,7 @@ import { Slot } from '../../slots'
 import { type SidebarEntry, type PaneFocus } from '../types'
 import { Spinner } from '../chrome'
 import { SectionFrame } from '../borders'
+import { PaneResizeHandle } from '../../paneResize'
 
 export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements }: {
   showRail: boolean
@@ -62,6 +63,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             title={sidebarView === 'coordinator' ? coordinatorSidebarHeader : undefined}
             titleColor={theme.cyan}
           >
+            <PaneResizeHandle kind="sidebar" extent={sidebarWidth} edge="right" inset={-1} />
             {sidebarView === 'sessions' ? (
               // Painted into the top border, where a title goes, rather than
               // on a row of its own under it: the rail's first row is a session.

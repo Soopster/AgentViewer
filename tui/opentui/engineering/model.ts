@@ -3,6 +3,9 @@ import type { TuiTranscriptCard } from '../../format'
 
 export type EngineeringPreset = 'focus' | 'build' | 'review' | 'multi-agent'
 export type InspectorTab = 'changes' | 'checks' | 'tasks' | 'context' | 'attention' | 'handoff'
+export function engineeringSelectedFile<T extends { path: string }>(files: readonly T[], preferredPath: string | null): T | null {
+  return files.find(file => file.path === preferredPath) ?? files[0] ?? null
+}
 export type EngineeringPreferences = {
   preset: EngineeringPreset
   inspector: InspectorTab
@@ -11,6 +14,8 @@ export type EngineeringPreferences = {
   sidebarWidth: number
   drawerOpen: boolean
   drawerRows: number
+  fileListRows?: number
+  composerRows?: number
   query: string
   filter: 'all' | 'attention' | 'running' | 'pinned'
   pinned: string[]
@@ -20,12 +25,14 @@ export const ENGINEERING_DEFAULTS: EngineeringPreferences = {
   preset: 'build', inspector: 'changes', inspectorOpen: true, inspectorWidth: 48,
   sidebarWidth: 28, drawerOpen: false, drawerRows: 12, query: '', filter: 'all', pinned: [], collapsed: [],
 }
+export function engineeringHeaderRows(width: number): number { return width >= 132 ? 1 : 2 }
 export function engineeringGeometry(width: number, height: number, preferences: EngineeringPreferences) {
   const inspectorWidth = preferences.inspectorOpen && preferences.preset !== 'focus' && width >= 132
-    ? Math.min(Math.max(32, preferences.inspectorWidth), Math.floor(width * .4)) : 0
+    ? Math.min(Math.max(32, preferences.inspectorWidth), Math.max(32, width - Math.max(24, preferences.sidebarWidth) - 48)) : 0
   const drawerRows = preferences.drawerOpen && preferences.preset !== 'focus' && height >= 32
-    ? Math.min(Math.max(8, preferences.drawerRows), Math.floor(height / 3)) : 0
-  return { inspectorWidth, drawerRows, width: width - inspectorWidth, height: height - 2 - drawerRows }
+    ? Math.min(Math.max(8, preferences.drawerRows), height - 20) : 0
+  const headerRows = engineeringHeaderRows(width)
+  return { inspectorWidth, drawerRows, headerRows, width: width - inspectorWidth, height: height - headerRows - drawerRows }
 }
 export function engineeringPreset(preferences: EngineeringPreferences, preset: EngineeringPreset): EngineeringPreferences {
   return { ...preferences, preset, inspectorOpen: preset !== 'focus',

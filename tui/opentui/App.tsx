@@ -415,6 +415,8 @@ import { useProviderGroup } from './app/slices/provider'
 import { useWorkspaceContextGroup } from './app/slices/workspaceContext'
 import { EngineeringFrame, EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
 import { useEngineeringLayout } from './engineering/state'
+import { PaneResizeProvider, usePaneResize } from './paneResize'
+import { ResizeReadout } from './ResizeReadout'
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -467,6 +469,12 @@ function OpenTuiWorkspace() {
   const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions()
   const engineeringLayout = useEngineeringLayout(terminalWidth, terminalHeight)
   const { width, height } = engineeringLayout
+  const [composerHeightPreference, setComposerHeightPreference] = useWorkspaceState<number | undefined>('composerHeightPreference', undefined)
+  const manualComposerHeight = engineeringLayout.active ? engineeringLayout.preferences.composerRows : composerHeightPreference
+  const setManualComposerHeight = (rows: number | undefined) => {
+    if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, composerRows: rows }))
+    else setComposerHeightPreference(rows)
+  }
   const engineeringKeyRef = useRef<EngineeringKeyHandler | null>(null)
   const engineeringRailKeyRef = useRef<EngineeringKeyHandler | null>(null)
 
@@ -1463,6 +1471,7 @@ function OpenTuiWorkspace() {
     composerTargetSessionInfo, composerCurrentModel, composerModelLookupSettled,
     filteredModelPickerOptions,
   } = useComposerHeightGroup({
+    composerHeightPreference: manualComposerHeight,
     embeddedComposer, composerDraftLines, height, fullscreenMode, composerDockChromeHeight,
     windowPresentation, composerTargetSessionIdentity, composerWindowOpen, composerHidden,
     composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
@@ -5781,6 +5790,7 @@ function OpenTuiWorkspace() {
     // The goal dialog owns every key while it is open: Tab moves between its
     // two fields, ^P pauses or resumes, ^D clears the goal, everything else
     // falls through to the focused input.
+    if (key.name === 'escape' && paneResize.cancel()) { handled(() => {}); return }
     if (sessionGoal.dialogOpen) {
       if (key.name === 'escape') {
         handled(() => sessionGoal.closeDialog())
@@ -6264,10 +6274,59 @@ function OpenTuiWorkspace() {
     setSurfacePanelResizing, surfacePanelKeyHandlerRef, surfacePluginKeyRef, renderSurfaceBody, resizeSurfacePanelBy,
   })
 
+  const paneResize = usePaneResize({
+    blocked: windowControlsBlocked || sessionGoal.dialogOpen, width: terminalWidth, height: terminalHeight, theme,
+    bindings: {
+      sidebar: {
+        min: MIN_SIDEBAR_WIDTH, max: maxSidebarWidth, available: sidebarWidth + readerAreaWidth,
+        apply: value => { if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, sidebarWidth: value })); else setSidebarWidthPreference(value) },
+        restore: () => { if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, sidebarWidth: engineeringLayout.preferences.sidebarWidth })); else setSidebarWidthPreference(sidebarWidthPreference) },
+        commit: value => { if (!engineeringLayout.active) void writeTuiSidebarWidth(value).catch(error => setError(String(error))) },
+      },
+      composer: {
+        min: embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, max: Math.floor(height * .4), available: mainContentHeight + composerDockHeight,
+        apply: setManualComposerHeight, restore: () => setManualComposerHeight(manualComposerHeight),
+      },
+      'surface-width': {
+        min: SURFACE_PANEL_MIN_WIDTH, max: surfacePanelMaxWidth, available: effectiveSurfacePanelWidth + readerAreaWidth,
+        apply: value => { setSurfacePanelExpanded(false); setSurfacePanelWidth(value) },
+        restore: () => { setSurfacePanelWidth(surfacePanelWidth); setSurfacePanelExpanded(surfacePanelExpanded) },
+      },
+      'surface-rows': {
+        min: SURFACE_PANEL_MIN_ROWS, max: surfacePanelMaxRows, available: effectiveSurfacePanelRows + mainContentHeight,
+        apply: value => { setSurfacePanelExpanded(false); setSurfacePanelRows(value) },
+        restore: () => { setSurfacePanelRows(surfacePanelRows); setSurfacePanelExpanded(surfacePanelExpanded) },
+      },
+      tasks: {
+        min: TASK_PANEL_MIN_WIDTH, max: maxTaskPanelWidth, available: effectiveTaskPanelWidth + readerAreaWidth,
+        apply: value => { setTaskPanelExpanded(false); setTaskPanelWidth(value) },
+        restore: () => { setTaskPanelWidth(taskPanelWidth); setTaskPanelExpanded(taskPanelExpanded) },
+      },
+      ...(engineeringLayout.active ? {
+        inspector: {
+          min: 32, max: Math.max(32, terminalWidth - sidebarWidth - Math.max(48, MIN_READER_WIDTH) - rightPanelsWidth - verticalTabsWidth), available: engineeringLayout.inspectorWidth + readerAreaWidth,
+          apply: (value: number) => engineeringLayout.setPreferences(previous => ({ ...previous, inspectorWidth: value })),
+          restore: () => engineeringLayout.setPreferences(previous => ({ ...previous, inspectorWidth: engineeringLayout.preferences.inspectorWidth })),
+        },
+        drawer: {
+          min: 8, max: terminalHeight - 20, available: terminalHeight - engineeringLayout.headerRows,
+          apply: (value: number) => engineeringLayout.setPreferences(previous => ({ ...previous, drawerRows: value })),
+          restore: () => engineeringLayout.setPreferences(previous => ({ ...previous, drawerRows: engineeringLayout.preferences.drawerRows })),
+        },
+        files: {
+          min: 1, max: Math.max(1, engineeringLayout.height - 22), available: engineeringLayout.height - 10,
+          apply: (value: number) => engineeringLayout.setPreferences(previous => ({ ...previous, fileListRows: value })),
+          restore: () => engineeringLayout.setPreferences(previous => ({ ...previous, fileListRows: engineeringLayout.preferences.fileListRows })),
+        },
+      } : {}),
+    },
+  })
+
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
   const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
   return (
     <BordersContext.Provider value={showBorders}>
+    <PaneResizeProvider value={paneResize.context}>
     <EngineeringFrame
       layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
       theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
@@ -6301,7 +6360,7 @@ function OpenTuiWorkspace() {
             <text fg={theme.cyan} selectable={false} wrapMode="none">{fullscreenMode ? ' FULLSCREEN · Shift+Z restore ' : ' ZOOM · Ctrl+B m restore '}</text>
           </box> : null}
       <WorkspaceBody isolatedView={engineeringLayout.active}
-        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={mainContentHeight} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
+        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}
@@ -6918,12 +6977,10 @@ function OpenTuiWorkspace() {
         if (!divider || !area) return null
         const vertical = divider.axis === 'x'
         const extent = vertical ? divider.rect.width : divider.rect.height
-        return <box id="tree-divider-readout" position="absolute"
+        return <ResizeReadout id="tree-divider-readout"
           left={Math.max(0, Math.min(width - 26, area.x + divider.rect.x + (vertical ? divider.firstExtent + 1 : 2)))}
           top={Math.max(0, Math.min(height - 1, area.y + divider.rect.y + (vertical ? 1 : divider.firstExtent)))}
-          width={Math.min(26, width)} height={1} zIndex={901} backgroundColor={theme.cyan}>
-          <text fg={theme.bg} selectable={false} wrapMode="none">{` ${divider.firstExtent} / ${extent - divider.firstExtent} ${vertical ? 'cols' : 'rows'} `}</text>
-        </box>
+          width={Math.min(26, width)} theme={theme} label={`${divider.firstExtent} / ${extent - divider.firstExtent} ${vertical ? 'cols' : 'rows'}`} />
       })() : null}
       {splitDividerDragging ? (
         // The divider drag, held by a full-screen layer for the same reason as the panel's.
@@ -7193,6 +7250,8 @@ function OpenTuiWorkspace() {
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
     </box>
     </EngineeringFrame>
+    {paneResize.layer}
+    </PaneResizeProvider>
     </BordersContext.Provider>
   )
 }

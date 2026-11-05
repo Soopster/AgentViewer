@@ -13,6 +13,7 @@ import {
 import { activeSurface, type SurfacePanelState, type TuiSurface } from './surfacePanelState'
 import { WindowButton } from './WindowButton'
 import { SectionFrame, useBordersVisible } from './app/borders'
+import { PaneResizeHandle, useSharedPaneResize } from './paneResize'
 
 export type SurfacePanelKey = {
   name: string
@@ -170,6 +171,7 @@ export function SurfacePanel({
 
   const innerWidth = Math.max(10, width - 2)
   const bordersVisible = useBordersVisible()
+  const sharedResize = useSharedPaneResize()
   const title = ` Panel${placement === 'bottom' ? ' · under' : ''}${expanded ? ' · expanded' : ''} `
   // Under the reader the handle is the top border, which carries the title; it starts after it.
   const handleLeft = placement === 'bottom' ? title.length + 1 : 0
@@ -208,7 +210,7 @@ export function SurfacePanel({
       titleColor={focused ? theme.cyan : theme.dim}
       titleAlignment="left"
     >
-      {onResizeStart ? (
+      {sharedResize ? <PaneResizeHandle id="surface-panel-resize-handle" kind={placement === 'bottom' ? 'surface-rows' : 'surface-width'} extent={placement === 'bottom' ? height : width} edge={placement === 'bottom' ? 'top' : 'left'} inset={-1} leading={placement === 'bottom' ? handleLeft : 0} /> : onResizeStart ? (
         // Laid over the inner border, so dragging it resizes the panel.
         <box
           id="surface-panel-resize-handle"

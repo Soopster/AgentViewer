@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { PaneResizeHandle } from '../../paneResize'
 import type { OpenCodeTodo } from '../../../../lib/taskRegistry'
 import type { TuiThemePalette } from '../../../theme'
 import { TaskSidePanel } from '../../TaskSidePanel'
@@ -32,6 +33,7 @@ export function TaskSidePanelFrame({ taskPanelVisible, effectiveSurfacePanelWidt
             overflow="hidden"
             zIndex={4}
           >
+            <PaneResizeHandle kind="tasks" extent={effectiveTaskPanelWidth} edge="left" />
             <TaskSidePanel
               messages={taskPanelMessages}
               todos={composerLiveTodos}

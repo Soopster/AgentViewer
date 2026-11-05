@@ -5,10 +5,12 @@ import type { TuiThemePalette } from '../../theme'
 import type { TuiTranscriptCard } from '../../format'
 import { fitText } from '../textLayout'
 import { EngineeringAction as Action } from './EngineeringAction'
+import { PaneResizeHandle } from '../paneResize'
 import type { EngineeringFile } from './repository'
 
 type Props = {
   files: EngineeringFile[]; width: number; height: number; theme: TuiThemePalette
+  listRowsPreference?: number
   selectedPath: string | null; patch: string; evidence: TuiTranscriptCard[]
   focused: boolean; editing: boolean
   onSelect: (path: string, index: number) => void
@@ -27,7 +29,7 @@ export function EngineeringChanges(props: Props) {
   const { files, theme, width, selectedPath } = props
   const [comment, setComment] = useState('')
   const list = useRef<ScrollBoxRenderable | null>(null)
-  const listRows = Math.max(4, Math.min(14, Math.floor(props.height * .3)))
+  const listRows = Math.max(1, Math.min(props.listRowsPreference ?? Math.min(files.length, 14, Math.floor(props.height * .3)), Math.max(1, props.height - 22)))
   useEffect(() => {
     const index = files.findIndex(file => file.path === selectedPath)
     const scroll = list.current
@@ -37,7 +39,7 @@ export function EngineeringChanges(props: Props) {
   }, [selectedPath, files])
 
   return <box flexGrow={1} minHeight={0} flexDirection="column">
-    <box height={1} flexShrink={0}><text fg={theme.dim}> Repository-wide · {files.length} changed files</text></box>
+    <box height={1} flexShrink={0}><text fg={theme.dim}> Repository-wide · {files.length} changed file{files.length === 1 ? '' : 's'}</text></box>
     <Action theme={theme} label="Open full Git review / hunk comments" onPress={props.onReview} />
     <scrollbox ref={list} height={listRows} flexShrink={0}>
       {files.map((file, index) => {
@@ -48,7 +50,8 @@ export function EngineeringChanges(props: Props) {
       })}
       {!files.length ? <text fg={theme.dim}> No changed files available.</text> : null}
     </scrollbox>
-    <box height={1} flexShrink={0} backgroundColor={theme.surface2}>
+    <box height={2} flexShrink={0} border={['top']} borderColor={theme.border} backgroundColor={theme.surface2}>
+      <PaneResizeHandle kind="files" extent={listRows} edge="top" inset={-1} direction="bottom" limits={{ min: 1, max: Math.max(1, props.height - 22) }} />
       <text fg={theme.text} wrapMode="none">{fitText(` ${selectedPath ?? 'Select a file to preview its diff'}`, width - 2)}</text>
     </box>
     {selectedPath ? <>
@@ -67,6 +70,6 @@ export function EngineeringChanges(props: Props) {
             setComment(''); props.onEndEdit()
           }} />
       </box>
-    </> : <box flexGrow={1}><text fg={theme.dim}> Select a file or use ↑/↓ to preview.</text></box>}
+    </> : <box flexGrow={1}><text fg={theme.dim}>{files.length ? ' Select a file or use ↑/↓ to preview.' : ' Changes appear here as files are edited.'}</text></box>}
   </box>
 }

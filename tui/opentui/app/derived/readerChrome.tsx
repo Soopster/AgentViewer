@@ -17,6 +17,7 @@ import { type TextareaRenderable } from '@opentui/core'
 import { DraftLengthSpans } from '../inlineText'
 import { type TuiTranscriptCard } from '../../../format'
 import { type WindowChrome } from '../../windowChrome'
+import { PaneResizeHandle } from '../../paneResize'
 import { Spinner, ComposerWaitingStatus, IdleTicker } from '../chrome'
 import { type SurfacePanelState, activeSurface, closeSurface as closeSurfaceIn, cycleSurface as cycleSurfaceIn, openSurface as openSurfaceIn, type TuiSurface } from '../../surfacePanelState'
 import { panelSurfaceAvailability } from '../../../../lib/rightPanel'
@@ -235,6 +236,7 @@ return !composerWindowOpen && !composerHidden && !presentationHidesComposer && e
         borderStyle="single"
         borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
       >
+        <PaneResizeHandle kind="composer" extent={composerDockHeight} edge="top" inset={-1} />
         <box
           flexGrow={1}
           overflow="hidden"

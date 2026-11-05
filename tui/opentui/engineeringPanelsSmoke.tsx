@@ -18,7 +18,7 @@ try {
   assert.match(lines[1]!, /SESSIONS · 150/)
   assert.match(lines[2]!, /Search sessions/)
   assert.match(lines[3]!, /all.*input.*run.*pin/)
-  assert.match(lines[5]!, /RECENT/)
+  assert.match(lines[4]!, /RECENT/)
 } finally { await act(async () => { rail.renderer.destroy() }) }
 
 const files = Array.from({ length: 60 }, (_, index) => ({ path: `src/long-directory/changed-file-${index}.ts`, status: ' M', additions: '12', deletions: '3' }))
@@ -37,5 +37,17 @@ try {
   assert.ok(diff.height >= 10, 'The diff owns a useful independent viewport')
   assert.ok(input.y >= diff.y + diff.height, 'The comment field stays below the diff viewport')
 } finally { await act(async () => { changes.renderer.destroy() }) }
+const single = await testRender(<box width={48} height={38}><EngineeringChanges files={files.slice(0, 1)}
+  width={48} height={38} theme={DARK_THEME} selectedPath={files[0]!.path}
+  patch={'+single-file-preview\n'} evidence={[]} focused={false} editing={false}
+  onSelect={noop} onReview={noop} onJump={noop} onBeginEdit={noop} onEndEdit={noop} onAppend={noop} /></box>, { width: 48, height: 38 })
+try {
+  await act(async () => { await single.flush() })
+  const frame = single.captureCharFrame()
+  assert.match(frame, /1 changed file/)
+  const preview = single.renderer.root.findDescendantById('engineering-diff-preview')!
+  assert.ok(preview.y <= 6, 'One changed file must not reserve an empty tall file list')
+  assert.ok(preview.height >= 25, 'The preview receives the freed rows')
+} finally { await act(async () => { single.renderer.destroy() }) }
 console.log('Engineering crowded sidebar and independent file/diff viewport smoke passed')
 process.exit(0)

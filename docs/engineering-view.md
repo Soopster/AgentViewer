@@ -6,6 +6,7 @@ Open the TUI view picker (`v`) and select **Engineering**, or choose **Engineeri
 - **F7** cycles presets, **F8** focuses the inspector, and **F9** opens or closes the terminal/process drawer. In the inspector, left/right selects a tab, up/down selects a row, Enter opens it, and Escape returns to the transcript. Narrow terminals open the inspector on demand; short terminals use an overlay for the terminal.
 - Sessions have separate search, activity filters, pins, and collapsible groups. Click `+` to pin. Recent observed writes are labelled separately from a known running turn.
 - Changes are repository-wide. The file list and selected diff scroll independently. Add a file comment to the composer, or open the existing Git surface for full review and hunk comments.
+- Pane borders use the window manager's mouse-resize pattern in every view: hover to highlight the border, drag to resize, and read the live column/row sizes beside it. Escape cancels the drag. This covers sidebars, docked and inline composers, task and surface panels, plus Engineering's inspector, terminal drawer, and file/diff divider.
 - Checks run only when requested. Application-recorded runs show their process result, duration, session identity, and pre-run working-state fingerprint. Changed files or index state make previous results stale. Transcript evidence has an unknown working state and is never promoted to a recorded pass. Process results unavailable after a restart remain explicitly unavailable.
 - Tasks and attention link to their source sessions. Reading attention does not acknowledge it. Completion notices, viewer notes, and recorded check failures have explicit acknowledgement actions.
 - Handoff assembles Markdown locally from recorded objective, response excerpts, changes, checks, and unresolved attention. Copy it for export or add it to the composer. It does not invoke a model.
@@ -23,4 +24,5 @@ bun run tui/opentui/engineeringStateSmoke.tsx
 bun run tui/opentui/engineeringPanelsSmoke.tsx
 bun run tui/opentui/engineeringViewSmoke.tsx
 bun run tui/opentui/engineeringShellSmoke.tsx
+bun run tui/opentui/paneResizeSmoke.tsx
 ```
