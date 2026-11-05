@@ -7,7 +7,7 @@ export function reviewDigest(value: string): string { return createHash('sha256'
 /** Use Pierre's parsed model so code addresses agree with both renderers. */
 export function reviewDocument(patch: string): ReviewDocument {
   const revision = reviewDigest(patch)
-  const files = parsePatchFiles(patch, revision, false).flatMap(part => part.files)
+  const files = parsePatchFiles(patch, { cacheKeyPrefix: revision }).flatMap(part => part.files)
   const hunks: ReviewHunk[] = []
   const paths: string[] = []
   for (const file of files) {

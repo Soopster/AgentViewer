@@ -20,7 +20,7 @@ type ParsedPatch = { files: FileDiffMetadata[] }
 type PierreLight = {
   /** Which copy loaded: 'package' means a release moved the internals. */
   source: 'internal' | 'package'
-  parsePatchFiles: (diffText: string, cacheKey?: string, throwOnError?: boolean) => ParsedPatch[]
+  parsePatchFiles: (diffText: string, options?: { cacheKeyPrefix?: string; throwOnError?: boolean }) => ParsedPatch[]
   cleanLastNewline: (value: string) => string
   /** @pierre/trees' default file order: directories before files at each level, natural, case-insensitive. */
   sortTreePaths: (paths: readonly string[]) => string[]

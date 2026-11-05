@@ -167,7 +167,7 @@ function parseFileDiff(file: PullRequestFile): FileDiffMetadata | null {
   const patchText = `diff --git a/${oldPath} b/${file.filename}\n`
     + (file.patch ? `--- ${oldRef}\n+++ ${newRef}\n${file.patch}\n` : '')
   try {
-    return parsePatchFiles(patchText, 'pr-review', false).flatMap((entry) => entry.files)[0] ?? null
+    return parsePatchFiles(patchText, { cacheKeyPrefix: 'pr-review' }).flatMap((entry) => entry.files)[0] ?? null
   } catch {
     return null
   }

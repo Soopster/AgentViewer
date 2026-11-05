@@ -209,7 +209,7 @@ export async function loadDiffHighlights(
 
   const promise = (async (): Promise<Map<string, TuiFileHighlights>> => {
     try {
-      const parsed = parsePatchFiles(diffText, cacheKey, false)
+      const parsed = parsePatchFiles(diffText, { cacheKeyPrefix: cacheKey })
       const files = parsed.flatMap((p) => p.files)
       const result = new Map<string, TuiFileHighlights>()
 
@@ -357,7 +357,7 @@ export function buildPierreDiffView(
   const rows: TuiPierreDiffRow[] = []
   const splitRows: TuiPierreSplitRow[] = []
   try {
-    const parsed = parsePatchFiles(diffText, cacheKey, false)
+    const parsed = parsePatchFiles(diffText, { cacheKeyPrefix: cacheKey })
     const files = parsed.flatMap((patch) => patch.files)
     if (files.length === 0) return buildFallbackDiffView(diffText, cacheKey)
 

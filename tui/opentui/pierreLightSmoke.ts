@@ -28,6 +28,6 @@ for (let round = 0; round < 300; round++) {
 }
 
 const patch = 'diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n'
-assert.deepEqual(parsePatchFiles(patch, 'k', false), packageParsePatchFiles(patch, 'k', false))
+assert.deepEqual(parsePatchFiles(patch, { cacheKeyPrefix: 'k' }), packageParsePatchFiles(patch, { cacheKeyPrefix: 'k' }))
 assert.equal(cleanLastNewline('a\n'), packageCleanLastNewline('a\n'))
 console.log('pierre light smoke passed (internals load without the package entry points; file order and patch parsing match the packages)')

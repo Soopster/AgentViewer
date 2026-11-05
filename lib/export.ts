@@ -96,7 +96,7 @@ function renderDiffView(oldStr: string, newStr: string): string {
 
 function renderPatchDiffView(patch: string): string {
   try {
-    const files = parsePatchFiles(patch, 'export', false).flatMap((entry) => entry.files)
+    const files = parsePatchFiles(patch, { cacheKeyPrefix: 'export' }).flatMap((entry) => entry.files)
     if (files.length > 0) return files.map(renderFileDiffMetadata).join('')
   } catch {
     // Fall through to escaped plain text for malformed or non-unified snippets.
