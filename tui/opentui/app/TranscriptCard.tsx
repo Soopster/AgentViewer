@@ -1300,6 +1300,8 @@ export function TranscriptCardInner({
                           <span fg={lineColor}>
                             {line.tone === 'tool' && !imessageUserBubble
                               ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
+                              : line.runs && !imessageUserBubble
+                                ? renderInlineTextSegments(ansiRunSegments(line.runs, theme), bodyInnerWidth, theme.dim)
                               : hasInlineSpans(line.text)
                                 ? renderInlineMarkdownClipped(line.text, theme, lineColor, bodyInnerWidth, `${card.key}:body-md:${lineIndex}`, linkCwd)
                                 : fitText(line.text, bodyInnerWidth)}
