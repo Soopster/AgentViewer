@@ -343,7 +343,7 @@ export function EngineeringFrame(props: Props) {
 }
 
 const RAIL_SCOPES = [['repo', 'This repo'], ['all', 'All repos']] as const
-const RAIL_ACTIVITIES = [['running', 'Running'], ['attention', 'Needs input'], ['pinned', 'Pinned']] as const
+const RAIL_ACTIVITIES = [['all', 'All sessions'], ['running', 'Running'], ['attention', 'Needs input'], ['pinned', 'Pinned']] as const
 
 export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys, root }: {
   sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height?: number; theme: TuiThemePalette
@@ -433,7 +433,7 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
     <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {shown === sessions.length ? sessions.length : `${shown}/${sessions.length}`}</text></box>
     <box height={1} flexShrink={0} onMouseDown={() => { onFocus(); setSearchFocused(true) }}><input id="engineering-input:search" placeholder="Search sessions…" value={preferences.query} focused={searchFocused && enabled} onInput={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)} /></box>
     <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_SCOPES.map(([value, label]) => <Action key={value} id={`engineering-scope:${value}`} theme={theme} selected={scope === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: value, activity })) }} />)}</box>
-    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_ACTIVITIES.map(([value, label]) => <Action key={value} id={`engineering-activity:${value}`} theme={theme} selected={activity === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope, activity: activity === value ? null : value })) }} />)}</box>
+    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_ACTIVITIES.map(([value, label]) => <Action key={value} id={`engineering-activity:${value}`} theme={theme} selected={value === 'all' ? activity === null : activity === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope, activity: value === 'all' || activity === value ? null : value })) }} />)}</box>
 
     <scrollbox ref={railScroll} flexGrow={1} minHeight={0}>{rows.map(row => {
       if (row.type === 'group') {
@@ -465,7 +465,9 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
         <text height={1} flexShrink={0} wrapMode="none" selectable={false}><span fg={tone}>{glyph}</span><span fg={theme.dim}>{` ${meta}`}</span></text>
       </box>
     })}
-      {!shown ? <text fg={theme.dim}>{` No ${activity === 'attention' ? 'sessions needing input' : activity === 'running' ? 'running sessions' : activity === 'pinned' ? 'pinned sessions' : 'sessions'} ${scope === 'repo' ? 'in this repo' : 'across all repos'}${preferences.query ? ' matching search' : ''}.`}</text> : null}
+      {!shown ? <box flexShrink={0} flexDirection="column"><text fg={theme.dim}>{` No ${activity === 'attention' ? 'sessions needing input' : activity === 'running' ? 'running sessions' : activity === 'pinned' ? 'pinned sessions' : 'sessions'} ${scope === 'repo' ? 'in this repo' : 'across all repos'}${preferences.query ? ' matching search' : ''}.`}</text>
+        {sessions.length && (activity || scope === 'repo' || preferences.query) ? <Action id="engineering-reset-filters" theme={theme} label="Reset all filters" onPress={() => { setSearchFocused(false); setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: 'all', activity: null, query: '' })) }} /> : null}
+      </box> : null}
     </scrollbox>
     {showDetail ? <box id="engineering-title-detail" position="absolute" bottom={0} left={0} width={width - 2} height={detailHeight} border borderColor={theme.cyan} backgroundColor={theme.surface} zIndex={20} onMouseOver={clearHoverExit} onMouseOut={leaveTitle}>
       <scrollbox ref={titleScroll} flexGrow={1} minHeight={0}><text fg={theme.text} wrapMode="none">{detailLines.join('\n')}</text></scrollbox>

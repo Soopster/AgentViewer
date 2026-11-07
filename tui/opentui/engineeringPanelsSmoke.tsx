@@ -18,7 +18,7 @@ try {
   assert.match(lines[1]!, /SESSIONS · 150/)
   assert.match(lines[2]!, /Search sessions/)
   assert.match(lines[3]!, /This repo.*All repos/)
-  assert.match(rail.captureCharFrame(), /Running.*Needs input/)
+  for (const label of ['All sessions', 'Running', 'Needs input']) assert.ok(rail.captureCharFrame().includes(label))
   assert.match(rail.captureCharFrame(), /Pinned/)
   const projectRow = lines.findIndex(line => line.includes('NO-PROJECT'))
   assert.ok(projectRow > 3)
