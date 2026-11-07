@@ -1,7 +1,7 @@
 import type { Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../format'
 
-export type InspectorTab = 'changes' | 'checks' | 'tasks' | 'context' | 'attention' | 'handoff'
+export type InspectorTab = 'work' | 'changes' | 'checks' | 'tasks' | 'context' | 'attention' | 'handoff'
 export function engineeringSelectedFile<T extends { path: string }>(files: readonly T[], preferredPath: string | null): T | null {
   return files.find(file => file.path === preferredPath) ?? files[0] ?? null
 }

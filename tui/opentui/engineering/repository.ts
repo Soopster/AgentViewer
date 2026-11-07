@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { git } from '../../../lib/git/command'
 
-export type EngineeringFile = { path: string; status: string; additions: string; deletions: string }
+export type EngineeringFile = { path: string; status: string; additions: string; deletions: string; version?: string }
 export type EngineeringRepository = { root: string; branch: string; fingerprint: string; files: EngineeringFile[] }
 
 /** All Git work is asynchronous. No transcript parsing or provider reads. */
@@ -40,6 +40,7 @@ export async function readEngineeringRepository(cwd: string): Promise<Engineerin
     try { const stat = await lstat(join(root, file.path)); return [file.path, stat.size, stat.mtimeMs, stat.ctimeMs] }
     catch { return [file.path, 'missing'] }
   }))
+  files.forEach((file, index) => { file.version = createHash('sha256').update(JSON.stringify([file.status, file.additions, file.deletions, versions[index]])).digest('hex') })
   const fingerprint = createHash('sha256').update(head).update(status).update(unstaged).update(staged).update(JSON.stringify(versions)).digest('hex')
   return { root, branch: branch.trim(), fingerprint, files }
 }

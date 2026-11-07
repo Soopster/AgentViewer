@@ -32,6 +32,8 @@ type Props = {
   selectedPath: string | null
   /** A unified diff of the selected file (an untracked file diffed against /dev/null). */
   patch: string; evidence: TuiTranscriptCard[]
+  requestEvidence?: TuiTranscriptCard
+  onEvidence?: () => void
   /** Repository the diff came from; omitted context is read from it. */
   root?: string
   wrap?: boolean
@@ -148,9 +150,9 @@ export function EngineeringChanges(props: Props) {
   }), [hunks, hunkIndex, selectedPath, cursorRow, model, nodes, cursorIndex, props.onSelect, directoryState])
 
   const listRows = Math.max(1, Math.min(props.listRowsPreference ?? Math.min(Math.max(nodes.length, 1), 14, Math.floor(props.height * .3)), Math.max(1, props.height - 22)))
-  const evidence = props.evidence.slice(-2)
+  const evidence = props.requestEvidence ? [props.requestEvidence, ...props.evidence.slice(-1)] : props.evidence.slice(-2)
   // summary, review action, list, selected-file row (2), evidence, comment (2)
-  const diffRows = Math.max(3, props.height - INSPECTOR_CHROME_ROWS - (3 + listRows + 2 + evidence.length + 2))
+  const diffRows = Math.max(3, props.height - INSPECTOR_CHROME_ROWS - (3 + listRows + 2 + evidence.length + 2 + (props.onEvidence ? 1 : 0)))
   useEffect(() => {
     const index = cursorIndex
     const scroll = list.current
@@ -186,6 +188,7 @@ export function EngineeringChanges(props: Props) {
     </box>
     <Action theme={theme} label="Open full Git review / hunk comments (r)" onPress={props.onReview} />
     <text height={1} flexShrink={0} fg={props.focused ? theme.cyan : theme.muted} wrapMode="none">{` Files ${Math.max(0, fileOrder.indexOf(selectedPath ?? '') + 1)}/${files.length}`}</text>
+    {props.onEvidence ? <Action id="engineering-file-evidence" theme={theme} label="Evidence for selected file (v)" onPress={props.onEvidence} /> : null}
     <scrollbox id="engineering-file-tree" ref={list} height={listRows} flexShrink={0}>
       {nodes.map((node, index) => {
         const indent = '  '.repeat(node.depth)
@@ -213,7 +216,7 @@ export function EngineeringChanges(props: Props) {
     </box>
     {selectedPath ? <>
       {evidence.map(card => <Action key={card.key} theme={theme}
-        label={fitText(`Edit source: ${card.label} · ${card.key.slice(-12)}`, width - 4)} onPress={() => props.onJump(card.key)} />)}
+        label={fitText(card.role === 'user' ? `Request: ${card.compactSummary}` : `Edit source: ${card.label} · ${card.key.slice(-12)}`, width - 4)} onPress={() => props.onJump(card.key)} />)}
       {props.patch ? <StackDiffView id="engineering-diff-preview" model={model} theme={theme} height={diffRows} cursor={cursorRow}
         jumpKey={jumpRow ? diffRowKeys(jumpRow)[0] : undefined} jumpRevision={hunk.revision}
         onRowPress={index => { const at = stackDiffHunkAt(model, index); if (at >= 0) setHunk(previous => ({ path: selectedPath, index: at, revision: previous.revision })) }} />

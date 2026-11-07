@@ -6367,6 +6367,9 @@ function OpenTuiWorkspace() {
       onActivateEngineering={() => chooseTranscriptView('engineering')}
       layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
       theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
+      coordination={watchedCoordinator} onOpenCoordinator={runId => { if (runId) setCoordBoardRunId(runId); runPluginCommandId('coord-board') }} onOpenCoordinatorAgent={openCoordinationAgentSession}
+      sessions={sessions} sessionsLoading={loadingSessions} transcriptLoading={loadingDetail} getSelectedMessageKey={() => selectedWindowHandleRef.current?.()?.getCursorCard()?.key ?? readTranscriptCursorKey()} goalObjective={sessionGoal.goal?.objective}
+      onOpenSession={key => { const target = sessions.find(session => sessionKey(session) === key) ?? openTabByKey.get(key); if (!target) { showNotice('info', 'Session is not in the loaded catalog'); return false }; selectTabSession(target); return true }}
       session={selectedSession} cards={transcriptCards} messages={taskPanelMessages}
       attention={attentionItems} running={runningSessions} recent={recentlyWrittenKeys} blocked={windowControlsBlocked}
       registerKeys={handler => { engineeringKeyRef.current = handler }}

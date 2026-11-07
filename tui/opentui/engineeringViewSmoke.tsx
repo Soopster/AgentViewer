@@ -80,6 +80,12 @@ const USER_CARD: TuiTranscriptCard = {
   lines: [{ text: 'Inspect coordinator recovery and show the changes needed for a reliable handoff.', tone: 'default' }],
   expandedLines: [{ text: 'Inspect coordinator recovery and show the changes needed for a reliable handoff.', tone: 'default' }],
 }
+const COORDINATOR_FIXTURE = {
+  run: { id: 'engineering-coordination', prompt: 'Coordinate recovery', baseCwd: process.cwd(), status: 'running', createdAt: '2026-11-07T00:00:00Z', updatedAt: '2026-11-07T00:01:00Z' },
+  agents: [{ id: 'builder', name: 'Build worker', role: 'lead', provider: 'claude', sessionId: SESSION.sessionId, status: 'working', turnActive: true, worktreePath: process.cwd(), worktreeBranch: 'main' }],
+  tasks: [{ id: 'implementation', title: 'Implement recovery', status: 'in_progress', ownerAgentId: 'builder', paths: ['src/recovery.ts'], blockedBy: ['gate'] }, { id: 'gate', title: 'Choose contract', status: 'pending', paths: [], blockedBy: [] }],
+  messages: [], locks: [], events: [],
+} as unknown as import('../../lib/agentProtocol').ProtocolRunSnapshot
 const DETAIL = {
   info: null,
   rawMessages: [],
@@ -112,6 +118,9 @@ mock.module('../../lib/tui/service', () => ({
   readTuiSessions: async () => SESSIONS,
   readTuiSessionDetail: async () => DETAIL,
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
+  listTuiProtocolRuns: async () => [COORDINATOR_FIXTURE.run],
+  readTuiProtocolRun: async () => COORDINATOR_FIXTURE,
+  subscribeTuiProtocolRunChanges: () => () => {},
   readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
@@ -195,6 +204,38 @@ try {
       await act(async () => { await setup.mockMouse.click(node.x + 1, node.y) })
       await settle()
     }
+    await click('engineering-work-open')
+    if (!setup.captureCharFrame().includes('What does done look like?')) throw new Error('Work tab did not expose the persistent brief')
+    await click('engineering-work:edit-objective')
+    await act(async () => { await setup.mockInput.typeText('Ship coherent engineering work') })
+    await act(async () => { setup.mockInput.pressKey('s', { ctrl: true }) })
+    await settle()
+    if (!setup.captureCharFrame().includes('Ship coherent engineering work')) throw new Error('Brief objective did not save through keyboard routing')
+    await click('engineering-work:edit-criteria')
+    await act(async () => { await setup.mockInput.typeText('Record validation evidence') })
+    await click('engineering-work:save')
+    const body = setup.renderer.root.findDescendantById('engineering-work-body') as import('@opentui/core').ScrollBoxRenderable
+    await act(async () => { body.scrollChildIntoView('engineering-work:criterion-check') })
+    await settle()
+    await click('engineering-work:criterion-check')
+    await act(async () => { await setup.mockInput.typeText('printf workbench-validation') })
+    await click('engineering-work:save')
+    await settle()
+    await act(async () => { (setup.renderer.root.findDescendantById('engineering-work-body') as import('@opentui/core').ScrollBoxRenderable).scrollTo(0) })
+    await settle()
+    if (!setup.captureCharFrame().includes('passed · printf workbench-validation')) throw new Error(`Application-run criterion check did not settle:\n${setup.captureCharFrame()}`)
+    const processes = await import('./processStore')
+    const checkProcess = processes.getProcesses().find(process => process.command === 'printf workbench-validation')
+    if (!checkProcess || !processes.removeProcess(checkProcess.id)) throw new Error('Completed verification process was not removable')
+    await settle()
+    if (!setup.captureCharFrame().includes('passed · printf workbench-validation')) throw new Error('Archived verification disappeared with its process')
+    await click('engineering-work:evidence')
+    if (!setup.captureCharFrame().includes('No recorded edit links')) throw new Error('Missing file evidence was not explicitly unknown')
+    await click('engineering-work:agents')
+    if (!setup.captureCharFrame().includes('Build worker')) throw new Error(`Existing Coordinator data did not enter Engineering:\n${setup.captureCharFrame()}`)
+    await click('engineering-coordination:task:implementation')
+    if (!setup.captureCharFrame().includes('Declared file scope') || !setup.captureCharFrame().includes('src/recovery.ts')) throw new Error('Coordinator task scope was not inspectable')
+    await click('engineering-tab:checks')
     const dockWidth = setup.renderer.root.findDescendantById('engineering-inspector')!.width
     const headerRow = setup.captureCharFrame().split('\n')[0] ?? ''
     if (/\b(Build|Review|Agents)\b/.test(headerRow)) throw new Error('Separate engineering presets remain in the header')

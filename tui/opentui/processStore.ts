@@ -155,15 +155,16 @@ function installExitHook(): void {
 }
 
 /** Adds a process without starting it (a suggestion, or one stopped by the user). */
-export function addProcess(definition: { name: string; command: string; cwd: string; ownerId?: string }): string {
+export function addProcess(definition: { name: string; command: string; cwd: string; ownerId?: string; reuse?: boolean }): string {
   if (isWorkspaceClosed(definition.ownerId)) throw new Error('Workspace has been closed')
-  const existing = [...entries.values()].find((entry) => entry.command === definition.command && entry.cwd === definition.cwd && entry.ownerId === definition.ownerId)
+  const { reuse = true, ...processDefinition } = definition
+  const existing = reuse ? [...entries.values()].find((entry) => entry.command === definition.command && entry.cwd === definition.cwd && entry.ownerId === definition.ownerId) : undefined
   if (existing) return existing.id
   counter += 1
   const id = `proc-${counter}`
   entries.set(id, {
     id,
-    ...definition,
+    ...processDefinition,
     status: 'idle',
     exitCode: null,
     signal: null,
@@ -200,6 +201,8 @@ export function startProcess(id: string): void {
     })
   } catch (error) {
     entry.status = 'failed'
+    entry.startedAt = Date.now(); entry.endedAt = entry.startedAt
+    entry.exitCode = null; entry.signal = null
     pushLines(entry, [`— could not start: ${error instanceof Error ? error.message : String(error)}`])
     notifyNow()
     return
