@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/react */
-import { useAppState } from '../../workspaceContext'
-import type { TuiTranscriptView } from '../../../theme'
 import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { TuiThemePalette } from '../../../theme'
 import type { ProviderComposerConfig } from '../../../../lib/providerComposer'
@@ -71,7 +69,6 @@ export type UseFooterSegmentsGroupContext = {
 }
 
 export function useFooterSegmentsGroup(ctx: UseFooterSegmentsGroupContext) {
-  const [view] = useAppState<TuiTranscriptView>('transcriptView', 'conversation')
   const {
     composerActive, composerKeysTargetTurn, effectiveFocus, sidebarView, isScrollbackView,
     scrollbackExpanded, commandChordPending, theme, splitChordPending, attentionNeedsInputCount,
@@ -135,7 +132,7 @@ export function useFooterSegmentsGroup(ctx: UseFooterSegmentsGroupContext) {
     const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
     if (nextWidth === sidebarWidth) return
     setSidebarWidthPreference(nextWidth)
-    if (view !== 'engineering') void writeTuiSidebarWidth(nextWidth).catch((err) => {
+    void writeTuiSidebarWidth(nextWidth).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store sidebar width')
     })
   })

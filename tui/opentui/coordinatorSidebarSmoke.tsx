@@ -2,7 +2,7 @@
 // Coordinator sidebar tab smoke: seeds a real Coordinator run (lead + a
 // teammate) directly through the external-protocol API — no live provider
 // CLI needed — then mounts the full OpenTUI app and drives the `a` toggle,
-// verifying the tab shows roles/relationships and row navigation works.
+// verifying shared-frame tabs, roster relationships and row navigation.
 // Full-App-mounted smokes use console.error + process.exit(1) instead of
 // throwing (matching coordSmoke.tsx) — the app's own live timers (session
 // polls, heartbeats) keep the process alive past an uncaught throw.
@@ -43,14 +43,20 @@ await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
 })
 
-act(() => { setup.mockInput.pressKey('a') })
+const sharedFrame = setup.renderer.root.findDescendantById('session-rail')!
+const coordinatorTab = setup.renderer.root.findDescendantById('sidebar-tab:coordinator')!
+await act(async () => { await setup.mockMouse.click(coordinatorTab.x + 1, coordinatorTab.y) })
 await act(async () => {
   await setup.flush()
   await new Promise((resolve) => setTimeout(resolve, 250))
 })
+const coordinatorRows = setup.renderer.root.findDescendantById('coordinator-sidebar-rows')!
+if (setup.renderer.root.findDescendantById('session-rail') !== sharedFrame || !coordinatorRows || coordinatorRows.y + coordinatorRows.height > sharedFrame.y + sharedFrame.height - 1) {
+  console.error('Coordinator tab did not stay inside the shared sidebar border'); process.exit(1)
+}
 let frame = captureCharFrame()
 if (!frame.includes('COORDINATOR')) {
-  console.error(`'a' did not switch the sidebar to the Coordinator tab:\n${frame}`)
+  console.error(`Clicking Coordinator did not switch the sidebar tab:\n${frame}`)
   process.exit(1)
 }
 if (!frame.includes('◆')) {

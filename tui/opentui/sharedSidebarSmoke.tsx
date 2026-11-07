@@ -5,7 +5,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Session } from '../../lib/types'
-import type { EngineeringPreferences } from './engineering/model'
+import { ENGINEERING_DEFAULTS } from './engineering/model'
+import type { SessionSidebarPreferences } from './app/state/sessionSidebarState'
 import { sessionKey } from './app/sessionList'
 import { act, testRender } from './testRender'
 
@@ -33,7 +34,7 @@ mock.module('../../lib/tui/service', () => ({ ...service,
 }))
 const spaces = await import('./spacesStore')
 let controller: InstanceType<typeof spaces.SpacesController> | null = null
-mock.module('./spacesStore', () => ({ ...spaces, SpacesController: class extends spaces.SpacesController { constructor() { super(); controller = this } } }))
+mock.module('./spacesStore', () => ({ ...spaces, SpacesController: class extends spaces.SpacesController { constructor() { super(); controller = this; this.runtime(this.activeWorkspace()!).set('engineering:preferences', { ...ENGINEERING_DEFAULTS, pinned: [sessionKey(sessions[3]!)] }) } } }))
 const copied: string[] = []
 const clipboard = await import('./app/clipboard')
 mock.module('./app/clipboard', () => ({ ...clipboard, writeClipboard: async (text: string) => { copied.push(text) } }))
@@ -54,13 +55,22 @@ try {
   assert.ok(ctl)
   const runtime = ctl.runtime(ctl.activeWorkspace()!)
   const alphaKey = sessionKey(sessions[0]!)
-  const prefs = () => runtime.get<EngineeringPreferences>('engineering:preferences', null as never, true)
+  const prefs = () => runtime.get<SessionSidebarPreferences>('sidebar:preferences', null as never, true)
+  assert.ok(prefs().pinned.includes(sessionKey(sessions[3]!)), 'Existing Engineering pins migrate into shared storage')
+  const sharedRail = setup.renderer.root.findDescendantById('session-rail')
   const view = async (name: string) => { await act(async () => { ctl.preferences.set('transcriptView', name) }); await settle(200) }
-  for (const name of ['chat', 'conversation', 'full', 'continue', 'stream', 'agents', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode']) {
+  for (const name of ['chat', 'conversation', 'full', 'continue', 'stream', 'agents', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'engineering']) {
     await view(name)
-    for (const id of ['sidebar-input:search', 'sidebar-scope', 'sidebar-activity']) assert.ok(setup.renderer.root.findDescendantById(id), `${name}: ${id}`)
+    assert.equal(setup.renderer.root.findDescendantById('session-rail'), sharedRail, `${name}: same sidebar instance stays mounted`)
+    assert.ok(!setup.renderer.root.findDescendantById('engineering-sessions'), 'No separate Engineering sidebar')
+    for (const id of ['sidebar-tab:sessions', 'sidebar-tab:coordinator', 'sidebar-input:search', 'sidebar-scope', 'sidebar-activity']) assert.ok(setup.renderer.root.findDescendantById(id), `${name}: ${id}`)
   }
   await view('chat')
+  await click('sidebar-tab:coordinator')
+  assert.equal(setup.renderer.root.findDescendantById('session-rail'), sharedRail, 'Coordinator uses the same border frame')
+  assert.ok(!setup.renderer.root.findDescendantById('sidebar-input:search'), 'Coordinator replaces session content inside the frame')
+  await click('sidebar-tab:sessions')
+  assert.equal(setup.renderer.root.findDescendantById('session-rail'), sharedRail, 'Returning to sessions retains the frame')
   await click('sidebar-scope:repo')
   assert.ok(row(0))
   assert.ok(!row(3), 'This repo excludes sibling paths')
@@ -126,24 +136,27 @@ try {
   await click(`sidebar-pin:${alphaKey}`)
   assert.ok(prefs().pinned.includes(alphaKey))
   await view('engineering')
-  await click('engineering-activity:settled')
-  assert.ok(setup.renderer.root.findDescendantById(`engineering-session:${sessionKey(sessions[4]!)}`), 'Engineering settled filter works')
-  assert.ok(!setup.renderer.root.findDescendantById(`engineering-session:${alphaKey}`))
-  await click('engineering-activity:all')
-  await click('engineering-input:search')
+  await click('sidebar-tab:coordinator')
+  assert.equal(setup.renderer.root.findDescendantById('session-rail'), sharedRail, 'Engineering also exposes Coordinator in the shared frame')
+  await click('sidebar-tab:sessions')
+  await click('sidebar-activity:settled')
+  assert.ok(setup.renderer.root.findDescendantById(`sidebar:session:${sessionKey(sessions[4]!)}`), 'Engineering settled filter works')
+  assert.ok(!setup.renderer.root.findDescendantById(`sidebar:session:${alphaKey}`))
+  await click('sidebar-activity:all')
+  await click('sidebar-input:search')
   await act(async () => { await setup.mockInput.pasteBracketedText('alpha') })
   await settle()
-  assert.ok(setup.renderer.root.findDescendantById(`engineering-session:${alphaKey}`), 'Engineering inline search keeps matching sessions')
-  assert.ok(!setup.renderer.root.findDescendantById(`engineering-session:${sessionKey(sessions[3]!)}`))
+  assert.ok(setup.renderer.root.findDescendantById(`sidebar:session:${alphaKey}`), 'Engineering inline search keeps matching sessions')
+  assert.ok(!setup.renderer.root.findDescendantById(`sidebar:session:${sessionKey(sessions[3]!)}`))
   await act(async () => { setup.mockInput.pressKey('v') })
   await settle()
   assert.ok(!setup.renderer.root.findDescendantById('transcript-view-lightweight'), 'Typing into Engineering search does not trigger view shortcuts')
   await act(async () => { setup.mockInput.pressEscape() }); await settle()
-  await act(async () => { runtime.set('engineering:preferences', { ...prefs(), query: '' }) }); await settle()
-  assert.ok(setup.renderer.root.findDescendantById(`engineering-pin:${alphaKey}`), 'Pins carry into Engineering')
-  await click(`engineering-pin:${alphaKey}`)
+  assert.equal(runtime.get('sessionSearchQuery', '', true), '', 'All views share search state and Escape behavior')
+  assert.ok(setup.renderer.root.findDescendantById(`sidebar-pin:${alphaKey}`), 'Pins carry into Engineering')
+  await click(`sidebar-pin:${alphaKey}`)
   assert.ok(!prefs().pinned.includes(alphaKey))
-  await click(`engineering-pin:${alphaKey}`)
+  await click(`sidebar-pin:${alphaKey}`)
   await view('chat')
   assert.ok(setup.renderer.root.findDescendantById(`sidebar-pin:${alphaKey}`), 'Engineering pins carry back to Chat')
   await act(async () => { setup.resize(100, 24) }); await settle(200)
@@ -156,7 +169,7 @@ try {
   await act(async () => { setup.mockInput.pressEscape() }); await settle()
   ctl.flush()
   const restored = new spaces.SpacesController(process.cwd())
-  assert.ok(restored.runtime(restored.activeWorkspace()!).get<EngineeringPreferences>('engineering:preferences', null as never, true).pinned.includes(alphaKey), 'Pins survive disk round trip')
+  assert.ok(restored.runtime(restored.activeWorkspace()!).get<SessionSidebarPreferences>('sidebar:preferences', null as never, true).pinned.includes(alphaKey), 'Pins survive disk round trip')
   console.log('Shared sidebar controls, all session views, pin/unpin icon, contextual actions, short menus, groups, scope, activity/settled, inline search, cross-view pins and persistence passed')
 } finally { await act(async () => { setup.renderer.destroy() }) }
 process.exit(0)

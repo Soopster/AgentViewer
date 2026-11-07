@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { testRender, act } from './testRender'
 import { SpacesController } from './spacesStore'
 import { WorkspaceContext, useAppState, useWorkspaceState } from './workspaceContext'
+import { useSessionSidebarState, type SessionSidebarPreferences } from './app/state/sessionSidebarState'
 import { useEngineeringLayout, useEngineeringWorkspaceState } from './engineering/state'
 import type { TuiTranscriptView } from '../theme'
 
@@ -18,6 +19,8 @@ const second = controller.addWorkspace(space.id)!
 type Probe = {
   view: TuiTranscriptView; setView: React.Dispatch<React.SetStateAction<TuiTranscriptView>>
   layout: ReturnType<typeof useEngineeringLayout>
+  sidebar: ReturnType<typeof useSessionSidebarState>
+  query: string; setQuery: React.Dispatch<React.SetStateAction<string>>
   share: number; setShare: React.Dispatch<React.SetStateAction<number>>
   draft: string; setDraft: React.Dispatch<React.SetStateAction<string>>
 }
@@ -26,9 +29,11 @@ let switchWorkspace: (second: boolean) => void
 function Probe() {
   const [view, setView] = useAppState<TuiTranscriptView>('transcriptView', 'chat')
   const layout = useEngineeringLayout(200, 40)
+  const sidebar = useSessionSidebarState()
+  const [query, setQuery] = useWorkspaceState('sessionSearchQuery', '')
   const [share, setShare] = useEngineeringWorkspaceState('splitReaderShare', .5)
   const [draft, setDraft] = useWorkspaceState('composerDraft', '')
-  useLayoutEffect(() => { probe = { view, setView, layout, share, setShare, draft, setDraft } })
+  useLayoutEffect(() => { probe = { view, setView, layout, sidebar, query, setQuery, share, setShare, draft, setDraft } })
   return <text>{`${view} ${share} ${layout.preferences.inspectorWidth} ${draft}`}</text>
 }
 function Fixture() {
@@ -44,10 +49,15 @@ try {
   assert.equal(probe!.draft, 'Keep this draft')
   await act(async () => {
     probe!.setShare(.3)
-    probe!.layout.setPreferences(previous => ({ ...previous, inspectorWidth: 64, query: 'reconnect', scope: 'all', activity: 'pinned', expandedOlder: ['project:ALPHA:date:Older'] }))
+    probe!.setQuery('reconnect')
+    probe!.sidebar.setActivity('pinned')
+    probe!.sidebar.togglePin({ sessionId: 'shared-pin', provider: 'claude' })
+    probe!.layout.setPreferences(previous => ({ ...previous, inspectorWidth: 64 }))
   })
   await act(async () => { probe!.setView('chat') })
   assert.equal(probe!.share, .7, 'Engineering must not alter the legacy layout')
+  assert.equal(probe!.query, 'reconnect', 'Search is shared across views')
+  assert.equal(probe!.sidebar.activity, 'pinned', 'Activity filter is shared across views')
   assert.equal(probe!.layout.width, 200, 'Engineering must release its width reservation')
   await act(async () => { probe!.setView('engineering') })
   assert.equal(probe!.share, .3)
@@ -55,17 +65,18 @@ try {
   await act(async () => { switchWorkspace!(true) })
   assert.equal(probe!.share, .5)
   assert.equal(probe!.layout.preferences.inspectorWidth, 48)
-  assert.equal(probe!.layout.preferences.query, '')
+  assert.equal(probe!.query, '')
   await act(async () => { switchWorkspace!(false) })
-  assert.equal(probe!.layout.preferences.query, 'reconnect')
+  assert.equal(probe!.query, 'reconnect')
   controller.flush()
   const restored = new SpacesController(cwd)
   const restoredFirst = restored.getSnapshot().spaces.flatMap(space => space.workspaces).find(workspace => workspace.id === first.id)!
   const saved = restored.runtime(restoredFirst).get<import('./engineering/model').EngineeringPreferences>('engineering:preferences', {} as import('./engineering/model').EngineeringPreferences, true)
   assert.equal(saved.inspectorWidth, 64)
-  assert.equal(saved.scope, 'all')
-  assert.equal(saved.activity, 'pinned')
-  assert.deepEqual(saved.expandedOlder, ['project:ALPHA:date:Older'], 'Explicit Older expansion survives restart')
+  const sidebar = restored.runtime(restoredFirst).get<SessionSidebarPreferences>('sidebar:preferences', { pinned: [], activity: null }, true)
+  assert.equal(sidebar.activity, 'pinned')
+  assert.equal(sidebar.pinned.length, 1, 'Shared pins survive restart')
+  assert.equal(restored.runtime(restoredFirst).get('sessionSearchQuery', '', true), 'reconnect')
   assert.equal(restored.runtime(restoredFirst).get('splitReaderShare', 0, true), .7)
   assert.equal(restored.runtime(restoredFirst).get('engineering:splitReaderShare', 0, true), .3)
   console.log('Engineering layout, workspace, draft and restart isolation smoke passed')

@@ -18,6 +18,7 @@ import { sessionKey, isSessionRecentlyTouched } from '../sessionList'
 import { mixHexColor } from '../transcriptStyle'
 import { SessionRailDetail, PR_STATE_GLYPH, pullRequestMark, pullRequestColor } from '../SessionRailDetail'
 import { sessionProviderLabel } from '../pickers'
+import { SidebarSessionRow } from '../SidebarTitlePreview'
 import { SidebarGroupHeading } from '../SidebarChrome'
 
 export type BuildSidebarRowContext = {
@@ -101,7 +102,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           summaryTokens > 0 ? `${fmtTokens(summaryTokens)} tokens` : null,
         ])
     return (
-      <box
+      <SidebarSessionRow preview={{ key: entry.key, title: label, width: sidebarInnerWidth - 6 }} selected={selected}
         key={entry.key}
         id={`sidebar:${entry.key}`}
         flexDirection="column"
@@ -126,7 +127,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
             {fitText(`${selected ? '▎' : ' '}   ${detail}`, sidebarInnerWidth - 2)}
           </text>
         )}
-      </box>
+      </SidebarSessionRow>
     )
   }
 
@@ -190,7 +191,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   )
 
   return (
-    <box
+    <SidebarSessionRow preview={{ key: entry.key, title: retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), width: singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth }} selected={selected}
       key={entry.key}
       id={`sidebar:${entry.key}`}
       flexDirection="column"
@@ -275,6 +276,6 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           <text fg={theme.muted} wrapMode="none" selectable={false}>{fitText(entry.session.recap.text, innerWidth - 3)}</text>
         </box>
       )}
-    </box>
+    </SidebarSessionRow>
   )
 }

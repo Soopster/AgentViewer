@@ -7,7 +7,8 @@
 // `memo` below real — a coordinator refresh re-renders these rows and nothing
 // else, where previously it re-rendered the whole app including the mounted
 // transcript.
-import { memo, useEffect, useSyncExternalStore } from 'react'
+import { memo, useEffect, useRef, useSyncExternalStore } from 'react'
+import type { ScrollBoxRenderable } from '@opentui/core'
 import { getProviderAccent } from '../theme'
 import type { TuiDensity, TuiThemePalette } from '../theme'
 import { fitText, joinMeta } from './textLayout'
@@ -131,6 +132,10 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
   // root's `sidebarView` guard used to.
   useEffect(() => acquireCoordinatorFeed(), [])
   const state = useSyncExternalStore(subscribeCoordinator, getCoordinatorState, getCoordinatorState)
+  const scroll = useRef<ScrollBoxRenderable | null>(null)
+  useEffect(() => {
+    if (state.selectedKey) scroll.current?.scrollChildIntoView(`sidebar:${state.selectedKey}`)
+  }, [state.selectedKey])
 
   if (state.entries.length === 0) {
     const empty = state.filter === 'all'
@@ -140,7 +145,10 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
   }
   return (
     <scrollbox
-      style={{ height: props.rowBudget }}
+      id="coordinator-sidebar-rows"
+      ref={scroll}
+      flexGrow={1}
+      minHeight={0}
       backgroundColor={props.theme.surface}
       scrollY
       viewportCulling

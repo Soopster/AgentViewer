@@ -135,7 +135,7 @@ try {
   await act(async () => { setup.mockInput.pressEnter() }); await settle(200)
   for (const [index, view] of (process.env.PANE_RESIZE_TOOLS_ONLY ? [[TRANSCRIPT_VIEWS.indexOf('engineering'), 'engineering'] as const] : [...TRANSCRIPT_VIEWS.entries()])) {
     await choose(index)
-    const railId = view === 'engineering' ? 'engineering-sessions' : 'session-rail'
+    const railId = 'session-rail'
     const before = node(railId)
     await drag('pane-resize-sidebar', 6, 0)
     if (node(railId).width !== before.width + 6) throw new Error(`${view}: sidebar did not grow`)
@@ -149,13 +149,13 @@ try {
     if (node('composer-dock').height !== composer.height) throw new Error(`${view}: composer did not shrink`)
     console.log(`${view}: mouse sidebar/composer resize and cancellation passed`)
   }
-  const rail = node('engineering-sessions')
+  const rail = node('session-rail')
   const composer = node('composer-dock')
   if (rail.y + rail.height !== composer.y) throw new Error(`Sidebar does not fill down to the composer: ${JSON.stringify({ rail, composer })}`)
   await act(async () => { await setup.mockMouse.click(composer.x + composer.width - 4, composer.y + 1) }); await settle()
-  const inactiveBorder = String((setup.renderer.root.findDescendantById('engineering-sessions') as unknown as { borderColor: unknown }).borderColor)
-  await act(async () => { await setup.mockMouse.click(rail.x + 2, rail.y + 1) }); await settle()
-  const activeBorder = String((setup.renderer.root.findDescendantById('engineering-sessions') as unknown as { borderColor: unknown }).borderColor)
+  const inactiveBorder = String((setup.renderer.root.findDescendantById('session-rail') as unknown as { borderColor: unknown }).borderColor)
+  await act(async () => { await setup.mockMouse.click(rail.x, rail.y + 1) }); await settle()
+  const activeBorder = String((setup.renderer.root.findDescendantById('session-rail') as unknown as { borderColor: unknown }).borderColor)
   if (activeBorder === inactiveBorder) throw new Error(`Sidebar focus did not light its border: ${inactiveBorder} → ${activeBorder}\n${setup.captureCharFrame()}`)
   const header = node('engineering-header')
   if (header.height !== 1) throw new Error('Wide Engineering header must use a single row')

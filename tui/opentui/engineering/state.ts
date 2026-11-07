@@ -1,6 +1,7 @@
 import { useAppState, useWorkspaceState } from '../workspaceContext'
 import { useState, type Dispatch, type SetStateAction } from 'react'
 import type { TuiTranscriptView } from '../../theme'
+import { DEFAULT_SIDEBAR_WIDTH } from '../app/layoutConstants'
 import { ENGINEERING_DEFAULTS, engineeringGeometry, type EngineeringPreferences } from './model'
 
 export function useEngineeringStateKey(key: string) {
@@ -31,7 +32,8 @@ export function useEngineeringLayout(width: number, height: number) {
   const [view] = useAppState<TuiTranscriptView>('transcriptView', 'conversation')
   const [preferences, setPreferences] = useWorkspaceState<EngineeringPreferences>('engineering:preferences', ENGINEERING_DEFAULTS)
   const active = view === 'engineering'
-  const geometry = engineeringGeometry(width, height, preferences)
+  const [sidebarWidth] = useAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
+  const geometry = engineeringGeometry(width, height, preferences, sidebarWidth)
   return { active, preferences, setPreferences, ...geometry,
     width: active ? geometry.width : width, height: active ? geometry.height : height }
 }

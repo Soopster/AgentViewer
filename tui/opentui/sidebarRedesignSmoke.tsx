@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import assert from 'node:assert/strict'
-import React from 'react'
+import React, { useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { DARK_THEME, LIGHT_THEME, type TuiDensity } from '../theme'
 import { act, testRender } from './testRender'
@@ -36,8 +36,10 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     sessionDragHandlers: { press: (_session, _pane, _event, onClick) => onClick?.(), move: () => {}, release: () => {} },
     renameDraft: '', setRenameDraft: () => {}, commitRename: async () => {}, toggleSidebarSubagents: () => {}, collapsedSubagentSet: new Set(),
   }
-  const setup = await testRender(<box width={width} height={24}>
-    <SessionRail showRail sidebarWidth={width} sidebarExtraRows={0} mainContentHeight={22} sidebarView="sessions"
+  function Fixture() {
+    const [view, setView] = useState<'sessions' | 'coordinator'>('sessions')
+    return <box width={width} height={24}>
+    <SessionRail onViewChange={setView} showRail sidebarWidth={width} sidebarExtraRows={0} mainContentHeight={22} sidebarView={view}
       effectiveFocus="sessions" theme={theme} coordinatorSidebarHeader="Coordinator" sidebarHeaderBaseText="SESSIONS 25 · CODEX"
       toggleSidebarSort={() => {}} showToggleOutcome={() => {}} sidebarSort="project" sidebarHeaderPrefixWidth={14}
       sidebarProviderBadgeText="CODEX" sidebarProviderAccent={theme.cyan} workspacesEnabled={false} openSpaces={() => {}}
@@ -45,7 +47,9 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
       sidebarRowBudget={20} density={density} sidebarScrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
       loadingSessions={false} sessions={sessions} sidebarEntries={entries} sidebarScrollRef={scroll}
       sidebarRowElements={entries.map((entry, i) => runBuildSidebarRow(context, entry, i === 2))} onNewSession={() => { created++ }} />
-  </box>, { width, height: 24 })
+  </box>
+  }
+  const setup = await testRender(<Fixture />, { width, height: 24 })
   try {
     await act(async () => { await setup.flush() })
     const frame = setup.captureCharFrame()
@@ -74,10 +78,21 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     assert.equal(collapsed, 'date:today')
     await click(`sidebar:${entries[2].key}`)
     assert.equal(chosen, sessions[0].sessionId)
+    if (setup.renderer.root.findDescendantById('sidebar-title-detail')) {
+      await act(async () => { setup.mockInput.pressEscape(); await new Promise(resolve => setTimeout(resolve, 60)) }); await setup.flush()
+      assert.ok(!setup.renderer.root.findDescendantById('sidebar-title-detail'), 'Escape dismisses the shared full-title preview')
+    }
     const composeY = setup.renderer.root.findDescendantById('sidebar-new-session')!.y
     await act(async () => { scroll.current!.scrollTo(1000); await setup.flush() })
     assert.match(setup.captureCharFrame(), /Session 24/, 'Last session is reachable')
     assert.equal(setup.renderer.root.findDescendantById('sidebar-new-session')!.y, composeY, 'Compose stays fixed while the list scrolls')
+    const offset = scroll.current!.scrollTop
+    const frameNode = setup.renderer.root.findDescendantById('session-rail')
+    await click('sidebar-tab:coordinator')
+    assert.equal(scroll.current, null, 'Session content unmounts when Coordinator is selected')
+    await click('sidebar-tab:sessions')
+    assert.equal(setup.renderer.root.findDescendantById('session-rail'), frameNode, 'Tabs keep the same border frame')
+    assert.equal(scroll.current!.scrollTop, offset, 'Returning to Sessions restores its scroll position')
     if (width === 44 && theme === DARK_THEME) console.log(`${density}: row height ${row.height}, spacing ${nextRow.y - row.y}`)
   } finally { await act(async () => { setup.renderer.destroy() }) }
 }

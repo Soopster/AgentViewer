@@ -72,8 +72,9 @@ import type { ContextMenuItem } from './ContextMenu'
 import { startSpacesBackground } from './spacesBackground'
 import { SpacesController, canonicalSpacePath } from './spacesStore'
 import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useQuietWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
-import { SpacesRail, WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
-import { SidebarFilters, type SidebarActivity } from './app/SidebarFilters'
+import { WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
+import { SidebarFilters } from './app/SidebarFilters'
+import { useSessionSidebarState } from './app/state/sessionSidebarState'
 import { LIGHT_THEME } from '../theme'
 import { WindowHistory } from './windowHistory'
 import { windowSessionTarget, type WindowTarget } from './windowTargets'
@@ -414,7 +415,7 @@ import { useLoadingSessionsGroup } from './app/slices/loadingSessions'
 import { usePopoverTabHostKeyGroup } from './app/slices/popoverTabHostKey'
 import { useProviderGroup } from './app/slices/provider'
 import { useWorkspaceContextGroup } from './app/slices/workspaceContext'
-import { EngineeringFrame, EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
+import { EngineeringFrame, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
 import { EngineeringInspectorWindow } from './engineering/EngineeringInspectorWindow'
 import { useEngineeringLayout } from './engineering/state'
 import { PaneResizeProvider, usePaneResize } from './paneResize'
@@ -470,13 +471,7 @@ function OpenTuiWorkspace() {
   const renderer = useRenderer()
   const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions()
   const engineeringLayout = useEngineeringLayout(terminalWidth, terminalHeight)
-  const [sidebarActivity, setSidebarActivity] = useWorkspaceState<SidebarActivity>('sidebar:activity', null)
-  // Pins are shared across views, using Engineering's existing persisted workspace list.
-  const sidebarPinnedKeys = useMemo(() => new Set(engineeringLayout.preferences.pinned), [engineeringLayout.preferences.pinned])
-  const toggleSidebarPin = useStableEvent((session: Session) => {
-    const key = sessionKey(session)
-    engineeringLayout.setPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))
-  })
+  const { activity: sidebarActivity, setActivity: setSidebarActivity, pinnedKeys: sidebarPinnedKeys, togglePin: toggleSidebarPin } = useSessionSidebarState()
   const { width, height } = engineeringLayout
   const [composerHeightPreference, setComposerHeightPreference] = useWorkspaceState<number | undefined>('composerHeightPreference', undefined)
   const manualComposerHeight = engineeringLayout.active ? engineeringLayout.preferences.composerRows : composerHeightPreference
@@ -485,7 +480,6 @@ function OpenTuiWorkspace() {
     else setComposerHeightPreference(rows)
   }
   const engineeringKeyRef = useRef<EngineeringKeyHandler | null>(null)
-  const engineeringRailKeyRef = useRef<EngineeringKeyHandler | null>(null)
 
   // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
   // every render; the effect below reads it after commit.
@@ -1943,7 +1937,7 @@ function OpenTuiWorkspace() {
     composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
     composerLiveReasoning, isStreamView, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
-    surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference: engineeringLayout.active ? engineeringLayout.preferences.sidebarWidth : sidebarWidthPreference,
+    surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
     taskPanelExpanded, taskPanelWidth, surfacePanelWidth, openTabSessions, popoverTabs,
     selectedSession, tabsEnabled, tabOrientation, splitPinnedKeys, selectedSessionKey,
     splitOrientation, measuredWindowAreaHeight, splitPaneCount, windowOrder, windowSurfaces,
@@ -5930,11 +5924,6 @@ function OpenTuiWorkspace() {
       const result = engineeringKeyRef.current?.(key)
       if (result === 'input') return
       if (result) { handled(() => {}); return }
-      if (engineeringLayout.active && effectiveFocus === 'sessions') {
-        const railResult = engineeringRailKeyRef.current?.(key)
-        if (railResult === 'input') return
-        if (railResult) { handled(() => {}); return }
-      }
     }
     if (handleWindowControlKeys({
       windowControlsBlocked, windowControlMode, handled, key, isCtrl, leaveWindowControls,
@@ -6404,9 +6393,9 @@ function OpenTuiWorkspace() {
     bindings: {
       sidebar: {
         min: MIN_SIDEBAR_WIDTH, max: maxSidebarWidth, available: sidebarWidth + readerAreaWidth,
-        apply: value => { if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, sidebarWidth: value })); else setSidebarWidthPreference(value) },
-        restore: () => { if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, sidebarWidth: engineeringLayout.preferences.sidebarWidth })); else setSidebarWidthPreference(sidebarWidthPreference) },
-        commit: value => { if (!engineeringLayout.active) void writeTuiSidebarWidth(value).catch(error => setError(String(error))) },
+        apply: value => setSidebarWidthPreference(value),
+        restore: () => setSidebarWidthPreference(sidebarWidthPreference),
+        commit: value => { void writeTuiSidebarWidth(value).catch(error => setError(String(error))) },
       },
       composer: {
         min: embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, max: Math.floor(height * .4), available: mainContentHeight + composerDockHeight,
@@ -6488,12 +6477,13 @@ function OpenTuiWorkspace() {
             <text fg={theme.cyan} selectable={false} wrapMode="none">{fullscreenMode ? ' FULLSCREEN · Shift+Z restore ' : ' ZOOM · Ctrl+B m restore '}</text>
           </box> : null}
       <WorkspaceBody isolatedView={engineeringLayout.active}
-        sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={theme} query={sessionSearchQuery} searchFocused={sessionSearchMode && !engineeringLayout.active}
+        onSidebarFocus={() => { setComposerActive(false); setFocusedPane('sessions') }}
+        onSidebarViewChange={view => { setSidebarView(view); setComposerActive(false); setFocusedPane('sessions') }}
+        sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={theme} query={sessionSearchQuery} searchFocused={sessionSearchMode}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onQuery={setSessionSearchQuery}
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity} />}
         onNewSession={openNewSessionModal}
-        engineeringRail={engineeringLayout.active && showRail ? <EngineeringRail onFilterMenu={setContextMenu} renameSessionKey={renameSessionKey} renameDraft={renameDraft} onRenameDraft={setRenameDraft} onRenameSubmit={() => { void commitRename() }} onSessionMenu={(session, point) => openSessionMenu(session, 'rail', point)} density={density} onNewSession={openNewSessionModal} providerBadge={{ label: sidebarProviderBadgeText, accent: sidebarProviderAccent }} spacesNavigation={workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : undefined} root={gitRepoCwd || workspaceCwd || process.cwd()} sessions={sessions} running={runningSessions} recent={recentlyWrittenKeys} attention={attentionItems} selected={selectedSessionKey} width={sidebarWidth} height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : undefined} theme={theme} preferences={engineeringLayout.preferences} onPreferences={engineeringLayout.setPreferences} onSelect={session => { selectTabSession(session); setFocusedPane('messages') }} onNavigate={session => setSelectedSessionKey(sessionKey(session))} enabled={effectiveFocus === 'sessions' && !windowControlsBlocked} registerKeys={handler => { engineeringRailKeyRef.current = handler }} onFocus={() => { setComposerActive(false); setFocusedPane('sessions') }} /> : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}
@@ -6693,7 +6683,7 @@ function OpenTuiWorkspace() {
 
       <TranscriptSearchBar searchMode={searchMode} width={width} theme={theme} searchMatches={searchMatches} searchMatchIndex={searchMatchIndex} searchQuery={searchQuery} setSearchQuery={setSearchQuery} jumpToTranscriptIndex={jumpToTranscriptIndex} setSearchMode={setSearchMode} />
 
-      <SessionSearchBar sessionSearchMode={sessionSearchMode && !(showRail && sidebarView === 'sessions' && !engineeringLayout.active)} width={width} theme={theme} filteredSessionsForSidebar={filteredSessionsForSidebar} sessions={sessions} sessionSearchQuery={sessionSearchQuery} setSessionSearchQuery={setSessionSearchQuery} sidebarEntries={sidebarEntries} setSelectedSessionKey={setSelectedSessionKey} setSessionSearchMode={setSessionSearchMode} />
+      <SessionSearchBar sessionSearchMode={sessionSearchMode && !(showRail && sidebarView === 'sessions')} width={width} theme={theme} filteredSessionsForSidebar={filteredSessionsForSidebar} sessions={sessions} sessionSearchQuery={sessionSearchQuery} setSessionSearchQuery={setSessionSearchQuery} sidebarEntries={sidebarEntries} setSelectedSessionKey={setSelectedSessionKey} setSessionSearchMode={setSessionSearchMode} />
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
 

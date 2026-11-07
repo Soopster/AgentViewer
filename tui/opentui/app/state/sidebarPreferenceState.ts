@@ -2,7 +2,7 @@
 import { useRef, useState } from 'react'
 import { type TuiPluginCapture } from '../../shell/pluginTypes'
 import { useWorkspaceState, useAppState } from '../../workspaceContext'
-import { useEngineeringWorkspaceState, useEngineeringAppState, useEngineeringLocalState } from '../../engineering/state'
+import { useEngineeringWorkspaceState, useEngineeringAppState } from '../../engineering/state'
 import { EMPTY_SURFACE_PANEL } from '../../surfacePanelState'
 import { readTuiRuntimeActivity, type TuiSidebarSort } from '../../../../lib/tui/service'
 import { type RunningSessionRef, type Session } from '../../../../lib/types'
@@ -12,12 +12,12 @@ import { DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_
 export function useSidebarPreferenceState() {
   const [showToolCalls, setShowToolCalls] = useEngineeringAppState('showToolCalls', true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useAppState('velocityScrollEnabled', false)
-  const [sidebarSort, setSidebarSort] = useEngineeringLocalState<TuiSidebarSort>('sidebarSort', 'project')
+  const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [hideScratch, setHideScratch] = useState(false)
   const [showSettled, setShowSettled] = useState(false)
   const pendingInboxEditsRef = useRef<Map<string, PendingInboxEdit>>(new Map())
   const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
-  const [sidebarWidthPreference, setSidebarWidthPreference] = useEngineeringAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
+  const [sidebarWidthPreference, setSidebarWidthPreference] = useAppState('sidebarWidthPreference', DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useEngineeringWorkspaceState('taskPanelWidth', TASK_PANEL_DEFAULT_WIDTH)
   const [taskPanelExpanded, setTaskPanelExpanded] = useEngineeringWorkspaceState('taskPanelExpanded', false)
   // Surface panel: the terminal half of the web's right-hand panel. Open

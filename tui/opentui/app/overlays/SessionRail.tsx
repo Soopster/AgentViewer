@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import type { TuiThemePalette } from '../../../theme'
-import React from 'react'
+import React, { useCallback, useRef } from 'react'
 import { SpacesRail } from '../../SpacesNavigation'
 import { type ScrollBoxRenderable } from '@opentui/core'
 import { type TuiDensity } from '../../../theme'
@@ -12,9 +12,15 @@ import { type SidebarEntry, type PaneFocus } from '../types'
 import { Spinner } from '../chrome'
 import { SectionFrame } from '../borders'
 import { PaneResizeHandle } from '../../paneResize'
+import { SidebarTitlePreview } from '../SidebarTitlePreview'
 import { SidebarHeading, SidebarNewSession } from '../SidebarChrome'
 
-export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, controls }: {
+const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
+
+export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, previewEnabled = effectiveFocus === 'sessions' }: {
+  onViewChange: (view: 'sessions' | 'coordinator') => void
+  onFocus?: () => void
+  previewEnabled?: boolean
   controls?: React.ReactNode
   onNewSession: () => void
   showRail: boolean
@@ -47,6 +53,12 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
   sidebarScrollRef: React.RefObject<ScrollBoxRenderable | null>
   sidebarRowElements: React.ReactNode[]
 }) {
+  const savedSessionScroll = useRef(0)
+  const bindSidebarScroll = useCallback((node: ScrollBoxRenderable | null) => {
+    if (!node && sidebarScrollRef.current) savedSessionScroll.current = sidebarScrollRef.current.scrollTop
+    sidebarScrollRef.current = node
+    node?.scrollTo(savedSessionScroll.current)
+  }, [sidebarScrollRef])
   return (
     showRail ? (
           <SectionFrame
@@ -54,7 +66,8 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             theme={theme}
             surface={theme.surface}
             width={sidebarWidth}
-            height={mainContentHeight + sidebarExtraRows}
+            height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : '100%'}
+            onMouseDown={event => { if (event.button === 0) onFocus?.() }}
             flexShrink={0}
             overflow={sidebarExtraRows > 0 ? 'hidden' : undefined}
             border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
@@ -67,6 +80,13 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             titleColor={theme.cyan}
           >
             <PaneResizeHandle kind="sidebar" extent={sidebarWidth} edge="right" inset={-1} />
+            <box id="sidebar-tabs" height={1} flexShrink={0} paddingX={1} flexDirection="row" overflow="hidden">
+              {SIDEBAR_VIEWS.map(view => <box key={view} id={`sidebar-tab:${view}`} height={1} flexShrink={0}
+                backgroundColor={sidebarView === view ? theme.surface3 : theme.surface}
+                onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onViewChange(view) } }}>
+                <text fg={sidebarView === view ? theme.cyan : theme.muted} wrapMode="none" selectable={false}>{view === 'sessions' ? ' Sessions ' : ' Coordinator '}</text>
+              </box>)}
+            </box>
             {sidebarView === 'sessions' ? <>
               <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
@@ -89,17 +109,19 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
               ) : sidebarEntries.length === 0 ? (
                 <text fg={theme.dim}>{fitText(controls ? 'No sessions match filters' : 'No sessions available', sidebarInnerWidth)}</text>
               ) : (
-                <scrollbox
-                  ref={sidebarScrollRef}
-                  flexGrow={1}
-                  minHeight={0}
-                  backgroundColor={theme.surface}
-                  scrollY
-                  viewportCulling
-                  scrollbarOptions={sidebarScrollbarOptions}
-                >
-                  {sidebarRowElements}
-                </scrollbox>
+                <SidebarTitlePreview theme={theme} width={sidebarWidth} height={mainContentHeight + sidebarExtraRows} enabled={previewEnabled}>
+                  <scrollbox
+                    ref={bindSidebarScroll}
+                    flexGrow={1}
+                    minHeight={0}
+                    backgroundColor={theme.surface}
+                    scrollY
+                    viewportCulling
+                    scrollbarOptions={sidebarScrollbarOptions}
+                  >
+                    {sidebarRowElements}
+                  </scrollbox>
+                </SidebarTitlePreview>
               )}
             </box>
           </SectionFrame>

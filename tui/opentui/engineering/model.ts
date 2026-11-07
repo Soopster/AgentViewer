@@ -1,3 +1,4 @@
+import { DEFAULT_SIDEBAR_WIDTH } from '../app/layoutConstants'
 import type { Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../format'
 
@@ -14,7 +15,6 @@ export type EngineeringPreferences = {
   inspectorWidth: number
   inspectorPlacement?: 'dock' | 'window'
   inspectorExpanded?: boolean
-  sidebarWidth: number
   drawerOpen: boolean
   drawerRows: number
   fileListRows?: number
@@ -23,32 +23,16 @@ export type EngineeringPreferences = {
   /** The inspector diff wraps long lines (z), or cuts them at the pane edge. */
   diffWrap?: boolean
   composerRows?: number
-  query: string
-  /** Legacy combined filter, retained for saved workspace migration. */
-  filter?: 'repo' | 'all' | 'attention' | 'running' | 'pinned'
-  scope?: 'repo' | 'all'
-  activity?: 'running' | 'attention' | 'pinned' | 'settled' | null
-  expandedOlder?: string[]
-  pinned: string[]
-  collapsed: string[]
 }
 export const ENGINEERING_DEFAULTS: EngineeringPreferences = {
   focusMode: false, inspector: 'changes', inspectorOpen: true, inspectorWidth: 48,
-  sidebarWidth: 28, drawerOpen: false, drawerRows: 12, query: '', filter: 'repo', pinned: [], collapsed: [],
-}
-/** Read old workspaces without changing the reach of their saved activity filter. */
-export function engineeringRailFilters(preferences: EngineeringPreferences) {
-  const legacy = preferences.filter ?? 'repo'
-  return {
-    scope: preferences.scope ?? (legacy === 'repo' ? 'repo' : 'all'),
-    activity: preferences.activity !== undefined ? preferences.activity : legacy === 'repo' || legacy === 'all' ? null : legacy,
-  }
+  drawerOpen: false, drawerRows: 12,
 }
 export function engineeringFocusMode(preferences: EngineeringPreferences): boolean { return preferences.focusMode ?? preferences.preset === 'focus' }
 export function engineeringHeaderRows(width: number): number { return width >= 132 ? 1 : 2 }
-export function engineeringGeometry(width: number, height: number, preferences: EngineeringPreferences) {
+export function engineeringGeometry(width: number, height: number, preferences: EngineeringPreferences, sidebarWidth = DEFAULT_SIDEBAR_WIDTH) {
   const inspectorWidth = preferences.inspectorOpen && preferences.inspectorPlacement !== 'window' && !preferences.inspectorExpanded && !engineeringFocusMode(preferences) && width >= 132
-    ? Math.min(Math.max(32, preferences.inspectorWidth), Math.max(32, width - Math.max(24, preferences.sidebarWidth) - 48)) : 0
+    ? Math.min(Math.max(32, preferences.inspectorWidth), Math.max(32, width - Math.max(24, sidebarWidth) - 48)) : 0
   const drawerRows = preferences.drawerOpen && !engineeringFocusMode(preferences) && height >= 32
     ? Math.min(Math.max(8, preferences.drawerRows), height - 20) : 0
   const headerRows = engineeringHeaderRows(width)

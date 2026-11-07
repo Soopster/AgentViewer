@@ -42,9 +42,10 @@ import { SessionRail } from './SessionRail'
 import { TaskSidePanelFrame } from './TaskSidePanelFrame'
 
 type WorkspaceBodyProps = {
+  onSidebarViewChange: (view: 'sessions' | 'coordinator') => void
+  onSidebarFocus: () => void
   sidebarControls?: ReactNode
   onNewSession: () => void
-  engineeringRail?: ReactNode
   isolatedView?: boolean
   surfacePanelAtBottom: boolean
   mainContentHeight: number
@@ -280,7 +281,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
         flexDirection="row"
         backgroundColor={theme.bg}
       >
-        {props.engineeringRail ?? <SessionRail controls={props.sidebarControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} />}
+        <SessionRail onViewChange={props.onSidebarViewChange} onFocus={props.onSidebarFocus} controls={props.sidebarControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} previewEnabled={effectiveFocus === 'sessions' && !props.windowControlsBlocked} />
 
         {showTabs && verticalTabsWidth > 0 ? <VerticalTabs
           options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys}
