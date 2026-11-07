@@ -196,6 +196,13 @@ try {
       await settle()
     }
     const dockWidth = setup.renderer.root.findDescendantById('engineering-inspector')!.width
+    const headerRow = setup.captureCharFrame().split('\n')[0] ?? ''
+    if (/\b(Build|Review|Agents)\b/.test(headerRow)) throw new Error('Separate engineering presets remain in the header')
+    await press('F7')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')) throw new Error('Focus did not hide docked inspector')
+    await press('F7')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== dockWidth) throw new Error('Focus changed saved inspector width')
+    if (!setup.captureCharFrame().includes('Application-recorded checks')) throw new Error('Focus changed selected inspector tab')
     await click('engineering-inspector-expand')
     if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== width) throw new Error('Expanded inspector did not use terminal width')
     if (!setup.captureCharFrame().includes('Application-recorded checks')) throw new Error('Expand lost inspector tab')

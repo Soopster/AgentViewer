@@ -3,16 +3,20 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../../lib/git/command'
-import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringPreset, engineeringSessionTitle, engineeringSelectedFile, engineeringFileEvidence, engineeringHandoff, engineeringSessionFiles, engineeringSessionInRepo } from './engineering/model'
+import { ENGINEERING_DEFAULTS, engineeringGeometry, engineeringFocusMode, engineeringSessionTitle, engineeringSelectedFile, engineeringFileEvidence, engineeringHandoff, engineeringSessionFiles, engineeringSessionInRepo } from './engineering/model'
 import { createEngineeringRepositoryClient } from './engineeringRepositoryWorkerClient'
 import { readEngineeringRepository } from './engineering/repository'
 import type { TuiTranscriptCard } from '../format'
 
 assert.equal(engineeringGeometry(80, 24, ENGINEERING_DEFAULTS).inspectorWidth, 0)
 assert.equal(engineeringGeometry(200, 40, ENGINEERING_DEFAULTS).inspectorWidth, 48)
-assert.equal(engineeringGeometry(200, 40, engineeringPreset(ENGINEERING_DEFAULTS, 'focus')).inspectorWidth, 0)
+assert.equal(engineeringGeometry(200, 40, { ...ENGINEERING_DEFAULTS, focusMode: true }).inspectorWidth, 0)
 assert.equal(engineeringGeometry(80, 24, { ...ENGINEERING_DEFAULTS, drawerOpen: true }).drawerRows, 0)
-assert.equal(ENGINEERING_DEFAULTS.preset, 'build')
+assert.equal(engineeringFocusMode(ENGINEERING_DEFAULTS), false)
+for (const preset of ['build', 'review', 'multi-agent'] as const) {
+  assert.deepEqual(engineeringGeometry(200, 40, { ...ENGINEERING_DEFAULTS, preset }), engineeringGeometry(200, 40, ENGINEERING_DEFAULTS), 'Old workspace modes share one layout')
+}
+assert.equal(engineeringFocusMode({ ...ENGINEERING_DEFAULTS, focusMode: undefined, preset: 'focus' }), true, 'Old Focus preference remains readable')
 {
   const cards = [{ key: 'd', fileEdits: [{ path: '/repo/src/a.ts' }, { path: './b.ts' }] }] as unknown as TuiTranscriptCard[]
   assert.deepEqual([...engineeringSessionFiles(cards, '/repo/')], ['src/a.ts', 'b.ts'])

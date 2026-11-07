@@ -6374,14 +6374,6 @@ function OpenTuiWorkspace() {
       onJump={key => { const index = visibleTranscriptCards.findIndex(card => card.key === key || agentToolCardsFor(card).some(tool => tool.key === key)); if (index >= 0) jumpToTranscriptIndex(index); else showNotice('info', 'Source is outside the loaded transcript') }}
       onAttention={item => { openAttentionSession(item); setAttentionOpen(true) }}
       onAcknowledge={dismissAttentionItem}
-      onPreset={preset => {
-        const candidates = preset === 'multi-agent'
-          ? [...sessions.filter(session => runningSessions.some(running => sessionKey(running) === sessionKey(session))), ...visibleTabSessions]
-          : []
-        const keys = [...new Set([...(selectedSessionKey ? [selectedSessionKey] : []), ...candidates.map(sessionKey)])].slice(0, preset === 'multi-agent' ? 3 : 1)
-        commitWindowKeys(keys)
-        setWindowSplitTree(arrangePaneTree(keys, false, 'columns'))
-      }}
       onDiagnostics={() => runPluginCommandId('diagnostics')}
       onReview={() => runPluginCommandId('git')}
       onOpenFile={(path, line) => openEditorAt(path, line)}

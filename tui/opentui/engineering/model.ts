@@ -1,13 +1,14 @@
 import type { Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../format'
 
-export type EngineeringPreset = 'focus' | 'build' | 'review' | 'multi-agent'
 export type InspectorTab = 'changes' | 'checks' | 'tasks' | 'context' | 'attention' | 'handoff'
 export function engineeringSelectedFile<T extends { path: string }>(files: readonly T[], preferredPath: string | null): T | null {
   return files.find(file => file.path === preferredPath) ?? files[0] ?? null
 }
 export type EngineeringPreferences = {
-  preset: EngineeringPreset
+  /** Legacy workspace preset, read only to restore the old Focus setting. */
+  preset?: 'focus' | 'build' | 'review' | 'multi-agent'
+  focusMode?: boolean
   inspector: InspectorTab
   inspectorOpen: boolean
   inspectorWidth: number
@@ -32,7 +33,7 @@ export type EngineeringPreferences = {
   collapsed: string[]
 }
 export const ENGINEERING_DEFAULTS: EngineeringPreferences = {
-  preset: 'build', inspector: 'changes', inspectorOpen: true, inspectorWidth: 48,
+  focusMode: false, inspector: 'changes', inspectorOpen: true, inspectorWidth: 48,
   sidebarWidth: 28, drawerOpen: false, drawerRows: 12, query: '', filter: 'repo', pinned: [], collapsed: [],
 }
 /** Read old workspaces without changing the reach of their saved activity filter. */
@@ -43,19 +44,15 @@ export function engineeringRailFilters(preferences: EngineeringPreferences) {
     activity: preferences.activity !== undefined ? preferences.activity : legacy === 'repo' || legacy === 'all' ? null : legacy,
   }
 }
+export function engineeringFocusMode(preferences: EngineeringPreferences): boolean { return preferences.focusMode ?? preferences.preset === 'focus' }
 export function engineeringHeaderRows(width: number): number { return width >= 132 ? 1 : 2 }
 export function engineeringGeometry(width: number, height: number, preferences: EngineeringPreferences) {
-  const inspectorWidth = preferences.inspectorOpen && preferences.inspectorPlacement !== 'window' && !preferences.inspectorExpanded && preferences.preset !== 'focus' && width >= 132
+  const inspectorWidth = preferences.inspectorOpen && preferences.inspectorPlacement !== 'window' && !preferences.inspectorExpanded && !engineeringFocusMode(preferences) && width >= 132
     ? Math.min(Math.max(32, preferences.inspectorWidth), Math.max(32, width - Math.max(24, preferences.sidebarWidth) - 48)) : 0
-  const drawerRows = preferences.drawerOpen && preferences.preset !== 'focus' && height >= 32
+  const drawerRows = preferences.drawerOpen && !engineeringFocusMode(preferences) && height >= 32
     ? Math.min(Math.max(8, preferences.drawerRows), height - 20) : 0
   const headerRows = engineeringHeaderRows(width)
   return { inspectorWidth, drawerRows, headerRows, width: width - inspectorWidth, height: height - headerRows - drawerRows }
-}
-export function engineeringPreset(preferences: EngineeringPreferences, preset: EngineeringPreset): EngineeringPreferences {
-  return { ...preferences, preset, inspectorOpen: preset !== 'focus',
-    inspector: preset === 'review' ? 'changes' : preset === 'multi-agent' ? 'attention' : preferences.inspector,
-    inspectorWidth: preset === 'review' ? 64 : 48, drawerOpen: false }
 }
 export function engineeringSessionTitle(session: Session): string {
   const candidates = [session.summary, session.firstPrompt].filter((value): value is string => Boolean(value?.trim()))

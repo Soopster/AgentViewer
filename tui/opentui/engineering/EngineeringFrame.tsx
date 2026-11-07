@@ -15,7 +15,7 @@ import { getProcesses, subscribeProcesses, addProcess, startProcess, type Manage
 import { git, WorkspaceGitError } from '../../../lib/git/command'
 import type { EngineeringRepository } from './repository'
 import { createEngineeringRepositoryClient } from '../engineeringRepositoryWorkerClient'
-import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionFiles, engineeringSessionInRepo, engineeringSessionTitle, engineeringSelectedFile, engineeringRailFilters, type EngineeringPreset, type InspectorTab } from './model'
+import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringFocusMode, engineeringSessionFiles, engineeringSessionInRepo, engineeringSessionTitle, engineeringSelectedFile, engineeringRailFilters, type InspectorTab } from './model'
 import type { EngineeringFile } from './repository'
 import { timeAgo } from '../app/format'
 import type { useEngineeringLayout } from './state'
@@ -35,7 +35,6 @@ export type EngineeringCheck = { id: string; command: string; fingerprint: strin
 const EMPTY_PROCESSES: readonly ManagedProcess[] = []
 const NO_SUBSCRIBE = () => () => {}
 const INSPECTORS: InspectorTab[] = ['changes', 'checks', 'tasks', 'context', 'attention', 'handoff']
-const PRESETS: EngineeringPreset[] = ['focus', 'build', 'review', 'multi-agent']
 const SHORT_INSPECTOR_LABELS: Record<InspectorTab, string> = { changes: 'chg', checks: 'chk', tasks: 'tasks', context: 'ctx', attention: 'attn', handoff: 'hand' }
 const FULL_INSPECTOR_CELLS = INSPECTORS.reduce((sum, tab) => sum + tab.length + 2, 0)
 /** The tab strip is one row: full names when they fit inside the border, short ones otherwise. */
@@ -76,7 +75,6 @@ type Props = {
   /** Open a file (absolute path) in the editor at a 1-based line. */
   onOpenFile?: (path: string, line: number | null) => void
   onCopy: (text: string) => void
-  onPreset: (preset: EngineeringPreset) => void
   renderTerminal: (width: number, height: number, focused: boolean, register: (handler: EngineeringKeyHandler) => void, capture: (value: TuiPluginCapture) => void) => ReactNode
 }
 
@@ -180,7 +178,7 @@ export function EngineeringFrame(props: Props) {
 
   const focus = (target: 'inspector' | 'terminal') => { props.onFocus(); setFocused(target) }
   const selectInspector = (inspector: InspectorTab) => {
-    setPreferences(previous => ({ ...previous, inspector, inspectorOpen: true }))
+    setPreferences(previous => ({ ...previous, inspector, inspectorOpen: true, focusMode: false }))
     setCursor(0); setCompactOpen(true); focus('inspector')
     if (preferences.inspectorPlacement === 'window') props.onInspectorWindow?.()
   }
@@ -231,8 +229,8 @@ export function EngineeringFrame(props: Props) {
     : preferences.inspector === 'attention' ? props.attention.map(item => () => { setFocused(null); props.onAttention(item) }) : []
   const handler: EngineeringKeyHandler = key => {
     if (!active || props.blocked) return false
-    if (key.name === 'f7') { const preset = PRESETS[(PRESETS.indexOf(preferences.preset) + 1) % PRESETS.length]!; setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); return true }
-    if (key.name === 'f9') { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, preset: previous.preset === 'focus' ? 'build' : previous.preset })); setCompactOpen(false); focus('terminal'); return true }
+    if (key.name === 'f7') { setPreferences(previous => ({ ...previous, focusMode: !engineeringFocusMode(previous) })); setFocused(null); setCompactOpen(false); return true }
+    if (key.name === 'f9') { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, focusMode: false })); setCompactOpen(false); focus('terminal'); return true }
     if (key.name === 'f8') { if (props.inspectorWindowOpen && focused === 'inspector') props.onInspectorLeave?.(); else if (focused) setFocused(null); else { selectInspector(preferences.inspector) }; return true }
     const input = renderer.currentFocusedRenderable
     if (input?.id.startsWith('engineering-input:')) {
@@ -326,17 +324,17 @@ export function EngineeringFrame(props: Props) {
       props.onAttention, props.onAcknowledge, props.onOpenFile, repositoryState, focused, cursor,
       fileSelection, patchState, checks, acknowledgedChecks, processes, commentEditing, notice, armedRevert])
   return <EngineeringInspectorContext.Provider value={renderInspectorWindow}><box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
-    {active ? <EngineeringHeader width={props.terminalWidth} rows={headerRows} theme={theme} preset={preferences.preset}
+    {active ? <EngineeringHeader width={props.terminalWidth} rows={headerRows} theme={theme} focusMode={engineeringFocusMode(preferences)}
       title={` ENGINEERING · ${cwd.split('/').pop()} · ${repository?.branch ?? (error ? 'no repository' : 'loading…')}${files.length ? ` · ${files.length} change${files.length === 1 ? '' : 's'}` : ''}${props.running.length ? ` · ${props.running.length} running` : ''}${props.recent.size ? ` · ${props.recent.size} recent` : ''}${props.attention.length ? ` · ${props.attention.length} attention` : ''}`}
-      onPreset={preset => { setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); setCompactOpen(false) }}
+      onToggleFocus={() => { setPreferences(previous => ({ ...previous, focusMode: !engineeringFocusMode(previous) })); setFocused(null); setCompactOpen(false) }}
       onInspector={() => selectInspector(preferences.inspector)}
-      onTerminal={() => { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, preset: previous.preset === 'focus' ? 'build' : previous.preset })); setCompactOpen(false); focus('terminal') }} /> : null}
+      onTerminal={() => { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, focusMode: false })); setCompactOpen(false); focus('terminal') }} /> : null}
     <box height={layout.height} flexShrink={0} flexDirection="row">
       <box key="existing-workspace" onMouseDown={() => setFocused(null)} width={layout.width} height={layout.height}>{props.children}</box>
       {active && inspectorWidth ? inspector(inspectorWidth, layout.height) : null}
     </box>
-    {active && preferences.inspectorOpen && preferences.preset !== 'focus' && preferences.inspectorPlacement !== 'window' && (preferences.inspectorExpanded || !inspectorWidth && compactOpen) ? <box position="absolute" left={0} top={headerRows} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - headerRows - 1, 12))}</box> : null}
-    {active && preferences.drawerOpen && preferences.preset !== 'focus' ? <box id="engineering-terminal" position={drawerRows ? undefined : "absolute"} top={drawerRows ? undefined : headerRows} left={drawerRows ? undefined : 0} width={props.terminalWidth} zIndex={drawerRows ? undefined : 31} backgroundColor={theme.bg} height={drawerRows || Math.max(8, props.terminalHeight - 4)} flexShrink={0} flexDirection="column" border borderColor={focused === 'terminal' ? theme.cyan : theme.border} onMouseDown={() => focus('terminal')}>
+    {active && preferences.inspectorOpen && !engineeringFocusMode(preferences) && preferences.inspectorPlacement !== 'window' && (preferences.inspectorExpanded || !inspectorWidth && compactOpen) ? <box position="absolute" left={0} top={headerRows} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - headerRows - 1, 12))}</box> : null}
+    {active && preferences.drawerOpen && !engineeringFocusMode(preferences) ? <box id="engineering-terminal" position={drawerRows ? undefined : "absolute"} top={drawerRows ? undefined : headerRows} left={drawerRows ? undefined : 0} width={props.terminalWidth} zIndex={drawerRows ? undefined : 31} backgroundColor={theme.bg} height={drawerRows || Math.max(8, props.terminalHeight - 4)} flexShrink={0} flexDirection="column" border borderColor={focused === 'terminal' ? theme.cyan : theme.border} onMouseDown={() => focus('terminal')}>
       <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}>TERMINAL / PROCESSES</text><Action theme={theme} label="Close" onPress={() => { setPreferences(previous => ({ ...previous, drawerOpen: false })); setFocused(null) }} /></box>
       <PaneResizeHandle kind="drawer" extent={drawerRows || Math.max(8, props.terminalHeight - 4)} edge="top" inset={-1} />
       {props.renderTerminal(props.terminalWidth - 2, (drawerRows || Math.max(8, props.terminalHeight - 4)) - 3, focused === 'terminal' && !props.blocked, handler => { terminalKeys.current = handler }, setTerminalCapture)}
