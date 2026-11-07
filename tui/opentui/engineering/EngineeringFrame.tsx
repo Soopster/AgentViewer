@@ -6,7 +6,7 @@ import type { Session, RunningSessionRef } from '../../../lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '../../../lib/agentProtocol'
 import type { ThreadedMessage } from '../../../lib/threading'
 import { buildTaskRegistry } from '../../../lib/taskRegistry'
-import type { TuiThemePalette } from '../../theme'
+import { getProviderAccent, type TuiDensity, type TuiThemePalette } from '../../theme'
 import type { TuiTranscriptCard } from '../../format'
 import { attentionItemNeedsInput, type AttentionItem } from '../AttentionInboxPopover'
 import { sessionKey } from '../app/sessionList'
@@ -26,9 +26,13 @@ import { EngineeringHeader } from './EngineeringHeader'
 import { engineeringSidebarRows, engineeringProjectCollapsed } from './sidebar'
 import { PaneResizeHandle } from '../paneResize'
 import { layoutDiffText } from '../gitDiffText'
-import type { ScrollBoxRenderable } from '@opentui/core'
+import { TextAttributes, type ScrollBoxRenderable } from '@opentui/core'
 import { EngineeringInspectorContext } from './EngineeringInspectorWindow'
 import { WindowButton } from '../WindowButton'
+import { SectionFrame } from '../app/borders'
+import { SidebarHeading, SidebarNewSession, SidebarGroupHeading } from '../app/SidebarChrome'
+import { mixHexColor } from '../app/transcriptStyle'
+import { SidebarFilters, type SidebarFilterMenu } from '../app/SidebarFilters'
 import { EngineeringWork, type EngineeringWorkHandle, type WorkSection } from './EngineeringWork'
 import { useEngineeringWorkbench } from './workbenchState'
 import { acknowledgeWorkSnapshot, checkVerification, ENGINEERING_RUNTIME_ID, findCheckProcess, compareWorkSnapshots, completedCheckResult, indexChangeEvidence, taskBriefMarkdown, workSnapshot, type ChangeEvidence, type EngineeringCheck, type WorkSession } from './workbenchModel'
@@ -442,10 +446,17 @@ export function EngineeringFrame(props: Props) {
   </box></EngineeringInspectorContext.Provider>
 }
 
-const RAIL_SCOPES = [['repo', 'This repo'], ['all', 'All repos']] as const
-const RAIL_ACTIVITIES = [['all', 'All sessions'], ['running', 'Running'], ['attention', 'Needs input'], ['pinned', 'Pinned']] as const
-
-export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys, root }: {
+export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys, root, onFilterMenu, onSessionMenu, renameSessionKey, renameDraft, onRenameDraft, onRenameSubmit, density = 'comfortable', onNewSession, spacesNavigation, providerBadge }: {
+  onFilterMenu: (menu: SidebarFilterMenu) => void
+  renameSessionKey?: string | null
+  renameDraft?: string
+  onRenameDraft?: (value: string) => void
+  onRenameSubmit?: () => void
+  onSessionMenu?: (session: Session, point: { x: number; y: number }) => void
+  density?: TuiDensity
+  onNewSession?: () => void
+  spacesNavigation?: ReactNode
+  providerBadge?: { label: string; accent: string }
   sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height?: number; theme: TuiThemePalette
   preferences: Props['layout']['preferences']; onPreferences: Props['layout']['setPreferences']; onSelect: (session: Session) => void; onNavigate: (session: Session) => void; onFocus: () => void; enabled: boolean; registerKeys: (handler: EngineeringKeyHandler | null) => void
   /** The repository the view is scoped to; the `repo` filter keeps sessions that ran in it. */
@@ -469,7 +480,7 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   for (const session of sessions) {
     const key = sessionKey(session), title = engineeringSessionTitle(session)
     if (!`${title} ${session.summary ?? ''} ${session.cwd ?? ''}`.toLowerCase().includes(preferences.query.toLowerCase())) continue
-    if (scope === 'repo' && !engineeringSessionInRepo(session, root) || activity === 'attention' && !attentionKeys.has(key) || activity === 'running' && !runningKeys.has(key) || activity === 'pinned' && !preferences.pinned.includes(key)) continue
+    if (scope === 'repo' && !engineeringSessionInRepo(session, root) || activity === 'attention' && !attentionKeys.has(key) || activity === 'running' && !runningKeys.has(key) || activity === 'pinned' && !preferences.pinned.includes(key) || activity === 'settled' && !session.inbox?.settledAt) continue
     filtered.push(session)
   }
   const shown = filtered.length
@@ -479,7 +490,7 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
     if (!selected) return
     const timer = setTimeout(() => railScroll.current?.scrollChildIntoView(`engineering-session:${selected}`), 0)
     return () => clearTimeout(timer)
-  }, [selected, width])
+  }, [selected, width, density])
   const toggleGroup = (key: string) => onPreferences(previous => {
     if (key.endsWith(':date:Older')) {
       const expanded = previous.expandedOlder ?? []
@@ -493,10 +504,10 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   const mixedProviders = new Set(visible.map(session => session.provider)).size > 1
   useEffect(() => {
     registerKeys(key => {
-      if (!enabled) return false
+      if (!enabled || renameSessionKey) return false
       if (key.name === 'escape') { setSearchFocused(false); setHoveredTitle(null); setDismissedTitle(selected); return true }
       if ((key.name === 'pageup' || key.name === 'pagedown') && titleScroll.current) { titleScroll.current.scrollBy(key.name === 'pageup' ? -3 : 3); return true }
-      if (searchFocused) return false
+      if (searchFocused) return 'input'
       if (key.sequence === '/') { setSearchFocused(true); onFocus(); return true }
       const project = selected ? projectBySession.get(selected) : undefined
       if (project && (key.name === 'e' || key.name === 'left' || key.name === 'right')) {
@@ -524,23 +535,29 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   const detailLines = layoutDiffText(detailTitle, detailWidth, 4, true).map(line => line.map(span => span.text).join(''))
   const detailRow = rows.find(row => row.type === 'session' && sessionKey(row.session) === detailKey)
   const detailMetaWidth = detailSession ? `${mixedProviders ? `${(detailSession.provider ?? '').slice(0, 3)} ` : ''}${(detailSession.lastModified ? timeAgo(detailSession.lastModified) : '').padStart(3)}`.length : 0
-  const detailTitleWidth = Math.max(4, width - 2 - 2 - (detailRow?.type === 'session' ? detailRow.indent : 0) - (detailKey && (preferences.pinned.includes(detailKey) || detailKey === selected) ? 3 : 0) - detailMetaWidth - 3)
-  const showDetail = Boolean(detailSession && dismissedTitle !== detailKey && layoutDiffText(detailTitle, detailTitleWidth, 4, true).length > (detailKey === selected ? 2 : 1))
+  const detailTitleWidth = Math.max(4, width - 5 - 3 - (detailRow?.type === 'session' ? detailRow.indent : 0) - (detailKey && (preferences.pinned.includes(detailKey) || detailKey === selected) ? 3 : 0) - (density === 'comfortable' ? 0 : detailMetaWidth + 2))
+  const showDetail = Boolean(detailSession && detailKey !== renameSessionKey && dismissedTitle !== detailKey && layoutDiffText(detailTitle, detailTitleWidth, 4, true).length > 1)
   useEffect(() => { if (titleScroll.current) titleScroll.current.scrollTop = 0 }, [detailKey, showDetail])
   const detailHeight = Math.max(3, Math.min(detailLines.length + 2, 8, (height ?? renderer.height) - 7))
-  return <box id="engineering-sessions" width={width} height={height} alignSelf="stretch" flexShrink={0} border flexDirection="column" borderColor={enabled ? theme.cyan : theme.border} onMouseDown={onFocus}>
+  const badge = providerBadge ?? { label: mixedProviders ? 'ALL' : (sessions[0]?.provider ?? 'agents').toUpperCase(), accent: theme.cyan }
+  const headingPrefix = `SESSIONS ${shown === sessions.length ? sessions.length : `${shown}/${sessions.length}`} · `
+  return <SectionFrame id="engineering-sessions" theme={theme} surface={theme.surface} focused={enabled} backgroundColor={theme.surface} width={width} height={height} alignSelf="stretch" flexShrink={0} border flexDirection="column" borderColor={enabled ? theme.border2 : theme.border} onMouseDown={onFocus}>
     <PaneResizeHandle kind="sidebar" extent={width} edge="right" inset={-1} />
-    <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {shown === sessions.length ? sessions.length : `${shown}/${sessions.length}`}</text></box>
-    <box height={1} flexShrink={0} onMouseDown={() => { onFocus(); setSearchFocused(true) }}><input id="engineering-input:search" placeholder="Search sessions…" value={preferences.query} focused={searchFocused && enabled} onInput={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)} /></box>
-    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_SCOPES.map(([value, label]) => <Action key={value} id={`engineering-scope:${value}`} theme={theme} selected={scope === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: value, activity })) }} />)}</box>
-    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_ACTIVITIES.map(([value, label]) => <Action key={value} id={`engineering-activity:${value}`} theme={theme} selected={value === 'all' ? activity === null : activity === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope, activity: value === 'all' || activity === value ? null : value })) }} />)}</box>
+    <SidebarHeading theme={theme} width={width} text={headingPrefix + badge.label} prefixWidth={headingPrefix.length} badge={badge.label} accent={badge.accent} />
+    {onNewSession ? <SidebarNewSession theme={theme} width={width} density={density} onPress={onNewSession} /> : null}
+    {spacesNavigation}
+    <SidebarFilters onOpenMenu={onFilterMenu} idPrefix="engineering" theme={theme} query={preferences.query} searchFocused={searchFocused && enabled}
+      onSearchFocus={() => { onFocus(); setSearchFocused(true) }} onQuery={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)}
+      scope={scope} activity={activity} onScope={value => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: value, activity })) }}
+      onActivity={value => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope, activity: value })) }} />
 
-    <scrollbox ref={railScroll} flexGrow={1} minHeight={0}>{rows.map(row => {
+    <scrollbox ref={railScroll} flexGrow={1} minHeight={0} paddingX={1} backgroundColor={theme.surface} scrollY viewportCulling>{rows.map((row, rowIndex) => {
       if (row.type === 'group') {
-        const suffix = ` / ${row.count}`
-        const label = `${row.dateGroup ? '  ' : ''}${row.collapsed ? '▸' : '▾'} ${fitText(row.label, Math.max(4, width - suffix.length - (row.dateGroup ? 8 : 6)))}${suffix}`
-        return <Action key={row.key} id={`engineering-group:${row.key}`} theme={theme} label={label} onPress={() => { onFocus(); toggleGroup(row.key) }} />
+        return <SidebarGroupHeading key={row.key} id={`engineering-group:${row.key}`} label={row.label} count={row.count}
+          width={width - 5} dateGroup={row.dateGroup} disclosure={row.collapsed ? '▸ ' : '▾ '} first={rowIndex === 0}
+          density={density} theme={theme} onPress={() => { onFocus(); toggleGroup(row.key) }} />
       }
+
       const { session, indent } = row
       const key = sessionKey(session), pinned = preferences.pinned.includes(key), isSelected = selected === key
       const title = engineeringSessionTitle(session)
@@ -549,30 +566,44 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
       const [glyph, tone] = attentionKeys.has(key) ? ['▲', theme.amber] : runningKeys.has(key) ? ['●', theme.green] : recent.has(key) ? ['●', theme.cyan] : [' ', theme.dim]
       const meta = `${mixedProviders ? `${(session.provider ?? '').slice(0, 3)} ` : ''}${(session.lastModified ? timeAgo(session.lastModified) : '').padStart(3)}`
       const showPin = pinned || isSelected
-      // Only the selected title grows; status, pin and age stay on its first row.
-      const titleWidth = Math.max(4, width - 2 - 2 - indent - (showPin ? 3 : 0) - meta.length - 3)
+      const comfortable = density === 'comfortable'
+      const accent = getProviderAccent(session.provider ?? 'claude')
+      const rowBg = isSelected ? mixHexColor(accent, theme.surface, 0.22) ?? theme.surface3 : theme.surface
+      const titleWidth = Math.max(4, width - 5 - 3 - indent - (showPin ? 3 : 0) - (comfortable ? 0 : meta.length + 2))
       const titleLines = layoutDiffText(label, Math.max(1, titleWidth), 4, true).map(line => line.map(span => span.text).join(''))
-      const rowLines = isSelected ? titleLines.slice(0, 2) : titleLines.slice(0, 1)
+      const rowLines = titleLines.slice(0, 1)
       if (titleLines.length > rowLines.length) {
         const last = rowLines.length - 1
         rowLines[last] = layoutDiffText(rowLines[last]!, Math.max(1, titleWidth - suffix.length - 1), 4, false)[0]!.map(span => span.text).join('') + '…' + suffix
       }
-      return <box key={row.key} id={`engineering-session:${key}`} height={rowLines.length} flexShrink={0} flexDirection="row" paddingLeft={indent} onMouseOver={() => enterTitle(key)} onMouseOut={leaveTitle}>
-        <box width={titleWidth + 2} height={rowLines.length} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setSearchFocused(false); setDismissedTitle(null); onSelect(session); onFocus() } }}>
-          <text selectable={false} fg={theme.text} bg={isSelected ? theme.surface3 : undefined} wrapMode="none">{rowLines.map(line => ` ${line}`).join('\n')}</text>
+      return <box key={row.key} id={`engineering-session:${key}`} flexShrink={0} flexDirection="column" paddingLeft={indent}
+        marginBottom={comfortable ? 1 : 0} backgroundColor={rowBg}
+        onMouseDown={event => { if (event.button === 2 && onSessionMenu) { event.stopPropagation(); onSessionMenu(session, event) } }} onMouseOver={() => enterTitle(key)} onMouseOut={leaveTitle}>
+        <box flexDirection="row" height={1}>
+          {renameSessionKey === key ? <box width={titleWidth + 2} height={1}>
+            <input id={`engineering-rename:${key}`} focused value={renameDraft ?? ''} maxLength={80} onInput={onRenameDraft} onSubmit={onRenameSubmit} />
+          </box> : <box width={titleWidth + 2} height={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setSearchFocused(false); setDismissedTitle(null); onSelect(session); onFocus() } }}>
+            <text selectable={false} fg={theme.text} attributes={isSelected ? TextAttributes.BOLD : undefined} wrapMode="none">
+              <span fg={accent}>{isSelected ? ' ▎' : '  '}</span>{rowLines[0] ?? ''}
+            </text>
+          </box>}
+          {showPin ? <Action id={`engineering-pin:${key}`} theme={theme} tone={pinned ? accent : theme.dim} label={pinned ? '−' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /> : null}
+          {comfortable ? null : <text height={1} flexShrink={0} wrapMode="none" selectable={false}><span fg={tone}>{glyph}</span><span fg={theme.dim}>{` ${meta}`}</span></text>}
         </box>
-        {showPin ? <Action theme={theme} label={pinned ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /> : null}
-        <text height={1} flexShrink={0} wrapMode="none" selectable={false}><span fg={tone}>{glyph}</span><span fg={theme.dim}>{` ${meta}`}</span></text>
+        {comfortable ? <text height={1} fg={theme.dim} wrapMode="none" selectable={false}>
+          <span fg={accent}>{isSelected ? ' ▎' : '  '}</span><span fg={tone}>{`${glyph} `}</span>{fitText(`${attentionKeys.has(key) ? 'Needs input · ' : runningKeys.has(key) ? 'Working · ' : ''}${meta}`, width - 5 - indent - 5)}
+        </text> : null}
+        {comfortable && session.recap ? <text height={1} fg={theme.muted} wrapMode="none" selectable={false}>{fitText(`  ${session.recap.text}`, width - 5 - indent - 1)}</text> : null}
       </box>
     })}
-      {!shown ? <box flexShrink={0} flexDirection="column"><text fg={theme.dim}>{` No ${activity === 'attention' ? 'sessions needing input' : activity === 'running' ? 'running sessions' : activity === 'pinned' ? 'pinned sessions' : 'sessions'} ${scope === 'repo' ? 'in this repo' : 'across all repos'}${preferences.query ? ' matching search' : ''}.`}</text>
+      {!shown ? <box flexShrink={0} flexDirection="column"><text fg={theme.dim}>{` No ${activity === 'attention' ? 'sessions needing input' : activity === 'running' ? 'running sessions' : activity === 'pinned' ? 'pinned sessions' : activity === 'settled' ? 'settled sessions' : 'sessions'} ${scope === 'repo' ? 'in this repo' : 'across all repos'}${preferences.query ? ' matching search' : ''}.`}</text>
         {sessions.length && (activity || scope === 'repo' || preferences.query) ? <Action id="engineering-reset-filters" theme={theme} label="Reset all filters" onPress={() => { setSearchFocused(false); setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: 'all', activity: null, query: '' })) }} /> : null}
       </box> : null}
     </scrollbox>
     {showDetail ? <box id="engineering-title-detail" position="absolute" bottom={0} left={0} width={width - 2} height={detailHeight} border borderColor={theme.cyan} backgroundColor={theme.surface} zIndex={20} onMouseOver={clearHoverExit} onMouseOut={leaveTitle}>
       <scrollbox ref={titleScroll} flexGrow={1} minHeight={0}><text fg={theme.text} wrapMode="none">{detailLines.join('\n')}</text></scrollbox>
     </box> : null}
-  </box>
+  </SectionFrame>
 }
 
 /**

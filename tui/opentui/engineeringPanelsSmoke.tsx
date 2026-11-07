@@ -3,28 +3,32 @@ import assert from 'node:assert/strict'
 import React from 'react'
 import { act, testRender } from './testRender'
 import { DARK_THEME } from '../theme'
+import { sessionKey } from './app/sessionList'
 import { EngineeringRail, inspectorTabLabel } from './engineering/EngineeringFrame'
 import { EngineeringChanges, type EngineeringChangesHandle } from './engineering/EngineeringChanges'
 import { ENGINEERING_DEFAULTS } from './engineering/model'
 
 const noop = () => {}
 const sessions = Array.from({ length: 150 }, (_, index) => ({ sessionId: `session-${index}`, provider: 'claude' as const, summary: `Engineering task ${index}`, lastModified: Date.now() }))
-const rail = await testRender(<EngineeringRail sessions={sessions} running={[]} recent={new Set()} attention={[]}
+const rail = await testRender(<EngineeringRail onFilterMenu={noop} density="balanced" sessions={sessions} running={[]} recent={new Set()} attention={[]}
   selected={null} width={28} height={30} theme={DARK_THEME} preferences={ENGINEERING_DEFAULTS}
   onPreferences={noop} onSelect={noop} onNavigate={noop} onFocus={noop} enabled={false} registerKeys={noop} />, { width: 28, height: 30 })
 try {
   await act(async () => { await rail.flush() })
   const lines = rail.captureCharFrame().split('\n')
-  assert.match(lines[1]!, /SESSIONS · 150/)
-  assert.match(lines[2]!, /Search sessions/)
-  assert.match(lines[3]!, /This repo.*All repos/)
-  for (const label of ['All sessions', 'Running', 'Needs input']) assert.ok(rail.captureCharFrame().includes(label))
-  assert.match(rail.captureCharFrame(), /Pinned/)
+  assert.match(lines[0]!, /SESSIONS 150/)
+  assert.match(lines[1]!, /Search sessions/)
+  assert.match(rail.captureCharFrame(), /This repo ▾/)
+  assert.match(rail.captureCharFrame(), /All sessions ▾/)
+  assert.doesNotMatch(rail.captureCharFrame(), /Needs input|Pinned/, 'Inactive choices stay in the dropdown')
   const projectRow = lines.findIndex(line => line.includes('NO-PROJECT'))
   assert.ok(projectRow > 3)
   // Unselected sessions remain consecutive single rows below the filter controls.
-  assert.match(lines[projectRow + 1]!, /Engineering task 0\b/)
-  assert.match(lines[projectRow + 2]!, /Engineering task 1\b/)
+  assert.match(lines[projectRow + 1]!, /Engineering/)
+  assert.match(lines[projectRow + 2]!, /Engineering/)
+  const first = rail.renderer.root.findDescendantById(`engineering-session:${sessionKey(sessions[0]!)}`)!
+  const second = rail.renderer.root.findDescendantById(`engineering-session:${sessionKey(sessions[1]!)}`)!
+  assert.equal(second.y, first.y + 1, 'Balanced sessions stay on consecutive rows at narrow widths')
   assert.doesNotMatch(rail.captureCharFrame(), /claude · idle/)
 } finally { await act(async () => { rail.renderer.destroy() }) }
 
@@ -34,13 +38,13 @@ const repoSessions = [
   { sessionId: 'cccc3333', provider: 'claude' as const, summary: 'Elsewhere', cwd: '/other', lastModified: Date.now() },
   { sessionId: 'dddd4444', provider: 'claude' as const, summary: 'Sibling', cwd: '/repository', lastModified: Date.now() },
 ]
-const scoped = await testRender(<EngineeringRail sessions={repoSessions} running={[]} recent={new Set()} attention={[]} root="/repo"
+const scoped = await testRender(<EngineeringRail onFilterMenu={noop} density="balanced" sessions={repoSessions} running={[]} recent={new Set()} attention={[]} root="/repo"
   selected={null} width={36} height={14} theme={DARK_THEME} preferences={ENGINEERING_DEFAULTS}
   onPreferences={noop} onSelect={noop} onNavigate={noop} onFocus={noop} enabled={false} registerKeys={noop} />, { width: 36, height: 14 })
 try {
   await act(async () => { await scoped.flush() })
   const frame = scoped.captureCharFrame()
-  assert.match(frame, /SESSIONS · 2\/4/, 'The repo filter is the default and counts what it hides')
+  assert.match(frame, /SESSIONS 2\/4/, 'The repo filter is the default and counts what it hides')
   assert.doesNotMatch(frame, /Elsewhere|Sibling/, 'Sessions outside the repository (including a prefix-sharing sibling) are hidden')
   assert.match(frame, /Hi #aaaa/)
   assert.match(frame, /Hi #bbbb/, 'Identical titles are told apart')

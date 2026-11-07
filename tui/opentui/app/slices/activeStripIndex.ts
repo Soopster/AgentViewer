@@ -136,7 +136,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
     || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
-  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0
+  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0 || filteredSessionsForSidebar.length !== spaceSessions.length
     ? `SESSIONS ${filteredSessionsForSidebar.length}/${spaceSessions.length}`
     : `SESSIONS ${spaceSessions.length}`
   const sidebarProviderLabel = provider === 'all'

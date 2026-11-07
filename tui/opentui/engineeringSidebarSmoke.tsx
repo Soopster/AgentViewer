@@ -56,7 +56,7 @@ let selected = sessionKey(sessions[0]!)
 function Fixture({ running = false }: { running?: boolean }) {
   const [preferences, setPreferences] = useState<EngineeringPreferences>({ ...ENGINEERING_DEFAULTS, filter: 'all' })
   const [selection, setSelection] = useState(selected)
-  return <EngineeringRail sessions={sessions} attention={[]} running={running ? [{ sessionId: 'child', provider: 'claude', providerInstanceId: 'two' }] : []} recent={new Set()}
+  return <EngineeringRail onFilterMenu={() => {}} density="balanced" sessions={sessions} attention={[]} running={running ? [{ sessionId: 'child', provider: 'claude', providerInstanceId: 'two' }] : []} recent={new Set()}
     selected={selection} width={48} height={24} theme={DARK_THEME} enabled preferences={preferences}
     onPreferences={setPreferences} onFocus={() => {}} onSelect={() => {}}
     onNavigate={session => { selected = sessionKey(session); setSelection(selected) }}
@@ -72,8 +72,8 @@ const clickGroup = async (key: string) => {
 }
 try {
   await settle()
-  assert.match(setup.captureCharFrame(), /ALPHA.*\/ 3/)
-  assert.match(setup.captureCharFrame(), /BETA.*\/ 1/)
+  assert.match(setup.captureCharFrame(), /ALPHA\s+3/)
+  assert.match(setup.captureCharFrame(), /BETA\s+1/)
   await clickGroup('project:ALPHA')
   assert.doesNotMatch(setup.captureCharFrame(), /Alpha today|Alpha child|Alpha yesterday/)
   assert.match(setup.captureCharFrame(), /Beta active/)

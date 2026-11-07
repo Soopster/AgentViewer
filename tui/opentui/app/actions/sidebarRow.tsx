@@ -18,9 +18,12 @@ import { sessionKey, isSessionRecentlyTouched } from '../sessionList'
 import { mixHexColor } from '../transcriptStyle'
 import { SessionRailDetail, PR_STATE_GLYPH, pullRequestMark, pullRequestColor } from '../SessionRailDetail'
 import { sessionProviderLabel } from '../pickers'
+import { SidebarGroupHeading } from '../SidebarChrome'
 
 export type BuildSidebarRowContext = {
   /** The Session insights plugin is on: PR glyph and the selected row's branch/PR detail. */
+  pinnedSessionKeys?: ReadonlySet<string>
+  toggleSessionPin?: (session: Session) => void
   sessionInsightsOn: boolean
   toggleDateGroup: (key: string) => void
   coordinatorRunGoals: ReadonlyMap<string, string>
@@ -57,25 +60,10 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
   } = ctx
   if (entry.type === 'project') {
-    const countLabel = `${entry.count}`
-    const projectLabel = fitText(entry.projectName, Math.max(sidebarInnerWidth - countLabel.length - 5 - (entry.dateGroup ? 1 : 0), 1)).trimEnd()
-    return (
-      <box
-        key={entry.key}
-        id={`sidebar:${entry.key}`}
-        onMouseDown={event => { if ((entry.dateGroup || entry.collapsible) && event.button === 0) { event.stopPropagation(); ctx.toggleDateGroup(entry.key) } }}
-        paddingX={1}
-        paddingLeft={entry.dateGroup ? 2 : 1}
-        // A blank row separates groups; the first has the rail's own title
-        // above it and nothing to be separated from.
-        marginTop={entry.dateGroup || entry.key === firstSidebarEntryKey ? 0 : 1}
-        backgroundColor={selected ? theme.surface3 : theme.surface}
-      >
-        <text fg={selected ? theme.text : theme.dim} wrapMode="none">
-          {fitText(`${entry.dateGroup || entry.collapsible ? entry.collapsed ? "▸ " : "▾ " : ""}${projectLabel} / ${countLabel}`, sidebarInnerWidth - (entry.dateGroup ? 3 : 2))}
-        </text>
-      </box>
-    )
+    return <SidebarGroupHeading key={entry.key} id={`sidebar:${entry.key}`} label={entry.projectName} count={entry.count}
+      width={sidebarInnerWidth} dateGroup={entry.dateGroup} disclosure={entry.dateGroup || entry.collapsible ? entry.collapsed ? '▸ ' : '▾ ' : '◆ '}
+      first={entry.key === firstSidebarEntryKey} selected={selected} density={density} theme={theme}
+      onPress={entry.dateGroup || entry.collapsible ? () => ctx.toggleDateGroup(entry.key) : undefined} />
   }
 
   if (entry.type === 'subagent') {
@@ -180,9 +168,8 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   // teammate, a result only waits to be read.
   const team = teamAttention.get(sessionKey(entry.session))
   const teamMark = team ? (team.waiting > 0 ? ` !${team.waiting}` : ` ✓${team.finished}`) : ''
-  // Only the comfortable density spends a second row on the age. Otherwise it
-  // rides the title's row, right-aligned, and the activity glyph stands in
-  // for the word — twice the sessions in the same rail.
+  // Comfortable keeps a separate metadata row; balanced and dense align
+  // activity and age alongside the title to fit more sessions.
   const singleRow = density !== 'comfortable' && sessionKey(entry.session) !== renameSessionKey
   const rowMeta = joinMeta([
     showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
@@ -193,9 +180,12 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   const settled = Boolean(entry.session.inbox?.settledAt)
   const rowGlyph = activity ? activityGlyph : settled ? '✓' : null
   const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
+  const pinned = ctx.pinnedSessionKeys?.has(sessionKey(entry.session)) ?? false
+  const showPin = Boolean(ctx.toggleSessionPin && (selected || pinned))
+  const pinWidth = showPin ? 3 : 0
   const pr = ctx.sessionInsightsOn ? pullRequestMark(entry.session) : null
   const rowTitleWidth = Math.max(
-    innerWidth - 3 - subagentDisclosureWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0) - (pr ? 2 : 0),
+    innerWidth - 3 - subagentDisclosureWidth - pinWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0) - (pr ? 2 : 0),
     4,
   )
 
@@ -207,6 +197,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
       paddingLeft={entry.indented ? 1 : 0}
       backgroundColor={rowBg}
       marginBottom={density === 'comfortable' ? 1 : 0}
+      flexShrink={0}
       // Its text is not selectable: a press on selectable text starts a text
       // selection, which takes the drag away from the row.
       // Selects on release, not press: a press that moves is a drag onto the
@@ -248,8 +239,11 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           >{collapsedSubagentSet.has(sessionKey(entry.session)) ? '▸ ' : '▾ '}</text> : null}
           {/* Keep the title readable; provider identity belongs to the rail. */}
           <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
-            {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth)}
+            {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth)}
           </text>
+          {showPin ? <text id={`sidebar-pin:${sessionKey(entry.session)}`} width={3} fg={pinned ? sessionAccent : theme.dim} wrapMode="none" selectable={false}
+            onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); ctx.toggleSessionPin?.(entry.session) } }}
+            onMouseUp={event => event.stopPropagation()}>{pinned ? ' − ' : ' + '}</text> : null}
           {singleRow ? (
             <>
               {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
@@ -274,8 +268,8 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
       {ctx.sessionInsightsOn && selected && sessionKey(entry.session) !== renameSessionKey
         ? <SessionRailDetail session={entry.session} theme={theme} width={innerWidth} rowBg={rowBg} accent={sessionAccent} />
         : null}
-      {/* The idle recap earns a row only where the rail already spends two. */}
-      {singleRow || !entry.session.recap ? null : (
+      {/* Comfortable density retains the session recap below its compact row. */}
+      {density !== 'comfortable' || !entry.session.recap ? null : (
         <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
           <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
           <text fg={theme.muted} wrapMode="none" selectable={false}>{fitText(entry.session.recap.text, innerWidth - 3)}</text>

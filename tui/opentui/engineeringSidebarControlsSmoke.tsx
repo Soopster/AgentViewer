@@ -2,8 +2,10 @@
 import assert from 'node:assert/strict'
 import React, { useState } from 'react'
 import type { Session } from '../../lib/types'
-import { DARK_THEME } from '../theme'
+import { DARK_THEME, type TuiDensity } from '../theme'
 import { act, testRender } from './testRender'
+import { ContextMenu } from './ContextMenu'
+import type { SidebarFilterMenu } from './app/SidebarFilters'
 import { sessionKey } from './app/sessionList'
 import { EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
 import { ENGINEERING_DEFAULTS, type EngineeringPreferences } from './engineering/model'
@@ -17,24 +19,33 @@ const sessions: Session[] = [
 let preferences: EngineeringPreferences
 let update: React.Dispatch<React.SetStateAction<EngineeringPreferences>>
 let setEnabled: (value: boolean) => void
+let changeDensity: React.Dispatch<React.SetStateAction<TuiDensity>>
+let currentDensity: TuiDensity
+let created = 0
 let keys: EngineeringKeyHandler | null
 let selected = sessionKey(sessions[0]!)
 function Fixture() {
+  const [menu, setMenu] = useState<SidebarFilterMenu | null>(null)
   const [prefs, setPrefs] = useState<EngineeringPreferences>({ ...ENGINEERING_DEFAULTS, pinned: [sessionKey(sessions[0]!)] })
   const [selection, setSelection] = useState(selected)
   const [enabled, enable] = useState(true)
+  const [density, setDensity] = useState<TuiDensity>('comfortable')
+  changeDensity = setDensity; currentDensity = density
   preferences = prefs; update = setPrefs; setEnabled = enable
-  return <EngineeringRail sessions={sessions} root="/work/repo" width={28} height={28} theme={DARK_THEME}
+  return <box width={28} height={28}><EngineeringRail onFilterMenu={setMenu} density={density} onNewSession={() => { created++ }} sessions={sessions} root="/work/repo" width={28} height={28} theme={DARK_THEME}
     preferences={prefs} onPreferences={setPrefs} selected={selection} enabled={enabled} onFocus={() => {}}
     onNavigate={session => { selected = sessionKey(session); setSelection(selected) }} onSelect={session => { selected = sessionKey(session); setSelection(selected) }}
     running={[{ sessionId: 'remote', provider: 'claude' }]} recent={new Set()}
     attention={[{ key: 'done', kind: 'turn-done', provider: 'claude', sessionId: 'done', sessionKey: sessionKey(sessions[2]!), sessionTitle: 'Done', title: 'Done', createdAt: 0 }]}
     registerKeys={handler => { keys = handler }} />
+    {menu ? <ContextMenu {...menu} theme={DARK_THEME} screenWidth={28} screenHeight={28} onClose={() => setMenu(null)} onKeyHandlerReady={() => {}} /> : null}
+  </box>
 }
 const setup = await testRender(<Fixture />, { width: 28, height: 28 })
 const settle = async () => { await act(async () => { await setup.flush() }) }
 const click = async (id: string) => {
-  const node = setup.renderer.root.findDescendantById(id)
+  let node = setup.renderer.root.findDescendantById(id)
+  if (!node && /engineering-(scope|activity):/.test(id)) { await click(id.split(':')[0]!); node = setup.renderer.root.findDescendantById(id) }
   assert.ok(node, `Missing ${id}`)
   await act(async () => { await setup.mockMouse.click(node.x + 1, node.y) })
   await settle()
@@ -42,7 +53,7 @@ const click = async (id: string) => {
 try {
   await settle()
   let frame = setup.captureCharFrame()
-  for (const label of ['This repo', 'All repos', 'All sessions', 'Running', 'Needs input', 'Pinned']) assert.ok(frame.includes(label), `Full label ${label} at narrow width`)
+  for (const label of ['This repo ▾', 'All sessions ▾']) assert.ok(frame.includes(label), `Full label ${label} at narrow width`)
   assert.equal(setup.renderer.root.findDescendantById(`engineering-session:${selected}`)?.height, 2, 'Selected Unicode title occupies two rows')
   assert.ok(setup.renderer.root.findDescendantById('engineering-title-detail'), 'Keyboard focus reveals full title')
   await act(async () => { keys?.({ name: 'escape', sequence: '', ctrl: false, shift: false }) })
@@ -65,10 +76,10 @@ try {
   await click('engineering-scope:all')
   assert.equal(preferences!.activity, 'running', 'Scope preserves activity')
   assert.match(setup.captureCharFrame(), /Remote running/)
-  await click('engineering-activity:running')
-  assert.equal(preferences!.activity, null, 'Clicking active filter clears it')
+  await click('engineering-activity:all')
+  assert.equal(preferences!.activity, null, 'All sessions clears the activity filter')
   await click('engineering-activity:attention')
-  assert.match(setup.captureCharFrame(), /No sessions needing input/, 'Completion notices do not need input')
+  assert.match(setup.captureCharFrame().replace(/[│\n]/g, ' ').replace(/\s+/g, ' '), /No sessions needing input/, 'Completion notices do not need input')
   await click('engineering-activity:pinned')
   assert.equal(preferences!.activity, 'pinned')
   assert.equal(preferences!.scope, 'all', 'Activity preserves scope')
@@ -85,6 +96,21 @@ try {
   await act(async () => { setEnabled!(true); await setup.mockMouse.moveTo(node.x + 2, node.y) })
   await settle()
   assert.ok(setup.renderer.root.findDescendantById('engineering-title-detail'), 'Hover reveals complete title')
+  for (const density of ['comfortable', 'balanced', 'dense'] as const) {
+    await act(async () => { changeDensity(density) })
+    await settle()
+    assert.equal(currentDensity!, density)
+    const sessionRow = setup.renderer.root.findDescendantById(`engineering-session:${selected}`)!
+    assert.equal(sessionRow.height, density === 'comfortable' ? 2 : 1, `${density}: session rows follow density`)
+    assert.equal(setup.renderer.root.findDescendantById('sidebar-new-session')!.height, density === 'comfortable' ? 3 : 1, `${density}: shared creation button follows density`)
+    assert.ok(setup.renderer.root.findDescendantById('sidebar-provider-badge'), 'Provider badge uses shared sidebar header')
+  }
+  await click('sidebar-new-session')
+  assert.equal(created, 1, 'New session action remains available in Engineering')
+  await click(`engineering-pin:${selected}`)
+  assert.ok(!preferences!.pinned.includes(selected), 'Pin toggle removes existing pin')
+  await click(`engineering-pin:${selected}`)
+  assert.ok(preferences!.pinned.includes(selected), 'Pin toggle restores pin')
   console.log('Engineering scope/activity controls, migration semantics, narrow labels and title detail smoke passed')
 } finally { await act(async () => { setup.renderer.destroy() }) }
 process.exit(0)

@@ -27,7 +27,7 @@ export type EngineeringPreferences = {
   /** Legacy combined filter, retained for saved workspace migration. */
   filter?: 'repo' | 'all' | 'attention' | 'running' | 'pinned'
   scope?: 'repo' | 'all'
-  activity?: 'running' | 'attention' | 'pinned' | null
+  activity?: 'running' | 'attention' | 'pinned' | 'settled' | null
   expandedOlder?: string[]
   pinned: string[]
   collapsed: string[]

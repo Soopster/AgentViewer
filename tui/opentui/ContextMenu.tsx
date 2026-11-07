@@ -8,6 +8,7 @@ import { MODAL_CONTENT_Z_INDEX } from './layers'
 import { fitText } from './textLayout'
 
 export type ContextMenuItem = {
+  id?: string
   label: string
   /** The key that does the same thing elsewhere, shown dim on the right. */
   hint?: string
@@ -97,7 +98,7 @@ export function ContextMenu({
         return (
           <box
             key={item.label}
-            id={`context-menu:${index}`}
+            id={item.id ?? `context-menu:${index}`}
             flexDirection="row"
             height={1}
             flexShrink={0}

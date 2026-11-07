@@ -243,6 +243,8 @@ export function buildSidebarEntries(
 }
 
 export const NEEDS_YOU_KEY = 'project:NEEDS YOU'
+export const PINNED_SESSIONS_KEY = 'project:PINNED'
+export const RUNNING_SESSIONS_KEY = 'project:RUNNING'
 
 /**
  * Moves sessions waiting on the user into one group at the top, with their subagent rows.
@@ -250,6 +252,11 @@ export const NEEDS_YOU_KEY = 'project:NEEDS YOU'
  * A project left with no sessions loses its header.
  */
 export function liftNeedsInput(entries: SidebarEntry[], needsInput: (session: Session) => boolean): SidebarEntry[] {
+  return liftSidebarGroup(entries, needsInput, NEEDS_YOU_KEY, 'NEEDS YOU')
+}
+
+/** Move complete parent/child bundles into an activity or pinned group without duplicating rows. */
+export function liftSidebarGroup(entries: SidebarEntry[], matches: (session: Session) => boolean, key: string, label: string): SidebarEntry[] {
   const lifted: SidebarEntry[] = []
   const rest: SidebarEntry[] = []
   let header: Extract<SidebarEntry, { type: 'project' }> | null = null
@@ -262,14 +269,14 @@ export function liftNeedsInput(entries: SidebarEntry[], needsInput: (session: Se
   let liftingChildren = false
   for (const entry of entries) {
     if (entry.type === 'project') { closeGroup(); header = entry; kept = []; liftingChildren = false; continue }
-    if (entry.type === 'session' && needsInput(entry.session)) { lifted.push(entry); liftingChildren = true; continue }
+    if (entry.type === 'session' && matches(entry.session)) { lifted.push(entry); liftingChildren = true; continue }
     if (entry.type === 'subagent' && liftingChildren) { lifted.push(entry); continue }
     liftingChildren = false
     kept.push(entry)
   }
   closeGroup()
   if (lifted.length === 0) return entries
-  return [{ type: 'project', key: NEEDS_YOU_KEY, projectName: 'NEEDS YOU', count: lifted.filter(entry => entry.type === 'session').length }, ...lifted, ...rest]
+  return [{ type: 'project', key, projectName: label, count: lifted.filter(entry => entry.type === 'session').length }, ...lifted, ...rest]
 }
 
 /** Coordinator-run projects (`COORD-ORION`) hold dozens of identical chat rows; fold them until asked. */
@@ -327,7 +334,7 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
     } else if (projectHidden) {
       continue
     } else if (entry.type === 'session') {
-      if (project === NEEDS_YOU_KEY || ((bucketsByProject.get(project)?.size ?? 0) < 2 && !(options.includeSingleOlder && bucketLabel(entry) === 'Older'))) { result.push(entry); continue }
+      if ((project === NEEDS_YOU_KEY || project === PINNED_SESSIONS_KEY || project === RUNNING_SESSIONS_KEY) || ((bucketsByProject.get(project)?.size ?? 0) < 2 && !(options.includeSingleOlder && bucketLabel(entry) === 'Older'))) { result.push(entry); continue }
       const label = bucketLabel(entry)
       const key = `${project}:date:${label}`
       if (key !== bucketKey) {
