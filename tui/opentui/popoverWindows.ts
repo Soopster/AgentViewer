@@ -16,6 +16,7 @@
 import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugins/catalog'
 
 type BuiltinPopoverWindowKind =
+  | 'engineering-inspector'
   | 'daily-summary'
   | 'attention' | 'prompt-library' | 'playbooks' | 'handoff'
 
@@ -35,6 +36,7 @@ export type PopoverWindowSpec = {
 }
 
 const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpec> = {
+  'engineering-inspector': { title: '▤ Inspector', pin: null, single: true, keys: 'window', palette: 'Engineering inspector in a window' },
   'daily-summary': { title: '☰ Daily summary', pin: null, single: true, keys: 'window', palette: 'Daily summary in a window' },
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
   'prompt-library': { title: '❝ Prompts', pin: null, single: true, keys: 'window', palette: 'Prompt library in a window' },

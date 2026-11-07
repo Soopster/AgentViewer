@@ -5,6 +5,7 @@ import { toggleFullToolOutput } from './fullToolOutput'
 import { transcriptMeasure } from '../engineeringLayout'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { WindowButton } from '../WindowButton'
+import { PromptNavigation, promptNavigationRows } from './PromptNavigation'
 import { transcriptViewportPosition, useTranscriptWindowPositions } from '../transcriptWindowState'
 import { useWorkspaceContext } from '../workspaceContext'
 import { registerTuiMetricsGauge } from '../metricsLogger'
@@ -136,7 +137,7 @@ export type SplitPaneHandle = {
 // Sticky prompt header: the last user prompt whose card has scrolled above the
 // viewport's top edge. Polled off layout because scroll position is not React
 // state; it sets state only on a change, so an idle window does not re-render.
-export function useStickyPromptKey(scrollRef: React.RefObject<ScrollBoxRenderable | null>, cards: TuiTranscriptCard[], enabled: boolean): string | null {
+export function useStickyPromptKey(scrollRef: React.RefObject<ScrollBoxRenderable | null>, cards: TuiTranscriptCard[], enabled: boolean, includeContainingTurn = false): string | null {
   const [stickyKey, setStickyKey] = useState<string | null>(null)
   useEffect(() => {
     if (!enabled) {
@@ -144,6 +145,12 @@ export function useStickyPromptKey(scrollRef: React.RefObject<ScrollBoxRenderabl
       return undefined
     }
     const userKeys = new Set(cards.filter((card) => card.role === 'user').map((card) => `card:${card.key}`))
+    const containingTurn = new Map<string, string>()
+    let promptKey: string | null = null
+    if (includeContainingTurn) for (const card of cards) {
+      if (card.role === 'user') promptKey = card.key
+      if (promptKey) containingTurn.set(`card:${card.key}`, promptKey)
+    }
     // Each child.y is a native layout read, and at the tail this walk visits
     // every mounted card, eight times a second, for an answer that cannot
     // change while nothing moves. It was most of the main thread's CPU while a
@@ -169,13 +176,14 @@ export function useStickyPromptKey(scrollRef: React.RefObject<ScrollBoxRenderabl
         const row = readerRowCard(child as Renderable) ?? child
         const top = child.y - contentTop
         if (top >= viewportBottom) break
+        if (includeContainingTurn && next === null) next = containingTurn.get(row.id) ?? null
         if (top >= scrollTop) reachedTop = true
         if (userKeys.has(row.id) && (!reachedTop || next !== null)) next = row.id.slice('card:'.length)
       }
       setStickyKey((prev) => (prev === next ? prev : next))
     }, READER_SCROLL_POLL_MS)
     return () => clearInterval(interval)
-  }, [enabled, cards, scrollRef])
+  }, [enabled, cards, scrollRef, includeContainingTurn])
   return stickyKey
 }
 
@@ -503,6 +511,7 @@ export function SplitTranscriptPaneInner({
     return () => { cancelled = true }
   }, [key, session.provider, session.sessionId])
 
+  const navigationHandle = useRef<SplitPaneHandle | null>(null)
   const selectPaneCard = useCallback((cardKey: string) => {
     setCursorKey(cardKey)
     onActivate(paneIndex)
@@ -720,8 +729,9 @@ export function SplitTranscriptPaneInner({
         return adding
       },
     }
+    navigationHandle.current = handle
     registerHandle(paneIndex, handle)
-    return () => registerHandle(paneIndex, null, handle)
+    return () => { navigationHandle.current = null; registerHandle(paneIndex, null, handle) }
   }, [paneIndex, registerHandle])
 
   // Following the tail pins the bottom once the tail window has mounted — on
@@ -936,7 +946,7 @@ export function SplitTranscriptPaneInner({
       return next
     })
   }
-  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && stickyHeaders && !lightView)
+  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && (stickyHeaders || transcriptView === 'engineering') && !lightView, transcriptView === 'engineering')
   const turnFooter = useMemo(
     () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
     [running, transcriptView, paneScrollbackLike, allPaneCards],
@@ -971,7 +981,8 @@ export function SplitTranscriptPaneInner({
   const taskStrip = useMemo(() => (insightsOn ? latestTaskStrip(allPaneCards) : null), [insightsOn, allPaneCards])
   const [taskStripOpen, setTaskStripOpen] = useState(false)
   const stripRows = taskStripRows(taskStrip, taskStripOpen)
-  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows, 1)
+  const navigationRows = transcriptView === 'engineering' && allPaneCards.length ? promptNavigationRows(innerWidth) : 0
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows - navigationRows, 1)
   const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   // The window holding the selected transcript reports its card window, which
@@ -1120,6 +1131,9 @@ export function SplitTranscriptPaneInner({
         <WindowButton id={selected ? 'reader-window-close' : `split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
       {header ? <box flexDirection="column" flexShrink={0}>{header.render(width)}</box> : null}
+      {navigationRows ? <PromptNavigation cards={allPaneCards} currentKey={stickyKey ?? cursorKey} following={followTail} width={innerWidth} theme={theme}
+        onJump={cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) }}
+        onLatest={() => { onActivate(paneIndex); const last = allPaneCards.at(-1); if (last) navigationHandle.current?.jumpToKey(last.key, true) }} /> : null}
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
@@ -1159,8 +1173,8 @@ export function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
-        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} /> : null}
-        {stickyCard ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
+        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={transcriptView === 'engineering' ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
+        {stickyCard && transcriptView !== 'engineering' ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
       {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}
       {liveText ? (

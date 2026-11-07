@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
+import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../../theme'
 import type { TuiTranscriptCard } from '../../format'
@@ -9,11 +9,16 @@ import { EngineeringAction as Action } from './EngineeringAction'
 import { PaneResizeHandle } from '../paneResize'
 import type { EngineeringFile } from './repository'
 import { diffAppearance, diffRowKeys, stackDiffHunkAt, stackDiffHunks, StackDiffView, useStackDiffModel } from '../diff'
+import { useWorkspaceState } from '../workspaceContext'
+import { sortTreePaths } from '../pierreLight'
+import { buildGitFileTree, gitFileTreeDirectories, type GitFileTreeNode } from '../gitFileTree'
 import { nearestDiffContextGap } from '../gitDiffContext'
 
 /** What the inspector's key handler asks of the diff it does not own. */
 export type EngineeringChangesHandle = {
   /** Step the hunk cursor; false when the file has no hunks. */
+  handleTreeKey: (key: string) => boolean
+  fileCursor: () => string | null
   moveHunk: (step: number) => boolean
   /** First new-side line of the hunk under the cursor, for opening the editor there. */
   hunkLine: () => number | null
@@ -36,6 +41,7 @@ type Props = {
   totalFiles?: number
   scope?: 'all' | 'session'
   onToggleScope?: () => void
+  onTreeFocus?: () => void
   handleRef?: Ref<EngineeringChangesHandle | null>
   focused: boolean; editing: boolean
   onSelect: (path: string, index: number) => void
@@ -48,9 +54,74 @@ const INSPECTOR_CHROME_ROWS = 5
 
 export function EngineeringChanges(props: Props) {
   const { files, theme, width, selectedPath } = props
-  const [comment, setComment] = useState('')
-  const [hunk, setHunk] = useState<{ path: string | null; index: number; revision: number }>({ path: null, index: 0, revision: 0 })
+  const [comment, setComment] = useWorkspaceState(`engineering:comment:${props.root ?? ''}`, '', false)
+  const [hunk, setHunk] = useWorkspaceState<{ path: string | null; index: number; revision: number }>(`engineering:hunk:${props.root ?? ''}`, { path: null, index: 0, revision: 0 }, false)
   const list = useRef<ScrollBoxRenderable | null>(null)
+  const [directoryState, setDirectoryState] = useWorkspaceState<{ root: string | undefined; collapsed: Set<string> }>(`engineering:tree:${props.root ?? ''}`, () => ({ root: props.root, collapsed: new Set() }), false)
+  const [treeCursor, setTreeCursor] = useWorkspaceState<string | null>(`engineering:tree-cursor:${props.root ?? ''}`, null, false)
+  const entries = useMemo(() => files.map(file => ({ path: file.path, x: file.status[0] ?? ' ', y: file.status[1] ?? ' ' })), [files])
+  const nodes = useMemo(() => {
+    const expanded = gitFileTreeDirectories(entries)
+    if (directoryState.root === props.root) for (const path of directoryState.collapsed) expanded.delete(path)
+    return buildGitFileTree(entries, expanded)
+  }, [entries, directoryState, props.root])
+  const nodeKey = (node: GitFileTreeNode) => `${node.kind}:${node.path}`
+  const cursorIndex = Math.max(0, nodes.findIndex(node => nodeKey(node) === (treeCursor ?? `file:${selectedPath}`)))
+  const cursorNode = nodes[cursorIndex]
+  const filesByPath = useMemo(() => new Map(files.map((file, index) => [file.path, { file, index }])), [files])
+  const chooseNode = (node: GitFileTreeNode) => {
+    setTreeCursor(nodeKey(node))
+    if (node.kind === 'file') props.onSelect(node.path, filesByPath.get(node.path)!.index)
+  }
+  const toggleDirectory = (node: Extract<GitFileTreeNode, { kind: 'dir' }>) => {
+    setDirectoryState(previous => {
+      const collapsed = new Set(previous.root === props.root ? previous.collapsed : [])
+      for (const path of node.chainPaths) { if (node.expanded) collapsed.add(path); else collapsed.delete(path) }
+      return { root: props.root, collapsed }
+    })
+  }
+  const previousSelection = useRef(selectedPath)
+  useEffect(() => {
+    const changed = previousSelection.current !== selectedPath
+    previousSelection.current = selectedPath
+    if (!changed && treeCursor) return
+    setTreeCursor(selectedPath ? `file:${selectedPath}` : null)
+    if (!selectedPath) return
+    // An external file jump reveals its ancestors; ordinary polling preserves folds.
+    const parents = gitFileTreeDirectories([{ path: selectedPath, x: ' ', y: ' ' }])
+    setDirectoryState(previous => {
+      if (previous.root !== props.root) return { root: props.root, collapsed: new Set() }
+      if (![...parents].some(path => previous.collapsed.has(path))) return previous
+      return { root: props.root, collapsed: new Set([...previous.collapsed].filter(path => !parents.has(path))) }
+    })
+  }, [selectedPath, props.root])
+  const handleTreeKey = (key: string): boolean => {
+    if (key === 'down' || key === 'j' || key === 'up' || key === 'k') {
+      const step = key === 'down' || key === 'j' ? 1 : -1
+      const node = nodes[Math.max(0, Math.min(nodes.length - 1, cursorIndex + step))]
+      if (node) chooseNode(node)
+      return true
+    }
+    if (key === 'return' || key === ' ') {
+      if (cursorNode?.kind === 'dir') toggleDirectory(cursorNode)
+      else if (cursorNode) chooseNode(cursorNode)
+      return true
+    }
+    if (key === 'left' || key === 'h') {
+      if (cursorNode?.kind === 'dir' && cursorNode.expanded) toggleDirectory(cursorNode)
+      else if (cursorNode && cursorNode.depth > 0) {
+        const parent = nodes.slice(0, cursorIndex).findLast(node => node.kind === 'dir' && node.depth === cursorNode.depth - 1)
+        if (parent) chooseNode(parent)
+      }
+      return true
+    }
+    if (key === 'right' || key === 'l') {
+      if (cursorNode?.kind === 'dir' && !cursorNode.expanded) toggleDirectory(cursorNode)
+      else if (cursorNode?.kind === 'dir' && nodes[cursorIndex + 1]) chooseNode(nodes[cursorIndex + 1]!)
+      return true
+    }
+    return false
+  }
   const selectedFile = files.find(file => file.path === selectedPath)
   const model = useStackDiffModel({
     diffText: props.patch, documentKey: `engineering:${props.root ?? ''}:${selectedPath ?? ''}`, cwd: props.root ?? process.cwd(),
@@ -60,6 +131,8 @@ export function EngineeringChanges(props: Props) {
   const hunkIndex = hunk.path === selectedPath ? Math.min(hunk.index, Math.max(0, hunks.length - 1)) : 0
   const cursorRow = hunks[hunkIndex]?.row ?? null
   useImperativeHandle(props.handleRef, () => ({
+    handleTreeKey,
+    fileCursor: () => cursorNode?.kind === 'file' ? cursorNode.path : null,
     moveHunk: step => {
       if (!hunks.length) return false
       setHunk(previous => ({ path: selectedPath, index: Math.max(0, Math.min(hunks.length - 1, hunkIndex + step)), revision: previous.revision + 1 }))
@@ -72,19 +145,19 @@ export function EngineeringChanges(props: Props) {
       model.changeContext(gap)
       return true
     },
-  }), [hunks, hunkIndex, selectedPath, cursorRow, model])
+  }), [hunks, hunkIndex, selectedPath, cursorRow, model, nodes, cursorIndex, props.onSelect, directoryState])
 
-  const listRows = Math.max(1, Math.min(props.listRowsPreference ?? Math.min(Math.max(files.length, 1), 14, Math.floor(props.height * .3)), Math.max(1, props.height - 22)))
+  const listRows = Math.max(1, Math.min(props.listRowsPreference ?? Math.min(Math.max(nodes.length, 1), 14, Math.floor(props.height * .3)), Math.max(1, props.height - 22)))
   const evidence = props.evidence.slice(-2)
   // summary, review action, list, selected-file row (2), evidence, comment (2)
-  const diffRows = Math.max(3, props.height - INSPECTOR_CHROME_ROWS - (2 + listRows + 2 + evidence.length + 2))
+  const diffRows = Math.max(3, props.height - INSPECTOR_CHROME_ROWS - (3 + listRows + 2 + evidence.length + 2))
   useEffect(() => {
-    const index = files.findIndex(file => file.path === selectedPath)
+    const index = cursorIndex
     const scroll = list.current
     if (!scroll || index < 0) return
     if (index < scroll.scrollTop) scroll.scrollTo(index)
     else if (index >= scroll.scrollTop + scroll.viewport.height) scroll.scrollTo(Math.max(0, index - scroll.viewport.height + 1))
-  }, [selectedPath, files])
+  }, [cursorIndex, nodes, listRows])
 
   const submitComment = () => {
     if (!comment.trim() || !selectedPath) return
@@ -99,6 +172,7 @@ export function EngineeringChanges(props: Props) {
     setComment(''); props.onEndEdit()
   }
 
+  const fileOrder = useMemo(() => sortTreePaths(files.map(file => file.path)), [files])
   const sessionCount = props.sessionFiles ? files.filter(file => props.sessionFiles!.has(file.path)).length : 0
   const total = props.totalFiles ?? files.length
   const summary = props.scope === 'session'
@@ -111,13 +185,20 @@ export function EngineeringChanges(props: Props) {
       {props.onToggleScope ? <Action theme={theme} label={props.scope === 'session' ? 'all (m)' : 'mine (m)'} onPress={props.onToggleScope} /> : null}
     </box>
     <Action theme={theme} label="Open full Git review / hunk comments (r)" onPress={props.onReview} />
-    <scrollbox ref={list} height={listRows} flexShrink={0}>
-      {files.map((file, index) => {
-        const stats = file.status === '??' ? 'new' : file.additions === 'binary' ? 'binary' : `+${file.additions} −${file.deletions}`
-        const mine = props.sessionFiles?.has(file.path) ? '●' : ' '
-        const label = `${mine}${file.status} ${fitText(file.path, Math.max(8, width - stats.length - 9))} ${stats}`
-        return <Action key={file.path} theme={theme} tone={theme.text} selected={selectedPath === file.path}
-          label={label} onPress={() => props.onSelect(file.path, index)} />
+    <text height={1} flexShrink={0} fg={props.focused ? theme.cyan : theme.muted} wrapMode="none">{` Files ${Math.max(0, fileOrder.indexOf(selectedPath ?? '') + 1)}/${files.length}`}</text>
+    <scrollbox id="engineering-file-tree" ref={list} height={listRows} flexShrink={0}>
+      {nodes.map((node, index) => {
+        const indent = '  '.repeat(node.depth)
+        const selected = index === cursorIndex
+        const file = node.kind === 'file' ? filesByPath.get(node.path)!.file : null
+        const status = file?.status.trim() || '??'
+        const color = !file ? theme.muted : status === '??' || status.includes('D') ? theme.red : status.includes('A') ? theme.green : theme.amber
+        const label = !file ? `${indent}${node.kind === 'dir' && node.expanded ? '▼' : '▶'} ${node.name}` : `${indent}${status === '??' ? '?' : status} ${node.name}${props.sessionFiles?.has(node.path) ? ' ●' : ''}`
+        return <box key={nodeKey(node)} id={`engineering-tree:${nodeKey(node)}`} height={1} flexShrink={0} flexDirection="row" backgroundColor={selected ? theme.surface3 : undefined}
+          onMouseDown={event => { if (event.button !== 0) return; event.stopPropagation(); props.onTreeFocus?.(); chooseNode(node); if (node.kind === 'dir') toggleDirectory(node) }}>
+          <text width={2} fg={selected ? theme.cyan : theme.dim} wrapMode="none">{selected ? '▎ ' : '  '}</text>
+          <text fg={selected ? theme.text : color} wrapMode="none">{fitText(label, Math.max(1, width - 6))}</text>
+        </box>
       })}
       {!files.length ? <text fg={theme.dim}>{props.scope === 'session' ? ' This session changed none of these files.' : ' No changed files available.'}</text> : null}
     </scrollbox>

@@ -11,6 +11,8 @@ export type EngineeringPreferences = {
   inspector: InspectorTab
   inspectorOpen: boolean
   inspectorWidth: number
+  inspectorPlacement?: 'dock' | 'window'
+  inspectorExpanded?: boolean
   sidebarWidth: number
   drawerOpen: boolean
   drawerRows: number
@@ -21,7 +23,11 @@ export type EngineeringPreferences = {
   diffWrap?: boolean
   composerRows?: number
   query: string
-  filter: 'repo' | 'all' | 'attention' | 'running' | 'pinned'
+  /** Legacy combined filter, retained for saved workspace migration. */
+  filter?: 'repo' | 'all' | 'attention' | 'running' | 'pinned'
+  scope?: 'repo' | 'all'
+  activity?: 'running' | 'attention' | 'pinned' | null
+  expandedOlder?: string[]
   pinned: string[]
   collapsed: string[]
 }
@@ -29,9 +35,17 @@ export const ENGINEERING_DEFAULTS: EngineeringPreferences = {
   preset: 'build', inspector: 'changes', inspectorOpen: true, inspectorWidth: 48,
   sidebarWidth: 28, drawerOpen: false, drawerRows: 12, query: '', filter: 'repo', pinned: [], collapsed: [],
 }
+/** Read old workspaces without changing the reach of their saved activity filter. */
+export function engineeringRailFilters(preferences: EngineeringPreferences) {
+  const legacy = preferences.filter ?? 'repo'
+  return {
+    scope: preferences.scope ?? (legacy === 'repo' ? 'repo' : 'all'),
+    activity: preferences.activity !== undefined ? preferences.activity : legacy === 'repo' || legacy === 'all' ? null : legacy,
+  }
+}
 export function engineeringHeaderRows(width: number): number { return width >= 132 ? 1 : 2 }
 export function engineeringGeometry(width: number, height: number, preferences: EngineeringPreferences) {
-  const inspectorWidth = preferences.inspectorOpen && preferences.preset !== 'focus' && width >= 132
+  const inspectorWidth = preferences.inspectorOpen && preferences.inspectorPlacement !== 'window' && !preferences.inspectorExpanded && preferences.preset !== 'focus' && width >= 132
     ? Math.min(Math.max(32, preferences.inspectorWidth), Math.max(32, width - Math.max(24, preferences.sidebarWidth) - 48)) : 0
   const drawerRows = preferences.drawerOpen && preferences.preset !== 'focus' && height >= 32
     ? Math.min(Math.max(8, preferences.drawerRows), height - 20) : 0

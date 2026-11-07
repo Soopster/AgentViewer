@@ -414,6 +414,7 @@ import { usePopoverTabHostKeyGroup } from './app/slices/popoverTabHostKey'
 import { useProviderGroup } from './app/slices/provider'
 import { useWorkspaceContextGroup } from './app/slices/workspaceContext'
 import { EngineeringFrame, EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
+import { EngineeringInspectorWindow } from './engineering/EngineeringInspectorWindow'
 import { useEngineeringLayout } from './engineering/state'
 import { PaneResizeProvider, usePaneResize } from './paneResize'
 import { ResizeReadout } from './ResizeReadout'
@@ -4451,15 +4452,33 @@ function OpenTuiWorkspace() {
   // A surface into the layout: out of the side panel, into a window, focused.
   // `another` opens a further window of a kind that can have several; otherwise
   // a kind already in a window is focused there rather than opened twice.
-  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string } = {}) => runOpenSurfaceWindow({ isolatedView: engineeringLayout.active,
-    showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
-    setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
-    workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
-    setSurfacePanelFocused, setWindowSurfaceMeta, gitRepoCwd, windowSplitTree, splitArrangement,
-    splitPaneCount, setWindowArrangement, splitReaderLast,
-  }, kind, options))
+  const pendingEngineeringInspector = useRef(false)
+  const openSurfaceWindow = useStableEvent((kind: WindowSurfaceKind, options: { another?: boolean; fromPanelId?: string; fromTab?: WindowSurfaceId; cwd?: string } = {}) => {
+    if (kind === 'engineering-inspector') {
+      if (!engineeringLayout.active) { pendingEngineeringInspector.current = true; chooseTranscriptView('engineering'); return }
+      engineeringLayout.setPreferences(previous => ({ ...previous, inspectorPlacement: 'window', inspectorOpen: true, inspectorExpanded: false }))
+      const parked = [...parkedWindowKeysRef.current].filter(isSurfaceWindowKey).map(surfaceIdOfKey)
+      const existing = [...popoverTabs, ...parked].find(id => surfaceKindOf(id) === kind)
+      if (existing) {
+        if (popoverTabs.includes(existing)) showPopoverTab(existing)
+        else activateWindowTab(surfaceWindowKey(existing))
+        return
+      }
+    }
+    return runOpenSurfaceWindow({ isolatedView: engineeringLayout.active,
+      showNotice, surfacePanel, windowSurfaces, pendingSurfaceFocusRef, setFocusedPane,
+      setWindowSurfaces, popoverTabs, parkedWindowKeysRef, checkpointWindowLayout, pluginOverlay,
+      workspaceContext, windowShellSelectionRef, setSurfacePanel, setSurfacePanelOpen,
+      setSurfacePanelFocused, setWindowSurfaceMeta, gitRepoCwd, windowSplitTree, splitArrangement,
+      splitPaneCount, setWindowArrangement, splitReaderLast,
+    }, kind, options)
+  })
+  useEffect(() => {
+    if (engineeringLayout.active && pendingEngineeringInspector.current) { pendingEngineeringInspector.current = false; openSurfaceWindow('engineering-inspector') }
+  }, [engineeringLayout.active, openSurfaceWindow])
   const returningPopoverRef = useRef(false)
   const closeSurfaceWindow = useStableEvent((surface: WindowSurfaceId, moving = false) => {
+    if (surfaceKindOf(surface) === 'engineering-inspector' && !moving) engineeringLayout.setPreferences(previous => ({ ...previous, inspectorPlacement: 'dock', inspectorOpen: false, inspectorExpanded: false }))
     if (!moving && !returningPopoverRef.current) {
       if (surfaceKindOf(surface) === 'teammates' && teammatesOpen) closeInteractiveCoordinator()
     }
@@ -4494,7 +4513,8 @@ function OpenTuiWorkspace() {
   // `pin` reopens a path-pinned popover (file history) on its path.
   const setPopoverOpen = (kind: WindowSurfaceKind, open: boolean, pin?: SurfaceMeta) => {
     // File history has an overlay slot of its own, above the plugin overlay.
-    if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
+    if (kind === 'engineering-inspector' && open) { chooseTranscriptView('engineering'); engineeringLayout.setPreferences(previous => ({ ...previous, inspectorPlacement: 'dock', inspectorOpen: true, inspectorExpanded: true })) }
+    else if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
     // Teammates stay open while windowed (below); every other plugin surface is the overlay.
     else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
@@ -4519,13 +4539,16 @@ function OpenTuiWorkspace() {
   // `placement`: beside the reader (a window in the layout), filling this tab's
   // window area (that window zoomed; ⌃B m restores the layout), or a new
   // workspace tab of its own.
-  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => runOpenPopoverWindow({ isolatedView: engineeringLayout.active,
+  const openPopoverWindow = useStableEvent((kind: PopoverWindowKind, pin: SurfaceMeta = pinFor(kind, readerPin()), placement: 'beside' | 'fill' | 'tab' = 'beside') => {
+    if (kind === 'engineering-inspector') { openSurfaceWindow(kind); return }
+    return runOpenPopoverWindow({ isolatedView: engineeringLayout.active,
     readerPin, teammatesOpen, openTeammatesPanel, setPopoverOpen, openPopoverInNewTab,
     openPopoverTab, parkedWindowKeysRef, windowSurfaces, windowSurfaceMeta, activateWindowTab,
     pendingSurfaceFocusRef, setFocusedPane, setWindowSurfaces, checkpointWindowLayout,
     workspaceContext, setWindowSurfaceMeta, windowSplitTree, splitArrangement, splitPaneCount,
     setWindowArrangement, splitReaderLast, showNotice,
-  }, kind, pin, placement))
+  }, kind, pin, placement)
+  })
   // A popover in a new workspace tab: the tab's layout is that one window,
   // filling the area — split, tab or float it there like any other.
   const openPopoverInNewTab = useStableEvent((kind: WindowSurfaceKind, pin: SurfaceMeta) => {
@@ -4827,7 +4850,7 @@ function OpenTuiWorkspace() {
   }, [teammatesModalOpen, disabledPlugins])
   const {
     registerTeammatesKeys, offerTeammatesPlacement, registerPluginOverlayKeys,
-    pluginSelectedDetail, offerPopoverPlacement, returnPopoverWindow, moveSurfaceToPanel,
+    pluginSelectedDetail, offerPopoverPlacement, returnPopoverWindow, moveSurfaceToPanel: moveStandardSurfaceToPanel,
     currentWindowLayoutAction,
   } = useRegisterTeammatesKeysGroup({
     teammatesKeyHandlerRef, pluginOverlayKeyHandlerRef, selectedSessionKey, sessionDetail,
@@ -4836,6 +4859,13 @@ function OpenTuiWorkspace() {
     returningPopoverRef, closeSurfaceWindow, openTabByKey, setOpenTabSessions, selectTabSession,
     surfacePanel, gitRepoCwd, setSurfacePanelOpen, setSurfacePanelFocused, setSurfacePanel,
     reconciledSplitTree, visibleSplitPaneCount, splitArrangement, stackedSplit, splitReaderLast,
+  })
+
+  const moveSurfaceToPanel = useStableEvent((surface: WindowSurfaceId) => {
+    if (surfaceKindOf(surface) !== 'engineering-inspector') { moveStandardSurfaceToPanel(surface); return }
+    closeSurfaceWindow(surface, true)
+    engineeringLayout.setPreferences(previous => ({ ...previous, inspectorPlacement: 'dock', inspectorOpen: true, inspectorExpanded: false }))
+    focusReaderFromSplit()
   })
 
   const planPaneArrangement = (action: WindowLayoutAction) => {
@@ -6203,7 +6233,7 @@ function OpenTuiWorkspace() {
   }
   // `slot` is the window id when the surface is a window: its key handler and
   // capture are then that window's own, not the side panel's.
-  const renderSurfaceBodyInner = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelCwd?: string) => runRenderSurfaceBodyInner({
+  const renderSurfaceBodyInner = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelCwd?: string) => kind === 'engineering-inspector' ? <EngineeringInspectorWindow width={box.width} height={box.height} /> : runRenderSurfaceBodyInner({
     windowSurfaceMeta, gitRepoCwd, popoverTabs, focusReaderFromSplit, windowSurfaceKeysRef,
     windowSurfaceCaptureRef, pluginSessionFor, pluginSelectedDetail, pluginLiveTranscript,
     pluginOpenRequests, density, showToolCalls, splitPaneShouldYield, gitSessionId,
@@ -6328,6 +6358,13 @@ function OpenTuiWorkspace() {
     <BordersContext.Provider value={showBorders}>
     <PaneResizeProvider value={paneResize.context}>
     <EngineeringFrame
+      inspectorWindowOpen={engineeringLayout.preferences.inspectorPlacement === 'window'}
+      inspectorWindowExpanded={splitFocusIndex !== null && windowZoom === splitFocusIndex}
+      onInspectorLeave={focusReaderFromSplit}
+      inspectorWindowFocused={focusedWindowSurfaceKind === 'engineering-inspector' && !composerActive}
+      onInspectorWindow={() => openSurfaceWindow('engineering-inspector')}
+      onInspectorExpandWindow={() => toggleWindowZoom(splitFocusIndex)}
+      onActivateEngineering={() => chooseTranscriptView('engineering')}
       layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
       theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
       session={selectedSession} cards={transcriptCards} messages={taskPanelMessages}

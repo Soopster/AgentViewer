@@ -44,7 +44,7 @@ try {
   assert.equal(probe!.draft, 'Keep this draft')
   await act(async () => {
     probe!.setShare(.3)
-    probe!.layout.setPreferences(previous => ({ ...previous, inspectorWidth: 64, query: 'reconnect' }))
+    probe!.layout.setPreferences(previous => ({ ...previous, inspectorWidth: 64, query: 'reconnect', scope: 'all', activity: 'pinned', expandedOlder: ['project:ALPHA:date:Older'] }))
   })
   await act(async () => { probe!.setView('chat') })
   assert.equal(probe!.share, .7, 'Engineering must not alter the legacy layout')
@@ -61,7 +61,11 @@ try {
   controller.flush()
   const restored = new SpacesController(cwd)
   const restoredFirst = restored.getSnapshot().spaces.flatMap(space => space.workspaces).find(workspace => workspace.id === first.id)!
-  assert.equal(restored.runtime(restoredFirst).get<{ inspectorWidth: number }>('engineering:preferences', { inspectorWidth: 0 }, true).inspectorWidth, 64)
+  const saved = restored.runtime(restoredFirst).get<import('./engineering/model').EngineeringPreferences>('engineering:preferences', {} as import('./engineering/model').EngineeringPreferences, true)
+  assert.equal(saved.inspectorWidth, 64)
+  assert.equal(saved.scope, 'all')
+  assert.equal(saved.activity, 'pinned')
+  assert.deepEqual(saved.expandedOlder, ['project:ALPHA:date:Older'], 'Explicit Older expansion survives restart')
   assert.equal(restored.runtime(restoredFirst).get('splitReaderShare', 0, true), .7)
   assert.equal(restored.runtime(restoredFirst).get('engineering:splitReaderShare', 0, true), .3)
   console.log('Engineering layout, workspace, draft and restart isolation smoke passed')

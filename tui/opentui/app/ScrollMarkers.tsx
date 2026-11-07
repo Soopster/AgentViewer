@@ -16,8 +16,8 @@ export type ScrollLayout = { contentHeight: number; cards: ReadonlyMap<string, {
  * midpoint over the content height, which is the scale the scrollbar's thumb uses — so a marker
  * sits where the thumb is when that card is on screen. Cards outside the mounted window have no
  * layout, and the track does not represent them either, so they get no marker. */
-export function scrollMarkerRows(cards: readonly TuiTranscriptCard[], layout: ScrollLayout | null, rows: number): Map<number, ScrollMarkerKind> {
-  const markers = new Map<number, ScrollMarkerKind>()
+export function scrollMarkerTargets(cards: readonly TuiTranscriptCard[], layout: ScrollLayout | null, rows: number): Map<number, { kind: ScrollMarkerKind; key: string }> {
+  const markers = new Map<number, { kind: ScrollMarkerKind; key: string }>()
   if (!layout || rows < 2 || layout.contentHeight <= 0) return markers
   for (const card of cards) {
     const placed = layout.cards.get(card.key)
@@ -26,9 +26,13 @@ export function scrollMarkerRows(cards: readonly TuiTranscriptCard[], layout: Sc
     if (!kind) continue
     const row = Math.max(0, Math.min(Math.floor(((placed.top + placed.height / 2) / layout.contentHeight) * rows), rows - 1))
     const existing = markers.get(row)
-    if (!existing || PRIORITY[kind] > PRIORITY[existing]) markers.set(row, kind)
+    if (!existing || PRIORITY[kind] > PRIORITY[existing.kind]) markers.set(row, { kind, key: card.key })
   }
   return markers
+}
+
+export function scrollMarkerRows(cards: readonly TuiTranscriptCard[], layout: ScrollLayout | null, rows: number): Map<number, ScrollMarkerKind> {
+  return new Map([...scrollMarkerTargets(cards, layout, rows)].map(([row, target]) => [row, target.kind]))
 }
 
 function measure(sb: ScrollBoxRenderable): ScrollLayout {
@@ -66,13 +70,13 @@ export function useScrollLayout(scrollRef: RefObject<ScrollBoxRenderable | null>
   return layout
 }
 
-export const ScrollMarkers = React.memo(function ScrollMarkers({ cards, layout, rows, theme }: { cards: readonly TuiTranscriptCard[]; layout: ScrollLayout | null; rows: number; theme: TuiThemePalette }) {
-  const markers = useMemo(() => scrollMarkerRows(cards, layout, rows), [cards, layout, rows])
+export const ScrollMarkers = React.memo(function ScrollMarkers({ cards, layout, rows, theme, onJump }: { cards: readonly TuiTranscriptCard[]; layout: ScrollLayout | null; rows: number; theme: TuiThemePalette; onJump?: (key: string) => void }) {
+  const markers = useMemo(() => scrollMarkerTargets(cards, layout, rows), [cards, layout, rows])
   const color = { error: theme.red, edit: theme.green, prompt: theme.cyan }
   return (
     <>
-      {[...markers].map(([row, kind]) => (
-        <box key={row} id={`scroll-marker:${kind}:${row}`} position="absolute" top={row} right={1} width={1} height={1} zIndex={2}>
+      {[...markers].map(([row, { kind, key }]) => (
+        <box key={row} id={`scroll-marker:${kind}:${row}`} position="absolute" top={row} right={1} width={1} height={1} zIndex={2} onMouseDown={event => { if (onJump && event.button === 0) { event.stopPropagation(); onJump(key) } }}>
           <text fg={color[kind]} wrapMode="none" selectable={false}>{kind === 'prompt' ? '·' : '▪'}</text>
         </box>
       ))}

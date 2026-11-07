@@ -479,7 +479,7 @@ export function runRenderSurfaceWindow(ctx: RenderSurfaceWindowContext, surface:
       <box position="absolute" top={-1} right={1} height={1} flexDirection="row" zIndex={3}>
         <WindowButton id={`surface-window-menu:${surface}`} label=" ≡ " theme={theme} onPress={point => openWindowControlMenu(surfaceWindowKey(surface), point)} />
         <WindowButton id={`surface-window-layout:${surface}`} label=" ⊞ layout " theme={theme} onPress={openLayout} />
-        <WindowButton id={`surface-window-to-panel:${surface}`} label={isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
+        <WindowButton id={`surface-window-to-panel:${surface}`} label={surfaceKindOf(surface) === 'engineering-inspector' ? ' ⇥ inspector ' : isPopoverWindowKind(surfaceKindOf(surface)) ? ' ⤢ ' : ' ⇥ panel '} theme={theme} onPress={() => moveSurfaceToPanel(surface)} />
         <WindowButton id={`surface-window-close:${surface}`} label=" × " theme={theme} tone="danger" onPress={() => closeSurfaceWindow(surface)} />
       </box>
       <box flexGrow={1} overflow="hidden">

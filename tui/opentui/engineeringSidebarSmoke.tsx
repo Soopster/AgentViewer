@@ -6,8 +6,8 @@ import { act, testRender } from './testRender'
 import { DARK_THEME } from '../theme'
 import { sessionKey } from './app/sessionList'
 import { EngineeringRail, type EngineeringKeyHandler } from './engineering/EngineeringFrame'
-import { ENGINEERING_RUNNING_GROUP, engineeringSidebarRows } from './engineering/sidebar'
-import { ENGINEERING_DEFAULTS, type EngineeringPreferences } from './engineering/model'
+import { ENGINEERING_RUNNING_GROUP, ENGINEERING_INPUT_GROUP, ENGINEERING_PINNED_GROUP, engineeringSidebarRows } from './engineering/sidebar'
+import { ENGINEERING_DEFAULTS, engineeringRailFilters, type EngineeringPreferences } from './engineering/model'
 
 const now = new Date()
 const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -21,11 +21,11 @@ const sessions: Session[] = [
 const grouped = engineeringSidebarRows(sessions, [], now).rows
 assert.deepEqual(grouped.flatMap(row => row.type === 'group' && !row.dateGroup ? [row.label] : []), ['ALPHA', 'BETA'])
 assert.deepEqual(grouped.flatMap(row => row.type === 'group' && row.dateGroup ? [row.label] : []), ['Today', 'Yesterday', 'Older'])
-assert.equal(grouped.filter(row => row.type === 'session').length, 5, 'Child sessions and separate provider instances remain addressable')
+assert.equal(grouped.filter(row => row.type === 'session').length, 4, 'Child sessions and separate provider instances remain addressable')
 const folded = engineeringSidebarRows(sessions, ['project:ALPHA'], now).rows
 assert.deepEqual(folded.flatMap(row => row.type === 'session' ? [row.session.summary] : []), ['Beta active'])
 const dateFolded = engineeringSidebarRows(sessions, ['project:ALPHA:date:Today'], now).rows
-assert.deepEqual(dateFolded.flatMap(row => row.type === 'session' ? [row.session.summary] : []), ['Alpha yesterday', 'Alpha older', 'Beta active'])
+assert.deepEqual(dateFolded.flatMap(row => row.type === 'session' ? [row.session.summary] : []), ['Alpha yesterday', 'Beta active'])
 const runningKeys = new Set([sessionKey(sessions[4]!)])
 const withRunning = engineeringSidebarRows(sessions, [], now, runningKeys).rows
 assert.equal(withRunning[0]?.type === 'group' && withRunning[0].label, 'RUNNING', 'Running remains above the repo groups')
@@ -34,6 +34,22 @@ assert.ok(withRunning.some(row => row.type === 'group' && row.label === 'ALPHA')
 const runningFolded = engineeringSidebarRows(sessions, [ENGINEERING_RUNNING_GROUP], now, runningKeys).rows
 assert.ok(!runningFolded.some(row => row.type === 'session' && row.session.summary === 'Beta active'))
 assert.ok(runningFolded.some(row => row.type === 'session' && row.session.summary === 'Alpha today'), 'Collapsing Running leaves repo groups intact')
+
+const ids = (rows: ReturnType<typeof engineeringSidebarRows>['rows']) => rows.flatMap(row => row.type === 'session' ? [sessionKey(row.session)] : [])
+const overlap = engineeringSidebarRows(sessions, [], now, new Set([sessionKey(sessions[0]!), sessionKey(sessions[4]!)]), new Set([sessionKey(sessions[0]!)]), new Set([sessionKey(sessions[0]!), sessionKey(sessions[2]!)]))
+assert.deepEqual(overlap.rows.filter(row => row.type === 'group').slice(0, 3).map(row => row.key), [ENGINEERING_RUNNING_GROUP, ENGINEERING_INPUT_GROUP, ENGINEERING_PINNED_GROUP])
+assert.equal(overlap.projectBySession.get(sessionKey(sessions[0]!)), ENGINEERING_INPUT_GROUP, 'Needs input wins overlaps')
+assert.equal(new Set(ids(overlap.rows)).size, ids(overlap.rows).length, 'Priority sessions are never duplicated')
+assert.ok(!ids(grouped).includes(sessionKey(sessions[3]!)), 'Older defaults closed')
+const expandedOlder = ['project:ALPHA:date:Older']
+assert.ok(ids(engineeringSidebarRows(sessions, [], now, new Set(), new Set(), new Set(), expandedOlder).rows).includes(sessionKey(sessions[3]!)))
+const olderOnly = engineeringSidebarRows([sessions[3]!], [], now).rows
+assert.ok(olderOnly.some(row => row.type === 'group' && row.label === 'Older' && row.collapsed), 'Older-only projects remain expandable')
+assert.equal(ids(olderOnly).length, 0)
+for (const filter of ['repo', 'all', 'running', 'attention', 'pinned'] as const) {
+  assert.deepEqual(engineeringRailFilters({ ...ENGINEERING_DEFAULTS, filter }), { scope: filter === 'repo' ? 'repo' : 'all', activity: filter === 'repo' || filter === 'all' ? null : filter })
+}
+assert.deepEqual(engineeringRailFilters({ ...ENGINEERING_DEFAULTS, filter: 'running', scope: 'repo', activity: null }), { scope: 'repo', activity: null }, 'Explicit controls supersede legacy preferences')
 
 let keys: EngineeringKeyHandler | null = null
 let selected = sessionKey(sessions[0]!)

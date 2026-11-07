@@ -12,3 +12,5 @@ export * from '../diff'
 export { sortTreePaths } from '../pierreLight'
 export { createScrollVelocityState, velocityScrollStep } from '../scrollVelocity'
 export { useWindowVisible, RetainedWindow } from '../windowActivity'
+
+export { buildGitFileTree, gitFileTreeDirectories, type GitFileTreeNode } from '../gitFileTree'

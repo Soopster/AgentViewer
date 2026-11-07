@@ -178,7 +178,7 @@ try {
     await settle()
   }
   await press('F8')
-  await arrow('right')
+  await press(']')
   await settle()
   frame = setup.captureCharFrame()
   if (!frame.includes('Application-recorded checks')) throw new Error(`Checks inspector inaccessible:\n${frame}`)
@@ -188,6 +188,34 @@ try {
   if (!setup.renderer.root.findDescendantById('engineering-terminal')) throw new Error('Terminal drawer inaccessible')
   await press('F9')
   if (setup.renderer.root.findDescendantById('engineering-terminal')) throw new Error('Terminal drawer did not close')
+  if (width === 200) {
+    const click = async (id: string) => {
+      const node = setup.renderer.root.findDescendantById(id)
+      if (!node) throw new Error(`Missing inspector presentation control ${id}:\n${setup.captureCharFrame()}`)
+      await act(async () => { await setup.mockMouse.click(node.x + 1, node.y) })
+      await settle()
+    }
+    const dockWidth = setup.renderer.root.findDescendantById('engineering-inspector')!.width
+    await click('engineering-inspector-expand')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== width) throw new Error('Expanded inspector did not use terminal width')
+    if (!setup.captureCharFrame().includes('Application-recorded checks')) throw new Error('Expand lost inspector tab')
+    await click('engineering-inspector-expand')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== dockWidth) throw new Error('Restore lost inspector width')
+    await click('engineering-inspector-window')
+    const window = setup.renderer.root.findDescendantById('surface-window-to-panel:engineering-inspector')
+    if (!window) throw new Error(`Inspector did not enter shared window manager:\n${setup.captureCharFrame()}`)
+    if (!setup.captureCharFrame().includes('Application-recorded checks')) throw new Error('Window move lost inspector tab')
+    const tiledWidth = setup.renderer.root.findDescendantById('engineering-inspector')!.width
+    await click('engineering-inspector-expand')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width <= tiledWidth) throw new Error('Inspector window did not zoom')
+    await click('engineering-inspector-expand')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== tiledWidth) throw new Error('Inspector window did not restore its tile')
+    await click('surface-window-to-panel:engineering-inspector')
+    if (setup.renderer.root.findDescendantById('surface-window-to-panel:engineering-inspector')) throw new Error('Return left a duplicate inspector window')
+    if (setup.renderer.root.findDescendantById('engineering-inspector')!.width !== dockWidth) throw new Error('Return did not restore docked inspector')
+    await act(async () => { setup.mockInput.pressEscape() })
+    await settle()
+  }
   // Preview another view, then cancel: Engineering must remain selected.
   await press('v')
   await arrow('up')

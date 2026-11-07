@@ -7,7 +7,7 @@ import type { ThreadedMessage } from '../../../lib/threading'
 import { buildTaskRegistry } from '../../../lib/taskRegistry'
 import type { TuiThemePalette } from '../../theme'
 import type { TuiTranscriptCard } from '../../format'
-import type { AttentionItem } from '../AttentionInboxPopover'
+import { attentionItemNeedsInput, type AttentionItem } from '../AttentionInboxPopover'
 import { sessionKey } from '../app/sessionList'
 import { fitText } from '../textLayout'
 import { useWorkspaceState } from '../workspaceContext'
@@ -15,7 +15,7 @@ import { getProcesses, subscribeProcesses, addProcess, startProcess, type Manage
 import { git, WorkspaceGitError } from '../../../lib/git/command'
 import type { EngineeringRepository } from './repository'
 import { createEngineeringRepositoryClient } from '../engineeringRepositoryWorkerClient'
-import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionFiles, engineeringSessionInRepo, engineeringSessionTitle, engineeringSelectedFile, type EngineeringPreset, type InspectorTab } from './model'
+import { engineeringEvidence, engineeringFileEvidence, engineeringHandoff, engineeringPreset, engineeringSessionFiles, engineeringSessionInRepo, engineeringSessionTitle, engineeringSelectedFile, engineeringRailFilters, type EngineeringPreset, type InspectorTab } from './model'
 import type { EngineeringFile } from './repository'
 import { timeAgo } from '../app/format'
 import type { useEngineeringLayout } from './state'
@@ -24,6 +24,10 @@ import { EngineeringChanges, type EngineeringChangesHandle } from './Engineering
 import { EngineeringHeader } from './EngineeringHeader'
 import { engineeringSidebarRows, engineeringProjectCollapsed } from './sidebar'
 import { PaneResizeHandle } from '../paneResize'
+import { layoutDiffText } from '../gitDiffText'
+import type { ScrollBoxRenderable } from '@opentui/core'
+import { EngineeringInspectorContext } from './EngineeringInspectorWindow'
+import { WindowButton } from '../WindowButton'
 
 export type EngineeringKey = { name: string; sequence: string; ctrl: boolean; shift: boolean; meta?: boolean }
 export type EngineeringKeyHandler = (key: EngineeringKey) => boolean | 'input'
@@ -61,6 +65,13 @@ type Props = {
   onAcknowledge: (item: AttentionItem) => void
   onReview: () => void
   onDiagnostics: () => void
+  inspectorWindowOpen?: boolean
+  inspectorWindowFocused?: boolean
+  inspectorWindowExpanded?: boolean
+  onInspectorLeave?: () => void
+  onInspectorWindow?: () => void
+  onInspectorExpandWindow?: () => void
+  onActivateEngineering?: () => void
   onAppend: (text: string) => void
   /** Open a file (absolute path) in the editor at a 1-based line. */
   onOpenFile?: (path: string, line: number | null) => void
@@ -76,13 +87,14 @@ function InspectorBody({ scroll, focused, children }: { scroll: boolean; focused
 
 /** The child slot stays mounted while changing views; only chrome is opt-in. */
 export function EngineeringFrame(props: Props) {
-  const { layout, theme, cwd } = props
+  const { layout, theme, cwd, onInspectorWindow } = props
   const renderer = useRenderer()
   const { active, preferences, setPreferences, inspectorWidth, drawerRows, headerRows } = layout
   const [repositoryState, setRepository] = useState<{ cwd: string; value: EngineeringRepository | null; error: string | null }>({ cwd, value: null, error: null })
   const repository = repositoryState.cwd === cwd ? repositoryState.value : null
   const error = repositoryState.cwd === cwd ? repositoryState.error : null
-  const [focused, setFocused] = useState<'inspector' | 'terminal' | null>(null)
+  const [dockedFocus, setFocused] = useState<'inspector' | 'terminal' | null>(null)
+  const focused = props.inspectorWindowOpen ? props.inspectorWindowFocused ? 'inspector' : dockedFocus === 'terminal' ? 'terminal' : null : dockedFocus
   const [compactOpen, setCompactOpen] = useState(false)
   const [cursor, setCursor] = useState(0)
   const [fileSelection, setFileSelection] = useState<{ cwd: string; path: string | null }>({ cwd, path: null })
@@ -170,6 +182,7 @@ export function EngineeringFrame(props: Props) {
   const selectInspector = (inspector: InspectorTab) => {
     setPreferences(previous => ({ ...previous, inspector, inspectorOpen: true }))
     setCursor(0); setCompactOpen(true); focus('inspector')
+    if (preferences.inspectorPlacement === 'window') props.onInspectorWindow?.()
   }
   const jump = (key: string) => { setFocused(null); props.onJump(key) }
   const moveHunk = (step: number) => {
@@ -220,7 +233,7 @@ export function EngineeringFrame(props: Props) {
     if (!active || props.blocked) return false
     if (key.name === 'f7') { const preset = PRESETS[(PRESETS.indexOf(preferences.preset) + 1) % PRESETS.length]!; setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); return true }
     if (key.name === 'f9') { setPreferences(previous => ({ ...previous, drawerOpen: !previous.drawerOpen, preset: previous.preset === 'focus' ? 'build' : previous.preset })); setCompactOpen(false); focus('terminal'); return true }
-    if (key.name === 'f8') { if (focused) setFocused(null); else { selectInspector(preferences.inspector) }; return true }
+    if (key.name === 'f8') { if (props.inspectorWindowOpen && focused === 'inspector') props.onInspectorLeave?.(); else if (focused) setFocused(null); else { selectInspector(preferences.inspector) }; return true }
     const input = renderer.currentFocusedRenderable
     if (input?.id.startsWith('engineering-input:')) {
       if (key.name === 'escape') { input.blur(); setCommentEditing(false); setFocused(null); setCompactOpen(false); return true }
@@ -229,12 +242,15 @@ export function EngineeringFrame(props: Props) {
     if (!focused || focused === 'terminal' && !preferences.drawerOpen) return false
     if (focused === 'terminal' && terminalCapture === 'terminal') { terminalKeys.current?.(key); return true }
     if (focused === 'terminal' && terminalCapture === 'input' && key.name !== 'escape') return 'input'
-    if (key.name === 'escape') { setFocused(null); setCompactOpen(false); return true }
+    if (key.name === 'escape') { if (props.inspectorWindowOpen) return false; setPreferences(previous => ({ ...previous, inspectorExpanded: false })); setFocused(null); setCompactOpen(false); return true }
+    if (focused === 'inspector' && key.sequence === '=') { if (props.inspectorWindowOpen) props.onInspectorExpandWindow?.(); else setPreferences(previous => ({ ...previous, inspectorExpanded: !previous.inspectorExpanded })); return true }
+    if (focused === 'inspector' && key.sequence === 'w' && !key.ctrl) { setPreferences(previous => ({ ...previous, inspectorPlacement: 'window', inspectorExpanded: false })); props.onInspectorWindow?.(); return true }
     if (commentEditing && preferences.inspector === 'changes') return 'input'
     if (focused === 'terminal') { if (key.name === 'tab' && !key.ctrl) { focus('inspector'); return true }; return terminalKeys.current?.(key) ?? false }
     if (key.name === 'tab') { if (drawerRows) focus('terminal'); else setFocused(null); return true }
-    if (key.name === 'left' || key.name === 'right') {
-      const direction = key.name === 'left' ? -1 : 1
+    if (preferences.inspector === 'changes' && changesRef.current?.handleTreeKey(key.sequence === ' ' ? ' ' : key.name)) return true
+    if (key.name === 'left' || key.name === 'right' || key.sequence === '[' || key.sequence === ']') {
+      const direction = key.name === 'left' || key.sequence === '[' ? -1 : 1
       selectInspector(INSPECTORS[(INSPECTORS.indexOf(preferences.inspector) + direction + INSPECTORS.length) % INSPECTORS.length]!); return true
     }
     const currentCursor = preferences.inspector === 'changes' ? Math.max(0, files.findIndex(file => file.path === selectedPath)) : cursor
@@ -249,9 +265,9 @@ export function EngineeringFrame(props: Props) {
       if (key.name === 'p' || key.name === 'n' && key.shift) { moveHunk(-1); return true }
       if (key.name === 'm') { setPreferences(previous => ({ ...previous, changesScope: (previous.changesScope ?? 'all') === 'all' ? 'session' : 'all' })); return true }
       if (key.name === 'c') { setCommentEditing(true); return true }
-      if (selectedFile && key.name === 's' && !key.shift) { void mutateFile(selectedFile, 'stage'); return true }
-      if (selectedFile && key.name === 'u') { void mutateFile(selectedFile, 'unstage'); return true }
-      if (selectedFile && key.name === 'x') { requestRevert(selectedFile); return true }
+      if (selectedFile && changesRef.current?.fileCursor() === selectedFile.path && key.name === 's' && !key.shift) { void mutateFile(selectedFile, 'stage'); return true }
+      if (selectedFile && changesRef.current?.fileCursor() === selectedFile.path && key.name === 'u') { void mutateFile(selectedFile, 'unstage'); return true }
+      if (selectedFile && changesRef.current?.fileCursor() === selectedFile.path && key.name === 'x') { requestRevert(selectedFile); return true }
     }
     if (key.name === 'return') { rowActions[currentCursor]?.(); return true }
     if (key.name === 'r' && preferences.inspector === 'changes') { props.onReview(); return true }
@@ -259,16 +275,20 @@ export function EngineeringFrame(props: Props) {
     return true
   }
   useEffect(() => { props.registerKeys(active ? handler : null); return () => props.registerKeys(null) })
-  const inspector = (panelWidth: number, panelHeight: number) => <box id="engineering-inspector" zIndex={10} width={panelWidth} height={panelHeight} border flexDirection="column" borderColor={focused === 'inspector' ? theme.cyan : theme.border} backgroundColor={theme.bg} onMouseDown={() => focus('inspector')}>
-    <PaneResizeHandle kind="inspector" extent={panelWidth} edge="left" inset={-1} />
-    <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}> INSPECTOR </text><Action theme={theme} label="×" onPress={() => { setPreferences(previous => ({ ...previous, inspectorOpen: false })); setCompactOpen(false); setFocused(null) }} /></box>
+  const inspector = (panelWidth: number, panelHeight: number, window = false) => <box id="engineering-inspector" zIndex={10} width={panelWidth} height={panelHeight} border={!window} flexDirection="column" borderColor={focused === 'inspector' ? theme.cyan : theme.border} backgroundColor={theme.bg} onMouseDown={() => focus('inspector')}>
+    {!window && !preferences.inspectorExpanded ? <PaneResizeHandle kind="inspector" extent={panelWidth} edge="left" inset={-1} /> : null}
+    <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text} flexGrow={1}> INSPECTOR </text>
+      <WindowButton id="engineering-inspector-expand" label={panelWidth < 40 ? ' ▣ ' : (window ? props.inspectorWindowExpanded : preferences.inspectorExpanded) ? ' ▭ restore ' : ' ▣ expand '} theme={theme} onPress={() => { focus('inspector'); if (window) props.onInspectorExpandWindow?.(); else setPreferences(previous => ({ ...previous, inspectorExpanded: !previous.inspectorExpanded })) }} />
+      {!window && props.onInspectorWindow ? <WindowButton id="engineering-inspector-window" label={panelWidth < 40 ? ' ⇥ ' : ' ⇥ window '} theme={theme} onPress={() => { setPreferences(previous => ({ ...previous, inspectorPlacement: 'window', inspectorExpanded: false })); setCompactOpen(false); setFocused(null); props.onInspectorWindow?.() }} /> : null}
+      {!window ? <WindowButton id="engineering-inspector-close" label=" × " theme={theme} onPress={() => { setPreferences(previous => ({ ...previous, inspectorOpen: false, inspectorExpanded: false })); setCompactOpen(false); setFocused(null) }} /> : null}
+    </box>
     <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">{INSPECTORS.map(tab => <Action key={tab} theme={theme} label={inspectorTabLabel(tab, panelWidth)} selected={preferences.inspector === tab} onPress={() => selectInspector(tab)} />)}</box>
 
     <InspectorBody scroll={preferences.inspector !== 'changes'} focused={focused === 'inspector'}>
       {error ? <text fg={theme.red}>{fitText(error, panelWidth - 4)}</text> : null}
       {preferences.inspector === 'changes' ? <EngineeringChanges
-        files={files} width={panelWidth} height={panelHeight} theme={theme} selectedPath={selectedPath} listRowsPreference={preferences.fileListRows}
-        handleRef={changesRef} root={root} wrap={preferences.diffWrap ?? true} sessionFiles={sessionFiles} totalFiles={allFiles.length} scope={scope}
+        files={files} width={panelWidth} height={window ? panelHeight + 2 : panelHeight} theme={theme} selectedPath={selectedPath} listRowsPreference={preferences.fileListRows}
+        handleRef={changesRef} root={root} onTreeFocus={() => focus('inspector')} wrap={preferences.diffWrap ?? true} sessionFiles={sessionFiles} totalFiles={allFiles.length} scope={scope}
         onToggleScope={() => setPreferences(previous => ({ ...previous, changesScope: (previous.changesScope ?? 'all') === 'all' ? 'session' : 'all' }))}
         patch={patch} evidence={fileEvidence} focused={focused === 'inspector'} editing={commentEditing}
         onSelect={(path, index) => { setSelectedPath(path); setCursor(index) }} onReview={props.onReview}
@@ -292,10 +312,20 @@ export function EngineeringFrame(props: Props) {
       {preferences.inspector === 'handoff' ? <box flexDirection="column"><box flexDirection="row"><Action theme={theme} label="Copy / export Markdown" onPress={() => props.onCopy(handoff)} /><Action theme={theme} label="Add to composer" onPress={() => { props.onAppend(handoff); setFocused(null) }} /></box><text fg={theme.text}>{handoff}</text>{props.cards.filter(card => card.role === 'assistant' && card.category === 'conversation').slice(-3).map(card => <Action key={card.key} theme={theme} label={`Jump to source ${card.key.slice(-16)}`} onPress={() => jump(card.key)} />)}</box> : null}
     </InspectorBody>
     <box height={1} flexShrink={0}><text fg={armedRevert || notice?.tone === 'error' ? theme.red : theme.dim} wrapMode="none">{fitText(armedRevert ? ` x again reverts ${armedRevert} · any key keeps` : notice ? ` ${notice.text}` : focused !== 'inspector' ? ' F8 focus inspector'
-      : preferences.inspector === 'changes' ? ' n/p hunk · s/u stage · x revert · e context · z wrap · o edit · c comment · m mine' : ' ←/→ tabs · ↑/↓ select · ⏎ open · esc back', panelWidth - 2)}</text></box>
+      : preferences.inspector === 'changes' ? ' ←/→ folders · [/] tabs · n/p hunk · s/u stage · x revert · e context · z wrap · o edit · c comment · m mine' : ' ←/→ tabs · ↑/↓ select · ⏎ open · esc back', panelWidth - 2)}</text></box>
   </box>
 
-  return <box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
+  // Only inspector inputs invalidate its window; terminal capture changes do not.
+  const renderInspectorWindow = useMemo(() => (width: number, height: number) => active ? inspector(width, height, true)
+    : <box width={width} height={height}><WindowButton label=" Open Engineering inspector " theme={theme} onPress={() => onInspectorWindow?.()} /></box>,
+    [props.layout, props.theme, props.cwd, props.session, props.cards, props.messages, props.attention,
+      props.running, props.recent, props.blocked, props.terminalWidth, props.terminalHeight,
+      props.onFocus, props.onInspectorWindow, props.onInspectorExpandWindow, props.onInspectorLeave,
+      props.inspectorWindowOpen, props.inspectorWindowFocused, props.inspectorWindowExpanded,
+      props.onReview, props.onDiagnostics, props.onAppend, props.onJump, props.onCopy,
+      props.onAttention, props.onAcknowledge, props.onOpenFile, repositoryState, focused, cursor,
+      fileSelection, patchState, checks, acknowledgedChecks, processes, commentEditing, notice, armedRevert])
+  return <EngineeringInspectorContext.Provider value={renderInspectorWindow}><box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
     {active ? <EngineeringHeader width={props.terminalWidth} rows={headerRows} theme={theme} preset={preferences.preset}
       title={` ENGINEERING · ${cwd.split('/').pop()} · ${repository?.branch ?? (error ? 'no repository' : 'loading…')}${files.length ? ` · ${files.length} change${files.length === 1 ? '' : 's'}` : ''}${props.running.length ? ` · ${props.running.length} running` : ''}${props.recent.size ? ` · ${props.recent.size} recent` : ''}${props.attention.length ? ` · ${props.attention.length} attention` : ''}`}
       onPreset={preset => { setPreferences(previous => engineeringPreset(previous, preset)); props.onPreset(preset); setFocused(null); setCompactOpen(false) }}
@@ -305,16 +335,17 @@ export function EngineeringFrame(props: Props) {
       <box key="existing-workspace" onMouseDown={() => setFocused(null)} width={layout.width} height={layout.height}>{props.children}</box>
       {active && inspectorWidth ? inspector(inspectorWidth, layout.height) : null}
     </box>
-    {active && !inspectorWidth && compactOpen ? <box position="absolute" left={0} top={headerRows} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - headerRows - 1, 12))}</box> : null}
+    {active && preferences.inspectorOpen && preferences.preset !== 'focus' && preferences.inspectorPlacement !== 'window' && (preferences.inspectorExpanded || !inspectorWidth && compactOpen) ? <box position="absolute" left={0} top={headerRows} zIndex={30}>{inspector(props.terminalWidth, Math.max(props.terminalHeight - headerRows - 1, 12))}</box> : null}
     {active && preferences.drawerOpen && preferences.preset !== 'focus' ? <box id="engineering-terminal" position={drawerRows ? undefined : "absolute"} top={drawerRows ? undefined : headerRows} left={drawerRows ? undefined : 0} width={props.terminalWidth} zIndex={drawerRows ? undefined : 31} backgroundColor={theme.bg} height={drawerRows || Math.max(8, props.terminalHeight - 4)} flexShrink={0} flexDirection="column" border borderColor={focused === 'terminal' ? theme.cyan : theme.border} onMouseDown={() => focus('terminal')}>
       <box height={1} flexShrink={0} flexDirection="row"><text fg={theme.text}>TERMINAL / PROCESSES</text><Action theme={theme} label="Close" onPress={() => { setPreferences(previous => ({ ...previous, drawerOpen: false })); setFocused(null) }} /></box>
       <PaneResizeHandle kind="drawer" extent={drawerRows || Math.max(8, props.terminalHeight - 4)} edge="top" inset={-1} />
       {props.renderTerminal(props.terminalWidth - 2, (drawerRows || Math.max(8, props.terminalHeight - 4)) - 3, focused === 'terminal' && !props.blocked, handler => { terminalKeys.current = handler }, setTerminalCapture)}
     </box> : null}
-  </box>
+  </box></EngineeringInspectorContext.Provider>
 }
 
-const RAIL_FILTERS = [['repo', 'repo'], ['all', 'all'], ['attention', 'input'], ['running', 'run'], ['pinned', 'pin']] as const
+const RAIL_SCOPES = [['repo', 'This repo'], ['all', 'All repos']] as const
+const RAIL_ACTIVITIES = [['running', 'Running'], ['attention', 'Needs input'], ['pinned', 'Pinned']] as const
 
 export function EngineeringRail({ sessions, running, recent, attention, selected, width, height, theme, preferences, onPreferences, onSelect, onNavigate, onFocus, enabled, registerKeys, root }: {
   sessions: Session[]; running: RunningSessionRef[]; recent: ReadonlySet<string>; attention: AttentionItem[]; selected: string | null; width: number; height?: number; theme: TuiThemePalette
@@ -323,19 +354,41 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   root?: string | null
 }) {
   const [searchFocused, setSearchFocused] = useState(false)
-  const attentionKeys = new Set(attention.map(item => item.sessionKey)), runningKeys = new Set(running.map(sessionKey))
+  const [hoveredTitle, setHoveredTitle] = useState<string | null>(null)
+  const [dismissedTitle, setDismissedTitle] = useState<string | null>(null)
+  const railScroll = useRef<ScrollBoxRenderable | null>(null)
+  const titleScroll = useRef<ScrollBoxRenderable | null>(null)
+  const hoverExit = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const renderer = useRenderer()
+  const clearHoverExit = () => { if (hoverExit.current) clearTimeout(hoverExit.current) }
+  useEffect(() => () => clearHoverExit(), [])
+  const leaveTitle = () => { clearHoverExit(); hoverExit.current = setTimeout(() => setHoveredTitle(null), 150) }
+  const enterTitle = (key: string) => { clearHoverExit(); setHoveredTitle(key); setDismissedTitle(null) }
+
+  const attentionKeys = new Set(attention.filter(attentionItemNeedsInput).map(item => item.sessionKey)), runningKeys = new Set(running.map(sessionKey))
   const filtered: Session[] = []
-  const filter = preferences.filter ?? 'repo'
+  const { scope, activity } = engineeringRailFilters(preferences)
   for (const session of sessions) {
     const key = sessionKey(session), title = engineeringSessionTitle(session)
     if (!`${title} ${session.summary ?? ''} ${session.cwd ?? ''}`.toLowerCase().includes(preferences.query.toLowerCase())) continue
-    if (filter === 'repo' && !engineeringSessionInRepo(session, root) || filter === 'attention' && !attentionKeys.has(key) || filter === 'running' && !runningKeys.has(key) || filter === 'pinned' && !preferences.pinned.includes(key)) continue
+    if (scope === 'repo' && !engineeringSessionInRepo(session, root) || activity === 'attention' && !attentionKeys.has(key) || activity === 'running' && !runningKeys.has(key) || activity === 'pinned' && !preferences.pinned.includes(key)) continue
     filtered.push(session)
   }
   const shown = filtered.length
-  const { rows, projectBySession } = engineeringSidebarRows(filtered, preferences.collapsed, new Date(), runningKeys)
+  const { rows, projectBySession } = engineeringSidebarRows(filtered, preferences.collapsed, new Date(), runningKeys, attentionKeys, new Set(preferences.pinned), preferences.expandedOlder)
   const visible = rows.flatMap(row => row.type === 'session' ? [row.session] : [])
-  const toggleGroup = (key: string) => onPreferences(previous => ({ ...previous, collapsed: previous.collapsed.includes(key) ? previous.collapsed.filter(value => value !== key) : [...previous.collapsed, key] }))
+  useEffect(() => {
+    if (!selected) return
+    const timer = setTimeout(() => railScroll.current?.scrollChildIntoView(`engineering-session:${selected}`), 0)
+    return () => clearTimeout(timer)
+  }, [selected, width])
+  const toggleGroup = (key: string) => onPreferences(previous => {
+    if (key.endsWith(':date:Older')) {
+      const expanded = previous.expandedOlder ?? []
+      return { ...previous, collapsed: previous.collapsed.filter(value => value !== key), expandedOlder: expanded.includes(key) ? expanded.filter(value => value !== key) : [...expanded, key] }
+    }
+    return { ...previous, collapsed: previous.collapsed.includes(key) ? previous.collapsed.filter(value => value !== key) : [...previous.collapsed, key] }
+  })
   // A title shared by several rows ("Hi", "Commit and push") is told apart by a short id.
   const titleCounts = new Map<string, number>()
   for (const session of visible) { const title = engineeringSessionTitle(session); titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1) }
@@ -343,10 +396,13 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
   useEffect(() => {
     registerKeys(key => {
       if (!enabled) return false
+      if (key.name === 'escape') { setSearchFocused(false); setHoveredTitle(null); setDismissedTitle(selected); return true }
+      if ((key.name === 'pageup' || key.name === 'pagedown') && titleScroll.current) { titleScroll.current.scrollBy(key.name === 'pageup' ? -3 : 3); return true }
+      if (searchFocused) return false
       if (key.sequence === '/') { setSearchFocused(true); onFocus(); return true }
       const project = selected ? projectBySession.get(selected) : undefined
       if (project && (key.name === 'e' || key.name === 'left' || key.name === 'right')) {
-        const folded = engineeringProjectCollapsed(project, preferences.collapsed)
+        const folded = engineeringProjectCollapsed(project, preferences.collapsed, preferences.expandedOlder)
         if (key.name === 'e' || key.name === 'left' && !folded || key.name === 'right' && folded) toggleGroup(project)
         return true
       }
@@ -354,7 +410,7 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
       if (key.name === 'j' || key.name === 'down' || key.name === 'k' || key.name === 'up') {
         const step = key.name === 'j' || key.name === 'down' ? 1 : -1
         const next = visible[Math.max(0, Math.min(visible.length - 1, index + step))]
-        if (next) onNavigate(next)
+        if (next) { setDismissedTitle(null); setHoveredTitle(null); onNavigate(next) }
         return true
       }
       if (key.name === 'return') { const session = visible[Math.max(0, index)]; if (session) onSelect(session); return true }
@@ -362,13 +418,26 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
     })
     return () => registerKeys(null)
   })
+  useEffect(() => { if (!enabled) setHoveredTitle(null) }, [enabled])
+  const detailKey = hoveredTitle ?? (enabled && !searchFocused ? selected : null)
+  const detailSession = visible.find(session => sessionKey(session) === detailKey)
+  const detailTitle = detailSession ? engineeringSessionTitle(detailSession) + ((titleCounts.get(engineeringSessionTitle(detailSession)) ?? 0) > 1 ? ` #${detailSession.sessionId.slice(0, 4)}` : '') : ''
+  const detailWidth = Math.max(1, width - 4)
+  const detailLines = layoutDiffText(detailTitle, detailWidth, 4, true).map(line => line.map(span => span.text).join(''))
+  const detailRow = rows.find(row => row.type === 'session' && sessionKey(row.session) === detailKey)
+  const detailMetaWidth = detailSession ? `${mixedProviders ? `${(detailSession.provider ?? '').slice(0, 3)} ` : ''}${(detailSession.lastModified ? timeAgo(detailSession.lastModified) : '').padStart(3)}`.length : 0
+  const detailTitleWidth = Math.max(4, width - 2 - 2 - (detailRow?.type === 'session' ? detailRow.indent : 0) - (detailKey && (preferences.pinned.includes(detailKey) || detailKey === selected) ? 3 : 0) - detailMetaWidth - 3)
+  const showDetail = Boolean(detailSession && dismissedTitle !== detailKey && layoutDiffText(detailTitle, detailTitleWidth, 4, true).length > (detailKey === selected ? 2 : 1))
+  useEffect(() => { if (titleScroll.current) titleScroll.current.scrollTop = 0 }, [detailKey, showDetail])
+  const detailHeight = Math.max(3, Math.min(detailLines.length + 2, 8, (height ?? renderer.height) - 7))
   return <box id="engineering-sessions" width={width} height={height} alignSelf="stretch" flexShrink={0} border flexDirection="column" borderColor={enabled ? theme.cyan : theme.border} onMouseDown={onFocus}>
     <PaneResizeHandle kind="sidebar" extent={width} edge="right" inset={-1} />
     <box height={1} flexShrink={0}><text fg={theme.text}> SESSIONS · {shown === sessions.length ? sessions.length : `${shown}/${sessions.length}`}</text></box>
     <box height={1} flexShrink={0} onMouseDown={() => { onFocus(); setSearchFocused(true) }}><input id="engineering-input:search" placeholder="Search sessions…" value={preferences.query} focused={searchFocused && enabled} onInput={query => onPreferences(previous => ({ ...previous, query }))} onSubmit={() => setSearchFocused(false)} /></box>
-    <box height={1} flexShrink={0} flexDirection="row">{RAIL_FILTERS.map(([value, label]) => <Action key={value} theme={theme} selected={filter === value} label={label} onPress={() => onPreferences(previous => ({ ...previous, filter: value }))} />)}</box>
+    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_SCOPES.map(([value, label]) => <Action key={value} id={`engineering-scope:${value}`} theme={theme} selected={scope === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope: value, activity })) }} />)}</box>
+    <box flexShrink={0} flexDirection="row" flexWrap="wrap">{RAIL_ACTIVITIES.map(([value, label]) => <Action key={value} id={`engineering-activity:${value}`} theme={theme} selected={activity === value} label={label} onPress={() => { setDismissedTitle(null); onPreferences(previous => ({ ...previous, scope, activity: activity === value ? null : value })) }} />)}</box>
 
-    <scrollbox flexGrow={1} minHeight={0}>{rows.map(row => {
+    <scrollbox ref={railScroll} flexGrow={1} minHeight={0}>{rows.map(row => {
       if (row.type === 'group') {
         const suffix = ` / ${row.count}`
         const label = `${row.dateGroup ? '  ' : ''}${row.collapsed ? '▸' : '▾'} ${fitText(row.label, Math.max(4, width - suffix.length - (row.dateGroup ? 8 : 6)))}${suffix}`
@@ -377,20 +446,32 @@ export function EngineeringRail({ sessions, running, recent, attention, selected
       const { session, indent } = row
       const key = sessionKey(session), pinned = preferences.pinned.includes(key), isSelected = selected === key
       const title = engineeringSessionTitle(session)
-      const label = (titleCounts.get(title) ?? 0) > 1 ? `${title} #${session.sessionId.slice(0, 4)}` : title
+      const suffix = (titleCounts.get(title) ?? 0) > 1 ? ` #${session.sessionId.slice(0, 4)}` : ''
+      const label = title + suffix
       const [glyph, tone] = attentionKeys.has(key) ? ['▲', theme.amber] : runningKeys.has(key) ? ['●', theme.green] : recent.has(key) ? ['●', theme.cyan] : [' ', theme.dim]
       const meta = `${mixedProviders ? `${(session.provider ?? '').slice(0, 3)} ` : ''}${(session.lastModified ? timeAgo(session.lastModified) : '').padStart(3)}`
       const showPin = pinned || isSelected
-      // One row: title, pin (only where it says something), state glyph, age.
+      // Only the selected title grows; status, pin and age stay on its first row.
       const titleWidth = Math.max(4, width - 2 - 2 - indent - (showPin ? 3 : 0) - meta.length - 3)
-      return <box key={row.key} height={1} flexShrink={0} flexDirection="row" paddingLeft={indent}>
-        <Action theme={theme} tone={theme.text} selected={isSelected} label={fitText(label, titleWidth)} onPress={() => { setSearchFocused(false); onSelect(session); onFocus() }} />
+      const titleLines = layoutDiffText(label, Math.max(1, titleWidth), 4, true).map(line => line.map(span => span.text).join(''))
+      const rowLines = isSelected ? titleLines.slice(0, 2) : titleLines.slice(0, 1)
+      if (titleLines.length > rowLines.length) {
+        const last = rowLines.length - 1
+        rowLines[last] = layoutDiffText(rowLines[last]!, Math.max(1, titleWidth - suffix.length - 1), 4, false)[0]!.map(span => span.text).join('') + '…' + suffix
+      }
+      return <box key={row.key} id={`engineering-session:${key}`} height={rowLines.length} flexShrink={0} flexDirection="row" paddingLeft={indent} onMouseOver={() => enterTitle(key)} onMouseOut={leaveTitle}>
+        <box width={titleWidth + 2} height={rowLines.length} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setSearchFocused(false); setDismissedTitle(null); onSelect(session); onFocus() } }}>
+          <text selectable={false} fg={theme.text} bg={isSelected ? theme.surface3 : undefined} wrapMode="none">{rowLines.map(line => ` ${line}`).join('\n')}</text>
+        </box>
         {showPin ? <Action theme={theme} label={pinned ? '●' : '+'} onPress={() => onPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))} /> : null}
         <text height={1} flexShrink={0} wrapMode="none" selectable={false}><span fg={tone}>{glyph}</span><span fg={theme.dim}>{` ${meta}`}</span></text>
       </box>
     })}
-      {!shown ? <text fg={theme.dim}>{filter === 'repo' ? ' No sessions in this repository. Try all.' : ' No sessions match.'}</text> : null}
+      {!shown ? <text fg={theme.dim}>{` No ${activity === 'attention' ? 'sessions needing input' : activity === 'running' ? 'running sessions' : activity === 'pinned' ? 'pinned sessions' : 'sessions'} ${scope === 'repo' ? 'in this repo' : 'across all repos'}${preferences.query ? ' matching search' : ''}.`}</text> : null}
     </scrollbox>
+    {showDetail ? <box id="engineering-title-detail" position="absolute" bottom={0} left={0} width={width - 2} height={detailHeight} border borderColor={theme.cyan} backgroundColor={theme.surface} zIndex={20} onMouseOver={clearHoverExit} onMouseOut={leaveTitle}>
+      <scrollbox ref={titleScroll} flexGrow={1} minHeight={0}><text fg={theme.text} wrapMode="none">{detailLines.join('\n')}</text></scrollbox>
+    </box> : null}
   </box>
 }
 

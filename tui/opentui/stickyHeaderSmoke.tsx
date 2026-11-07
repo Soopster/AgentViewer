@@ -18,6 +18,7 @@ const { mock } = await import(bunTestSpecifier) as {
   mock: { module(specifier: string, factory: () => unknown): void }
 }
 
+const engineering = process.env.ENGINEERING_NAV_SMOKE === '1'
 const SESSION = {
   sessionId: 'sticky-header-smoke-session',
   provider: 'claude' as const,
@@ -51,7 +52,7 @@ const DETAIL = {
   threadedMessages: [],
   transcriptCards: [
     card('first-prompt', 'user', ['Do', '5. Summarise the groups']),
-    ...replies('long', 16),
+    ...replies('long', engineering ? 160 : 16),
     card('second-prompt', 'user', ['Roll that back']),
     card('tail', 'assistant', ['Rolled back.']),
   ],
@@ -74,8 +75,8 @@ mock.module('./metadataWorkerClient', () => ({
 const service = await import('../../lib/tui/service')
 mock.module('../../lib/tui/service', () => ({
   ...service,
-  readTuiTranscriptView: async () => 'scrollback',
-  readTuiStickyHeaders: async () => true,
+  readTuiTranscriptView: async () => engineering ? 'engineering' : 'scrollback',
+  readTuiStickyHeaders: async () => !engineering,
   writeTuiTranscriptView: async () => {},
   readTuiSessions: async () => [SESSION],
   readTuiSessionDetail: async () => DETAIL,
@@ -96,7 +97,7 @@ const settle = async (ms = 200) => {
 const fail = (message: string): never => {
   throw new Error(`${message}\n${setup.captureCharFrame()}`)
 }
-const headerRow = () => setup.captureCharFrame().split('\n').find((row) => row.includes('▌ PROMPT')) ?? null
+const headerRow = () => setup.captureCharFrame().split('\n').find((row) => row.includes(engineering ? 'Turn ' : '▌ PROMPT')) ?? null
 type Scroll = { scrollTop: number; scrollHeight: number; viewport: { height: number } }
 const scroll = () => setup.renderer.root.findDescendantById('transcript-scroll') as unknown as Scroll
 
@@ -110,14 +111,32 @@ try {
   if (!atTail) fail('No sticky header at the tail')
   if (!atTail!.includes('Roll that back')) fail('A newer prompt on screen did not take over the header')
 
+  if (engineering) {
+    const click = async (id: string) => {
+      const node = setup.renderer.root.findDescendantById(id)
+      if (!node) fail(`Missing navigation control ${id}`)
+      await act(async () => { await setup.mockMouse.click(node!.x + 1, node!.y) })
+      await settle(700)
+    }
+    await click('prompt-navigation:previous-prompt')
+    if (!headerRow()?.includes('Turn 1/2')) fail('Previous prompt did not reveal an unmounted older turn')
+    if (!headerRow()?.includes('Do 5. Summarise the groups')) fail('Header lost the older prompt text')
+    await click('prompt-navigation:next-prompt')
+    if (!headerRow()?.includes('Turn 2/2')) fail('Next prompt did not select the newer turn')
+    await click('prompt-navigation:latest')
+    const sb = scroll()
+    if (Math.abs(sb.scrollTop - Math.max(sb.scrollHeight - sb.viewport.height, 0)) > 1) fail('Latest did not align with the transcript bottom')
+    if (!headerRow()?.includes('Turn 2/2')) fail('Latest lost current turn')
+  } else {
   // Scroll the newer prompt out of view; the older turn owns the top again.
   act(() => { scroll().scrollTop = Math.max(scroll().scrollHeight - scroll().viewport.height - 40, 10) })
   await settle(600)
   const midway = headerRow()
   if (!midway?.includes('Do 5. Summarise the groups')) fail('The sticky header did not read a multi-line prompt as one line, or lost it mid-transcript')
   if (midway!.includes('Roll that back')) fail('The header named a newer prompt that is not on screen')
+  }
 } finally {
   setup.renderer.destroy()
 }
-console.log('Sticky header smoke passed (newer prompt in view takes over, multi-line prompt, handed back off screen)')
+console.log(engineering ? 'Engineering navigation smoke passed (sticky current turn, unmounted previous prompt, next prompt, latest alignment)' : 'Sticky header smoke passed (newer prompt in view takes over, multi-line prompt, handed back off screen)')
 process.exit(0)

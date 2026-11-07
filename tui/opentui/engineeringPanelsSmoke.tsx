@@ -8,7 +8,7 @@ import { EngineeringChanges, type EngineeringChangesHandle } from './engineering
 import { ENGINEERING_DEFAULTS } from './engineering/model'
 
 const noop = () => {}
-const sessions = Array.from({ length: 150 }, (_, index) => ({ sessionId: `session-${index}`, provider: 'claude' as const, summary: `Engineering task ${index}`, lastModified: 0 }))
+const sessions = Array.from({ length: 150 }, (_, index) => ({ sessionId: `session-${index}`, provider: 'claude' as const, summary: `Engineering task ${index}`, lastModified: Date.now() }))
 const rail = await testRender(<EngineeringRail sessions={sessions} running={[]} recent={new Set()} attention={[]}
   selected={null} width={28} height={30} theme={DARK_THEME} preferences={ENGINEERING_DEFAULTS}
   onPreferences={noop} onSelect={noop} onNavigate={noop} onFocus={noop} enabled={false} registerKeys={noop} />, { width: 28, height: 30 })
@@ -17,11 +17,14 @@ try {
   const lines = rail.captureCharFrame().split('\n')
   assert.match(lines[1]!, /SESSIONS · 150/)
   assert.match(lines[2]!, /Search sessions/)
-  assert.match(lines[3]!, /repo.*all.*input.*run.*pin/)
-  assert.match(lines[4]!, /NO-PROJECT/)
-  // One row per session: consecutive rows are consecutive sessions, no metadata row between.
-  assert.match(lines[5]!, /Engineering task 0\b/)
-  assert.match(lines[6]!, /Engineering task 1\b/)
+  assert.match(lines[3]!, /This repo.*All repos/)
+  assert.match(rail.captureCharFrame(), /Running.*Needs input/)
+  assert.match(rail.captureCharFrame(), /Pinned/)
+  const projectRow = lines.findIndex(line => line.includes('NO-PROJECT'))
+  assert.ok(projectRow > 3)
+  // Unselected sessions remain consecutive single rows below the filter controls.
+  assert.match(lines[projectRow + 1]!, /Engineering task 0\b/)
+  assert.match(lines[projectRow + 2]!, /Engineering task 1\b/)
   assert.doesNotMatch(rail.captureCharFrame(), /claude · idle/)
 } finally { await act(async () => { rail.renderer.destroy() }) }
 
@@ -71,8 +74,8 @@ try {
   const frame = single.captureCharFrame()
   assert.match(frame, /1 changed file/)
   const preview = single.renderer.root.findDescendantById('engineering-diff-preview')!
-  assert.ok(preview.y <= 6, 'One changed file must not reserve an empty tall file list')
-  assert.ok(preview.height >= 25, 'The preview receives the freed rows')
+  assert.ok(preview.y <= 7, 'One changed file must not reserve an empty tall file list')
+  assert.ok(preview.height >= 24, 'The preview receives the freed rows')
 } finally { await act(async () => { single.renderer.destroy() }) }
 const longLine = `+${'x'.repeat(120)}`
 const handle = React.createRef<EngineeringChangesHandle>()
@@ -88,7 +91,7 @@ try {
   const frame = review.captureCharFrame()
   assert.equal(handle.current?.hunkLine(), 40, 'n moves to the second hunk')
   assert.doesNotMatch(frame, /diff --git|index 1111111|\+\+\+ b\/f/, 'File headers that restate the file are not drawn')
-  assert.match(frame, /\n ● M src\/long-directory\/changed-file/, "This session's file is marked")
+  assert.match(frame, /changed-file-1\.ts ●/, "This session's file is marked")
   assert.match(frame, /● 1 mine/)
   assert.match(frame, /hunk 2\/2/)
   assert.match(frame, /▶@ @@ -40,2 \+40,2 @@ second\(\)/, 'The selected hunk carries the cursor, drawn by the shared row')

@@ -291,7 +291,7 @@ export function mergeCoordinatorGroups(entries: SidebarEntry[]): SidebarEntry[] 
 }
 
 /** Calendar buckets preserve parent/child adjacency and the existing project order. */
-export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date()): SidebarEntry[] {
+export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date(), options: { includeSingleOlder?: boolean } = {}): SidebarEntry[] {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime()
   const result: SidebarEntry[] = []
@@ -327,7 +327,7 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
     } else if (projectHidden) {
       continue
     } else if (entry.type === 'session') {
-      if (project === NEEDS_YOU_KEY || (bucketsByProject.get(project)?.size ?? 0) < 2) { result.push(entry); continue }
+      if (project === NEEDS_YOU_KEY || ((bucketsByProject.get(project)?.size ?? 0) < 2 && !(options.includeSingleOlder && bucketLabel(entry) === 'Older'))) { result.push(entry); continue }
       const label = bucketLabel(entry)
       const key = `${project}:date:${label}`
       if (key !== bucketKey) {

@@ -14,6 +14,7 @@ export const WindowButton = memo(function WindowButton({
   onPress,
   tone = 'normal',
   background,
+  foreground,
 }: {
   id?: string
   label: string
@@ -23,6 +24,8 @@ export const WindowButton = memo(function WindowButton({
   tone?: 'normal' | 'danger'
   /** The border's own background, which the button sits on. */
   background?: string
+  /** Optional resting color for actions that should remain discoverable. */
+  foreground?: string
 }) {
   const [hovered, setHovered] = useState(false)
   return (
@@ -37,7 +40,7 @@ export const WindowButton = memo(function WindowButton({
       }}
     >
       <text
-        fg={hovered ? (tone === 'danger' ? theme.red : theme.cyan) : theme.dim}
+        fg={hovered ? (tone === 'danger' ? theme.red : theme.cyan) : foreground ?? theme.dim}
         bg={hovered ? theme.surface3 : background ?? theme.surface}
         wrapMode="none"
         selectable={false}
