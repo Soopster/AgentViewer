@@ -96,6 +96,8 @@ export type TuiThemeMode =
   | 'phosphor'
   | 'bloomberg-dark'
   | 'bloomberg-light'
+  | 'oled-dark'
+  | 'oled-light'
   | 'nocturne'
   | 'slate'
   | 'solstice'
@@ -729,6 +731,54 @@ export const BLOOMBERG_LIGHT_THEME: TuiThemePalette = {
   amber: '#9a6b00',
   pink: '#c0392b',
   userBg: '#fbeedd',
+} as const
+
+// Black keeps the OLED canvas unlit; cool raised surfaces separate panels
+// while saturated accents carry focus, status, and syntax.
+export const OLED_DARK_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#080b12',
+  surface2: '#111827',
+  surface3: '#202c40',
+  diffAddBg: '#092a1c',
+  diffRemoveBg: '#310e20',
+  diffMetaBg: '#171332',
+  border: '#33445c',
+  border2: '#33e6ff',
+  text: '#f4f7ff',
+  muted: '#b4c2d8',
+  dim: '#8b9bb5',
+  violet: '#b799ff',
+  cyan: '#33e6ff',
+  green: '#80ff99',
+  red: '#ff708d',
+  amber: '#ffd166',
+  pink: '#ff80d5',
+  userBg: '#14112b',
+} as const
+
+// The same vivid hues, deepened for legible color on white. Cool tinted
+// surfaces and inky text retain the dark variant's crisp separation.
+export const OLED_LIGHT_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f5f7ff',
+  surface2: '#eaf0fc',
+  surface3: '#dce5f5',
+  diffAddBg: '#d9f6e4',
+  diffRemoveBg: '#ffe0e9',
+  diffMetaBg: '#e9e2ff',
+  border: '#a3b3cc',
+  border2: '#006b85',
+  text: '#080d1a',
+  muted: '#35445e',
+  dim: '#52617b',
+  violet: '#6824d6',
+  cyan: '#006b85',
+  green: '#006b3c',
+  red: '#bf1744',
+  amber: '#805000',
+  pink: '#ad1679',
+  userBg: '#ede5ff',
 } as const
 
 export const TRUE_BLACK_THEME: TuiThemePalette = {
@@ -3459,6 +3509,8 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'phosphor': return PHOSPHOR_THEME
     case 'bloomberg-dark': return BLOOMBERG_THEME
     case 'bloomberg-light': return BLOOMBERG_LIGHT_THEME
+    case 'oled-dark': return OLED_DARK_THEME
+    case 'oled-light': return OLED_LIGHT_THEME
     case 'nocturne': return NOCTURNE_THEME
     case 'slate': return SLATE_THEME
     case 'solstice': return SOLSTICE_THEME
