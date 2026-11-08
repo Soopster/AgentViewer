@@ -9,13 +9,14 @@ import { type SidebarEntry, type PaneFocus, type NoticeTone } from '../types'
 
 /** Returns true when one of these branches handled the key. */
 export function handleSidebarKeys({
-  toggleDateGroups, transcriptView, effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
+  toggleDateGroups, agentGroupKeys, effectiveFocus, sidebarSubagentCursor, key, handled, showNotice, setSidebarView,
   showToggleOutcome, sidebarView, moveCoordinatorSelection, jumpCoordinatorSelection, isShifted,
   openSelectedCoordinatorAgent, moveSelection, sidebarEntries, focusSidebarEntry,
   toggleHideScratch, toggleSelectedSessionSettled, toggleSidebarSort, sidebarSort,
 }: {
   toggleDateGroups?: () => void
-  transcriptView: string
+  /** The view groups tool calls by agent: a focused rail's `e` folds the selected group instead. */
+  agentGroupKeys: boolean
   effectiveFocus: PaneFocus
   sidebarSubagentCursor: string | null
   key: KeyEvent
@@ -38,7 +39,7 @@ export function handleSidebarKeys({
 }): boolean {
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'e' && !key.ctrl && !key.meta && !key.shift && toggleDateGroups
       // Agents view gives a focused rail's `e` to the parent card (readerKeys).
-      && transcriptView !== 'agents') {
+      && !agentGroupKeys) {
       handled(toggleDateGroups)
       return true
     }

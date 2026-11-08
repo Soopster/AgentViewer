@@ -22,8 +22,8 @@ writeFileSync(stateFile, JSON.stringify({
   customViewId: 'view-9',
   customViews: [{ id: 'view-9', name: 'Seeded', base: 'stream', overrides: { markers: 'codex', bogus: 1, promptBand: 'nope' } }],
 }))
-assert.deepEqual(normalizeCustomViews(JSON.parse(readFileSync(stateFile, 'utf8')).customViews)[0]!.overrides, { markers: 'codex' },
-  'unknown fields and values are dropped on read')
+assert.deepEqual(normalizeCustomViews(JSON.parse(readFileSync(stateFile, 'utf8')).customViews)[0]!.overrides, { promptMarker: '›', replyMarker: '•' },
+  'unknown fields and values are dropped on read, and the old markers field becomes the prompt and reply glyphs')
 
 const { buildThreadedMessages } = await import('../../lib/threading')
 const { formatTranscriptCards } = await import('../format')
@@ -104,7 +104,7 @@ try {
   if (!frame().includes('Base  ‹')) fail('the studio shows no base')
   if (!frame().includes('STREAM copy')) fail('a view cloned from STREAM is not named after it')
 
-  // Style → Markers: cycle to the Claude glyphs and watch the live transcript change.
+  // Style → Prompt marker: cycle to › and watch the live transcript change.
   await press('3')
   await press('j')
   if (!/❯ Why does the pool respawn\?/.test(promptRow())) fail('a view from STREAM does not start with STREAM\'s markers')
@@ -131,7 +131,7 @@ try {
     assert.ok(focus, `the saved view is in tui.json: ${JSON.stringify(state)}`)
     assert.equal(state.customViewId, focus.id, 'the saved view is the active one')
     assert.equal(focus.overrides.cursor, 'none')
-    assert.ok(focus.overrides.markers, 'the markers change is stored')
+    assert.equal(focus.overrides.promptMarker, '›', 'the prompt marker change is stored')
     assert.ok(!('bogus' in (state.customViews?.find((view) => view.id === 'view-9')?.overrides ?? {})), 'the unknown field is not written back')
   }
   await press('v')
@@ -148,7 +148,7 @@ try {
   await pressEscape()
   if (studioOpen()) fail('the second Esc did not discard')
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('discarding left the edited markers on screen')
-  if (stored().customViews?.find((view) => view.name === 'Focus')?.overrides.markers === undefined) fail('discarding changed the stored view')
+  if (stored().customViews?.find((view) => view.name === 'Focus')?.overrides.promptMarker !== '›') fail('discarding changed the stored view')
 
   // ── delete takes two presses and falls back to the base ──
   await press('v')
@@ -178,7 +178,7 @@ try {
   await press('s')
   await settle(400)
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('the edited STREAM does not draw its new markers')
-  if ((stored() as { builtinViewEdits?: Record<string, Record<string, unknown>> }).builtinViewEdits?.stream?.markers !== 'codex') fail('the STREAM edit is not stored')
+  if ((stored() as { builtinViewEdits?: Record<string, Record<string, unknown>> }).builtinViewEdits?.stream?.promptMarker !== '›') fail('the STREAM edit is not stored')
   await press('v')
   if (!frame().includes('STREAM • ✓')) fail('the edited built-in is not marked in the v menu')
   await press('e')

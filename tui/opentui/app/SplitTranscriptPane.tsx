@@ -948,7 +948,7 @@ export function SplitTranscriptPaneInner({
       return next
     })
   }
-  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && (stickyHeaders || transcriptView === 'engineering') && !lightView, transcriptView === 'engineering')
+  const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && (stickyHeaders || viewSpec.promptNavigation) && !lightView, viewSpec.promptNavigation)
   const turnFooter = useMemo(
     () => (!running && viewSpec.completedTurnHint ? streamCompletedTurnHint(allPaneCards) : null),
     [running, viewSpec.completedTurnHint, allPaneCards],
@@ -983,7 +983,7 @@ export function SplitTranscriptPaneInner({
   const taskStrip = useMemo(() => (insightsOn ? latestTaskStrip(allPaneCards) : null), [insightsOn, allPaneCards])
   const [taskStripOpen, setTaskStripOpen] = useState(false)
   const stripRows = taskStripRows(taskStrip, taskStripOpen)
-  const navigationRows = transcriptView === 'engineering' && allPaneCards.length ? promptNavigationRows(innerWidth) : 0
+  const navigationRows = viewSpec.promptNavigation && allPaneCards.length ? promptNavigationRows(innerWidth) : 0
   const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows - navigationRows, 1)
   const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
@@ -1175,8 +1175,8 @@ export function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
-        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={transcriptView === 'engineering' ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
-        {stickyCard && transcriptView !== 'engineering' ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
+        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={viewSpec.scrollMarkerJump ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
+        {stickyCard && !viewSpec.promptNavigation ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
       {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}
       {liveText ? (

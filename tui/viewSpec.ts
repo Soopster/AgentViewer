@@ -17,7 +17,9 @@ export type ViewAgentCards = 'none' | 'operational' | 'all'
 export type ViewFoldDefault = 'default' | 'expand-all'
 export type ViewTurnBoundaries = 'rules' | 'summary-only' | 'gaps' | 'none'
 export type ViewMessageLayout = 'markers' | 'continuous'
-export type ViewMarkers = 'tone' | 'codex' | 'claude' | 'copilot'
+export type ViewPromptMarker = '❯' | '›' | '>' | '▸' | '$'
+/** `tone` picks the glyph from the reply's first line (● result, × error, ▲ system, • text) and lights the cursor card ❯. */
+export type ViewReplyMarker = 'tone' | '•' | '●' | '◦' | '·' | '▹'
 export type ViewMarkerColor = 'role' | 'plain' | 'cyan'
 export type ViewPromptBand = 'stream' | 'continuous' | 'surface' | 'soft' | 'faint'
 export type ViewThinking = 'tone' | 'muted-italic' | 'amber-italic'
@@ -39,6 +41,10 @@ export type ViewSpec = {
   completedTurnHint: boolean
   appTabs: boolean
   contextSidebar: boolean
+  /** A prompt navigation bar above the transcript, tracking the turn on screen (in place of the floating sticky prompt). */
+  promptNavigation: boolean
+  /** The scrollbar's prompt markers jump to their card when clicked. */
+  scrollMarkerJump: boolean
   // Content
   cardFilter: ViewCardFilter
   toolGrouping: ViewToolGrouping
@@ -53,7 +59,8 @@ export type ViewSpec = {
   timeMarkers: boolean
   // Style
   messageLayout: ViewMessageLayout
-  markers: ViewMarkers
+  promptMarker: ViewPromptMarker
+  replyMarker: ViewReplyMarker
   markerColor: ViewMarkerColor
   promptBand: ViewPromptBand
   promptRule: boolean
@@ -97,7 +104,7 @@ export type ViewSpec = {
 export type ViewSpecKey = keyof ViewSpec
 
 /** What a card needs of a view. Identity is stable per spec (see `viewCardStyle`). */
-export type ViewCardStyle = Pick<ViewSpec, 'messageLayout' | 'markers' | 'markerColor' | 'promptBand' | 'promptRule'
+export type ViewCardStyle = Pick<ViewSpec, 'messageLayout' | 'promptMarker' | 'replyMarker' | 'markerColor' | 'promptBand' | 'promptRule'
   | 'userBold' | 'thinking' | 'toolRows' | 'promptTimestamps' | 'replyTimestamps' | 'diffPreview' | 'textWidth'> & {
   /** Turn rules drawn between messages (false drops `turn` landmarks; `break` gaps stay). */
   turnRules: boolean
@@ -107,10 +114,10 @@ export type ViewCardStyle = Pick<ViewSpec, 'messageLayout' | 'markers' | 'marker
 
 const CARDS: ViewSpec = {
   flow: 'cards', cursor: 'card', readerHeader: true, composer: 'docked', idleTicker: true, liveReasoning: true,
-  completedTurnHint: false, appTabs: false, contextSidebar: false,
+  completedTurnHint: false, appTabs: false, contextSidebar: false, promptNavigation: false, scrollMarkerJump: false,
   cardFilter: 'all', toolGrouping: 'none', agentCards: 'none', foldDefault: 'default', dimAutoFolded: false,
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
-  messageLayout: 'markers', markers: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
+  messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   sessionRail: null, sidebarView: null, tabs: null, tabOrientation: null, focusMode: null, borders: null,
@@ -136,17 +143,17 @@ export const BUILTIN_VIEW_SPECS: Readonly<Record<TuiTranscriptView, ViewSpec>> =
     turnBoundaries: 'none', turnFooter: true, messageLayout: 'continuous', promptBand: 'continuous', userBold: false,
   },
   scrollback: SCROLLBACK,
-  codex: { ...SCROLLBACK_CLI, markers: 'codex', promptBand: 'surface' },
-  'claude-code': { ...SCROLLBACK_CLI, markers: 'claude', markerColor: 'plain', promptBand: 'soft', toolRows: 'dim' },
+  codex: { ...SCROLLBACK_CLI, promptMarker: '›', replyMarker: '•', promptBand: 'surface' },
+  'claude-code': { ...SCROLLBACK_CLI, promptMarker: '❯', replyMarker: '•', markerColor: 'plain', promptBand: 'soft', toolRows: 'dim' },
   copilot: {
-    ...SCROLLBACK_CLI, markers: 'copilot', markerColor: 'cyan', promptBand: 'faint', thinking: 'muted-italic',
+    ...SCROLLBACK_CLI, promptMarker: '❯', replyMarker: '●', markerColor: 'cyan', promptBand: 'faint', thinking: 'muted-italic',
     toolRows: 'shell-bold', promptTimestamps: true, textWidth: 'full', appTabs: true,
   },
   opencode: {
     ...SCROLLBACK, turnBoundaries: 'gaps', messageLayout: 'continuous', promptBand: 'continuous', userBold: false,
     thinking: 'amber-italic', toolRows: 'dollar-shell', textWidth: 'full', turnFooter: true, contextSidebar: true,
   },
-  engineering: { ...STREAM, completedTurnHint: false, stickyHeaders: null },
+  engineering: { ...STREAM, completedTurnHint: false, promptNavigation: true, scrollMarkerJump: true },
 }
 
 /** Built-ins a custom view may start from. ENGINEERING has its own frame and state scope. */
@@ -184,6 +191,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'idleTicker', section: 'Layout', label: 'Idle ticker', help: 'The "on standby" line under an idle transcript.', options: ON_OFF },
   { key: 'liveReasoning', section: 'Layout', label: 'Live reasoning', help: 'A preview of the model\'s reasoning above the composer while it thinks.', options: ON_OFF },
   { key: 'completedTurnHint', section: 'Layout', label: 'Turn-done hint', help: 'A summary line once a turn has finished.', options: ON_OFF },
+  { key: 'promptNavigation', section: 'Layout', label: 'Prompt navigation', help: 'A bar above the transcript naming the turn on screen, with the prompts before and after it (in place of the sticky prompt).', options: ON_OFF },
+  { key: 'scrollMarkerJump', section: 'Layout', label: 'Clickable markers', help: 'Click a prompt marker on the scrollbar to jump to it.', options: ON_OFF },
   { key: 'appTabs', section: 'Layout', label: 'App tabs', help: 'A Current / Sessions tab row above the transcript.', options: ON_OFF },
   { key: 'contextSidebar', section: 'Layout', label: 'Context sidebar', help: 'Reserve a column for session context beside a single window.', options: ON_OFF },
   // Content
@@ -205,8 +214,10 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   // Style
   { key: 'messageLayout', section: 'Style', label: 'Message layout', help: 'A marker gutter per message, or continuous prose with one rule per prompt.',
     options: [{ value: 'markers', label: 'markers' }, { value: 'continuous', label: 'continuous' }] },
-  { key: 'markers', section: 'Style', label: 'Markers', help: 'The glyphs before a prompt and a reply.',
-    options: [{ value: 'tone', label: '❯ by tone' }, { value: 'codex', label: '› •' }, { value: 'claude', label: '❯ •' }, { value: 'copilot', label: '❯ ●' }] },
+  { key: 'promptMarker', section: 'Style', label: 'Prompt marker', help: 'The glyph before each of your prompts.',
+    options: [{ value: '❯', label: '❯' }, { value: '›', label: '›' }, { value: '>', label: '>' }, { value: '▸', label: '▸' }, { value: '$', label: '$' }] },
+  { key: 'replyMarker', section: 'Style', label: 'Reply marker', help: 'The glyph before a reply: by tone (● result, × error, ▲ system, • text; the cursor card ❯), or one fixed glyph.',
+    options: [{ value: 'tone', label: 'by tone' }, { value: '•', label: '•' }, { value: '●', label: '●' }, { value: '◦', label: '◦' }, { value: '·', label: '·' }, { value: '▹', label: '▹' }] },
   { key: 'markerColor', section: 'Style', label: 'Marker colour', help: 'Accent prompts, plain prompts, or cyan replies.',
     options: [{ value: 'role', label: 'accent' }, { value: 'plain', label: 'plain' }, { value: 'cyan', label: 'cyan' }] },
   { key: 'promptBand', section: 'Style', label: 'Prompt band', help: 'The background behind your prompts.',
@@ -330,11 +341,18 @@ export function builtinDraftId(view: TuiTranscriptView): string { return `builti
 
 export const CUSTOM_VIEW_NAME_MAX = 24
 
+const LEGACY_MARKERS: Record<string, Pick<ViewSpec, 'promptMarker' | 'replyMarker'>> = {
+  tone: { promptMarker: '❯', replyMarker: 'tone' }, codex: { promptMarker: '›', replyMarker: '•' },
+  claude: { promptMarker: '❯', replyMarker: '•' }, copilot: { promptMarker: '❯', replyMarker: '●' },
+}
+
 /** Keeps only fields and values the registry knows; anything else in tui.json is dropped. */
 export function normalizeViewSpecOverrides(raw: unknown): CustomViewOverrides {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    // Views saved before markers split into a prompt and a reply glyph.
+    if (key === 'markers' && typeof value === 'string' && value in LEGACY_MARKERS) { Object.assign(result, LEGACY_MARKERS[value]); continue }
     const field = FIELD_BY_KEY.get(key as ViewSpecKey)
     // A side-panel surface may belong to a plugin not loaded in this process; it is checked when applied.
     if (key === 'sidePanel' && typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value)) result[key] = value
@@ -411,7 +429,7 @@ export function viewCardStyle(spec: ViewSpec): ViewCardStyle {
   let style = cardStyleCache.get(spec)
   if (!style) {
     style = {
-      messageLayout: spec.messageLayout, markers: spec.markers, markerColor: spec.markerColor, promptBand: spec.promptBand,
+      messageLayout: spec.messageLayout, promptMarker: spec.promptMarker, replyMarker: spec.replyMarker, markerColor: spec.markerColor, promptBand: spec.promptBand,
       promptRule: spec.promptRule, userBold: spec.userBold, thinking: spec.thinking, toolRows: spec.toolRows,
       promptTimestamps: spec.promptTimestamps, replyTimestamps: spec.replyTimestamps, diffPreview: spec.diffPreview, textWidth: spec.textWidth,
       turnRules: spec.turnBoundaries === 'rules' || spec.turnBoundaries === 'summary-only',

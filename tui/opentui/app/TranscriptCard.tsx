@@ -872,14 +872,14 @@ export function TranscriptCardInner({
     // panel already says where a turn starts.
     const streamLandmarks = !viewStyle.turnRules ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
     const firstLine = bodyLines[0]
+    // A fixed reply glyph also fixes the prompt's (no cursor ❯); `tone` reads the reply's first line.
+    const toneMarkers = viewStyle.replyMarker === 'tone'
     const streamBaseMarker = continuousMode
       ? ''
-      : viewStyle.markers === 'copilot'
-      ? card.role === 'user' ? '❯' : '●'
-      : viewStyle.markers === 'claude'
-      ? card.role === 'user' ? '❯' : '•'
-      : viewStyle.markers === 'codex'
-      ? card.role === 'user' ? '›' : '•'
+      : card.role === 'user' && !(toneMarkers && hasCursor)
+      ? viewStyle.promptMarker
+      : !toneMarkers
+      ? viewStyle.replyMarker
       : hasCursor
         ? '❯'
         : firstLine

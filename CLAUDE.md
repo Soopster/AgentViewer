@@ -1552,6 +1552,12 @@ presentation, and that difference is preserved as `agentCards: 'none'`).
   pins each one. Tabs stay uniform width (tab-select requires it), so "fit" means the width of the longest
   title, not a width per tab. The studio's sixth section is **Pins** (it was Overrides): global settings a
   view holds while it is shown.
+- **No built-in behaviour is keyed on a view id any more, except ENGINEERING's workspace frame and state
+  scope.** ENGINEERING's prompt navigation bar (`promptNavigation`, which replaces the floating sticky
+  prompt) and its clickable scroll markers (`scrollMarkerJump`) are fields. AGENTS' rail `e` follows
+  `toolGrouping: 'agents'`. Markers are separate `promptMarker`/`replyMarker` glyphs. A view saved with the
+  old combined `markers` field is migrated when it is read. `viewSpecParitySmoke`'s CONTINUE capture can
+  catch a half-expanded frame when run four at a time; re-run that view alone before trusting a difference.
 - A pinned global setting is not changed by its own toggle (`d`, `X`, …) while that view is active; the
   toggle changes the global value underneath.
 - `viewSpecParitySmoke.tsx` paints all 13 built-ins cell for cell against goldens recorded on the commit

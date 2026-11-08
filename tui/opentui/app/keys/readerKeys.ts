@@ -6,7 +6,6 @@ import type { SetStateAction } from 'react'
 import React from 'react'
 import { type SelectedLineRange } from '@pierre/diffs'
 import { type TuiTranscriptCard } from '../../../format'
-import { type TuiTranscriptView } from '../../../theme'
 import { writeTuiDiffLayout, type TuiDiffLayout } from '../../../../lib/tui/service'
 import { type PaneFocus, type NoticeTone } from '../types'
 import { clamp } from '../util'
@@ -17,7 +16,7 @@ import { type TranscriptDiffNote, transcriptDiffCardNamespace, transcriptDiffSel
 export function handleReaderKeys({
   effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep,
   jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl,
-  moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView,
+  moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, agentGroupKeys,
   jumpToUnreadBoundary, selectedInteractiveTranscriptCard,
   selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor,
   replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys,
@@ -45,7 +44,8 @@ export function handleReaderKeys({
   moveViewport: (direction: -1 | 1) => void
   openSelectedAsyncQuestionsOrFold: () => void
   toggleExpansion: (scope?: 'selected' | 'parent') => void
-  transcriptView: TuiTranscriptView
+  /** The view groups tool calls by agent (`e` from the rail folds the group). */
+  agentGroupKeys: boolean
   jumpToUnreadBoundary: () => void
   selectedInteractiveTranscriptCard: TuiTranscriptCard | null
   selectedInteractiveTranscriptCardDisplay: CardDisplayData | null
@@ -160,7 +160,7 @@ export function handleReaderKeys({
       return true
     }
 
-    if (effectiveFocus === 'sessions' && transcriptView === 'agents' && key.name === 'e') {
+    if (effectiveFocus === 'sessions' && agentGroupKeys && key.name === 'e') {
       handled(() => {
         toggleExpansion('parent')
       })

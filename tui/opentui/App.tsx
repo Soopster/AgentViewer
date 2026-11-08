@@ -6297,7 +6297,7 @@ function OpenTuiWorkspace() {
       openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
     })) return
     if (handleSidebarKeys({
-      transcriptView,
+      agentGroupKeys: viewSpec.toolGrouping === 'agents',
       toggleDateGroups: () => {
         // `e` folds the folder the cursor is in; with nothing selected, it folds every group.
         const selectedEntryKey = selectedSession ? `session:${sessionKey(selectedSession)}` : null
@@ -6331,7 +6331,7 @@ function OpenTuiWorkspace() {
     if (handleReaderKeys({
       effectiveFocus, key, handled, moveAgentToolCursor, moveCursor, velocityScrollStep,
       jumpToTranscriptIndex, isShifted, jumpToTranscriptTail, transcriptViewportRows, isCtrl,
-      moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, transcriptView,
+      moveViewport, openSelectedAsyncQuestionsOrFold, toggleExpansion, agentGroupKeys: viewSpec.toolGrouping === 'agents',
       jumpToUnreadBoundary, selectedInteractiveTranscriptCard,
       selectedInteractiveTranscriptCardDisplay, jumpToResumeMarker, toggleBookmarkForCursor,
       replySelectedMessage, diffLayout, transcriptDiffHiddenHunkHeaderCardKeys,
