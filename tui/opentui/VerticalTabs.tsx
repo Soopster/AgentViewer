@@ -4,6 +4,7 @@ import { LayoutEvents, type MouseEvent, type ScrollBoxRenderable, type TabSelect
 import { useRenderer } from '@opentui/react'
 import type { TuiThemePalette } from '../theme'
 import { fitText } from './textLayout'
+import { tabStripLabel } from './tabStrip'
 import { SectionFrame } from './app/borders'
 
 const FRAMES = ['◐', '◓', '◑', '◒']
@@ -58,7 +59,7 @@ export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, r
       {options.map((option, index) => {
         const active = index === activeIndex
         const busy = running.has(String(option.value))
-        const label = option.name.slice(0, -2).trimEnd()
+        const label = tabStripLabel(option.name)
         return <box id={`vertical-tab:${index}`} key={String(option.value)} height={1} flexShrink={0} width={width - 1} flexDirection="row" backgroundColor={active ? theme.surface3 : theme.surface}
           onMouseDown={event => onPress(index, event)} onMouseDrag={onDrag} onMouseUp={onRelease}>
           <text fg={active ? theme.cyan : theme.dim} width={2} selectable={false}>{active ? '▸ ' : '  '}</text>

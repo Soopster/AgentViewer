@@ -6,7 +6,9 @@ import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opent
 type Rect = { x: number; y: number; width: number; height: number }
 
 /** Connect only to the owning frame directly below the existing tab row.
- * Never cross a neighbouring pane, an overflow banner, or title controls. */
+ * Never cross a neighbouring pane, an overflow banner, or title controls.
+ * A tab may sit flush with the frame's left edge (`flushLeft`): its side then
+ * meets the frame's corner instead of drawing a second one beside it. */
 export function tabConnectionGeometry(tabs: Rect, frame: Rect, index: number, offset: number, tabWidth: number) {
   const column = (index - offset) * tabWidth
   const left = tabs.x + column
@@ -14,8 +16,8 @@ export function tabConnectionGeometry(tabs: Rect, frame: Rect, index: number, of
   const borderEnd = frame.x + frame.width - 22
   if (column < 0 || column + tabWidth > tabs.width || tabWidth < 4
     || tabs.height !== 1 || frame.y !== tabs.y + 1
-    || left < frame.x + 1 || right >= borderEnd) return null
-  return { left, right, topY: tabs.y - 1, tabY: tabs.y, borderY: frame.y, borderStart: frame.x + 1, borderEnd }
+    || left < frame.x || right >= borderEnd) return null
+  return { left, right, flushLeft: left === frame.x, topY: tabs.y - 1, tabY: tabs.y, borderY: frame.y, borderStart: frame.x + 1, borderEnd }
 }
 
 /** Native chrome only: no layout changes, timers, hit targets, or root updates.
@@ -55,8 +57,9 @@ export function SessionTabConnection(props: {
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
       const { foreground, background, inactiveForeground, inactiveBackground } = palette.current
-      // Inactive tabs keep their own muted cap and sides. Only the selected
-      // tab opens into the window border below; empty strip space stays bare.
+      // Inactive tabs keep their own muted cap and sides, standing on the
+      // window border (┴, or ├ at the frame's corner). Only the selected tab
+      // opens into it; empty strip space stays bare.
       const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
       for (let index = offset; index < tabs.options.length; index++) {
         if ((index - offset + 1) * tabs.getTabWidth() > tabs.width) break
@@ -68,10 +71,20 @@ export function SessionTabConnection(props: {
         buffer.drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
       }
       buffer.drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
+      for (let index = offset; index < tabs.options.length; index++) {
+        if ((index - offset + 1) * tabs.getTabWidth() > tabs.width) break
+        if (index === tabs.getSelectedIndex()) continue
+        const inactive = tabConnectionGeometry(tabs, frame, index, offset, tabs.getTabWidth())
+        if (!inactive) continue
+        // In the tab's own colour: a cell has one foreground, and the side
+        // meeting the line reads as the tab's, not the window's.
+        buffer.drawText(inactive.flushLeft ? '├' : '┴', inactive.left, inactive.borderY, inactiveForeground, background)
+        buffer.drawText('┴', inactive.right, inactive.borderY, inactiveForeground, background)
+      }
       buffer.drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
       buffer.drawText('│', connection.left, connection.tabY, foreground, background)
       buffer.drawText('│', connection.right, connection.tabY, foreground, background)
-      buffer.drawText('╯' + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
+      buffer.drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
     }
     renderer.addPostProcessFn(paint)
     return () => { renderer.removePostProcessFn(paint) }

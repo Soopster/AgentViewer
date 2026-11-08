@@ -12,6 +12,7 @@ import { runTabOptions } from '../derived/tabs'
 export type UseTranscriptViewportRowsGroupContext = {
   estimatedTranscriptViewportRows: number
   selectedSessionKey: string | null
+  shownPopoverTab: string | null
   visibleTabSessions: Session[]
   /** Leading tabs drawn on the dedicated pinned row, not in the strip. */
   pinnedRowCount: number
@@ -33,7 +34,7 @@ export type UseTranscriptViewportRowsGroupContext = {
 
 export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGroupContext) {
   const {
-    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions, pinnedRowCount,
+    estimatedTranscriptViewportRows, selectedSessionKey, shownPopoverTab, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
     windowSurfaceMeta, openTabByKey, sessions,
@@ -95,9 +96,9 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
   const tabManagerOn = !useDisabledPlugins().has('tab-manager')
   const tabOptions = useMemo(() => runTabOptions({
     visibleTabSessions: pinnedRowCount > 0 ? visibleTabSessions.slice(pinnedRowCount) : visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
-    tabStateGlyphs, isPreviewMode, selectedSessionKey, tabWidth, popoverTabs, windowSurfaceMeta,
+    tabStateGlyphs, isPreviewMode, selectedSessionKey, shownPopoverTab, tabWidth, popoverTabs, windowSurfaceMeta,
     openTabByKey, sessions, pinnedTabs: tabManagerOn ? pinnedTabs : undefined,
-  }), [pinnedRowCount, pinnedTabs, tabManagerOn, isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
+  }), [shownPopoverTab, pinnedRowCount, pinnedTabs, tabManagerOn, isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
 
   return {
     transcriptViewportRows, activeTabIndex, runningTabKeys, tabWidth, tabOptions,

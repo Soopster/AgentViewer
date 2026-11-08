@@ -329,7 +329,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
               height={TAB_BAR_HEIGHT}
               paddingTop={1}
               flexShrink={0}
-              paddingX={1}
+              // Flush left: the first tab's side meets the window frame's corner.
+              paddingRight={1}
               overflow="hidden"
               backgroundColor={theme.bg}
             >
@@ -358,13 +359,19 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   if (popoverTab) {
                     event.stopPropagation()
                     if (event.button === 2) openPopoverTabMenu(popoverTab, event)
-                    else if (event.button === 0 && tabCloseHit(event.x)) closePopoverTab(popoverTab)
+                    // Middle-click closes any tab; only the selected one draws a ×.
+                    else if (event.button === 1 || (event.button === 0 && tabCloseHit(event.x))) closePopoverTab(popoverTab)
                     else if (event.button === 0) showPopoverTab(popoverTab)
                     return
                   }
                   if (event.button === 2) {
                     const tab = tabAt(event.x)
                     if (tab) splitPaneActions.sessionMenu(tab, 'tab', event)
+                    return
+                  }
+                  if (event.button === 1) {
+                    const tab = tabAt(event.x)
+                    if (tab) { event.stopPropagation(); closeSessionTab(tab) }
                     return
                   }
                   if (event.button !== 0) return

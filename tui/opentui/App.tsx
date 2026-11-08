@@ -2292,7 +2292,7 @@ function OpenTuiWorkspace() {
   const {
     transcriptViewportRows, activeTabIndex, runningTabKeys, tabWidth, tabOptions,
   } = useTranscriptViewportRowsGroup({
-    estimatedTranscriptViewportRows, selectedSessionKey, visibleTabSessions, pinnedRowCount,
+    estimatedTranscriptViewportRows, selectedSessionKey, shownPopoverTab, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
     windowSurfaceMeta, openTabByKey, sessions,

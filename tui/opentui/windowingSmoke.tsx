@@ -318,15 +318,27 @@ await click(bravoTab.x + 2, bravoTab.y)
 check(runtime().values.get('selectedSessionKey') === 'claude:win-bravo' && sameFrame(windowWith('bravo'), bravoBefore) && !!windowWith('alpha'),
   'clicking a tab replaced another visible frame instead of focusing its own')
 const tabRow = () => setup.captureCharFrame().split('\n')[frame('session-tabs')!.y] ?? ''
-const closeTab = async (name: string) => {
+// Only the selected tab draws a ×; any tab closes on a middle-click.
+const closeTab = async (name: string, how: 'close' | 'middle') => {
   const at = tabRow().indexOf(`Win ${name}`), x = tabRow().indexOf('×', at)
-  check(at >= 0 && x > at, `no close control for ${name}`)
-  await click(x, frame('session-tabs')!.y)
+  check(at >= 0, `no tab for ${name}`)
+  if (how === 'close') {
+    check(tabSegment(name).includes('×'), `no close control for ${name}`)
+    await click(x, frame('session-tabs')!.y)
+  } else {
+    await act(async () => { await setup.mockMouse.pressDown(at + 1, frame('session-tabs')!.y, 1 as never); await setup.mockMouse.release(at + 1, frame('session-tabs')!.y, 1 as never) }); await settle(100)
+  }
   await waitFor(`${name} closes from the strip`, () => !tabRow().includes(`Win ${name}`))
 }
-await closeTab('delta')
+const tabSegment = (name: string) => {
+  const row = tabRow(), at = row.indexOf(`Win ${name}`), next = row.indexOf('Win ', at + 1)
+  return row.slice(at, next < 0 ? undefined : next)
+}
+check(!tabSegment('delta').includes('×'), 'an inactive tab still draws a close control')
+await closeTab('delta', 'middle')
 check(!!windowWith('bravo') && !!windowWith('alpha'), 'closing another tab changed the surviving views')
-await closeTab('alpha')
+await click(locate('Win alpha', frame('session-tabs')!).x + 2, frame('session-tabs')!.y); await settle(200)
+await closeTab('alpha', 'close')
 check(!windowWith('alpha') && !!windowWith('bravo') && windowCount() === 1, 'closing the original tab opened an unrelated session')
 const bravo = locate('Win bravo', frame('session-tabs')!)
 await act(async () => { await setup.mockMouse.pressDown(bravo.x + 2, bravo.y, 2 as never); await setup.mockMouse.release(bravo.x + 2, bravo.y, 2 as never) }); await settle(100)

@@ -20,7 +20,8 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
   const width = tabWidth * 4 + 4
   const labels = ['Assess TUI and rendering changes', 'Hi', 'Improve tab bar rendering', 'Feature plugin host migration']
   const options = Array.from({ length: count }, (_, i) => ({
-    name: i === count - 1 ? tabStripActivity(tabStripName(labels[i % labels.length], tabWidth), tabWidth, '●') : tabStripName(labels[i % labels.length], tabWidth),
+    // The selected (last) tab is the closable one, and carries the activity cell.
+    name: i === count - 1 ? tabStripActivity(tabStripName(labels[i % labels.length], tabWidth), tabWidth, '●') : tabStripName(labels[i % labels.length], tabWidth, '', false),
     description: '',
   }))
   let tabs: TabSelectRenderable | null = null
@@ -35,7 +36,9 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
     await setup.flush()
     const rows = setup.captureCharFrame().split('\n')
     assert.equal(rows[0][1 + 3 * tabWidth + tabWidth - 2], '×', `last tab close button remains at its hit target at width ${width}`)
-    assert.equal((rows[0].match(/×/g) ?? []).length, 4, 'every tab retains its close button')
+    assert.equal((rows[0].match(/×/g) ?? []).length, 1, 'only the selected tab draws a close button')
+    assert.ok(!tabStripName('A long inactive tab title', tabWidth, '', false).includes('×'), 'inactive names have no ×')
+    assert.equal(tabStripName('Hi', tabWidth, '', false).length, tabWidth - 2, 'inactive names fill the label width')
     assert.ok(rows[1].includes('Transcript border'), 'tab content stays on its own row')
   } finally {
     await act(async () => setup.renderer.destroy())
@@ -44,9 +47,9 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
 for (const selected of [0, 1]) {
   const tabs = createRef<TabSelectRenderable>()
   const frame = createRef<BoxRenderable>()
-  const options = ['Alpha', 'Bravo'].map((label, index) => ({ name: tabStripName(label, 24), value: `tab:${index}`, description: '' }))
+  const options = ['Alpha', 'Bravo'].map((label, index) => ({ name: tabStripName(label, 24, '', index === selected), value: `tab:${index}`, description: '' }))
   const setup = await testRender(<box flexDirection="column" width={100}>
-    <box height={2} paddingTop={1} paddingX={1} backgroundColor="#101010">
+    <box height={2} paddingTop={1} paddingRight={1} backgroundColor="#101010">
       <tab-select ref={tabs} options={options} width={76} height={1} tabWidth={24}
         backgroundColor="#101010" focusedBackgroundColor="#101010" textColor="#aaaaaa"
         selectedBackgroundColor="#202020" selectedTextColor="#00aaff"
@@ -70,18 +73,26 @@ for (const selected of [0, 1]) {
       throw new Error(`Missing cell ${x},${y}`)
     }
     for (const index of [0, 1]) {
-      const left = 1 + index * 24
+      const left = index * 24
       assert.equal(rows[0].slice(left, left + 24), `╭${'─'.repeat(22)}╮`)
       assert.equal(rows[1][left], '│')
       assert.equal(rows[1][left + 23], '│')
-      assert.equal(rows[2][left], index === selected ? '╯' : '─', 'only the active tab opens into the window')
+      // Tab 0 is flush with the frame: its side meets the corner, never a ╭╯ hook.
+      const leftJoin = index === selected ? (left === 0 ? '│' : '╯') : (left === 0 ? '├' : '┴')
+      assert.equal(rows[2][left], leftJoin, 'the active tab opens into the window; inactive tabs stand on its border')
+      assert.equal(rows[2][left + 23], index === selected ? '╰' : '┴')
+      if (index !== selected) for (const x of [left, left + 23]) {
+        assert.deepEqual(cell(x, 2).fg, parseColor('#555555'), 'an inactive tab meets the border in its own colour')
+      }
+      assert.ok(!rows[2].includes('╭╯'), 'no doubled corner at the frame edge')
+      assert.equal(rows[1].slice(left, left + 24).includes('×'), index === selected, 'only the active tab is closable')
       assert.deepEqual(cell(left, 0).fg, parseColor(index === selected ? '#00aaff' : '#555555'), 'inactive outlines stay muted')
     }
     assert.deepEqual(cell(60, 1).bg, parseColor('#101010'), 'focused tabs leave empty strip space at the base background')
-    assert.deepEqual(cell(2 + (1 - selected) * 24, 1).bg, parseColor('#101010'), 'inactive labels use the strip background')
+    assert.deepEqual(cell(1 + (1 - selected) * 24, 1).bg, parseColor('#101010'), 'inactive labels use the strip background')
   } finally {
     await act(async () => setup.renderer.destroy())
   }
 }
-console.log('Tab strip passed: inactive outlines and colors, active window join, close targets, scrolling and row bounds')
+console.log('Tab strip passed: inactive outlines, junctions and colors, flush-left join, active-only close, scrolling and row bounds')
 process.exit(0)

@@ -19,6 +19,8 @@ export type TabOptionsContext = {
   pinnedTabs?: ReadonlySet<string>
   isPreviewMode: boolean
   selectedSessionKey: string | null
+  /** The popover tab shown in place of the selected session, which then owns the strip's selection. */
+  shownPopoverTab?: string | null
   tabWidth: number
   popoverTabs: string[]
   windowSurfaceMeta: Record<string, SurfaceMeta>
@@ -30,7 +32,7 @@ export function runTabOptions(ctx: TabOptionsContext) {
   const {
     visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
     tabStateGlyphs, isPreviewMode, selectedSessionKey, tabWidth, popoverTabs, windowSurfaceMeta,
-    openTabByKey, sessions, pinnedTabs,
+    openTabByKey, sessions, pinnedTabs, shownPopoverTab = null,
   } = ctx
 return (
   visibleTabSessions.map((s) => {
@@ -49,7 +51,8 @@ return (
     return {
       // tab-select draws a name in tabWidth - 2 cells from its second column,
       // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
-      name: tabStripName(label, tabWidth),
+      // Only the selected tab carries it (tabCloseHit agrees).
+      name: tabStripName(label, tabWidth, '', !shownPopoverTab && selectedSessionKey === sessionKey(s)),
       description: isPreviewMode && selectedSessionKey === sessionKey(s)
         ? 'Preview tab'
         : inSplit
@@ -63,6 +66,6 @@ return (
   const pinned = windowSurfaceMeta[id]?.session
   const pinnedSession = pinned ? openTabByKey.get(pinned) ?? sessions.find((entry) => sessionKey(entry) === pinned) : null
   const label = `${surfaceTitle(id)}${pinnedSession ? ` · ${formatSessionTitle(pinnedSession)}` : ''}`
-  return { name: tabStripName(label, tabWidth), description: 'popover tab', value: `popover:${id}` }
+  return { name: tabStripName(label, tabWidth, '', id === shownPopoverTab), description: 'popover tab', value: `popover:${id}` }
 }))
 }

@@ -186,9 +186,12 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
 
   // Whether a column of the tab strip is a tab's ×: the label's last cell,
   // tabWidth - 2 into the tab (one cell either side, a click is not that exact).
+  // Only the selected tab draws one, so only a tab whose name ends in it closes.
   const tabCloseHit = (x: number): boolean => {
     const instance = tabSelectRef.current
     if (!instance) return false
+    const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
+    if (!instance.options[scrollOffset + Math.floor((x - instance.x) / tabWidth)]?.name.endsWith(' ×')) return false
     const column = (x - instance.x) % tabWidth
     return column >= tabWidth - 3 && column <= tabWidth - 1
   }
