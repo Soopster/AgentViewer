@@ -137,5 +137,47 @@ for (const selected of [0, 1, 2]) {
     await act(async () => setup.renderer.destroy())
   }
 }
-console.log('Tab strip passed: Chrome-style raised active tab, inactive separators, hover lift, flush-left join, active-only close, scrolling and row bounds')
+// The view's tab styles, on the middle tab.
+for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal'] as const) {
+  const tabs = createRef<TabSelectRenderable>()
+  const frame = createRef<BoxRenderable>()
+  const options = ['Alpha', 'Bravo', 'Charlie'].map((label, index) => ({ name: tabStripName(label, 24, '', index === 1), value: `tab:${index}`, description: '' }))
+  const setup = await testRender(<box flexDirection="column" width={100}>
+    <box height={2} paddingTop={1} paddingRight={1} backgroundColor="#101010">
+      <tab-select ref={tabs} options={options} width={76} height={1} tabWidth={24}
+        backgroundColor="#101010" focusedBackgroundColor="#101010" textColor="#aaaaaa"
+        selectedBackgroundColor="#101010" selectedTextColor="#00aaff" showDescription={false} showUnderline={false} />
+    </box>
+    <box ref={frame} width={100} height={4} border borderStyle="rounded" borderColor="#00aaff" backgroundColor="#202020" />
+    <SessionTabConnection tabs={tabs} readWindow={() => frame.current} ownerKey="tab:1" enabled
+      foreground="#00aaff" background="#202020" inactiveForeground="#555555" inactiveBackground="#101010"
+      hoverForeground="#eeeeee" hoverBackground="#181818" pillForeground="#ffffff" pillBackground="#225577"
+      tabStyle={tabStyle} separators />
+  </box>, { width: 100, height: 6 })
+  try {
+    await act(async () => { tabs.current!.setSelectedIndex(1); tabs.current!.focus() })
+    await setup.flush()
+    const rows = setup.captureCharFrame().split('\n')
+    const spans = setup.captureSpans()
+    const bgAt = (x: number, y: number) => { let column = 0; for (const span of spans.lines[y].spans) { if (x < column + span.width) return span.bg; column += span.width } return null }
+    if (tabStyle === 'underline') {
+      assert.equal(rows[0].trim(), '', 'underline raises no tab')
+      assert.equal(rows[2].slice(24, 48), '━'.repeat(24), 'underline rules the border under the active tab')
+    } else if (tabStyle === 'pills') {
+      assert.equal(rows[1][24] + rows[1][47], '▐▌', 'the active pill has rounded ends')
+      assert.deepEqual(bgAt(30, 1), parseColor('#225577'), 'the pill is filled')
+      assert.equal(rows[0].trim(), '', 'pills raise no tab')
+    } else if (tabStyle === 'boxed') {
+      assert.equal(rows[0].slice(0, 24), `╭${'─'.repeat(22)}╮`, 'an inactive tab is outlined too')
+      assert.equal(rows[0].slice(24, 48), `╭${'─'.repeat(22)}╮`, 'the active tab is outlined')
+      assert.equal(rows[2][23], '┴', 'an inactive tab stands on the border')
+    } else {
+      assert.equal(rows[0].trim(), '', 'minimal draws no outline')
+      assert.ok(!rows[2].slice(24, 48).includes('━') && !rows[1].includes('▐'), 'minimal draws no marks')
+    }
+  } finally {
+    await act(async () => setup.renderer.destroy())
+  }
+}
+console.log('Tab strip passed: Chrome-style raised active tab, underline/pills/boxed/minimal styles, inactive separators, hover lift, flush-left join, active-only close, scrolling and row bounds')
 process.exit(0)

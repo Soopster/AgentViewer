@@ -7,7 +7,8 @@ import { useMemo } from 'react'
 import { type SurfaceMeta } from '../../popoverWindows'
 import { type AgentProvider, type Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
-import { runTabOptions } from '../derived/tabs'
+import { runTabOptions, tabTitleText } from '../derived/tabs'
+import type { TabDisplay } from '../../../viewSpec'
 
 export type UseTranscriptViewportRowsGroupContext = {
   estimatedTranscriptViewportRows: number
@@ -30,6 +31,7 @@ export type UseTranscriptViewportRowsGroupContext = {
   windowSurfaceMeta: Record<string, SurfaceMeta>
   openTabByKey: Map<string, Session>
   sessions: Session[]
+  tabDisplay: TabDisplay
 }
 
 export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGroupContext) {
@@ -37,7 +39,7 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
     estimatedTranscriptViewportRows, selectedSessionKey, shownPopoverTab, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
-    windowSurfaceMeta, openTabByKey, sessions,
+    windowSurfaceMeta, openTabByKey, sessions, tabDisplay,
   } = ctx
 
   // Keep the scrollbox's explicit row budget inside its actual content area.
@@ -90,15 +92,24 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
     // tabs get the full width instead of being squeezed into the reader column.
     const available = tabStripTabsWidth(readerAreaWidth)
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length - pinnedRowCount + popoverTabs.length))
+    // The view's tab width: share the strip (capped), fit the longest title,
+    // or a narrow or wide cap. Tabs stay uniform, which the strip relies on.
+    if (tabDisplay.tabWidth === 'compact') return Math.max(10, Math.min(fill, 18))
+    if (tabDisplay.tabWidth === 'wide') return Math.max(10, Math.min(fill, 56))
+    if (tabDisplay.tabWidth === 'fit') {
+      const extras = (tabDisplay.tabNumbers ? 3 : 0) + (tabDisplay.tabIcons === 'none' ? 0 : tabDisplay.tabIcons === 'provider' ? 4 : 2) + (tabDisplay.tabClose === 'never' ? 0 : 2)
+      const longest = Math.max(0, ...visibleTabSessions.slice(pinnedRowCount).map((s) => tabTitleText(s, tabDisplay).length))
+      return Math.max(10, Math.min(fill, longest + extras + 3, 56))
+    }
     return Math.max(10, Math.min(fill, 40))
-  }, [readerAreaWidth, visibleTabSessions.length, pinnedRowCount, popoverTabs.length, verticalTabsWidth])
+  }, [readerAreaWidth, visibleTabSessions, pinnedRowCount, popoverTabs.length, verticalTabsWidth, tabDisplay])
   const pinnedTabs = usePinnedTabs()
   const tabManagerOn = !useDisabledPlugins().has('tab-manager')
   const tabOptions = useMemo(() => runTabOptions({
     visibleTabSessions: pinnedRowCount > 0 ? visibleTabSessions.slice(pinnedRowCount) : visibleTabSessions, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges,
     tabStateGlyphs, isPreviewMode, selectedSessionKey, shownPopoverTab, tabWidth, popoverTabs, windowSurfaceMeta,
-    openTabByKey, sessions, pinnedTabs: tabManagerOn ? pinnedTabs : undefined,
-  }), [shownPopoverTab, pinnedRowCount, pinnedTabs, tabManagerOn, isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
+    openTabByKey, sessions, pinnedTabs: tabManagerOn ? pinnedTabs : undefined, display: tabDisplay, numberOffset: pinnedRowCount,
+  }), [tabDisplay, shownPopoverTab, pinnedRowCount, pinnedTabs, tabManagerOn, isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount, tabStateGlyphs, teamAttention, coordinatorBadges, tabWidth, popoverTabs, windowSurfaceMeta])
 
   return {
     transcriptViewportRows, activeTabIndex, runningTabKeys, tabWidth, tabOptions,

@@ -73,6 +73,13 @@ export function SessionTabConnection(props: {
   /** An inactive tab under the pointer: Chrome draws it as a tinted pill. */
   hoverForeground: string
   hoverBackground: string
+  /** The active tab in the `pills` style. */
+  pillForeground?: string
+  pillBackground?: string
+  /** How the strip draws (tui/viewSpec.ts `tabStyle`); Chrome's raised tab by default. */
+  tabStyle?: 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal'
+  /** Thin rules between inactive tabs. */
+  separators?: boolean
 }) {
   const renderer = useRenderer()
   const latest = useRef(props)
@@ -80,7 +87,8 @@ export function SessionTabConnection(props: {
     foreground: parseColor(props.foreground), background: parseColor(props.background),
     inactiveForeground: parseColor(props.inactiveForeground), inactiveBackground: parseColor(props.inactiveBackground),
     hoverForeground: parseColor(props.hoverForeground), hoverBackground: parseColor(props.hoverBackground),
-  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground])
+    pillForeground: parseColor(props.pillForeground ?? props.hoverForeground), pillBackground: parseColor(props.pillBackground ?? props.hoverBackground),
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -109,7 +117,9 @@ export function SessionTabConnection(props: {
         }
         for (const [from, to] of ranges) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg)
       }
-      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground } = palette.current
+      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, pillForeground, pillBackground } = palette.current
+      const style = current.tabStyle ?? 'chrome'
+      const tabWidth = tabs.getTabWidth()
       // Chrome's strip: inactive tabs have no outline, only a muted separator
       // between two of them (none beside the selected tab, none after the
       // last). Only the selected tab is raised, and it opens into the window.
@@ -118,7 +128,8 @@ export function SessionTabConnection(props: {
       drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       const hovered = hoveredTabIndex(tabs)
       const lifted = hovered !== null && hovered !== selected ? hovered : null
-      for (let index = offset; index < tabs.options.length - 1; index++) {
+      // Boxed tabs carry their own sides, so they need no separators.
+      for (let index = offset; current.separators !== false && style !== 'boxed' && index < tabs.options.length - 1; index++) {
         if ((index - offset + 2) * tabs.getTabWidth() > tabs.width) break
         // Like Chrome, a separator also gives way beside the hovered tab.
         if (index === selected || index + 1 === selected || index === lifted || index + 1 === lifted) continue
@@ -134,10 +145,36 @@ export function SessionTabConnection(props: {
         drawText(tabs.options[lifted]?.name ?? '', hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
         drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
       }
-      drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
-      drawText('│', connection.left, connection.tabY, foreground, background)
-      drawText('│', connection.right, connection.tabY, foreground, background)
-      drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
+      const inner = connection.right - connection.left - 1
+      if (style === 'boxed') {
+        // Every tab outlined, inactive ones in the muted colour, standing on the border.
+        for (let index = offset; index < tabs.options.length; index++) {
+          if ((index - offset + 1) * tabWidth > tabs.width) break
+          if (index === selected) continue
+          const tab = tabConnectionGeometry(tabs, frame, index, offset, tabWidth)
+          if (!tab) continue
+          drawText('╭' + '─'.repeat(tab.right - tab.left - 1) + '╮', tab.left, tab.topY, inactiveForeground, inactiveBackground)
+          drawText('│', tab.left, tab.tabY, inactiveForeground, inactiveBackground)
+          drawText('│', tab.right, tab.tabY, inactiveForeground, inactiveBackground)
+          drawText(tab.flushLeft ? '├' : '┴', tab.left, tab.borderY, foreground, background)
+          drawText('┴', tab.right, tab.borderY, foreground, background)
+        }
+      }
+      if (style === 'chrome' || style === 'boxed') {
+        drawText('╭' + '─'.repeat(inner) + '╮', connection.left, connection.topY, foreground, background)
+        drawText('│', connection.left, connection.tabY, foreground, background)
+        drawText('│', connection.right, connection.tabY, foreground, background)
+        drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(inner) + '╰', connection.left, connection.borderY, foreground, background)
+      } else if (style === 'underline') {
+        // A heavy rule on the window's border, under the active tab alone.
+        drawText('━'.repeat(inner + 2), connection.left, connection.borderY, foreground, background)
+      } else if (style === 'pills' && inner >= 1) {
+        drawText('▐', connection.left, connection.tabY, pillBackground, inactiveBackground)
+        drawText(' '.repeat(inner), connection.left + 1, connection.tabY, pillForeground, pillBackground)
+        drawText(tabs.options[selected]?.name ?? '', connection.left + 1, connection.tabY, pillForeground, pillBackground)
+        drawText('▌', connection.right, connection.tabY, pillBackground, inactiveBackground)
+      }
+      // `minimal`: the label's colour is the only mark.
     }
     renderer.addPostProcessFn(paint)
     return () => { renderer.removePostProcessFn(paint) }

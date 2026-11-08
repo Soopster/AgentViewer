@@ -320,7 +320,8 @@ type MockRegion = 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' 
 const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', cursor: 'keys', stickyHeaders: 'header',
-  sessionRail: 'rail', sidebarView: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip', focusMode: 'header',
+  sessionRail: 'rail', sidebarView: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
+  tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip', focusMode: 'header',
   borders: 'frame', fleetStrip: 'fleet', taskPanel: 'taskpanel', sidePanel: 'sidepanel', sidePanelPlacement: 'sidepanel',
 }
 function regionOf(key: ViewSpecKey | null): MockRegion | null {
@@ -374,7 +375,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
         ? <MockRow theme={theme} marked={marked('fleet')}><text fg={theme.green} wrapMode="none">● 2 running <span fg={theme.dim}>· build · docs</span></text></MockRow>
         : marked('fleet') ? <Placeholder theme={theme} text={spec.fleetStrip === false ? 'fleet strip hidden' : 'fleet strip: global'} /> : null}
       {tabsOn && !sideTabs
-        ? <MockRow theme={theme} marked={marked('tabstrip')}><text fg={theme.muted} wrapMode="none">{' '.repeat(railWidth)}<span fg={theme.cyan}>╭ build ╮</span> docs │ fix  +</text></MockRow>
+        ? <MockRow theme={theme} marked={marked('tabstrip')}><MockTabStrip spec={spec} theme={theme} indent={railWidth} /></MockRow>
         : marked('tabstrip') && !sideTabs ? <Placeholder theme={theme} text="session tabs off" /> : null}
       <box flexDirection="row">
         {showRail
@@ -446,5 +447,45 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
         </text>
       </MockRow>
     </box>
+  )
+}
+
+const MOCK_TABS = [
+  { title: 'Why is the build slow?', folder: 'web', provider: 'C', glyph: '' },
+  { title: 'Docs pass', folder: 'docs', provider: 'X', glyph: '✓' },
+  { title: 'Fix flaky test', folder: 'api', provider: 'C', glyph: '◌' },
+]
+
+/** The tab strip as the view's Tabs fields draw it, on three sample sessions. */
+function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiThemePalette; indent: number }) {
+  const width = spec.tabWidth === 'compact' ? 10 : spec.tabWidth === 'wide' ? 16 : spec.tabWidth === 'fit' ? 0 : 12
+  const label = (tab: typeof MOCK_TABS[number], index: number, active: boolean) => {
+    const title = spec.tabTitle === 'folder' ? tab.folder : spec.tabTitle === 'folder-title' ? `${tab.folder} · ${tab.title}` : tab.title
+    const icons = spec.tabIcons === 'none' ? '' : `${spec.tabIcons === 'provider' ? `${tab.provider} ` : ''}${tab.glyph ? `${tab.glyph} ` : ''}`
+    const close = spec.tabClose === 'all' || (spec.tabClose === 'active' && active) ? ' ×' : ''
+    const text = `${spec.tabNumbers ? `${index + 1} ` : ''}${icons}${title}`
+    const budget = width ? Math.max(width - close.length, 3) : text.length
+    return (text.length > budget ? `${text.slice(0, budget - 1)}…` : text.padEnd(budget)) + close
+  }
+  const parts = MOCK_TABS.map((tab, index) => ({ text: label(tab, index, index === 0), active: index === 0 }))
+  const sep = spec.tabSeparators && spec.tabStyle !== 'boxed' ? '│' : ' '
+  const underline = spec.tabStyle === 'underline' ? `${' '.repeat(indent + 1)}${'━'.repeat(parts[0]!.text.length + 2)}` : null
+  return (
+    <>
+      <text fg={theme.muted} wrapMode="none">
+        {' '.repeat(indent)}
+        {parts.map((part, index) => {
+          const active = part.active
+          const fg = active ? theme.cyan : theme.muted
+          const body = spec.tabStyle === 'pills' && active ? <span fg={theme.text} bg={theme.surface3}>{` ${part.text} `}</span>
+            : spec.tabStyle === 'chrome' && active ? <span fg={fg}>{`╭${part.text}╮`}</span>
+            : spec.tabStyle === 'boxed' ? <span fg={active ? theme.cyan : theme.border2}>{'│'}<span fg={fg}>{part.text}</span>{'│'}</span>
+            : <span fg={fg} attributes={active && spec.tabStyle === 'minimal' ? TextAttributes.BOLD : undefined}>{` ${part.text} `}</span>
+          return <span key={index}>{body}{index < parts.length - 1 && !(active || parts[index + 1]!.active) ? <span fg={theme.border2}>{sep}</span> : ' '}</span>
+        })}
+        <span fg={theme.dim}> +</span>
+      </text>
+      {underline ? <text fg={theme.cyan} wrapMode="none">{underline}</text> : null}
+    </>
   )
 }

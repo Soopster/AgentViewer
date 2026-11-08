@@ -1546,6 +1546,12 @@ presentation, and that difference is preserved as `agentCards: 'none'`).
   and the draft triggers it too. The side-panel choices come from the plugin catalog, which `tui/viewSpec.ts`
   must not import (lib/tuiState.ts reads it), so App registers them (`registerViewSidePanelSurfaces`).
   A stored surface is validated only as a slug and is checked when it is applied.
+- **Tabs fields restyle the session tab strip** (`tabStyle` chrome/underline/pills/boxed/minimal, width
+  fill/fit/compact/wide, close buttons, numbers, icons, separators, title source). Labels are built in
+  `runTabOptions`. The styles are drawn by `SessionTabConnection`'s post-process pass, and `tabStripSmoke`
+  pins each one. Tabs stay uniform width (tab-select requires it), so "fit" means the width of the longest
+  title, not a width per tab. The studio's sixth section is **Pins** (it was Overrides): global settings a
+  view holds while it is shown.
 - A pinned global setting is not changed by its own toggle (`d`, `X`, …) while that view is active; the
   toggle changes the global value underneath.
 - `viewSpecParitySmoke.tsx` paints all 13 built-ins cell for cell against goldens recorded on the commit

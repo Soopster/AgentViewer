@@ -317,7 +317,7 @@ import { handleAskAndShortcutKeys } from './app/keys/askKeys'
 import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
 import { ViewStudioOverlay, VIEW_STUDIO_WIDTH, type ViewStudioKeyHandler } from './app/overlays/ViewStudioOverlay'
-import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId, registerViewSidePanelSurfaces, type CustomView } from '../viewSpec'
+import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
@@ -593,6 +593,7 @@ function OpenTuiWorkspace() {
   } = useSidebarPreferenceState()
   // A custom view may pin tool calls shown or hidden; X still toggles the global setting.
   const showToolCalls = viewSpec.showToolCalls ?? globalShowToolCalls
+  const tabDisplay = viewTabDisplay(viewSpec)
   const surfacePanelPlacement = viewSpec.sidePanelPlacement ?? globalSurfacePanelPlacement
   const setSelectedSessionKey = setSelectedSessionKeyState
   const [sessionDetail, setSessionDetail] = useWorkspaceState<TuiSessionDetail | null>('sessionDetail', null, false)
@@ -2307,7 +2308,7 @@ function OpenTuiWorkspace() {
     estimatedTranscriptViewportRows, selectedSessionKey, shownPopoverTab, visibleTabSessions, pinnedRowCount,
     sidebarSessionActivity, attentionDone, recentlyWrittenKeys, verticalTabsWidth, readerAreaWidth,
     popoverTabs, splitPinnedKeys, splitPaneCount, teamAttention, coordinatorBadges, isPreviewMode,
-    windowSurfaceMeta, openTabByKey, sessions,
+    windowSurfaceMeta, openTabByKey, sessions, tabDisplay,
   })
   const {
     activeStripIndex, tabStripLength, surfacePanelHeight, sidebarExtraRows, sidebarRowBudget,
@@ -6858,6 +6859,7 @@ function OpenTuiWorkspace() {
         toggleRoundedBorders={toggleRoundedBorders}
         transcriptViewMenuOpen={transcriptViewMenuOpen}
         viewMenuItems={viewMenuItems}
+        tabDisplay={tabDisplay}
         editedBuiltinViews={editedBuiltinViews}
         viewMenuOriginKey={viewMenuOriginRef.current ? viewMenuItemKey(viewMenuOriginRef.current.view, viewMenuOriginRef.current.customId) : null}
         transcriptViewMenuIndex={transcriptViewMenuIndex}

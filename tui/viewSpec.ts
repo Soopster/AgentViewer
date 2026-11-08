@@ -25,6 +25,8 @@ export type ViewToolRows = 'default' | 'dim' | 'shell-bold' | 'dollar-shell'
 export type ViewTextWidth = 'measure' | 'full'
 export type ViewTranscriptWidth = 'readable' | 'centered' | 'full'
 export type ViewDiffLayout = 'stack' | 'split'
+export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal'
+export type ViewTabWidth = 'fill' | 'fit' | 'compact' | 'wide'
 
 export type ViewSpec = {
   // Layout
@@ -62,6 +64,14 @@ export type ViewSpec = {
   replyTimestamps: boolean
   diffPreview: boolean
   textWidth: ViewTextWidth
+  // Tabs: how the session tab strip draws.
+  tabStyle: ViewTabStyle
+  tabWidth: ViewTabWidth
+  tabClose: 'active' | 'all' | 'never'
+  tabNumbers: boolean
+  tabIcons: 'status' | 'provider' | 'none'
+  tabSeparators: boolean
+  tabTitle: 'title' | 'folder' | 'folder-title'
   // Panels: null keeps whatever the app has. Pins hold while the view is
   // shown; "on entering" values are applied when the view is chosen.
   sessionRail: boolean | null
@@ -102,6 +112,7 @@ const CARDS: ViewSpec = {
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
   messageLayout: 'markers', markers: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
+  tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   sessionRail: null, sidebarView: null, tabs: null, tabOrientation: null, focusMode: null, borders: null,
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
@@ -145,8 +156,8 @@ export const VIEW_SPEC_BASES: readonly TuiTranscriptView[] = [
 
 // ── the field registry the studio renders ──────────────────────────────────
 
-export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Panels' | 'Overrides'
-export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Panels', 'Overrides']
+export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Tabs' | 'Panels' | 'Pins'
+export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Tabs', 'Panels', 'Pins']
 
 export type ViewSpecFieldOption = { value: ViewSpec[ViewSpecKey]; label: string }
 export type ViewSpecField = {
@@ -211,15 +222,28 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'diffPreview', section: 'Style', label: 'Diff previews', help: 'A few changed lines under a folded edit, or its heading alone.', options: ON_OFF },
   { key: 'textWidth', section: 'Style', label: 'Prose width', help: 'Keep prose to a readable measure, or use the full width.',
     options: [{ value: 'measure', label: 'measure' }, { value: 'full', label: 'full' }] },
+  // Tabs
+  { key: 'tabs', section: 'Tabs', label: 'Session tabs', help: 'Pin the session tab strip on or off.',
+    options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
+  { key: 'tabOrientation', section: 'Tabs', label: 'Tab layout', help: 'Pin tabs along the top or down the side.',
+    options: [INHERIT, { value: 'horizontal', label: 'top' }, { value: 'vertical', label: 'side' }] },
+  { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Chrome raises the active tab into the window; underline marks it on the border; pills fill it; boxed outlines every tab; minimal is text alone.',
+    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }] },
+  { key: 'tabWidth', section: 'Tabs', label: 'Tab width', help: 'Share the strip, fit the longest title, keep tabs narrow, or let them run wide.',
+    options: [{ value: 'fill', label: 'fill' }, { value: 'fit', label: 'fit titles' }, { value: 'compact', label: 'compact' }, { value: 'wide', label: 'wide' }] },
+  { key: 'tabClose', section: 'Tabs', label: 'Close buttons', help: 'A × on the active tab, on every tab, or on none (middle-click still closes).',
+    options: [{ value: 'active', label: 'active tab' }, { value: 'all', label: 'every tab' }, { value: 'never', label: 'never' }] },
+  { key: 'tabNumbers', section: 'Tabs', label: 'Numbered tabs', help: 'A position number before each title.', options: ON_OFF },
+  { key: 'tabIcons', section: 'Tabs', label: 'Tab icons', help: 'Status glyphs (waiting, finished, team), the provider\'s initial with them, or none.',
+    options: [{ value: 'status', label: 'status' }, { value: 'provider', label: 'provider + status' }, { value: 'none', label: 'none' }] },
+  { key: 'tabSeparators', section: 'Tabs', label: 'Separators', help: 'A thin rule between inactive tabs.', options: ON_OFF },
+  { key: 'tabTitle', section: 'Tabs', label: 'Tab title', help: 'The session title, its folder, or both.',
+    options: [{ value: 'title', label: 'title' }, { value: 'folder', label: 'folder' }, { value: 'folder-title', label: 'folder · title' }] },
   // Panels
   { key: 'sessionRail', section: 'Panels', label: 'Session rail', help: 'Pin the sessions rail shown or hidden while this view is on.',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
   { key: 'sidebarView', section: 'Panels', label: 'Rail opens on', help: 'Switch the rail to Sessions or Coordinator when entering the view.',
     options: [KEEP, { value: 'sessions', label: 'sessions' }, { value: 'coordinator', label: 'coordinator' }] },
-  { key: 'tabs', section: 'Panels', label: 'Session tabs', help: 'Pin the session tab strip on or off.',
-    options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
-  { key: 'tabOrientation', section: 'Panels', label: 'Tab layout', help: 'Pin tabs along the top or down the side.',
-    options: [INHERIT, { value: 'horizontal', label: 'top' }, { value: 'vertical', label: 'side' }] },
   { key: 'focusMode', section: 'Panels', label: 'Focus mode', help: 'Pin focus mode: rail and header chrome hidden.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
   { key: 'borders', section: 'Panels', label: 'Borders', help: 'Pin window borders drawn or hidden.',
@@ -233,17 +257,17 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'sidePanelPlacement', section: 'Panels', label: 'Side panel at', help: 'Pin the side panel beside the reader or under it.',
     options: [INHERIT, { value: 'right', label: 'beside' }, { value: 'bottom', label: 'under' }] },
   // Overrides
-  { key: 'density', section: 'Overrides', label: 'Density', help: 'Pin a density for this view; global follows d.',
+  { key: 'density', section: 'Pins', label: 'Density', help: 'Pin a density for this view; global follows d.',
     options: [INHERIT, { value: 'comfortable', label: 'comfortable' }, { value: 'balanced', label: 'balanced' }, { value: 'dense', label: 'dense' }] },
-  { key: 'transcriptWidth', section: 'Overrides', label: 'Transcript width', help: 'Pin readable, centred or full width for this view.',
+  { key: 'transcriptWidth', section: 'Pins', label: 'Transcript width', help: 'Pin readable, centred or full width for this view.',
     options: [INHERIT, { value: 'readable', label: 'readable' }, { value: 'centered', label: 'centred' }, { value: 'full', label: 'full' }] },
-  { key: 'showToolCalls', section: 'Overrides', label: 'Tool calls', help: 'Pin tool calls shown or hidden (global follows X).',
+  { key: 'showToolCalls', section: 'Pins', label: 'Tool calls', help: 'Pin tool calls shown or hidden (global follows X).',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
-  { key: 'diffLayout', section: 'Overrides', label: 'Diff layout', help: 'Pin stacked or side-by-side diffs.',
+  { key: 'diffLayout', section: 'Pins', label: 'Diff layout', help: 'Pin stacked or side-by-side diffs.',
     options: [INHERIT, { value: 'stack', label: 'stacked' }, { value: 'split', label: 'split' }] },
-  { key: 'lightweight', section: 'Overrides', label: 'Lightweight', help: 'Pin lightweight windows: folded cards, last page mounted.',
+  { key: 'lightweight', section: 'Pins', label: 'Lightweight', help: 'Pin lightweight windows: folded cards, last page mounted.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
-  { key: 'stickyHeaders', section: 'Overrides', label: 'Sticky prompt', help: 'Pin the prompt header that stays under the top edge.',
+  { key: 'stickyHeaders', section: 'Pins', label: 'Sticky prompt', help: 'Pin the prompt header that stays under the top edge.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
 ]
 
@@ -419,3 +443,21 @@ export function nestedViewCardStyle(parent: ViewCardStyle): ViewCardStyle {
   }
   return style
 }
+
+// ── tabs ───────────────────────────────────────────────────────────────────
+
+export type TabDisplay = Pick<ViewSpec, 'tabStyle' | 'tabWidth' | 'tabClose' | 'tabNumbers' | 'tabIcons' | 'tabSeparators' | 'tabTitle'>
+const tabDisplayCache = new WeakMap<ViewSpec, TabDisplay>()
+/** The strip's slice of a spec, one object per spec so memos keyed on it hold. */
+export function viewTabDisplay(spec: ViewSpec): TabDisplay {
+  let display = tabDisplayCache.get(spec)
+  if (!display) {
+    display = {
+      tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
+      tabIcons: spec.tabIcons, tabSeparators: spec.tabSeparators, tabTitle: spec.tabTitle,
+    }
+    tabDisplayCache.set(spec, display)
+  }
+  return display
+}
+export const DEFAULT_TAB_DISPLAY: TabDisplay = viewTabDisplay(BUILTIN_VIEW_SPECS.conversation)

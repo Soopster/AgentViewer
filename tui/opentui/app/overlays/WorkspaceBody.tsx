@@ -38,6 +38,7 @@ import { ThemeMenuOverlay } from './ThemeMenuOverlay'
 import { CommandPaletteOverlay } from './CommandPaletteOverlay'
 import { ChordHelpOverlay } from './ChordHelpOverlay'
 import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
+import type { TabDisplay } from '../../../viewSpec'
 import { BookmarksOverlay } from './BookmarksOverlay'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
 import { SessionRail } from './SessionRail'
@@ -210,6 +211,8 @@ type WorkspaceBodyProps = {
   toggleRoundedBorders: () => void
   transcriptViewMenuOpen: boolean
   viewMenuItems: ViewMenuItem[]
+  /** How the session tab strip draws (the view's Tabs settings). */
+  tabDisplay: TabDisplay
   editedBuiltinViews: ReadonlySet<string>
   viewMenuOriginKey: string | null
   transcriptViewMenuIndex: number
@@ -267,7 +270,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     applyModelPickerPermission, modelPickerFocusedLabel, modelPickerFocusedOption,
     modelPickerFocusedDescription, themeMenuOpen, themeMenuOriginRef, themeMenuGroup,
     themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode,
-    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, editedBuiltinViews, viewMenuOriginKey,
+    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, tabDisplay, editedBuiltinViews, viewMenuOriginKey,
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
     commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery,
@@ -357,7 +360,9 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                 focusedBackgroundColor={theme.bg}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
-                selectedBackgroundColor={activeInPinnedRow ? theme.bg : theme.surface}
+                // Chrome and boxed raise the active tab onto the window's surface;
+                // the flat styles leave it on the strip (pills are painted over it).
+                selectedBackgroundColor={activeInPinnedRow || (tabDisplay.tabStyle !== 'chrome' && tabDisplay.tabStyle !== 'boxed') ? theme.bg : theme.surface}
                 selectedTextColor={activeInPinnedRow ? theme.muted : theme.cyan}
                 selectedDescriptionColor={theme.dim}
                 showDescription={false}
@@ -491,7 +496,9 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
             ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab && showBorders}
             foreground={theme.cyan} background={theme.surface}
             inactiveForeground={theme.border} inactiveBackground={theme.bg}
-            hoverForeground={theme.text} hoverBackground={mixHexColor(theme.cyan, theme.bg, 0.14) ?? theme.surface2} />
+            hoverForeground={theme.text} hoverBackground={mixHexColor(theme.cyan, theme.bg, 0.14) ?? theme.surface2}
+            pillForeground={theme.text} pillBackground={mixHexColor(theme.cyan, theme.bg, 0.32) ?? theme.surface3}
+            tabStyle={tabDisplay.tabStyle} separators={tabDisplay.tabSeparators} />
 
           </box>
         </box>

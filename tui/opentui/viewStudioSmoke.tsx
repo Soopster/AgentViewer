@@ -192,7 +192,17 @@ try {
   // ── a Panels pin: this view hides the session rail ──
   await press('v')
   await press('c')
+  // Tabs: numbered, then the underline style.
   await press('4')
+  for (let i = 0; i < 5; i += 1) await press('j')
+  await press('l')
+  if (!/Numbered tabs\s+‹ on ›/.test(frame())) fail('Numbered tabs did not cycle on')
+  if (!/1 Studio/.test(frame())) fail('numbered tabs did not number the strip')
+  for (let i = 0; i < 3; i += 1) await press('k')
+  await press('l')
+  if (!/Tab style\s+‹ underline ›/.test(frame())) fail('Tab style did not cycle to underline')
+  if (!frame().includes('━━━')) fail('the underline style did not rule the active tab')
+  await press('5')
   await press('l')
   await press('l')
   if (!/Session rail\s+‹ hidden ›/.test(frame())) fail('Session rail did not cycle to hidden')
@@ -222,7 +232,7 @@ try {
     await act(async () => { await setup.mockMouse.click(x, y, button as never) })
     await settle(200)
   }
-  await click('5 Overrides')
+  await click('6 Pins')
   if (!frame().includes('Density')) fail('clicking a section tab did not switch to it')
   await click('Density')
   if (!/Density\s+‹ comfortable ›/.test(frame())) fail('clicking a field did not cycle its value')
@@ -233,5 +243,5 @@ try {
 } finally {
   await act(async () => setup.renderer.destroy())
 }
-console.log('View studio smoke passed: boot restore, unknown fields dropped, clone, live markers and cursor, rename, save, discard confirm, two-press delete, built-in edit and reset, rail pin, prompts-only filter, mouse')
+console.log('View studio smoke passed: boot restore, unknown fields dropped, clone, live markers and cursor, rename, save, discard confirm, two-press delete, built-in edit and reset, numbered and underlined tabs, rail pin, prompts-only filter, mouse')
 process.exit(0)
