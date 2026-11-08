@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewSpec } from '../../viewSpec'
 import { indexComposerMessages, visibleComposerMessages } from '../../../lib/composerTranscript'
 import { foldTurnActivity } from './turnActivity'
 import { toggleFullToolOutput } from './fullToolOutput'
@@ -253,6 +254,7 @@ export type SplitTranscriptPaneProps = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   transcriptView: TuiTranscriptView
+  viewSpec: ViewSpec
   width: number
   height: number
   paneIndex: number
@@ -325,6 +327,7 @@ export function SplitTranscriptPaneInner({
   imessageStyle,
   transcriptWidth,
   transcriptView,
+  viewSpec,
   width,
   height,
   paneIndex,
@@ -422,8 +425,7 @@ export function SplitTranscriptPaneInner({
   // reader's shaping too: bookkeeping rows dropped, tool calls grouped into
   // activity rows, and no "No visible content" stop for every tool-only
   // message — otherwise the two halves of a split are two different apps.
-  const paneStreamLike = transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat'
-    || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  const paneStreamLike = viewSpec.flow === 'stream'
   // Lightweight windows draw the current view the way the old pane did:
   // bookkeeping rows dropped, tool calls grouped into activity rows and no
   // empty streaming placeholders, whatever the view; every card starts folded;
@@ -441,8 +443,8 @@ export function SplitTranscriptPaneInner({
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
     return lightView
       ? groupStreamToolCards(merged.filter(card => card.category !== 'system')).filter(card => !isStreamGhostCard(card))
-      : visibleCardsForTranscriptView(merged, transcriptView)
-  }, [cards, liveCards, transcriptView, lightView])
+      : visibleCardsForTranscriptView(merged, viewSpec)
+  }, [cards, liveCards, viewSpec, lightView])
   // Counted against the persisted cards: live cards are additions and must not
   // push history out of the window while a turn streams. Kept with the
   // window's position, so a remount does not drop the pages already loaded.
@@ -488,7 +490,7 @@ export function SplitTranscriptPaneInner({
   nestedToolRef.current = { expanded: expandedKeys, cursors: agentToolCursorByGroupKey, select: onSelectAgentTool }
   const cursorKeyRef = useRef<string | null>(cursorKey)
 
-  const paneScrollbackLike = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  const paneScrollbackLike = viewSpec.cursor === 'none'
   const scrollbackRef = useRef(paneScrollbackLike)
   scrollbackRef.current = paneScrollbackLike
   const sessionRef = useRef(session)
@@ -948,8 +950,8 @@ export function SplitTranscriptPaneInner({
   }
   const stickyKey = useStickyPromptKey(scrollRef, allPaneCards, visible && (stickyHeaders || transcriptView === 'engineering') && !lightView, transcriptView === 'engineering')
   const turnFooter = useMemo(
-    () => (!running && (transcriptView === 'stream' || paneScrollbackLike) ? streamCompletedTurnHint(allPaneCards) : null),
-    [running, transcriptView, paneScrollbackLike, allPaneCards],
+    () => (!running && viewSpec.completedTurnHint ? streamCompletedTurnHint(allPaneCards) : null),
+    [running, viewSpec.completedTurnHint, allPaneCards],
   )
   const stickyCard = stickyKey ? allPaneCards.find((card) => card.key === stickyKey) ?? null : null
 
@@ -1057,9 +1059,9 @@ export function SplitTranscriptPaneInner({
     visibleTranscriptCards: allPaneCards, windowStore, followTail,
     isScrollbackView: paneScrollbackLike, scrollbackExpanded, scrollbackToggledKeys,
     resolvedExpandedKeys: expandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys,
-    transcriptView, focused, isPreviewMode: false,
-    isChatLikeView: paneStreamLike, isContinuousView: transcriptView === 'transcript' || transcriptView === 'opencode',
-    groupedToolView: transcriptView === 'agents' || paneStreamLike, liveCardCount: liveCards.length,
+    transcriptView, viewSpec, focused, isPreviewMode: false,
+    isChatLikeView: paneStreamLike, isContinuousView: viewSpec.messageLayout === 'continuous',
+    groupedToolView: viewSpec.toolGrouping !== 'none', liveCardCount: liveCards.length,
     resumeMarkerIndex: -1, unreadBoundaryIndex: -1, pendingNewCount: 0,
     provider: session.provider ?? 'claude', shouldEnableSyntaxHighlighting,
     searchMatches: searchMatchIndexes, searchMatchIndex: Math.max(activeMatch, 0), bookmarkKeys: bookmarkedKeys,

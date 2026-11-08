@@ -1512,6 +1512,46 @@ messages" notice and wheel acceleration already exist.
   is resumed in `finally` — a failed editor must not leave a frozen app —
   and `transcriptPagerSmoke.ts` pins that, the expansion, and the cleanup.
 
+#### Views are specs, and users compose their own (load-bearing)
+
+A transcript view is a `ViewSpec` (`tui/viewSpec.ts`): about 30 fields (flow, cursor, reader header,
+composer placement, card filter, tool grouping, agent cards, folding, turn boundaries, markers, prompt
+band, prompt rule, thinking style, tool rows, prompt timestamps, prose width) plus optional pins of global
+settings (density, width, tool calls, diff layout, lightweight, sticky prompt). The 13 built-ins are presets
+of it (`BUILTIN_VIEW_SPECS`). The reader, the card and the composer read fields; they never compare view ids.
+Before this, five hand-kept lists of view ids already disagreed (TRANSCRIPT was missing from agent-card
+presentation, and that difference is preserved as `agentCards: 'none'`).
+
+- **A custom view is a base plus a diff** (`{ id, name, base, overrides }`, `customViews`/`customViewId` in
+  tui.json). Only the changed fields are stored, so improving a preset carries its custom views along.
+  Stored views are validated field by field against `VIEW_SPEC_FIELDS` (`normalizeCustomViews`), so an
+  unknown field or value is dropped.
+- **While a custom view or the studio's draft shows, `transcriptView` holds its base.** Code that keys on
+  the built-in id (ENGINEERING's frame and state scope, labels) keeps working, and the spec drives
+  everything drawn. ENGINEERING cannot be a base.
+- **The card gets one `viewStyle` object per spec** (`viewCardStyle`, WeakMap-cached). Cards are memoized
+  on `Object.is` per prop, so a fresh object per render would re-render every card.
+- **The View Studio** (`app/overlays/ViewStudioOverlay.tsx`; `v` then `n` or `e`, or the palette) is a
+  panel, not a modal. The transcript behind it draws with the draft. A specimen built from real
+  `TranscriptCard`s shows the style fields on a fixed sample. It owns every key while open (the branch
+  sits at the top of the root key handler). Esc with changes asks first, and delete takes two presses.
+- **Built-ins can be edited in place and reset** (`e` on a built-in in the `v` menu). Edits are stored as the
+  same kind of diff, under `builtinViewEdits` in tui.json, and an edited built-in is marked `•` in the menu.
+  In the studio, `x` resets it to its defaults instead of deleting it. A custom view starts from the built-in
+  as it ships (`resolveViewSpec`), so editing STREAM does not change views built on STREAM. `c` clones any
+  view into a new one.
+- **Panels fields reach past the transcript.** Pins (session rail, session tabs, tab layout, focus mode,
+  borders, fleet strip, side-panel placement) hold while the view is shown. The "on entering" fields
+  (which rail tab opens, task panel, side-panel surface) are applied by an effect keyed on the active view,
+  and the draft triggers it too. The side-panel choices come from the plugin catalog, which `tui/viewSpec.ts`
+  must not import (lib/tuiState.ts reads it), so App registers them (`registerViewSidePanelSurfaces`).
+  A stored surface is validated only as a slug and is checked when it is applied.
+- A pinned global setting is not changed by its own toggle (`d`, `X`, …) while that view is active; the
+  toggle changes the global value underneath.
+- `viewSpecParitySmoke.tsx` paints all 13 built-ins cell for cell against goldens recorded on the commit
+  before a change. It is a refactor tool, not a chain smoke. `viewStudioSmoke.tsx` covers the round trip
+  (boot restore, live edit, save, discard confirm, two-press delete, the mouse).
+
 #### SCROLLBACK view: scrolled text, no card cursor (load-bearing)
 
 `v` → SCROLLBACK is STREAM's rows read the way a terminal scrollback is (Claude

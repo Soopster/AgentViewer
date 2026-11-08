@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createRef } from 'react'
 import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
-import { SessionTabConnection, noteTabStripHover, tabConnectionGeometry } from './SessionTabConnection'
+import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
 import { tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 
@@ -119,6 +119,17 @@ for (const selected of [0, 1, 2]) {
       await act(async () => { await setup.mockMouse.moveTo(2, 1) })
       await setup.flush()
       assert.equal(setup.captureCharFrame().split('\n')[0].slice(0, 24), `╭${'─'.repeat(22)}╮`, 'hovering the active tab changes nothing')
+    }
+    if (selected === 1) {
+      // A panel floating over the strip (the View Studio) keeps its cells: the
+      // outline pass runs after the frame and would otherwise draw through it.
+      const unregister = registerTabPaintOccluder(() => ({ x: 30, y: 0, width: 40, height: 4 }))
+      await act(async () => { tabs.current!.requestRender() })
+      await setup.flush()
+      const covered = setup.captureCharFrame().split('\n')
+      assert.equal(covered[0].slice(30, 47), ' '.repeat(17), 'the cap is not drawn over the panel')
+      assert.equal(covered[2][24], '╯', 'the outline still draws beside the panel')
+      unregister()
     }
     assert.deepEqual(cell(74, 1).bg, parseColor('#101010'), 'focused tabs leave empty strip space at the base background')
     assert.deepEqual(cell(1 + ((selected + 1) % 3) * 24, 1).bg, parseColor('#101010'), 'inactive labels use the strip background')

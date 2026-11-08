@@ -19,21 +19,21 @@ function Harness() {
   const [, setTick] = useState(0)
   const bump = () => setTick((n) => n + 1)
   const sessions = state.order.map(session)
-  const keyOf = (s: Session) => sessionIdentityKey(s)
+  const keyOf = (s: Session) => sessionIdentityKey(s) as string
   return (
     <TabManagerPopover theme={DARK} width={100} height={30} onKeyHandlerReady={() => {}}
-      onSelect={(s) => opened.push(s.id)} onClose={() => { closedPanel += 1 }}
+      onSelect={(s) => opened.push(s.sessionId)} onClose={() => { closedPanel += 1 }}
       tabs={{
         sessions, pinned: new Set([...state.pinned].map((id) => keyOf(session(id)))), selectedKey: keyOf(sessions[0]!), row: state.row,
         toggleRow: () => { state.row = !state.row; bump(); return state.row },
-        togglePin: (s) => { state.pinned.has(s.id) ? state.pinned.delete(s.id) : state.pinned.add(s.id); bump(); return state.pinned.has(s.id) },
+        togglePin: (s) => { state.pinned.has(s.sessionId) ? state.pinned.delete(s.sessionId) : state.pinned.add(s.sessionId); bump(); return state.pinned.has(s.sessionId) },
         move: (s, delta) => {
-          const from = state.order.indexOf(s.id), to = from + delta
+          const from = state.order.indexOf(s.sessionId), to = from + delta
           if (to < 0 || to >= state.order.length) return
           const next = [...state.order]; [next[from], next[to]] = [next[to]!, next[from]!]
           state.order = next; bump()
         },
-        close: (s) => { state.order = state.order.filter((id) => id !== s.id); bump() },
+        close: (s) => { state.order = state.order.filter((id) => id !== s.sessionId); bump() },
       }} />
   )
 }

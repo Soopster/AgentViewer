@@ -83,13 +83,14 @@ export type UseSubmitComposerFromDockGroupContext = {
   chatComposerHintFitted: string
   presentationFocusMode: boolean
   isStreamView: boolean
+  viewIdleTicker: boolean
   contextUsage: ContextUsage | null
   selectedSession: Session | null
   contextUsageStatus: 'idle' | 'loading' | 'unavailable' | 'ready'
   followTail: boolean
   isScrollbackView: boolean
   pendingNewCount: number
-  isCopilotView: boolean
+  viewAppTabs: boolean
   fleetStripVisible: boolean
   error: string | null
   showToolCalls: boolean
@@ -135,8 +136,8 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
     composerSlashHint, clickComposerStatus, composerDockStatsFor, composerDraftState,
     hoverComposerStatus, setComposerStatusHover, composerStatusHover, chatComposerHintWidth,
     visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted,
-    presentationFocusMode, isStreamView, contextUsage, selectedSession, contextUsageStatus,
-    followTail, isScrollbackView, pendingNewCount, isCopilotView, fleetStripVisible, error,
+    presentationFocusMode, isStreamView, viewIdleTicker, contextUsage, selectedSession, contextUsageStatus,
+    followTail, isScrollbackView, pendingNewCount, viewAppTabs, fleetStripVisible, error,
     showToolCalls, normalizedSearchQuery, providerAccent, showTabs, transcriptView, readerTitle,
     readerContextMeta, fleetStripSegments, setShowToolCalls, setError, searchQuery, searchMatches,
     searchMatchIndex, visibleTranscriptCards, turnRunningForComposer, chatTurnStatusRows,
@@ -212,18 +213,18 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
     || (selectedSession?.provider === 'claude' && (contextUsageStatus === 'loading' || contextUsageStatus === 'unavailable')))
   const tailBannerShown = !followTail && (!isScrollbackView || pendingNewCount > 0)
   const readerHeaderChrome: WindowChrome = runReaderHeaderChrome({
-    presentationFocusMode, isCopilotView, isStreamView, contextRowShown, fleetStripVisible, error,
+    presentationFocusMode, viewAppTabs, isStreamView, contextRowShown, fleetStripVisible, error,
     showToolCalls, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
     transcriptView, followTail, readerTitle, readerContextMeta, contextUsage, selectedSession,
     contextUsageStatus, fleetStripSegments, setShowToolCalls, setError, isScrollbackView,
     pendingNewCount, searchQuery, searchMatches, searchMatchIndex,
   })
-  const idleTickerShown = followTail && visibleTranscriptCards.length > 0 && !turnRunningForComposer && !embeddedComposer && !isStreamView
+  const idleTickerShown = followTail && visibleTranscriptCards.length > 0 && !turnRunningForComposer && viewIdleTicker
   const readerFooterChrome: WindowChrome = runReaderFooterChrome({
     chatTurnStatusRows, idleTickerShown, embeddedComposerChrome, densityState, theme,
     visibleComposerSending, composerSendStartedAt, composerWaitingStatusSeed,
     composerWaitingSuffix, composerWaitingOnUser, visibleAwaitingPersistedTurn, followTail,
-    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, isStreamView,
+    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, idleTickerOff: !viewIdleTicker,
     selectedSessionKey,
   })
 

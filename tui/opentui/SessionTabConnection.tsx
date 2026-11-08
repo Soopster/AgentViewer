@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useRenderer } from '@opentui/react'
-import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
+import { parseColor, type BoxRenderable, type RGBA, type TabSelectRenderable } from '@opentui/core'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -50,6 +50,17 @@ export function hoveredTabIndex(tabs: TabSelectRenderable): number | null {
 /** Native chrome only: no layout changes, timers, hit targets, or root updates.
  * Paint the cap, label sides and pane join using current native coordinates, so resize and tab
  * scrolling cannot leave a connector on yesterday's window. */
+export type TabPaintOccluder = { x: number; y: number; width: number; height: number }
+const TAB_PAINT_OCCLUDERS = new Set<() => TabPaintOccluder | null>()
+/**
+ * A panel drawn over the tab strip registers where it is, read at paint time
+ * (after layout), so the outline pass leaves its cells alone.
+ */
+export function registerTabPaintOccluder(read: () => TabPaintOccluder | null): () => void {
+  TAB_PAINT_OCCLUDERS.add(read)
+  return () => { TAB_PAINT_OCCLUDERS.delete(read) }
+}
+
 export function SessionTabConnection(props: {
   tabs: React.RefObject<TabSelectRenderable | null>
   readWindow: () => BoxRenderable | null
@@ -87,13 +98,24 @@ export function SessionTabConnection(props: {
       // A covering overlay must not acquire a hole in its own border/content.
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
+      // A floating panel over the strip (the View Studio) keeps its cells: this
+      // pass runs after the frame, so without clipping it draws through them.
+      const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA) => {
+        let ranges: Array<[number, number]> = [[x, x + text.length]]
+        for (const read of TAB_PAINT_OCCLUDERS) {
+          const rect = read()
+          if (!rect || y < rect.y || y >= rect.y + rect.height) continue
+          ranges = ranges.flatMap(([from, to]): Array<[number, number]> => [[from, Math.min(to, rect.x)], [Math.max(from, rect.x + rect.width), to]].filter(([l, r]) => r > l) as Array<[number, number]>)
+        }
+        for (const [from, to] of ranges) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg)
+      }
       const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground } = palette.current
       // Chrome's strip: inactive tabs have no outline, only a muted separator
       // between two of them (none beside the selected tab, none after the
       // last). Only the selected tab is raised, and it opens into the window.
       const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
       const selected = tabs.getSelectedIndex()
-      buffer.drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
+      drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       const hovered = hoveredTabIndex(tabs)
       const lifted = hovered !== null && hovered !== selected ? hovered : null
       for (let index = offset; index < tabs.options.length - 1; index++) {
@@ -101,21 +123,21 @@ export function SessionTabConnection(props: {
         // Like Chrome, a separator also gives way beside the hovered tab.
         if (index === selected || index + 1 === selected || index === lifted || index + 1 === lifted) continue
         const inactive = tabConnectionGeometry(tabs, frame, index, offset, tabs.getTabWidth())
-        if (inactive) buffer.drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
+        if (inactive) drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
       }
       const hover = lifted === null ? null : tabConnectionGeometry(tabs, frame, lifted, offset, tabs.getTabWidth())
       if (hover && lifted !== null && hover.right - hover.left >= 2) {
         // Chrome's hover is a pill on the label row, inset from the tab's edges:
         // half blocks at each end round it, the cells between carry the label.
-        buffer.drawText('▐', hover.left, hover.tabY, hoverBackground, inactiveBackground)
-        buffer.drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
-        buffer.drawText(tabs.options[lifted]?.name ?? '', hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
-        buffer.drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
+        drawText('▐', hover.left, hover.tabY, hoverBackground, inactiveBackground)
+        drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+        drawText(tabs.options[lifted]?.name ?? '', hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+        drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
       }
-      buffer.drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
-      buffer.drawText('│', connection.left, connection.tabY, foreground, background)
-      buffer.drawText('│', connection.right, connection.tabY, foreground, background)
-      buffer.drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
+      drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
+      drawText('│', connection.left, connection.tabY, foreground, background)
+      drawText('│', connection.right, connection.tabY, foreground, background)
+      drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(connection.right - connection.left - 1) + '╰', connection.left, connection.borderY, foreground, background)
     }
     renderer.addPostProcessFn(paint)
     return () => { renderer.removePostProcessFn(paint) }

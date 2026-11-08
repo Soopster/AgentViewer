@@ -1,3 +1,4 @@
+import { BUILTIN_VIEW_SPECS, type ViewSpec } from '../../viewSpec'
 import { type ScrollBoxRenderable, type Renderable, TextAttributes } from '@opentui/core'
 import { summarizeShellCommand } from './shellSummary'
 import type { TuiTranscriptWidth } from '../../../lib/tuiState'
@@ -39,7 +40,8 @@ export function computeAllLandmarks(
   pendingNewCount: number,
   previous: CardLandmark[][] | null,
   streamMode: boolean,
-  quietTurns = false): CardLandmark[][] {
+  quietTurns = false,
+  timeMarkers = true): CardLandmark[][] {
   const result: CardLandmark[][] = new Array(cards.length)
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i]
@@ -89,7 +91,9 @@ export function computeAllLandmarks(
       })
     }
 
-    if (!prev || prev.dayKey !== card.dayKey) {
+    if (!timeMarkers) {
+      // The view drops day separators and time-gap rules.
+    } else if (!prev || prev.dayKey !== card.dayKey) {
       if (card.dayLabel) {
         landmarks = landmarks ?? []
         landmarks.push({ kind: 'day', text: card.dayLabel.toUpperCase() })
@@ -340,19 +344,31 @@ export function groupStreamToolCards(cards: TuiTranscriptCard[]): TuiTranscriptC
   // single Claude-style activity narration row.
   return groupToolCards(cards, (card) => card.category === 'technical')
 }
-export function visibleCardsForTranscriptView(cards: TuiTranscriptCard[], view: TuiTranscriptView): TuiTranscriptCard[] {
-  if (view === 'continue') return cards.filter(card => !card.autoFold)
+/** A built-in id or a spec; the id form is for callers that only ever name a built-in. */
+export type TranscriptViewLike = TuiTranscriptView | ViewSpec
+function specOf(view: TranscriptViewLike): ViewSpec {
+  return typeof view === 'string' ? BUILTIN_VIEW_SPECS[view] : view
+}
+export function visibleCardsForTranscriptView(cards: TuiTranscriptCard[], view: TranscriptViewLike): TuiTranscriptCard[] {
+  const spec = specOf(view)
+  const filtered = spec.cardFilter === 'prose' ? cards.filter(card => !card.autoFold)
+    : spec.cardFilter === 'no-system' ? cards.filter(card => card.category !== 'system')
+    : spec.cardFilter === 'prompts' ? cards.filter(card => card.role === 'user' && card.category === 'conversation')
+    : cards
+  const shown = spec.showThinking && spec.showSubagents ? filtered : filtered.filter(card =>
+    (spec.showThinking || !isThinkingOnlyCard(card)) && (spec.showSubagents || !card.subagentDepth))
   // Agents view drops the empty assistant shells a tool-only message leaves
   // behind (a header and a "No visible content" row each) before grouping, so
   // the tool calls either side of one merge into a single group.
-  if (view === 'agents') return groupAgentsToolCards(cards.filter(card => !isStreamGhostCard(card)))
-  if (view === 'engineering' || view === 'stream' || view === 'chat' || view === 'transcript' || view === 'scrollback'
-    || view === 'codex' || view === 'claude-code' || view === 'copilot' || view === 'opencode') {
-    // Ghosts go first: an empty assistant shell between two tool calls would
-    // otherwise split them into two groups.
-    return groupStreamToolCards(cards.filter(card => card.category !== 'system' && !isStreamGhostCard(card)))
-  }
-  return cards
+  if (spec.toolGrouping === 'agents') return groupAgentsToolCards(shown.filter(card => !isStreamGhostCard(card)))
+  // Ghosts go first: an empty assistant shell between two tool calls would
+  // otherwise split them into two groups.
+  if (spec.toolGrouping === 'stream') return groupStreamToolCards(shown.filter(card => !isStreamGhostCard(card)))
+  return shown
+}
+/** A card that is nothing but reasoning: hidden whole when a view hides thinking. */
+function isThinkingOnlyCard(card: TuiTranscriptCard): boolean {
+  return Boolean(card.thinkingTranscript) || (card.lines.length > 0 && card.lines.every(line => line.tone === 'thinking'))
 }
 function isStreamOperationalCard(card: TuiTranscriptCard): boolean {
   return card.key.startsWith('agents-tools:') || card.category === 'technical'
@@ -365,10 +381,10 @@ function isStreamOperationalCard(card: TuiTranscriptCard): boolean {
 
 export function usesAgentCardPresentation(
   card: TuiTranscriptCard,
-  transcriptView: TuiTranscriptView
+  view: TranscriptViewLike,
 ): boolean {
-  return transcriptView === 'agents'
-    || ((transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode') && isStreamOperationalCard(card))
+  const { agentCards } = specOf(view)
+  return agentCards === 'all' || (agentCards === 'operational' && isStreamOperationalCard(card))
 }
 
 export function shouldCenterTranscriptCard(

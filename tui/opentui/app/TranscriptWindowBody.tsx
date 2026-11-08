@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { viewCardStyle, viewQuietTurns, type ViewSpec } from '../../viewSpec'
 import { readReaderLayout, measureReaderRowHeights } from '../readerLayout'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { logCardRecompute } from '../metricsLogger'
@@ -69,6 +70,7 @@ export type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   expandedCardKeys: ReadonlySet<string>
   collapsedCardKeys: ReadonlySet<string>
   transcriptView: TuiTranscriptView
+  viewSpec: ViewSpec
   focused: boolean
   isPreviewMode: boolean
   isChatLikeView: boolean
@@ -289,7 +291,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   const windowVisible = useWindowVisible()
   const {
     visibleTranscriptCards, followTail, isScrollbackView, scrollbackExpanded, scrollbackToggledKeys,
-    resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, transcriptView, focused,
+    resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, viewSpec, focused,
     isPreviewMode, isChatLikeView, isContinuousView, groupedToolView, liveCardCount, resumeMarkerIndex,
     unreadBoundaryIndex, pendingNewCount, provider, shouldEnableSyntaxHighlighting, searchMatches, searchMatchIndex,
     bookmarkKeys, agentToolCursorByGroupKey, transcriptCursorKey, cursorIndex, sessionKey, readerWindowGaugeRef,
@@ -331,13 +333,13 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   // A card-count cap still protects pathological runs of one-line cards.
   const rowBudget = Math.max(120, inputs.viewportRows * 6)
   const rowIndex = useMemo(() => new RowHeightIndex(visibleTranscriptCards.map(card => {
-    const expanded = transcriptView === 'full' || resolvedExpandedKeys.has(card.key)
+    const expanded = viewSpec.foldDefault === 'expand-all' || resolvedExpandedKeys.has(card.key)
       || isScrollbackView && scrollbackExpanded
       || isChatLikeView && (card.category === 'conversation' || card.category === 'insight')
     const lines = expanded ? card.expandedLines : card.lines
     const prose = expanded && card.markdownContent ? Math.ceil(card.markdownContent.length / Math.max(rightPaneWidth - 8, 20)) : 0
     return 3 + densityState.cardGap + Math.max(lines.length, prose)
-  })), [visibleTranscriptCards, transcriptView, resolvedExpandedKeys, isScrollbackView, scrollbackExpanded, isChatLikeView, rightPaneWidth, densityState.cardGap])
+  })), [visibleTranscriptCards, viewSpec, resolvedExpandedKeys, isScrollbackView, scrollbackExpanded, isChatLikeView, rightPaneWidth, densityState.cardGap])
   const targetWindow = deriveRowReaderWindow(rowIndex, READER_CARD_WINDOW, rowBudget, followTail, readerWindowStart)
   useEffect(() => {
     if (!windowVisible) return
@@ -423,8 +425,8 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   // each, to mount 8 cards. Built from every card they change only when the
   // transcript or the expansion state does.
   const allVisibleCardKeys = useMemo(
-    () => transcriptView === 'full' ? new Set(visibleTranscriptCards.map((card) => card.key)) : EMPTY_EXPANDED_KEYS,
-    [transcriptView, visibleTranscriptCards],
+    () => viewSpec.foldDefault === 'expand-all' ? new Set(visibleTranscriptCards.map((card) => card.key)) : EMPTY_EXPANDED_KEYS,
+    [viewSpec, visibleTranscriptCards],
   )
   // SCROLLBACK has no cursor to fold a card with, so a card is expanded when
   // expand-all or its ordinary default says so, unless a click flipped it.
@@ -437,11 +439,11 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     }
     return keys
   }, [isScrollbackView, scrollbackExpanded, scrollbackToggledKeys, resolvedExpandedKeys, visibleTranscriptCards])
-  const fullExpandedKeys = transcriptView === 'full'
+  const fullExpandedKeys = viewSpec.foldDefault === 'expand-all'
     ? allVisibleCardKeys
     : focused
       || !isPreviewMode
-      || transcriptView === 'agents'
+      || viewSpec.toolGrouping === 'agents'
       ? scrollbackExpandedKeys ?? resolvedExpandedKeys
       : EMPTY_EXPANDED_KEYS
   // Leaving the collapsed preview (the reader's first focus) expands every card
@@ -516,7 +518,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     const result = renderedTranscriptCards.map((card) => {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
-      const agentsModeForCard = usesAgentCardPresentation(card, transcriptView)
+      const agentsModeForCard = usesAgentCardPresentation(card, viewSpec)
       // Stream is a chronological transcript, not a collapsed card preview:
       // feed prose its untruncated formatter lines and let the text renderer
       // wrap them to the active transcript width. Technical cards stay bounded.
@@ -567,7 +569,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       })
     }
     return result
-  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView])
+  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, viewSpec])
 
   // Landmark arrays are reused per CARD, not per window index. Keyed by index,
   // every slide handed each card its neighbour's previous array, so every card
@@ -585,11 +587,12 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       pendingNewCount,
       renderedTranscriptCards.map((card) => byCard.get(card) ?? EMPTY_LANDMARKS),
       isChatLikeView,
-      isScrollbackView,
+      viewQuietTurns(viewSpec),
+      viewSpec.timeMarkers,
     )
     renderedTranscriptCards.forEach((card, index) => byCard.set(card, next[index]))
     return next
-  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, transcriptView])
+  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, viewSpec, isChatLikeView])
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {
       isExpanded: boolean
@@ -613,7 +616,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       // Latest = last card of the FULL transcript; a detached reader window
       // may end before it.
       const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
-      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold && !isExpanded
+      const isAutoFoldedTechnical = viewSpec.dimAutoFolded && card.autoFold && !isExpanded
       const isCursor = card.key === transcriptCursorKey
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -708,7 +711,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     totalTranscriptCards,
     expandedKeysForRender,
     transcriptCursorKey,
-    transcriptView,
+    viewSpec,
     provider,
     shouldEnableSyntaxHighlighting,
   ])
@@ -758,13 +761,9 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
         imessageStyle,
         transcriptWidth,
         streamMode: isChatLikeView,
-        continuousMode: isContinuousView,
-        codexMode: transcriptView === 'codex',
-        claudeCodeMode: transcriptView === 'claude-code',
-        copilotMode: transcriptView === 'copilot',
-      openCodeMode: transcriptView === 'opencode',
-        turnFooter: isContinuousView ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
-        agentsMode: usesAgentCardPresentation(card, transcriptView),
+        viewStyle: viewCardStyle(viewSpec),
+        turnFooter: viewSpec.turnFooter ? continuousTurnFooter(card, visibleTranscriptCards[absoluteIndex + 1]) : null,
+        agentsMode: usesAgentCardPresentation(card, viewSpec),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: scrollbackToolKeys?.expanded ?? (groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS),
         agentToolCollapsedKeys: scrollbackToolKeys?.collapsed ?? (groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS),
@@ -808,7 +807,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     diffLayout,
     imessageStyle,
     transcriptWidth,
-    transcriptView,
+    viewSpec,
     groupedToolView,
     agentToolCursorByGroupKey,
     expandedCardKeys,

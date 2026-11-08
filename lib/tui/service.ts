@@ -63,6 +63,9 @@ import {
   setConfiguredTuiThemeFollow,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
+  getConfiguredTuiCustomViews,
+  setConfiguredTuiCustomViews,
+  type TuiCustomViewState,
   setConfiguredTuiTranscriptWidth,
   setConfiguredTuiVelocityScroll,
   setConfiguredTuiSurfacePanelPlacement,
@@ -409,6 +412,14 @@ export async function readTuiTranscriptView(): Promise<TuiTranscriptView> {
 
 export async function writeTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await setConfiguredTuiTranscriptView(transcriptView)
+}
+
+export async function readTuiCustomViews(): Promise<TuiCustomViewState> {
+  return getConfiguredTuiCustomViews()
+}
+
+export async function writeTuiCustomViews(state: Partial<TuiCustomViewState>): Promise<void> {
+  await setConfiguredTuiCustomViews(state)
 }
 
 export async function readTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {

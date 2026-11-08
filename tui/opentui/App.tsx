@@ -4,7 +4,7 @@ import { presentationIndex, type WindowPresentation } from './windowPresentation
 import { registerWindowBridge } from './windowControlBridge'
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
 import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
-import { panelSurfaceAvailability } from '../../lib/rightPanel'
+import { panelSurfaceAvailability, RIGHT_PANEL_SURFACE_KINDS, surfaceKindLabel } from '../../lib/rightPanel'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
 import { SessionTabConnection, tabIndexAt } from './SessionTabConnection'
@@ -142,7 +142,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -252,7 +252,7 @@ import {
 } from './chordHelp'
 import { userKeyProblems } from './userKeys'
 import { isAltKey, isCtrlKey, isCtrlShiftKey, isShiftedKey, PORTABLE_COMMAND_CHORDS, portableCommandChord } from './shortcutKeys'
-import { type RunningRegistryEntry, type MenuPoint, type WindowItem, type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type NoticeTone } from './app/types'
+import { type RunningRegistryEntry, type MenuPoint, type WindowItem, type ComposerPromptPart, type QueuedComposerSend, type ComposerDraftSnapshot, type ClipboardImage, type SseFrame, type TuiLiveToolActivity, type PendingInboxEdit, type SidebarEntry, type SidebarSubagentEntry, type ModelPickerOption, type TuiEffort, type PaneFocus, type TuiMentionResult, type SteeredComposerSend, type TuiPermissionMode, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier, type ModelPickerFocus, type ComposerPromptPartRange, type ComposerSubmission, CLAUDE_PERMISSION_MODE_ORDER, type PaletteRow, type PaletteCommand, type NoticeTone } from './app/types'
 import { NATIVE_OSC_ENABLED, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWAITING_PERSISTED_TURN_TIMEOUT_MS, COMPOSER_GIT_SUMMARY_POLL_MS, COMPOSER_GIT_SUMMARY_IDLE_POLL_MS, COMPOSER_AFFORDANCES_CACHE_MAX, COMPOSER_AFFORDANCES_TTL_MS, DETAIL_OPEN_DELAY_MS, CLAUDE_METADATA_REFRESH_MS, DEFAULT_METADATA_REFRESH_MS, CLAUDE_BACKGROUND_METADATA_REFRESH_MS, DEFAULT_BACKGROUND_METADATA_REFRESH_MS, METADATA_REQUEST_TIMEOUT_MS, ATTACHED_DAEMON_HOST, EXIT_CLEANUP_TIMEOUT_MS, ATTENTION_DONE_LIMIT, LIVE_TEXT_FLUSH_MS, STREAM_STALL_SENTINEL, CLAUDE_STREAM_STALL_MS, NOTIFY_AFTER_MS, NOTIFY_PREVIEW_CHARS, REATTACH_POLL_MS, DETAIL_OPEN_CACHED_DELAY_MS, NEIGHBOR_PREFETCH_RADIUS, NEIGHBOR_PREFETCH_DELAY_MS, SESSION_REFRESH_MS, DETAIL_REFRESH_MS, IS_WINDOWS, SEARCH_MAX_CHARS } from './app/timing'
 import { FLOATING_PANE_INDEX, READER_CARD_WINDOW, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
@@ -315,6 +315,9 @@ import { handleGlobalChordKeys } from './app/keys/globalChordKeys'
 import { handleComposerKeys } from './app/keys/composerKeys'
 import { handleAskAndShortcutKeys } from './app/keys/askKeys'
 import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
+import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
+import { ViewStudioOverlay, VIEW_STUDIO_WIDTH, type ViewStudioKeyHandler } from './app/overlays/ViewStudioOverlay'
+import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId, registerViewSidePanelSurfaces, type CustomView } from '../viewSpec'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
@@ -420,6 +423,8 @@ import { EngineeringInspectorWindow } from './engineering/EngineeringInspectorWi
 import { useEngineeringLayout } from './engineering/state'
 import { PaneResizeProvider, usePaneResize } from './paneResize'
 import { ResizeReadout } from './ResizeReadout'
+// The View Studio's side-panel choices: every surface the panel can open, plugins' included.
+registerViewSidePanelSurfaces(RIGHT_PANEL_SURFACE_KINDS.map((kind) => ({ kind, label: surfaceKindLabel(kind) })))
 export { readRootRenderCount } from './app/perf'
 export { TAB_SPINNER_FRAMES, IDLE_TICKER_PHRASES } from './app/chrome'
 export { createSidebarRowElements } from './app/sessionList'
@@ -510,7 +515,10 @@ function OpenTuiWorkspace() {
     transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey,
     transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
     agentToolCursorByGroupKey, setAgentToolCursorByGroupKey, transcriptView, setTranscriptView,
-    isCopilotView, isOpenCodeView, isChatLikeView, isScrollbackView, isStreamView,
+    viewAppTabs, viewContextSidebar, isChatLikeView, isScrollbackView, isStreamView,
+    customViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
+    builtinViewEdits, setBuiltinViewEdits,
+    viewSpec, viewStyle, globalLightweightWindows, globalDensity,
     scrollbackExpanded, setScrollbackExpanded, embeddedComposer, transcriptWidth,
     setTranscriptWidth, focusMode, setFocusMode, stickyHeaders, setStickyHeaders,
     lightweightWindows, setLightweightWindows, windowPresentation, setWindowPresentation,
@@ -570,12 +578,12 @@ function OpenTuiWorkspace() {
     else if (!expected || splitPaneHandlesRef.current.get(paneIndex) === expected) splitPaneHandlesRef.current.delete(paneIndex)
   })
   const {
-    showToolCalls, setShowToolCalls, velocityScrollEnabled, setVelocityScrollEnabled, sidebarSort,
+    showToolCalls: globalShowToolCalls, setShowToolCalls, velocityScrollEnabled, setVelocityScrollEnabled, sidebarSort,
     setSidebarSort, hideScratch, setHideScratch, showSettled, setShowSettled, pendingInboxEditsRef,
     sidebarView, setSidebarView, sidebarWidthPreference, setSidebarWidthPreference, taskPanelWidth,
     setTaskPanelWidth, taskPanelExpanded, setTaskPanelExpanded, surfacePanelOpen,
     setSurfacePanelOpen, surfacePanelFocused, setSurfacePanelFocused, surfacePanelWidth,
-    setSurfacePanelWidth, surfacePanelPlacement, setSurfacePanelPlacement, surfacePanelRows,
+    setSurfacePanelWidth, surfacePanelPlacement: globalSurfacePanelPlacement, setSurfacePanelPlacement, surfacePanelRows,
     setSurfacePanelRows, surfacePanelResizing, setSurfacePanelResizing, surfacePanelResizeFromRef,
     surfacePanelExpanded, setSurfacePanelExpanded, surfacePanel, setSurfacePanel,
     surfaceBrowserRecent, setSurfaceBrowserRecent, surfacePanelKeyHandlerRef, surfacePluginKeyRef,
@@ -583,6 +591,9 @@ function OpenTuiWorkspace() {
     setRunningSessions, waitingSessions, setWaitingSessions, viewerAttentionNotes,
     setViewerAttentionNotes, selectedSessionKey, setSelectedSessionKeyState,
   } = useSidebarPreferenceState()
+  // A custom view may pin tool calls shown or hidden; X still toggles the global setting.
+  const showToolCalls = viewSpec.showToolCalls ?? globalShowToolCalls
+  const surfacePanelPlacement = viewSpec.sidePanelPlacement ?? globalSurfacePanelPlacement
   const setSelectedSessionKey = setSelectedSessionKeyState
   const [sessionDetail, setSessionDetail] = useWorkspaceState<TuiSessionDetail | null>('sessionDetail', null, false)
   const sessionDetailRef = useRef<TuiSessionDetail | null>(sessionDetail)
@@ -634,7 +645,7 @@ function OpenTuiWorkspace() {
     coordTeammateProviderOverride, setCoordTeammateProviderOverride, coordProviderPoolIndex,
     setCoordProviderPoolIndex, coordModalFocus, setCoordModalFocus, coordTextareaRef,
     coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordBusy, setCoordBusy, coordBoardRunId,
-    setCoordBoardRunId, coordError, setCoordError, coordStartInFlightRef, fleetStripEnabled,
+    setCoordBoardRunId, coordError, setCoordError, coordStartInFlightRef, fleetStripEnabled: globalFleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
     fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
     dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
@@ -647,6 +658,7 @@ function OpenTuiWorkspace() {
   } = useLastBridgeChatIdRefGroup({
     composerPaneTargetKey, selectedSessionKey, sessions, workspaceContext,
   })
+  const fleetStripEnabled = viewSpec.fleetStrip ?? globalFleetStripEnabled
   useLayoutEffect(() => {
     bookmarkKeysRef.current = bookmarkKeys
   }, [bookmarkKeys])
@@ -1216,7 +1228,7 @@ function OpenTuiWorkspace() {
   } = useTaskPanelMessagesGroup({
     sessionDetail, liveTranscriptMessagesForSession, transcriptSession, density, showToolCalls,
     bridgeTranscriptEntries, selectedSessionTarget, liveTranscriptBaselineRef, transcriptView,
-    isChatLikeView,
+    viewSpec, isChatLikeView,
   })
 
   useLayoutEffect(() => runLiveTranscriptOverlayEffect({
@@ -1935,7 +1947,7 @@ function OpenTuiWorkspace() {
     presentationHidesComposer, composerTurnStatusInBorder, composerActivityVisible,
     hasSubagentTail, visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion,
     composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
-    composerLiveReasoning, isStreamView, composerTargetSession, sessionDetail, width,
+    composerLiveReasoning, hideLiveReasoning: !viewSpec.liveReasoning, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
     surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
     taskPanelExpanded, taskPanelWidth, surfacePanelWidth, openTabSessions, popoverTabs,
@@ -2185,7 +2197,7 @@ function OpenTuiWorkspace() {
     ? { x: 0, y: 0, ...fittedWindows.panes[transcriptWindowIndex]! }
     : null
   const activeTranscriptWidth = treeReaderRect ? treeReaderRect.width : arrangedVisible ? arrangedLayout.reader.width : stackedSplit ? readerAreaWidth : splitLayout.readerExtent
-  const openCodeContextWidth = isOpenCodeView && visibleSplitPaneCount === 0
+  const openCodeContextWidth = viewContextSidebar && visibleSplitPaneCount === 0
     ? Math.min(Math.max(24, Math.floor(activeTranscriptWidth * 0.22)), Math.max(activeTranscriptWidth - MIN_READER_WIDTH, 0))
     : 0
   const rightPaneWidth = activeTranscriptWidth - openCodeContextWidth
@@ -2265,7 +2277,7 @@ function OpenTuiWorkspace() {
   // Frame, header, context row and the ticker-or-banner pair. The stream views
   // draw only the frame and the banner, and were handing the transcript's rows
   // to chrome they never render.
-  const readerChromeRows = isStreamView ? 1 + tailBannerRows + (!presentationFocusMode && isCopilotView ? 1 : 0) : 7
+  const readerChromeRows = isStreamView ? 1 + tailBannerRows + (!presentationFocusMode && viewAppTabs ? 1 : 0) : 7
   const estimatedTranscriptViewportRows = Math.max(
     readerRowBudget
     // Sticky headers sit directly beneath the pane title; reclaim its inset.
@@ -2273,7 +2285,7 @@ function OpenTuiWorkspace() {
     // Fullscreen removes the two-row reader frame, leaving only the compact
     // restore affordance plus the transcript's top/bottom content insets.
     - (fullscreenMode ? 3 : focusMode ? 4 : readerChromeRows)
-    - (fullscreenMode && !presentationFocusMode && isCopilotView ? 1 : 0)
+    - (fullscreenMode && !presentationFocusMode && viewAppTabs ? 1 : 0)
     - (showHorizontalTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     - (pinnedRowCount > 0 ? 1 : 0)
     // Fleet strip is one header row when visible.
@@ -2429,37 +2441,194 @@ function OpenTuiWorkspace() {
     })
   })
 
+  // The `v` menu lists the built-ins, the user's views and "New view…".
+  // Arrowing previews; Esc returns to the view it opened on.
+  const viewMenuItems = useMemo(() => buildViewMenuItems(customViews), [customViews])
+  const editedBuiltinViews = useMemo(() => new Set(Object.keys(builtinViewEdits)), [builtinViewEdits])
+  const viewMenuOriginRef = useRef<{ view: TuiTranscriptView; customId: string | null } | null>(null)
+  const currentViewMenuIndex = () => Math.max(viewMenuItems.findIndex((item) => item.key === viewMenuItemKey(transcriptView, customViewId)), 0)
   const openTranscriptViewMenu = useStableEvent(() => {
     transcriptViewMenuOriginRef.current = transcriptView
-    setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
+    viewMenuOriginRef.current = { view: transcriptView, customId: customViewId }
+    setTranscriptViewMenuIndex(currentViewMenuIndex())
     setTranscriptViewMenuOpen(true)
   })
-
-  const closeTranscriptViewMenu = useStableEvent(() => {
-    const originView = transcriptViewMenuOriginRef.current
-    setTranscriptViewMenuOpen(false)
-    if (originView) {
-      setTranscriptView(originView)
-      setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(originView), 0))
-    } else {
-      setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
-    }
-    transcriptViewMenuOriginRef.current = null
-  })
-
-  const chooseTranscriptView = useCallback((nextView: TuiTranscriptView) => {
-    setTranscriptView(nextView)
-    setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(nextView), 0))
-    transcriptViewMenuOriginRef.current = null
-    void writeTuiTranscriptView(nextView).catch((err) => {
+  const showView = (view: TuiTranscriptView, customId: string | null) => {
+    setCustomViewId(customId)
+    setTranscriptView(view)
+  }
+  const persistView = (view: TuiTranscriptView, customId: string | null) => {
+    void Promise.all([writeTuiTranscriptView(view), writeTuiCustomViews({ activeId: customId })]).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store transcript view')
     })
+  }
+
+  const closeTranscriptViewMenu = useStableEvent(() => {
+    const origin = viewMenuOriginRef.current
     setTranscriptViewMenuOpen(false)
+    if (origin) showView(origin.view, origin.customId)
+    transcriptViewMenuOriginRef.current = null
+    viewMenuOriginRef.current = null
+  })
+
+  const chooseTranscriptView = useStableEvent((nextView: TuiTranscriptView) => {
+    showView(nextView, null)
+    transcriptViewMenuOriginRef.current = null
+    viewMenuOriginRef.current = null
+    persistView(nextView, null)
+    setTranscriptViewMenuOpen(false)
+  })
+  const chooseCustomView = useStableEvent((view: CustomView) => {
+    showView(view.base, view.id)
+    transcriptViewMenuOriginRef.current = null
+    viewMenuOriginRef.current = null
+    persistView(view.base, view.id)
+    setTranscriptViewMenuOpen(false)
+  })
+  const previewViewMenuItem = useStableEvent((item: ViewMenuItem) => {
+    if (item.kind === 'builtin') showView(item.view, null)
+    else if (item.kind === 'custom') showView(item.view.base, item.view.id)
+  })
+
+  // ── View Studio ──
+  // The draft is shown while the studio is open (provider.ts resolves it ahead
+  // of the active custom view), with `transcriptView` following its base.
+  const viewStudioKeyHandlerRef = useRef<ViewStudioKeyHandler | null>(null)
+  const viewStudioOriginRef = useRef<{ view: TuiTranscriptView; customId: string | null }>({ view: 'conversation', customId: null })
+  // `edit` opens the view itself — a custom view, or a built-in (its edits are
+  // kept apart and can be reset); otherwise a new custom view starts from it.
+  const openViewStudio = useStableEvent((from: ViewMenuItem | null, edit: boolean) => {
+    const origin = viewMenuOriginRef.current ?? { view: transcriptView, customId: customViewId }
+    viewStudioOriginRef.current = origin
+    setTranscriptViewMenuOpen(false)
+    transcriptViewMenuOriginRef.current = null
+    viewMenuOriginRef.current = null
+    const picked = from && from.kind !== 'new' ? from : null
+    const source = picked ?? (activeCustomView ? { kind: 'custom' as const, key: '', view: activeCustomView } : { kind: 'builtin' as const, key: '', view: transcriptView })
+    const id = newCustomViewId(customViews)
+    const editable = source.kind === 'builtin' && VIEW_SPEC_BASES.includes(source.view)
+    const draft: CustomView = source.kind === 'custom'
+      ? edit ? { ...source.view, overrides: { ...source.view.overrides } } : { id, name: `${source.view.name} copy`.slice(0, CUSTOM_VIEW_NAME_MAX), base: source.view.base, overrides: { ...source.view.overrides } }
+      : edit && editable
+        ? { id: builtinDraftId(source.view), name: TRANSCRIPT_VIEW_LABELS[source.view], base: source.view, overrides: { ...builtinViewEdits[source.view] }, builtin: true }
+        : { id, name: picked ? `${TRANSCRIPT_VIEW_LABELS[source.view]} copy` : 'My view', base: editable ? source.view : 'stream', overrides: editable ? { ...builtinViewEdits[source.view] } : {} }
+    setViewDraft(draft)
+    setTranscriptView(draft.base)
+  })
+  const changeViewDraft = useStableEvent((next: CustomView) => {
+    setViewDraft(next)
+    setTranscriptView(next.base)
+  })
+  const closeViewStudio = (view: TuiTranscriptView, customId: string | null) => {
+    setViewDraft(null)
+    showView(view, customId)
+    viewStudioKeyHandlerRef.current = null
+  }
+  const storeBuiltinEdits = (view: TuiTranscriptView, overrides: CustomView['overrides']) => {
+    const edits = { ...builtinViewEdits }
+    if (Object.keys(overrides).length) edits[view] = overrides
+    else delete edits[view]
+    setBuiltinViewEdits(edits)
+    void Promise.all([writeTuiCustomViews({ builtins: edits, activeId: null }), writeTuiTranscriptView(view)]).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store the view')
+    })
+  }
+  const saveViewDraft = useStableEvent((asNew: boolean) => {
+    if (!viewDraft) return
+    if (viewDraft.builtin && !asNew) {
+      storeBuiltinEdits(viewDraft.base, viewDraft.overrides)
+      closeViewStudio(viewDraft.base, null)
+      showNotice('info', Object.keys(viewDraft.overrides).length ? `Saved ${viewDraft.name}` : `${viewDraft.name} is back to its defaults`, 2500)
+      return
+    }
+    const editing = viewDraft.builtin || customViews.some((view) => view.id === viewDraft.id)
+    const name = viewDraft.name.trim() || 'My view'
+    const { builtin: _builtin, ...draftView } = viewDraft
+    const saved: CustomView = asNew && editing
+      ? { ...draftView, id: newCustomViewId(customViews), name: `${name} copy`.slice(0, CUSTOM_VIEW_NAME_MAX) }
+      : { ...draftView, name }
+    const views = customViews.some((view) => view.id === saved.id)
+      ? customViews.map((view) => view.id === saved.id ? saved : view)
+      : [...customViews, saved]
+    setCustomViews(views)
+    closeViewStudio(saved.base, saved.id)
+    void Promise.all([writeTuiCustomViews({ views, activeId: saved.id }), writeTuiTranscriptView(saved.base)]).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store the view')
+    })
+    showNotice('info', `Saved view "${saved.name}"`, 2500)
+  })
+  const discardViewDraft = useStableEvent(() => {
+    const origin = viewStudioOriginRef.current
+    closeViewStudio(origin.view, origin.customId)
+  })
+  const deleteViewDraft = useStableEvent(() => {
+    if (!viewDraft) return
+    // A built-in cannot be deleted; `x` puts it back the way it ships.
+    if (viewDraft.builtin) {
+      storeBuiltinEdits(viewDraft.base, {})
+      closeViewStudio(viewDraft.base, null)
+      showNotice('info', `${viewDraft.name} is back to its defaults`, 2500)
+      return
+    }
+    const deleted = viewDraft
+    const views = customViews.filter((view) => view.id !== deleted.id)
+    setCustomViews(views)
+    const origin = viewStudioOriginRef.current
+    // A deleted view that was showing falls back to the built-in it was made from.
+    const next = origin.customId === deleted.id ? { view: deleted.base, customId: null } : origin
+    closeViewStudio(next.view, next.customId)
+    void Promise.all([writeTuiCustomViews({ views, activeId: next.customId }), writeTuiTranscriptView(next.view)]).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store the view')
+    })
+    showNotice('info', `Deleted view "${deleted.name}"`, 2500)
+  })
+  const chooseViewMenuItem = useStableEvent((item: ViewMenuItem) => {
+    if (item.kind === 'builtin') chooseTranscriptView(item.view)
+    else if (item.kind === 'custom') chooseCustomView(item.view)
+    else openViewStudio(null, false)
+  })
+  // `n` and `e` in the `v` menu: a new view from the highlighted row, or edit it.
+  const handleViewMenuKey = useStableEvent((sequence: string): boolean => {
+    const item = viewMenuItems[transcriptViewMenuIndex]
+    // `c` clones the highlighted view into a new one (`n` too, its older name).
+    if (sequence === 'c' || sequence === 'n') { openViewStudio(item && item.kind !== 'new' ? item : null, false); return true }
+    if (sequence === 'e' && (item?.kind === 'custom' || (item?.kind === 'builtin' && VIEW_SPEC_BASES.includes(item.view)))) { openViewStudio(item, true); return true }
+    return false
+  })
+  useEffect(() => {
+    let cancelled = false
+    void readTuiCustomViews().then(({ views, activeId, builtins }) => {
+      if (cancelled) return
+      setCustomViews(views)
+      setCustomViewId(activeId)
+      setBuiltinViewEdits(builtins)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // A view's "on entering" panel settings, applied when it is chosen (and while
+  // the studio changes them, so the draft previews them too).
+  const activeViewKey = viewDraft ? `draft:${viewDraft.id}` : customViewId ?? transcriptView
+  useEffect(() => {
+    if (viewSpec.sidebarView) setSidebarView(viewSpec.sidebarView)
+    if (viewSpec.taskPanel) setTaskPanelOpen(viewSpec.taskPanel === 'open')
+    const panel = viewSpec.sidePanel
+    if (panel === 'closed') setSurfacePanelOpen(false)
+    else if (panel && (RIGHT_PANEL_SURFACE_KINDS as readonly string[]).includes(panel)) {
+      const kind = panel as RightPanelSurfaceKind
+      setSurfacePanelOpen(true)
+      setSurfacePanel((current) => {
+        const existing = current.surfaces.find((surface) => surface.kind === kind)
+        return existing ? { ...current, activeId: existing.id } : openSurfaceIn(current, kind)
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeViewKey, viewSpec.sidebarView, viewSpec.taskPanel, viewSpec.sidePanel])
 
   // Lightweight windows apply to whichever view is chosen, like the old pane did.
   const toggleLightweightWindows = useStableEvent(() => {
-    const next = !lightweightWindows
+    const next = !globalLightweightWindows
     setLightweightWindows(next)
     showToggleOutcome('Lightweight windows', next)
     if (!engineeringLayout.active) void writeTuiLightweightWindows(next).catch((err) => {
@@ -2570,9 +2739,13 @@ function OpenTuiWorkspace() {
   }, [])
 
   const filteredCommands = useMemo(() => {
-    const enabledCommands = disabledPlugins.size
-      ? COMMANDS.filter((cmd) => { const plugin = getPluginCommand(cmd.id)?.pluginId; return !plugin || !disabledPlugins.has(plugin) })
+    // One entry per custom view, so a view is reachable by name.
+    const withViews = customViews.length
+      ? [...COMMANDS, ...customViews.map((view): PaletteCommand => ({ id: `view:${view.id}`, label: `View: ${view.name}`, key: '', category: 'View' }))]
       : COMMANDS
+    const enabledCommands = disabledPlugins.size
+      ? withViews.filter((cmd) => { const plugin = getPluginCommand(cmd.id)?.pluginId; return !plugin || !disabledPlugins.has(plugin) })
+      : withViews
     const bridgeFiltered = canUseChannelBridge
       ? enabledCommands
       : enabledCommands.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
@@ -2588,7 +2761,7 @@ function OpenTuiWorkspace() {
       ))
     }
     return availableCommands.filter((cmd) => `${cmd.label} ${cmd.key} ${cmd.category}`.toLowerCase().includes(q))
-  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery, disabledPlugins])
+  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery, disabledPlugins, customViews])
 
   useEffect(() => runExitConfirmOpenEffect({
     currentThemeRef, themeMode,
@@ -3966,7 +4139,7 @@ function OpenTuiWorkspace() {
   // When switching to a filtered/grouped transcript mode the cursor may be on a
   // hidden technical card. Snap it to the last visible card so navigation stays coherent.
   useEffect(() => {
-    if (transcriptView !== 'continue' && !isStreamView && transcriptView !== 'agents') return
+    if (viewSpec.cardFilter !== 'prose' && !isStreamView && viewSpec.toolGrouping !== 'agents') return
     if (visibleTranscriptCards.length === 0) return
     const cursorKey = readTranscriptCursorKey()
     const isVisible = cursorKey
@@ -3976,7 +4149,7 @@ function OpenTuiWorkspace() {
       setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcriptView])
+  }, [viewSpec])
   const {
     footerSegments, composerStatusMessage, composerTargetMessage, composerIdleFooterHint,
     resizeSidebar, resizeTaskPanel, showNotice, toggleSelectedSessionSettled, openTurnCheckpoint,
@@ -5699,6 +5872,15 @@ function OpenTuiWorkspace() {
 
   const executeCommandPalette = useStableEvent((id: string) => {
     if (id === 'engineering-view') { closeCommandPalette(); chooseTranscriptView('engineering'); return }
+    if (id === 'view-studio-new') { closeCommandPalette(); openViewStudio(null, false); return }
+    if (id === 'view-studio-edit') { closeCommandPalette(); openViewStudio(null, true); return }
+    if (id === 'view-studio-clone') { closeCommandPalette(); openViewStudio(viewMenuItems.find((item) => item.key === viewMenuItemKey(transcriptView, customViewId)) ?? null, false); return }
+    if (id.startsWith('view:')) {
+      closeCommandPalette()
+      const view = customViews.find((candidate) => `view:${candidate.id}` === id)
+      if (view) chooseCustomView(view)
+      return
+    }
     return runExecuteCommandPalette({
     isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
@@ -5926,6 +6108,14 @@ function OpenTuiWorkspace() {
       key.preventDefault()
       key.stopPropagation()
       action()
+    }
+    // The View Studio owns every key while it is open.
+    if (viewDraft) {
+      handled(() => { viewStudioKeyHandlerRef.current?.({ name: key.name, sequence: key.sequence, ctrl: key.ctrl, meta: key.meta, shift: key.shift }) })
+      return
+    }
+    if (transcriptViewMenuOpen && !key.ctrl && !key.meta && (key.sequence === 'n' || key.sequence === 'c' || key.sequence === 'e')) {
+      if (handleViewMenuKey(key.sequence)) { handled(() => {}); return }
     }
     // The goal dialog owns every key while it is open: Tab moves between its
     // two fields, ^P pauses or resumes, ^D clears the goal, everything else
@@ -6232,8 +6422,8 @@ function OpenTuiWorkspace() {
     composerSlashHint, clickComposerStatus, composerDockStatsFor, composerDraftState,
     hoverComposerStatus, setComposerStatusHover, composerStatusHover, chatComposerHintWidth,
     visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted,
-    presentationFocusMode, isStreamView, contextUsage, selectedSession, contextUsageStatus,
-    followTail, isScrollbackView, pendingNewCount, isCopilotView, fleetStripVisible, error,
+    presentationFocusMode, isStreamView, viewIdleTicker: viewSpec.idleTicker, contextUsage, selectedSession, contextUsageStatus,
+    followTail, isScrollbackView, pendingNewCount, viewAppTabs, fleetStripVisible, error,
     showToolCalls, normalizedSearchQuery, providerAccent, showTabs, transcriptView, readerTitle,
     readerContextMeta, fleetStripSegments, setShowToolCalls, setError, searchQuery, searchMatches,
     searchMatchIndex, visibleTranscriptCards, turnRunningForComposer, chatTurnStatusRows,
@@ -6307,7 +6497,7 @@ function OpenTuiWorkspace() {
     visibleTranscriptCards, searchMatchIndex, registerSplitPaneHandle, theme, densityState,
     density, showToolCalls, syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls,
     agentToolCursorByGroupKey, selectAgentTool, thinkingMode, diffLayout, imessageStyle,
-    transcriptWidth, transcriptView, splitPaneLiveMessages, liveTranscriptBaselineRef,
+    transcriptWidth, transcriptView, viewSpec, splitPaneLiveMessages, liveTranscriptBaselineRef,
     splitPaneRunningKeys, badgeForWindow, watchedCoordinator, reportWindowActivity,
     composerSendState, composerLiveText, composerActivitySessionKey, focusSplitPane,
     splitPaneActions, stickyHeaders, lightweightWindows, noteTranscriptLinkPress,
@@ -6667,12 +6857,14 @@ function OpenTuiWorkspace() {
         toggleBorders={toggleBorders}
         toggleRoundedBorders={toggleRoundedBorders}
         transcriptViewMenuOpen={transcriptViewMenuOpen}
-        transcriptViewMenuOriginRef={transcriptViewMenuOriginRef}
+        viewMenuItems={viewMenuItems}
+        editedBuiltinViews={editedBuiltinViews}
+        viewMenuOriginKey={viewMenuOriginRef.current ? viewMenuItemKey(viewMenuOriginRef.current.view, viewMenuOriginRef.current.customId) : null}
         transcriptViewMenuIndex={transcriptViewMenuIndex}
         setTranscriptViewMenuIndex={setTranscriptViewMenuIndex}
-        setTranscriptView={setTranscriptView}
-        chooseTranscriptView={chooseTranscriptView}
-        lightweightWindows={lightweightWindows}
+        previewViewMenuItem={previewViewMenuItem}
+        chooseViewMenuItem={chooseViewMenuItem}
+        lightweightWindows={globalLightweightWindows}
         commandPaletteOpen={commandPaletteOpen}
         filteredCommands={filteredCommands}
         paletteDisplayRows={paletteDisplayRows}
@@ -6688,6 +6880,12 @@ function OpenTuiWorkspace() {
         bookmarksOverlay={bookmarksOverlay}
         bookmarksOverlayIndex={bookmarksOverlayIndex}
       />
+      {viewDraft ? (
+        <ViewStudioOverlay theme={theme} top={focusMode ? 1 : 4} width={Math.min(VIEW_STUDIO_WIDTH, Math.max(width - 4, 30))} height={Math.max(height - (focusMode ? 1 : 4) - 1, 16)}
+          draft={viewDraft} saved={viewDraft.builtin ? { ...viewDraft, overrides: builtinViewEdits[viewDraft.base] ?? {} } : customViews.find((view) => view.id === viewDraft.id) ?? null} globalDensity={globalDensity}
+          onChange={changeViewDraft} onSave={saveViewDraft} onDiscard={discardViewDraft} onDelete={deleteViewDraft}
+          keyHandlerRef={viewStudioKeyHandlerRef} />
+      ) : null}
 
       {/* Under the reader the panel takes these rows in flow. The main row above
           keeps to its height (it would otherwise grow into them, and the
@@ -6724,7 +6922,7 @@ function OpenTuiWorkspace() {
         theme={theme}
         width={width}
         composerLiveReasoning={composerLiveReasoning}
-        isStreamView={isStreamView}
+        hideLiveReasoning={!viewSpec.liveReasoning}
         composerProvider={composerProvider}
         tuiEffort={tuiEffort}
         composerThinkingTokens={composerThinkingTokens}

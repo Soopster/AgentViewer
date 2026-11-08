@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { nestedViewCardStyle, type ViewCardStyle } from '../../viewSpec'
 import { transcriptMeasure } from '../engineeringLayout'
 import { TranscriptImages } from '../TranscriptImages'
 import { toolOutputPreview } from './toolOutputPreview'
@@ -69,12 +70,8 @@ export type TranscriptCardProps = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   streamMode: boolean
-  /** STREAM restyled after opencode's session view: prompts are ruled bands, replies are plain prose. */
-  continuousMode: boolean
-  codexMode?: boolean
-  claudeCodeMode?: boolean
-  copilotMode?: boolean
-  openCodeMode?: boolean
+  /** How the view draws a stream card: markers, prompt band, thinking, tool rows (tui/viewSpec.ts). */
+  viewStyle: ViewCardStyle
   /**
    * The line under a turn's last reply — who answered and how long it took —
    * set only on that card and only in the continuous view. A card cannot know
@@ -231,11 +228,7 @@ export function TranscriptCardInner({
   imessageStyle,
   transcriptWidth,
   streamMode,
-  continuousMode,
-  codexMode = false,
-  claudeCodeMode = false,
-  copilotMode = false,
-  openCodeMode = false,
+  viewStyle,
   turnFooter,
   agentsMode,
   agentToolCursorKey,
@@ -665,13 +658,13 @@ export function TranscriptCardInner({
                 ) : null}
                 {streamDetailToolCards.map((toolCard, toolIndex) => {
                   let segments = streamToolSummarySegments(toolCard, theme)
-                  if (claudeCodeMode) segments = segments.map((segment, index) => ({
+                  if (viewStyle.toolRows === 'dim') segments = segments.map((segment, index) => ({
                     ...segment, text: index === 0 ? '  ' : segment.text, fg: theme.dim,
                   }))
-                  if (copilotMode) segments = segments.map((segment, index) => index === 1
+                  if (viewStyle.toolRows === 'shell-bold') segments = segments.map((segment, index) => index === 1
                     ? { ...segment, text: streamToolSummaryName(toolCard) === 'bash' ? 'Shell' : segment.text, fg: theme.text, attributes: TextAttributes.BOLD }
                     : index > 1 ? { ...segment, fg: theme.dim } : segment)
-                  if (openCodeMode && streamToolSummaryName(toolCard) === 'bash') segments = segments.map((segment, index) => index === 0
+                  if (viewStyle.toolRows === 'dollar-shell' && streamToolSummaryName(toolCard) === 'bash') segments = segments.map((segment, index) => index === 0
                     ? { ...segment, text: '$ ', fg: theme.amber }
                     : index === 1
                       ? { ...segment, text: 'Shell', fg: theme.text, attributes: TextAttributes.BOLD }
@@ -777,7 +770,7 @@ export function TranscriptCardInner({
                       imessageStyle={imessageStyle}
                       transcriptWidth="full"
                       streamMode={streamMode}
-                      continuousMode={continuousMode}
+                      viewStyle={nestedViewCardStyle(viewStyle)}
                       agentsMode={false}
                       agentToolCursorKey={null}
                       agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
@@ -849,7 +842,7 @@ export function TranscriptCardInner({
     // The transcript pane spends two columns on its border and two more on
     // the surrounding paddingX={1}; bodyIndent is budgeted separately below.
     const streamAvailableWidth = Math.max(rightPaneWidth - 4, 16)
-    const streamWidth = Math.max((copilotMode || openCodeMode || (transcriptWidth === 'readable' && (card.category !== 'conversation' || Boolean(card.codeBlocks?.length)))) ? streamAvailableWidth - densityState.bodyIndent : transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
+    const streamWidth = Math.max((viewStyle.textWidth === 'full' || (transcriptWidth === 'readable' && (card.category !== 'conversation' || Boolean(card.codeBlocks?.length)))) ? streamAvailableWidth - densityState.bodyIndent : transcriptMeasure(streamAvailableWidth - densityState.bodyIndent, transcriptWidth), 16)
     const streamLandmarkWidth = streamWidth + densityState.bodyIndent
     // Subagent cards prefix the marker with one ↪ per spawn-chain level
     // (`subagent:parent/child` origin), widening the marker gutter to match.
@@ -858,12 +851,17 @@ export function TranscriptCardInner({
     // already says whose message this is, and a glyph per line is the thing
     // that stops a transcript reading as prose. Subagent arrows stay: they say
     // something the rule cannot, and they are why this is not simply zero.
+    const continuousMode = viewStyle.messageLayout === 'continuous'
+    // The provider-styled prompts (codex, claude, copilot) drop the rule and the
+    // indent: the band alone marks a prompt.
+    const flushLeft = !viewStyle.promptRule
     const streamMarkerWidth = (continuousMode ? 0 : 2) + streamSubagentArrows.length
     // Every continuous message starts its text in the column a prompt's text
     // does (rule + two), so prompts and replies share one left edge the way
     // opencode's do; only the prompt draws the rule.
     const continuousInset = 3
-    const copilotTimeWidth = copilotMode && card.role === 'user' && card.timestampMs ? 8 : 0
+    const showsTime = Boolean(card.timestampMs) && (card.role === 'user' ? viewStyle.promptTimestamps : viewStyle.replyTimestamps)
+    const copilotTimeWidth = showsTime ? 8 : 0
     const streamTextWidth = continuousMode
       ? Math.max(streamLandmarkWidth - continuousInset - streamMarkerWidth, 12)
       : Math.max(streamWidth - streamMarkerWidth - copilotTimeWidth, 12)
@@ -872,16 +870,16 @@ export function TranscriptCardInner({
       : Math.max(streamWidth - 4, 10)
     // Turn separators are the rule the band replaces: a prompt on its own
     // panel already says where a turn starts.
-    const streamLandmarks = continuousMode || codexMode || claudeCodeMode || copilotMode || openCodeMode ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
+    const streamLandmarks = !viewStyle.turnRules ? landmarks.filter((landmark) => landmark.kind !== 'turn') : landmarks
     const firstLine = bodyLines[0]
-    const streamBaseMarker = copilotMode
-      ? card.role === 'user' ? '❯' : '●'
-      : claudeCodeMode
-      ? card.role === 'user' ? '❯' : '•'
-      : codexMode
-      ? card.role === 'user' ? '›' : '•'
-      : continuousMode
+    const streamBaseMarker = continuousMode
       ? ''
+      : viewStyle.markers === 'copilot'
+      ? card.role === 'user' ? '❯' : '●'
+      : viewStyle.markers === 'claude'
+      ? card.role === 'user' ? '❯' : '•'
+      : viewStyle.markers === 'codex'
+      ? card.role === 'user' ? '›' : '•'
       : hasCursor
         ? '❯'
         : firstLine
@@ -892,20 +890,20 @@ export function TranscriptCardInner({
       ? theme.text
       : isSearchHit
         ? theme.cyan
-        : copilotMode
+        : viewStyle.markerColor === 'cyan'
           ? card.role === 'user' ? theme.text : theme.cyan
           : card.role === 'user'
-            ? claudeCodeMode ? theme.text : accent
+            ? viewStyle.markerColor === 'plain' ? theme.text : accent
             : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
               ? transcriptColor(firstLine, theme)
               : theme.text
     const streamFirstLineColor = hasCursor && firstLine
       ? theme.text
       : firstLine
-        ? copilotMode && firstLine.tone === 'thinking' ? theme.muted : openCodeMode && firstLine.tone === 'thinking' ? theme.amber : transcriptColor(firstLine, theme)
+        ? thinkingColor(firstLine, viewStyle, theme) ?? transcriptColor(firstLine, theme)
         : theme.dim
     const remainingLines = bodyLines.slice(1)
-    const streamDiffPreview = card.category === 'diff' ? streamDiffPreviewData(card) : null
+    const streamDiffPreview = card.category === 'diff' && viewStyle.diffPreview ? streamDiffPreviewData(card) : null
     const streamDiffHeaderSegments = streamDiffPreview
       ? (() => {
           const segments = streamToolSummarySegments(card, theme)
@@ -941,7 +939,7 @@ export function TranscriptCardInner({
     // User prompts get a full-width tinted band plus an accent rail so they
     // remain obvious even in palettes whose base user background is subtle.
     const streamBg = card.role === 'user'
-      ? copilotMode ? mixHexColor(theme.text, theme.bg, 0.13) ?? theme.surface2 : claudeCodeMode ? mixHexColor(theme.text, theme.bg, 0.20) ?? theme.surface2 : codexMode ? theme.surface2 : continuousMode ? continuousUserBackground(theme) : streamUserBackground(theme)
+      ? viewStyle.promptBand === 'faint' ? mixHexColor(theme.text, theme.bg, 0.13) ?? theme.surface2 : viewStyle.promptBand === 'soft' ? mixHexColor(theme.text, theme.bg, 0.20) ?? theme.surface2 : viewStyle.promptBand === 'surface' ? theme.surface2 : viewStyle.promptBand === 'continuous' ? continuousUserBackground(theme) : streamUserBackground(theme)
       : hasCursor
         ? theme.surface2
         : undefined
@@ -998,10 +996,10 @@ export function TranscriptCardInner({
           // A prompt is a ruled band; everything else is unmarked prose indented
           // to the prompt's text column. The band's vertical padding is what
           // makes it read as a panel rather than a highlighted line.
-          border={card.role === 'user' && !codexMode && !claudeCodeMode && !copilotMode ? ['left'] : []}
+          border={card.role === 'user' && !flushLeft ? ['left'] : []}
           borderStyle={card.role === 'user' ? 'heavy' : undefined}
           borderColor={card.role === 'user' ? theme.cyan : undefined}
-          paddingLeft={codexMode || claudeCodeMode || copilotMode ? 0 : continuousMode
+          paddingLeft={flushLeft ? 0 : continuousMode
             ? card.role === 'user' ? continuousInset - 1 : continuousInset
             : card.role === 'user'
               ? Math.max(densityState.bodyIndent - 1, 0)
@@ -1049,7 +1047,7 @@ export function TranscriptCardInner({
               fg={streamFirstLineColor}
               width={streamTextWidth}
               wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
-              attributes={(copilotMode || openCodeMode) && firstLine.tone === 'thinking' ? TextAttributes.ITALIC : card.role === 'user' && !continuousMode && !codexMode && !claudeCodeMode && !copilotMode ? TextAttributes.BOLD : undefined}
+              attributes={viewStyle.thinking !== 'tone' && firstLine.tone === 'thinking' ? TextAttributes.ITALIC : card.role === 'user' && viewStyle.userBold ? TextAttributes.BOLD : undefined}
               selectable
               {...selectionColors}
             >
@@ -1059,7 +1057,7 @@ export function TranscriptCardInner({
                   ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`, linkCwd)
                   : firstLine.text}
             </text>
-            {copilotMode && card.role === 'user' && card.timestampMs ? (
+            {showsTime && card.timestampMs ? (
               <text fg={theme.dim} width={copilotTimeWidth} wrapMode="none" selectable {...selectionColors}>
                 {formatCopilotTimestamp(card.timestampMs)}
               </text>
@@ -1080,7 +1078,7 @@ export function TranscriptCardInner({
           const continuationMarker = `${continuousMode ? '  ' : streamContinuationMarker(line)}${' '.repeat(hang)}`
           const lineText = hang > 0 ? line.text.slice(hang) : line.text
           const lineWidth = streamChildTextWidth - hang
-          const lineColor = copilotMode && line.tone === 'thinking' ? theme.muted : openCodeMode && line.tone === 'thinking' ? theme.amber : transcriptColor(line, theme)
+          const lineColor = thinkingColor(line, viewStyle, theme) ?? transcriptColor(line, theme)
           return (
             <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
               <text fg={theme.dim} width={continuationMarker.length} wrapMode="none" selectable {...selectionColors}>
@@ -1089,7 +1087,7 @@ export function TranscriptCardInner({
               <text
                 {...selectionColors}
                 fg={lineColor}
-                attributes={(copilotMode || openCodeMode) && line.tone === 'thinking' ? TextAttributes.ITALIC : undefined}
+                attributes={viewStyle.thinking !== 'tone' && line.tone === 'thinking' ? TextAttributes.ITALIC : undefined}
                 width={lineWidth}
                 wrapMode={line.tone === 'tool' ? 'none' : 'word'}
                 selectable
@@ -1138,7 +1136,7 @@ export function TranscriptCardInner({
         )}
         </box>
         )}
-        {continuousMode && turnFooter && streamHasBody ? (
+        {turnFooter && streamHasBody ? (
           <box marginTop={1} paddingLeft={continuousInset}>
             <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
               {renderInlineTextSegments([
@@ -1647,6 +1645,12 @@ export function TranscriptCardInner({
       </box>
     </box>
   )
+}
+
+/** A thinking line in a view that recolours reasoning, else null (the line's own tone colour). */
+function thinkingColor(line: { tone: string }, style: ViewCardStyle, theme: TuiThemePalette): string | null {
+  if (line.tone !== 'thinking' || style.thinking === 'tone') return null
+  return style.thinking === 'muted-italic' ? theme.muted : theme.amber
 }
 
 export const TranscriptCard = React.memo(function TranscriptCardWithImages(props: TranscriptCardProps) {

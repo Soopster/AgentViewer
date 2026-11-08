@@ -177,10 +177,10 @@ try {
 
   // Tab in the view menu turns it off: the same view, drawn normally.
   await press('v')
-  await waitFor('the view menu', () => frame().includes('TRANSCRIPT VIEW') && frame().includes('● lightweight windows'))
+  await waitFor('the view menu', () => frame().includes('TRANSCRIPT VIEW') && frame().includes('● lightweight'))
   await act(async () => { setup.mockInput.pressTab() })
   await settle(200)
-  if (!frame().includes('○ lightweight windows')) fail('Tab did not turn lightweight windows off')
+  if (!frame().includes('○ lightweight')) fail('Tab did not turn lightweight windows off')
   if (stored.lightweight !== false) fail('turning it off was not stored')
   await act(async () => { setup.mockInput.pressEscape() })
   await settle(300)

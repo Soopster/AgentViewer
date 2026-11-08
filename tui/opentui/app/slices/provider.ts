@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import { type WindowPresentation } from '../../windowPresentation'
 import React, { useMemo, useRef } from 'react'
-import { useWorkspaceState } from '../../workspaceContext'
+import { useAppState, useWorkspaceState } from '../../workspaceContext'
+import { resolveViewSpec, viewCardStyle, type BuiltinViewOverrides, type CustomView } from '../../../viewSpec'
 import { coordinatorWindowBadges } from '../../coordinatorWorkspace'
 import { useCoordinatorWorkspace } from '../../useCoordinatorWorkspace'
 import { type TuiTranscriptWidth } from '../../../../lib/tui/service'
@@ -15,8 +16,8 @@ export function useProviderGroup() {
   const {
     provider, setProvider, providerInstanceId, setProviderInstanceId, providerInstanceIdRef,
     providerInstances, setProviderInstances, themeMode, setThemeMode, themeFollowsTerminal,
-    setThemeFollowsTerminal, showBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
-    themeFollowsTerminalRef, themeSlotsRef, density, setDensity, diffLayout, setDiffLayout,
+    setThemeFollowsTerminal, showBorders: globalShowBorders, setShowBorders, terminalPaletteEpoch, setTerminalPaletteEpoch,
+    themeFollowsTerminalRef, themeSlotsRef, density: globalDensity, setDensity, diffLayout: globalDiffLayout, setDiffLayout,
     transcriptDiffNotes, setTranscriptDiffNotes, transcriptDiffDraft, setTranscriptDiffDraft,
     pendingTranscriptDiffPrompt, setPendingTranscriptDiffPrompt, hoveredTranscriptDiffAnchor,
     setHoveredTranscriptDiffAnchor, transcriptDiffPlainCardKeys, setTranscriptDiffPlainCardKeys,
@@ -26,31 +27,50 @@ export function useProviderGroup() {
     transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
     agentToolCursorByGroupKey, setAgentToolCursorByGroupKey, transcriptView, setTranscriptView,
   } = useProviderThemeState()
-  // Chat reuses stream's chronological, borderless card grouping — the two views
-  // diverge only in composer placement (docked vs. inline-with-transcript).
-  const isCopilotView = transcriptView === 'copilot'
-  const isOpenCodeView = transcriptView === 'opencode'
-  const isChatLikeView = transcriptView === 'engineering' || transcriptView === 'stream' || transcriptView === 'chat' || transcriptView === 'transcript' || transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || transcriptView === 'copilot' || transcriptView === 'opencode'
+  // A view is a ViewSpec (tui/viewSpec.ts): a built-in preset, or a custom
+  // view (its base plus what the user changed). While a custom view or the
+  // studio's draft is shown, `transcriptView` holds its base, so code keyed on
+  // the built-in id (ENGINEERING's own frame, labels) keeps working.
+  const [customViews, setCustomViews] = useAppState<CustomView[]>('customViews', [])
+  const [customViewId, setCustomViewId] = useAppState<string | null>('customViewId', null)
+  const [viewDraft, setViewDraft] = useAppState<CustomView | null>('viewDraft', null)
+  // Edits to the built-ins themselves (`e` on a built-in in the v menu).
+  const [builtinViewEdits, setBuiltinViewEdits] = useAppState<BuiltinViewOverrides>('builtinViewEdits', {})
+  const activeCustomView = viewDraft ?? (customViewId ? customViews.find((view) => view.id === customViewId) ?? null : null)
+  const viewSpec = resolveViewSpec(transcriptView, activeCustomView, builtinViewEdits)
+  const viewStyle = viewCardStyle(viewSpec)
+  const viewAppTabs = viewSpec.appTabs
+  const viewContextSidebar = viewSpec.contextSidebar
+  // Borderless chronological flow (STREAM and everything built on it).
+  const isChatLikeView = viewSpec.flow === 'stream'
   // SCROLLBACK is STREAM read the way a terminal scrollback is: the same rows,
   // but no card cursor — keys and the wheel move the text by lines, and nothing
   // is ever highlighted as "selected". The cursor key survives as an invisible
   // position (kept on the top visible message) so jumps and search still have
   // somewhere to start from.
-  const isScrollbackView = transcriptView === 'scrollback' || transcriptView === 'codex' || transcriptView === 'claude-code' || isCopilotView || isOpenCodeView
-  // Both draw the pane as bare stream: no reader header, no thinking preview.
-  const isStreamView = transcriptView === 'engineering' || transcriptView === 'stream' || isScrollbackView
+  const isScrollbackView = viewSpec.cursor === 'none'
+  // No reader header (and the reader's chrome rows with it).
+  const isStreamView = !viewSpec.readerHeader
   // With no cursor there is no card for `e` to act on, so SCROLLBACK expands
   // or folds everything at once, as Claude Code's ⌃O does.
   const [scrollbackExpanded, setScrollbackExpanded] = useWorkspaceState('scrollbackExpanded', false)
-  const embeddedComposer = transcriptView === 'chat' || transcriptView === 'agents'
+  const embeddedComposer = viewSpec.composer === 'inline'
   // TRANSCRIPT is STREAM without the per-line markers, and with the role rule
   // on every message rather than only on user prompts. Modelled on opencode's
   // session view, where one left rule per message is the only chrome there is.
-  const isContinuousView = transcriptView === 'transcript' || isOpenCodeView
-  const [transcriptWidth, setTranscriptWidth] = useEngineeringAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
-  const [focusMode, setFocusMode] = useEngineeringAppState('focusMode', false)
-  const [stickyHeaders, setStickyHeaders] = useEngineeringAppState('stickyHeaders', false)
-  const [lightweightWindows, setLightweightWindows] = useEngineeringAppState('lightweightWindows', false)
+  const isContinuousView = viewSpec.messageLayout === 'continuous'
+  // A view may pin a global setting; the setters still change the global one.
+  const density = viewSpec.density ?? globalDensity
+  const diffLayout = viewSpec.diffLayout ?? globalDiffLayout
+  const [globalTranscriptWidth, setTranscriptWidth] = useEngineeringAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
+  const [globalFocusMode, setFocusMode] = useEngineeringAppState('focusMode', false)
+  const focusMode = viewSpec.focusMode ?? globalFocusMode
+  const showBorders = viewSpec.borders ?? globalShowBorders
+  const [globalStickyHeaders, setStickyHeaders] = useEngineeringAppState('stickyHeaders', false)
+  const [globalLightweightWindows, setLightweightWindows] = useEngineeringAppState('lightweightWindows', false)
+  const transcriptWidth = viewSpec.transcriptWidth ?? globalTranscriptWidth
+  const stickyHeaders = viewSpec.stickyHeaders ?? globalStickyHeaders
+  const lightweightWindows = viewSpec.lightweight ?? globalLightweightWindows
   // Prompt card pinned under the reader's top edge while its turn scrolls past.
   // Temporary presentation mode, deliberately separate from the persisted
   // focus preference: fullscreen can be entered and restored without changing
@@ -64,7 +84,7 @@ export function useProviderGroup() {
     setWindowPresentation(next && target ? { mode: 'fullscreen', target } : null)
   })
   const {
-    railVisible, setRailVisible, tabsEnabled, setTabsEnabled, tabOrientation, setTabOrientation,
+    railVisible: globalRailVisible, setRailVisible, tabsEnabled: globalTabsEnabled, setTabsEnabled, tabOrientation: globalTabOrientation, setTabOrientation,
     splitPaneCount, setSplitPaneCount, splitPinnedKeys, setSplitPinnedKeys, splitOrientation,
     setSplitOrientation, splitReaderShare, setSplitReaderShare, splitArrangement,
     setSplitArrangement, splitReaderLast, setSplitReaderLast, windowSplitTree, setWindowSplitTree,
@@ -73,6 +93,9 @@ export function useProviderGroup() {
     coordinatorWorkspace, setCoordinatorWorkspace, coordinatorWorkspaceRunId,
     setCoordinatorWorkspaceRunId, watchedRosterRef,
   } = useWindowPanesState()
+  const railVisible = viewSpec.sessionRail ?? globalRailVisible
+  const tabsEnabled = viewSpec.tabs ?? globalTabsEnabled
+  const tabOrientation = viewSpec.tabOrientation ?? globalTabOrientation
   const watchedCoordinator = useCoordinatorWorkspace(coordinatorWorkspace, coordinatorWorkspaceRunId)
   const coordinatorBadges = useMemo(() => watchedCoordinator ? coordinatorWindowBadges(watchedCoordinator) : new Map<string, string>(), [watchedCoordinator])
   const {
@@ -100,7 +123,10 @@ export function useProviderGroup() {
     transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey,
     transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
     agentToolCursorByGroupKey, setAgentToolCursorByGroupKey, transcriptView, setTranscriptView,
-    isCopilotView, isOpenCodeView, isChatLikeView, isScrollbackView, isStreamView,
+    viewAppTabs, viewContextSidebar, isChatLikeView, isScrollbackView, isStreamView,
+    customViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
+    builtinViewEdits, setBuiltinViewEdits,
+    viewSpec, viewStyle, globalLightweightWindows, globalDensity,
     scrollbackExpanded, setScrollbackExpanded, embeddedComposer, transcriptWidth,
     setTranscriptWidth, focusMode, setFocusMode, stickyHeaders, setStickyHeaders,
     lightweightWindows, setLightweightWindows, windowPresentation, setWindowPresentation,

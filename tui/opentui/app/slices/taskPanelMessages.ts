@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewSpec } from '../../../viewSpec'
 import type { RefObject } from 'react'
 import React, { useMemo, useState } from 'react'
 import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../../../format'
@@ -22,14 +23,14 @@ export type UseTaskPanelMessagesGroupContext = {
   selectedSessionTarget: Session | null
   liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
   transcriptView: TuiTranscriptView
+  viewSpec: ViewSpec
   isChatLikeView: boolean
 }
 
 export function useTaskPanelMessagesGroup(ctx: UseTaskPanelMessagesGroupContext) {
   const {
     sessionDetail, liveTranscriptMessagesForSession, transcriptSession, density, showToolCalls,
-    bridgeTranscriptEntries, selectedSessionTarget, liveTranscriptBaselineRef, transcriptView,
-    isChatLikeView,
+    bridgeTranscriptEntries, selectedSessionTarget, liveTranscriptBaselineRef, viewSpec,
   } = ctx
 
   const taskPanelMessages = useMemo(() => {
@@ -127,10 +128,10 @@ export function useTaskPanelMessagesGroup(ctx: UseTaskPanelMessagesGroupContext)
 
   // Continue is prose-only. Stream mirrors native agent CLIs: conversation plus
   // compact operational rows, while low-level system bookkeeping stays hidden.
-  const groupedToolView = transcriptView === 'agents' || isChatLikeView
+  const groupedToolView = viewSpec.toolGrouping !== 'none'
   const visibleTranscriptCards = useMemo(
-    () => visibleCardsForTranscriptView(transcriptCards, transcriptView),
-    [transcriptCards, transcriptView],
+    () => visibleCardsForTranscriptView(transcriptCards, viewSpec),
+    [transcriptCards, viewSpec],
   )
 
   return {

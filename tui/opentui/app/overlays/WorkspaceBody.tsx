@@ -37,7 +37,7 @@ import { type WindowSurfaceId, type SplitPaneHandle } from '../SplitTranscriptPa
 import { ThemeMenuOverlay } from './ThemeMenuOverlay'
 import { CommandPaletteOverlay } from './CommandPaletteOverlay'
 import { ChordHelpOverlay } from './ChordHelpOverlay'
-import { TranscriptViewMenuOverlay } from './TranscriptViewMenuOverlay'
+import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
 import { BookmarksOverlay } from './BookmarksOverlay'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
 import { SessionRail } from './SessionRail'
@@ -209,11 +209,13 @@ type WorkspaceBodyProps = {
   toggleBorders: () => void
   toggleRoundedBorders: () => void
   transcriptViewMenuOpen: boolean
-  transcriptViewMenuOriginRef: React.RefObject<TuiTranscriptView | null>
+  viewMenuItems: ViewMenuItem[]
+  editedBuiltinViews: ReadonlySet<string>
+  viewMenuOriginKey: string | null
   transcriptViewMenuIndex: number
   setTranscriptViewMenuIndex: React.Dispatch<React.SetStateAction<number>>
-  setTranscriptView: React.Dispatch<React.SetStateAction<TuiTranscriptView>>
-  chooseTranscriptView: (nextView: TuiTranscriptView) => void
+  previewViewMenuItem: (item: ViewMenuItem) => void
+  chooseViewMenuItem: (item: ViewMenuItem) => void
   lightweightWindows: boolean
   commandPaletteOpen: boolean
   filteredCommands: PaletteCommand[]
@@ -265,8 +267,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     applyModelPickerPermission, modelPickerFocusedLabel, modelPickerFocusedOption,
     modelPickerFocusedDescription, themeMenuOpen, themeMenuOriginRef, themeMenuGroup,
     themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode,
-    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, transcriptViewMenuOriginRef,
-    transcriptViewMenuIndex, setTranscriptViewMenuIndex, setTranscriptView, chooseTranscriptView,
+    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, editedBuiltinViews, viewMenuOriginKey,
+    transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
     commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery,
     chordHelp, composerDockHeight, composerStatusBlockHeight, toasts, bookmarksOverlayOpen,
@@ -526,7 +528,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} showBorders={showBorders} toggleBorders={toggleBorders} toggleRoundedBorders={toggleRoundedBorders} />
 
-        <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} transcriptViewMenuOriginRef={transcriptViewMenuOriginRef} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} setTranscriptView={setTranscriptView} chooseTranscriptView={chooseTranscriptView} lightweightWindows={lightweightWindows} />
+        <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} height={height} viewMenuItems={viewMenuItems} editedBuiltinViews={editedBuiltinViews} viewMenuOriginKey={viewMenuOriginKey} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} previewViewMenuItem={previewViewMenuItem} chooseViewMenuItem={chooseViewMenuItem} lightweightWindows={lightweightWindows} />
 
         <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} />
 

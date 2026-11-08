@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { BUILTIN_VIEW_SPECS, viewCardStyle } from '../viewSpec'
 import React from 'react'
 import assert from 'node:assert/strict'
 import { testRender, act } from './testRender'
@@ -26,7 +27,7 @@ const props: TranscriptCardProps = {
   card, display: { landmarks: [], bodyLines: lines, diffView: null, codeBlockLineCounts: [], headerMeta: '', accent: DARK_THEME.cyan, isThinkingCard: false, categoryEmoji: '', isInsight: false, markdownFallbackLines: null },
   theme: DARK_THEME, densityState: densityConfig('balanced'), syntaxStyle: null, rightPaneWidth: 100,
   isExpanded: true, hasCursor: false, isSelected: false, isSearchHit: false, isActiveMatch: false, bookmarked: false,
-  onSelectCard: noop, thinkingMode: false, diffLayout: 'stack', imessageStyle: false, transcriptWidth: 'readable', streamMode: true, continuousMode: false, agentsMode: false,
+  onSelectCard: noop, thinkingMode: false, diffLayout: 'stack', imessageStyle: false, transcriptWidth: 'readable', streamMode: true, viewStyle: viewCardStyle(BUILTIN_VIEW_SPECS.stream), agentsMode: false,
   agentToolCursorKey: null, agentToolExpandedKeys: new Set(), agentToolCollapsedKeys: new Set(), onSelectAgentTool: noop,
   noteNamespace: 'test', diffNotes: new Map(), diffDraft: null, hoveredDiffAnchor: null, activateDiffHover: noop, openDiffNote: noop, sendDiffNoteToComposer: noop,
   diffPlain: false, diffShowLineNumbers: true, diffShowHunkHeaders: true, diffRowCursor: 0, diffSelectionAnchor: null,

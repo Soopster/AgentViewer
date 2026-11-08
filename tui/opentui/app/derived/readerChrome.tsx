@@ -28,7 +28,7 @@ import { type WindowSurfaceId } from '../SplitTranscriptPane'
 
 export type ReaderHeaderChromeContext = {
   presentationFocusMode: boolean
-  isCopilotView: boolean
+  viewAppTabs: boolean
   isStreamView: boolean
   contextRowShown: boolean
   fleetStripVisible: boolean
@@ -58,19 +58,19 @@ export type ReaderHeaderChromeContext = {
 
 export function runReaderHeaderChrome(ctx: ReaderHeaderChromeContext) {
   const {
-    presentationFocusMode, isCopilotView, isStreamView, contextRowShown, fleetStripVisible, error,
+    presentationFocusMode, viewAppTabs, isStreamView, contextRowShown, fleetStripVisible, error,
     showToolCalls, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
     transcriptView, followTail, readerTitle, readerContextMeta, contextUsage, selectedSession,
     contextUsageStatus, fleetStripSegments, setShowToolCalls, setError, isScrollbackView,
     pendingNewCount, searchQuery, searchMatches, searchMatchIndex,
   } = ctx
 return {
-  rows: (!presentationFocusMode && isCopilotView ? 1 : 0) + (!presentationFocusMode && !isStreamView ? 2 : 0)
+  rows: (!presentationFocusMode && viewAppTabs ? 1 : 0) + (!presentationFocusMode && !isStreamView ? 2 : 0)
     + (contextRowShown ? 1 : 0) + (fleetStripVisible ? 1 : 0) + (error ? 2 : 0) + (!showToolCalls ? 1 : 0)
     + (tailBannerShown ? 2 : 0) + (normalizedSearchQuery ? 2 : 0),
   render: (chromeWidth: number) => (
     <>
-    {!presentationFocusMode && isCopilotView ? (
+    {!presentationFocusMode && viewAppTabs ? (
       <box height={1} paddingX={1} flexDirection="row" alignItems="center">
         {['Current', 'Sessions', 'Issues', 'Pull requests', 'Gists'].map((tab) => {
           const active = tab === 'Current'
@@ -311,7 +311,7 @@ export type ReaderFooterChromeContext = {
   visibleTranscriptCards: TuiTranscriptCard[]
   turnRunningForComposer: boolean
   embeddedComposer: boolean
-  isStreamView: boolean
+  idleTickerOff: boolean
   selectedSessionKey: string | null
 }
 
@@ -320,7 +320,7 @@ export function runReaderFooterChrome(ctx: ReaderFooterChromeContext) {
     chatTurnStatusRows, idleTickerShown, embeddedComposerChrome, densityState, theme,
     visibleComposerSending, composerSendStartedAt, composerWaitingStatusSeed,
     composerWaitingSuffix, composerWaitingOnUser, visibleAwaitingPersistedTurn, followTail,
-    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, isStreamView,
+    visibleTranscriptCards, turnRunningForComposer, embeddedComposer, idleTickerOff,
     selectedSessionKey,
   } = ctx
 return {
@@ -374,7 +374,7 @@ return {
         Stream and Scrollback omit it too: they are the bare transcript,
         and two rows saying nothing is happening are two rows of it. */}
     {followTail && visibleTranscriptCards.length > 0
-      && !turnRunningForComposer && !embeddedComposer && !isStreamView ? (
+      && !turnRunningForComposer && !idleTickerOff ? (
       <box paddingX={2} paddingBottom={1}>
         <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
       </box>

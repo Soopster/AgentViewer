@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewSpec } from '../../../viewSpec'
 import type { WindowLayout } from '../../windowLayout'
 import type { SplitRect } from '../../windowSplitTree'
 import type { SplitDivider } from '../../windowSplitTree'
@@ -72,6 +73,7 @@ export type UseRenderSurfaceLayerGroupContext = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   transcriptView: TuiTranscriptView
+  viewSpec: ViewSpec
   splitPaneLiveMessages: Map<string, ThreadedMessage[]>
   liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
   splitPaneRunningKeys: Set<string>
@@ -123,7 +125,7 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     visibleTranscriptCards, searchMatchIndex, registerSplitPaneHandle, theme, densityState,
     density, showToolCalls, syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls,
     agentToolCursorByGroupKey, selectAgentTool, thinkingMode, diffLayout, imessageStyle,
-    transcriptWidth, transcriptView, splitPaneLiveMessages, liveTranscriptBaselineRef,
+    transcriptWidth, transcriptView, viewSpec, splitPaneLiveMessages, liveTranscriptBaselineRef,
     splitPaneRunningKeys, badgeForWindow, watchedCoordinator, reportWindowActivity,
     composerSendState, composerLiveText, composerActivitySessionKey, focusSplitPane,
     splitPaneActions, stickyHeaders, lightweightWindows, noteTranscriptLinkPress,
@@ -149,7 +151,7 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     setFollowTail, fullscreenMode, deferredSearchQuery, searchMatches, visibleTranscriptCards,
     searchMatchIndex, registerSplitPaneHandle, theme, densityState, density, showToolCalls,
     syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls, agentToolCursorByGroupKey,
-    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView,
+    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView, viewSpec,
     splitPaneLiveMessages, liveTranscriptBaselineRef, splitPaneRunningKeys, badgeForWindow,
     watchedCoordinator, reportWindowActivity, composerSendState, composerLiveText,
     composerActivitySessionKey, focusSplitPane, splitPaneActions, stickyHeaders,

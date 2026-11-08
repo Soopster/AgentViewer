@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewSpec } from '../../../viewSpec'
 import type { RefObject } from 'react'
 import type { SyntaxStyle } from '@opentui/core'
 import type { TuiThemePalette } from '../../../theme'
@@ -276,6 +277,7 @@ export type RenderSplitPaneContext = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   transcriptView: TuiTranscriptView
+  viewSpec: ViewSpec
   splitPaneLiveMessages: Map<string, ThreadedMessage[]>
   liveTranscriptBaselineRef: React.RefObject<Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string; startedAt: number; }>>
   splitPaneRunningKeys: Set<string>
@@ -305,7 +307,7 @@ export function runRenderSplitPane(ctx: RenderSplitPaneContext, splitSession: Se
     setFollowTail, fullscreenMode, deferredSearchQuery, searchMatches, visibleTranscriptCards,
     searchMatchIndex, registerSplitPaneHandle, theme, densityState, density, showToolCalls,
     syntaxStyle, shouldEnableSyntaxHighlighting, transcriptDiffControls, agentToolCursorByGroupKey,
-    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView,
+    selectAgentTool, thinkingMode, diffLayout, imessageStyle, transcriptWidth, transcriptView, viewSpec,
     splitPaneLiveMessages, liveTranscriptBaselineRef, splitPaneRunningKeys, badgeForWindow,
     watchedCoordinator, reportWindowActivity, composerSendState, composerLiveText,
     composerActivitySessionKey, focusSplitPane, splitPaneActions, stickyHeaders,
@@ -355,6 +357,7 @@ return (
       imessageStyle={imessageStyle}
       transcriptWidth={transcriptWidth}
       transcriptView={transcriptView}
+      viewSpec={viewSpec}
       width={size.width}
       height={size.height}
       liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}

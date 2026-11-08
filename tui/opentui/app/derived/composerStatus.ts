@@ -125,7 +125,7 @@ export type ComposerStatusBlockHeightContext = {
   visibleAwaitingPersistedTurn: boolean
   liveStatus: 'requesting' | 'compacting' | 'retrying' | null
   composerLiveReasoning: string
-  isStreamView: boolean
+  hideLiveReasoning: boolean
   reattachedRunning: boolean
   composerTargetSession: Session | null
   sessionDetail: TuiSessionDetail | null
@@ -141,7 +141,7 @@ export function runComposerStatusBlockHeight(ctx: ComposerStatusBlockHeightConte
     visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion, composerSendState,
     hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, isChatLikeView,
     liveAssistantTextCardVisible, visibleAwaitingPersistedTurn, liveStatus, composerLiveReasoning,
-    isStreamView, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
+    hideLiveReasoning, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
     questionPickerPlan, width,
   } = ctx
 return (() => {
@@ -163,7 +163,7 @@ return (() => {
   }
   if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
   if ((liveStatus === 'retrying' || liveStatus === 'compacting') && visibleComposerSending) rows += 2
-  if (visibleComposerSending && composerLiveReasoning.trim() && !isStreamView) rows += composerTargetSession?.provider === 'codex' ? 3 : LIVE_PREVIEW_HEIGHT
+  if (visibleComposerSending && composerLiveReasoning.trim() && !hideLiveReasoning) rows += composerTargetSession?.provider === 'codex' ? 3 : LIVE_PREVIEW_HEIGHT
   // Reattached-turn banner (rendered when a turn runs without an owned stream).
   if (!visibleComposerSending && reattachedRunning && !visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2
   // Codex external-writer banner — another Codex client owns the rollout,

@@ -47,7 +47,7 @@ export type UseComposerKeysTargetTurnGroupContext = {
   liveAssistantTextCardVisible: boolean
   liveStatus: 'requesting' | 'compacting' | 'retrying' | null
   composerLiveReasoning: string
-  isStreamView: boolean
+  hideLiveReasoning: boolean
   composerTargetSession: Session | null
   sessionDetail: TuiSessionDetail | null
   width: number
@@ -90,7 +90,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     presentationHidesComposer, composerTurnStatusInBorder, composerActivityVisible,
     hasSubagentTail, visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion,
     composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
-    composerLiveReasoning, isStreamView, composerTargetSession, sessionDetail, width,
+    composerLiveReasoning, hideLiveReasoning, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
     surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
     taskPanelExpanded, taskPanelWidth, surfacePanelWidth, openTabSessions, popoverTabs,
@@ -168,7 +168,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion, composerSendState,
     hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, isChatLikeView,
     liveAssistantTextCardVisible, visibleAwaitingPersistedTurn, liveStatus, composerLiveReasoning,
-    isStreamView, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
+    hideLiveReasoning, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
     questionPickerPlan, width,
   })
   // Chat and Agents render the composer bar as the reader box's own trailing child

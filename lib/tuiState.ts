@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { PROCEDURAL_THEME_NAMES } from '../tui/theme'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
+import { normalizeBuiltinViewOverrides, normalizeCustomViews, type BuiltinViewOverrides, type CustomView } from '../tui/viewSpec'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
 const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
@@ -184,6 +185,9 @@ type TuiState = {
   density?: unknown
   diffLayout?: unknown
   transcriptView?: unknown
+  customViews?: unknown
+  customViewId?: unknown
+  builtinViewEdits?: unknown
   transcriptWidth?: unknown
   tabOrientation?: unknown
   tabsEnabled?: unknown
@@ -447,6 +451,28 @@ export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptVie
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await writeTuiState({ transcriptView })
+}
+
+export type TuiCustomViewState = { views: CustomView[]; activeId: string | null; builtins: BuiltinViewOverrides }
+
+/**
+ * Views the user composed in the View Studio, and which one is shown. Stored
+ * views are validated field by field (an unknown field or value is dropped),
+ * and an active id with no view behind it reads as none.
+ */
+export async function getConfiguredTuiCustomViews(): Promise<TuiCustomViewState> {
+  const parsed = await readTuiState()
+  const views = normalizeCustomViews(parsed.customViews)
+  const activeId = typeof parsed.customViewId === 'string' && views.some((view) => view.id === parsed.customViewId) ? parsed.customViewId : null
+  return { views, activeId, builtins: normalizeBuiltinViewOverrides(parsed.builtinViewEdits) }
+}
+
+export async function setConfiguredTuiCustomViews(state: Partial<TuiCustomViewState>): Promise<void> {
+  await writeTuiState({
+    ...(state.views ? { customViews: state.views } : {}),
+    ...(state.activeId !== undefined ? { customViewId: state.activeId } : {}),
+    ...(state.builtins ? { builtinViewEdits: state.builtins } : {}),
+  })
 }
 
 export async function getConfiguredTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {

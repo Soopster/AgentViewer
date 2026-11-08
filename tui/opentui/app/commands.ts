@@ -41,6 +41,9 @@ export const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
 export const FLEET_PAGE_SIZE = 9
 export const COMMANDS: PaletteCommand[] = [
   { id: 'engineering-view', label: 'Engineering view', key: '', category: 'View' },
+  { id: 'view-studio-new', label: 'View: New custom view…', key: 'v n', category: 'View' },
+  { id: 'view-studio-edit', label: 'View: Customise the current view…', key: 'v e', category: 'View' },
+  { id: 'view-studio-clone', label: 'View: Clone the current view into a new one…', key: 'v c', category: 'View' },
   // Navigation
   { id: 'move-prev', label: 'Move to previous item', key: 'k / ↑', category: 'Navigation' },
   { id: 'move-next', label: 'Move to next item', key: 'j / ↓', category: 'Navigation' },
