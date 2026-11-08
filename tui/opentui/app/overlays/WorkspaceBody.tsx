@@ -14,8 +14,10 @@ import type { PaletteCommand } from '../types'
 import type { Toast } from '../../toastStore'
 import { VerticalTabs } from '../../VerticalTabs'
 import { PinnedTabRow } from '../../PinnedTabRow'
-import { tabStripWidth } from '../../tabStrip'
-import { SessionTabConnection } from '../../SessionTabConnection'
+import { WindowButton } from '../../WindowButton'
+import { TAB_STRIP_BUTTON_WIDTH, tabStripTabsWidth, tabStripWidth } from '../../tabStrip'
+import { SessionTabConnection, noteTabStripHover } from '../../SessionTabConnection'
+import { mixHexColor } from '../transcriptStyle'
 import React from 'react'
 import { surfaceTitle, type WindowSurfaceKind } from '../../windowSurfaceNames'
 import { WorkspaceLauncher } from '../../SpacesNavigation'
@@ -46,6 +48,8 @@ type WorkspaceBodyProps = {
   onSidebarFocus: () => void
   sidebarControls?: ReactNode
   onNewSession: () => void
+  /** The strip's ▾ (⌃K m): the tab list. Omitted when the Tab manager plugin is off. */
+  onOpenTabManager?: () => void
   isolatedView?: boolean
   surfacePanelAtBottom: boolean
   mainContentHeight: number
@@ -90,7 +94,7 @@ type WorkspaceBodyProps = {
   setError: React.Dispatch<React.SetStateAction<string | null>>
   splitPaneActions: { close: (paneIndex: number) => void; promote: (session: Session) => void; openLayout: () => void; fullscreen: () => void; sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) => void; }
   openPopoverTabMenu: (id: WindowSurfaceId, point: { x: number; y: number; }) => void
-  sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }
+  sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; pressStripTab: (session: Session, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }
   selectStripIndex: (index: number) => void
   readerAreaWidth: number
   showHorizontalTabs: boolean
@@ -329,16 +333,22 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
               height={TAB_BAR_HEIGHT}
               paddingTop={1}
               flexShrink={0}
-              // Flush left: the first tab's side meets the window frame's corner.
+              flexDirection="row"
               paddingRight={1}
               overflow="hidden"
               backgroundColor={theme.bg}
             >
+              {/* Chrome's strip: the tab list before the tabs, a new tab after the last one. */}
+              <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
+                {props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={theme.bg} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
+              </box>
               <tab-select
                 id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
-                width={tabStripWidth(readerAreaWidth)}
+                // As wide as its tabs, so the + follows the last one.
+                width={Math.max(1, Math.min(tabStripTabsWidth(readerAreaWidth), tabWidth * Math.max(1, tabOptions.length)))}
+                flexShrink={0}
                 height={1}
                 tabWidth={tabWidth}
                 backgroundColor={theme.bg}
@@ -382,15 +392,20 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                     closeSessionTab(tab)
                     return
                   }
-                  if (tab) sessionDragHandlers.press(tab, null, event, () => selectTabSession(tab))
+                  if (tab) sessionDragHandlers.pressStripTab(tab, event, () => selectTabSession(tab))
                 }}
-                onMouseDrag={(event) => sessionDragHandlers.move(event)}
+                onMouseDrag={(event) => { noteTabStripHover(tabSelectRef.current, null); sessionDragHandlers.move(event) }}
+                onMouseMove={(event) => noteTabStripHover(tabSelectRef.current, event.x)}
+                onMouseOut={() => noteTabStripHover(tabSelectRef.current, null)}
                 onMouseUp={(event) => {
                   if (event.button !== 0) return
                   sessionDragHandlers.release(event)
                 }}
                 onChange={(index: number) => selectStripIndex(index + pinnedRowCount)}
               />
+              <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
+                <WindowButton id="tab-strip-new" label=" + " theme={theme} background={theme.bg} foreground={theme.muted} onPress={() => props.onNewSession()} />
+              </box>
             </box>
           ) : showPreviewBar && selectedSession ? (
             <box paddingX={1} backgroundColor={theme.surface2}>
@@ -473,7 +488,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
             ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab && showBorders}
             foreground={theme.cyan} background={theme.surface}
-            inactiveForeground={theme.border} inactiveBackground={theme.bg} />
+            inactiveForeground={theme.border} inactiveBackground={theme.bg}
+            hoverForeground={theme.text} hoverBackground={mixHexColor(theme.cyan, theme.bg, 0.14) ?? theme.surface2} />
 
           </box>
         </box>

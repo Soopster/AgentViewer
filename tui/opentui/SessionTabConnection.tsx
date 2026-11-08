@@ -20,6 +20,33 @@ export function tabConnectionGeometry(tabs: Rect, frame: Rect, index: number, of
   return { left, right, flushLeft: left === frame.x, topY: tabs.y - 1, tabY: tabs.y, borderY: frame.y, borderStart: frame.x + 1, borderEnd }
 }
 
+// The tab under the pointer, per strip. Hover repaints the strip alone (the
+// painter below reads it): routing it through React state would re-render the
+// root, mounted transcript included, on every mouse move across the tabs.
+const hoveredTabs = new WeakMap<TabSelectRenderable, number>()
+
+/** The tab index a strip column falls in, or null outside every tab. */
+export function tabIndexAt(tabs: TabSelectRenderable, x: number): number | null {
+  const column = x - tabs.x
+  if (column < 0 || column >= tabs.width) return null
+  const index = ((tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0) + Math.floor(column / tabs.getTabWidth())
+  return index < tabs.options.length ? index : null
+}
+
+/** Record the pointer over a strip (null when it leaves); repaints only on a change of tab. */
+export function noteTabStripHover(tabs: TabSelectRenderable | null, x: number | null) {
+  if (!tabs) return
+  const index = x === null ? null : tabIndexAt(tabs, x)
+  if ((hoveredTabs.get(tabs) ?? null) === index) return
+  if (index === null) hoveredTabs.delete(tabs)
+  else hoveredTabs.set(tabs, index)
+  tabs.requestRender()
+}
+
+export function hoveredTabIndex(tabs: TabSelectRenderable): number | null {
+  return hoveredTabs.get(tabs) ?? null
+}
+
 /** Native chrome only: no layout changes, timers, hit targets, or root updates.
  * Paint the cap, label sides and pane join using current native coordinates, so resize and tab
  * scrolling cannot leave a connector on yesterday's window. */
@@ -32,13 +59,17 @@ export function SessionTabConnection(props: {
   background: string
   inactiveForeground: string
   inactiveBackground: string
+  /** An inactive tab under the pointer: Chrome draws it as a tinted pill. */
+  hoverForeground: string
+  hoverBackground: string
 }) {
   const renderer = useRenderer()
   const latest = useRef(props)
   const colors = useMemo(() => ({
     foreground: parseColor(props.foreground), background: parseColor(props.background),
     inactiveForeground: parseColor(props.inactiveForeground), inactiveBackground: parseColor(props.inactiveBackground),
-  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground])
+    hoverForeground: parseColor(props.hoverForeground), hoverBackground: parseColor(props.hoverBackground),
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -56,30 +87,30 @@ export function SessionTabConnection(props: {
       // A covering overlay must not acquire a hole in its own border/content.
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
-      const { foreground, background, inactiveForeground, inactiveBackground } = palette.current
-      // Inactive tabs keep their own muted cap and sides, standing on the
-      // window border (┴, or ├ at the frame's corner). Only the selected tab
-      // opens into it; empty strip space stays bare.
+      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground } = palette.current
+      // Chrome's strip: inactive tabs have no outline, only a muted separator
+      // between two of them (none beside the selected tab, none after the
+      // last). Only the selected tab is raised, and it opens into the window.
       const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
-      for (let index = offset; index < tabs.options.length; index++) {
-        if ((index - offset + 1) * tabs.getTabWidth() > tabs.width) break
-        if (index === tabs.getSelectedIndex()) continue
-        const inactive = tabConnectionGeometry(tabs, frame, index, offset, tabs.getTabWidth())
-        if (!inactive) continue
-        buffer.drawText('╭' + '─'.repeat(inactive.right - inactive.left - 1) + '╮', inactive.left, inactive.topY, inactiveForeground, inactiveBackground)
-        buffer.drawText('│', inactive.left, inactive.tabY, inactiveForeground, inactiveBackground)
-        buffer.drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
-      }
+      const selected = tabs.getSelectedIndex()
       buffer.drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
-      for (let index = offset; index < tabs.options.length; index++) {
-        if ((index - offset + 1) * tabs.getTabWidth() > tabs.width) break
-        if (index === tabs.getSelectedIndex()) continue
+      const hovered = hoveredTabIndex(tabs)
+      const lifted = hovered !== null && hovered !== selected ? hovered : null
+      for (let index = offset; index < tabs.options.length - 1; index++) {
+        if ((index - offset + 2) * tabs.getTabWidth() > tabs.width) break
+        // Like Chrome, a separator also gives way beside the hovered tab.
+        if (index === selected || index + 1 === selected || index === lifted || index + 1 === lifted) continue
         const inactive = tabConnectionGeometry(tabs, frame, index, offset, tabs.getTabWidth())
-        if (!inactive) continue
-        // In the tab's own colour: a cell has one foreground, and the side
-        // meeting the line reads as the tab's, not the window's.
-        buffer.drawText(inactive.flushLeft ? '├' : '┴', inactive.left, inactive.borderY, inactiveForeground, background)
-        buffer.drawText('┴', inactive.right, inactive.borderY, inactiveForeground, background)
+        if (inactive) buffer.drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
+      }
+      const hover = lifted === null ? null : tabConnectionGeometry(tabs, frame, lifted, offset, tabs.getTabWidth())
+      if (hover && lifted !== null && hover.right - hover.left >= 2) {
+        // Chrome's hover is a pill on the label row, inset from the tab's edges:
+        // half blocks at each end round it, the cells between carry the label.
+        buffer.drawText('▐', hover.left, hover.tabY, hoverBackground, inactiveBackground)
+        buffer.drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+        buffer.drawText(tabs.options[lifted]?.name ?? '', hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+        buffer.drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
       }
       buffer.drawText('╭' + '─'.repeat(connection.right - connection.left - 1) + '╮', connection.left, connection.topY, foreground, background)
       buffer.drawText('│', connection.left, connection.tabY, foreground, background)

@@ -21,7 +21,7 @@ export function useWindowGestureState() {
   // `tab` is set when a tab is dragged out of a frame's tab strip; `title` when
   // the pointer is over a window's title row, where a drop adds a tab.
   const [sessionDrag, setSessionDrag] = useState<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; zone: WindowDropZone | null; pane: number | null; insert: WindowDropZone | null; title?: boolean; x: number; y: number } | null>(null)
-  const sessionPressRef = useRef<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void } | null>(null)
+  const sessionPressRef = useRef<{ session: Session | null; surface?: WindowSurfaceId; tab?: string; reader?: boolean; fromPane: number | null; x: number; y: number; dragging: boolean; onClick?: () => void; strip?: boolean; reordered?: boolean } | null>(null)
   // A press is under way: a full-screen layer takes the rest of the gesture, so
   // a drag that leaves a one-row tab or rail row on its first motion is not
   // captured by whatever it moved onto.
@@ -46,6 +46,7 @@ export function useWindowGestureState() {
   // implementation is assigned further down, where what it calls exists.
   const sessionDragImplRef = useRef({
     press: (_session: Session, _fromPane: number | null, _event: { x: number; y: number }, _onClick?: () => void) => {},
+    pressStripTab: (_session: Session, _event: { x: number; y: number }, _onClick?: () => void) => {},
     pressSurface: (_surface: WindowSurfaceId, _fromPane: number, _event: { x: number; y: number }) => {},
     pressTab: (_key: string, _fromPane: number, _event: { x: number; y: number }, _onClick?: () => void) => {},
     pressReader: (_session: Session, _event: { x: number; y: number }) => {},

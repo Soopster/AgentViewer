@@ -335,6 +335,23 @@ const tabSegment = (name: string) => {
   return row.slice(at, next < 0 ? undefined : next)
 }
 check(!tabSegment('delta').includes('×'), 'an inactive tab still draws a close control')
+// Chrome's strip: ▾ before the tabs, + right after the last one, and a tab dragged along the strip reorders.
+{
+  const row = tabRow(), strip = frame('session-tabs')!
+  check(row.slice(0, strip.x).includes('▾'), 'no tab list button before the tabs')
+  check(row.slice(strip.x + strip.width, strip.x + strip.width + 3).includes('+'), 'no + right after the last tab')
+  const names = () => ['alpha', 'bravo', 'delta'].filter(n => tabRow().includes(`Win ${n}`)).sort((a, b) => tabRow().indexOf(`Win ${a}`) - tabRow().indexOf(`Win ${b}`))
+  const before = names()
+  const first = locate(`Win ${before[0]}`, strip), last = locate(`Win ${before.at(-1)}`, strip)
+  await act(async () => {
+    await setup.mockMouse.pressDown(last.x + 1, strip.y)
+    await setup.mockMouse.moveTo(last.x - 3, strip.y)
+    await setup.mockMouse.moveTo(first.x + 1, strip.y)
+    await setup.mockMouse.release(first.x + 1, strip.y)
+  })
+  await settle(200)
+  check(names()[0] === before.at(-1) && names().length === before.length, `dragging a tab along the strip did not reorder it: ${before} -> ${names()}`)
+}
 await closeTab('delta', 'middle')
 check(!!windowWith('bravo') && !!windowWith('alpha'), 'closing another tab changed the surviving views')
 await click(locate('Win alpha', frame('session-tabs')!).x + 2, frame('session-tabs')!.y); await settle(200)

@@ -2,7 +2,7 @@
 import { usePinnedTabs } from '../../tabPinsStore'
 import { useDisabledPlugins } from '../../../../lib/plugins/useDisabledPlugins'
 import type { TeamAttention } from '../../teamAttentionStore'
-import { tabStripWidth } from '../../tabStrip'
+import { tabStripTabsWidth } from '../../tabStrip'
 import { useMemo } from 'react'
 import { type SurfaceMeta } from '../../popoverWindows'
 import { type AgentProvider, type Session } from '../../../../lib/types'
@@ -88,7 +88,7 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
     // capped to avoid very wide tabs when only a few sessions are open.
     // The strip spans the reader area (reader box plus any split panes), so
     // tabs get the full width instead of being squeezed into the reader column.
-    const available = tabStripWidth(readerAreaWidth)
+    const available = tabStripTabsWidth(readerAreaWidth)
     const fill = Math.floor(available / Math.max(1, visibleTabSessions.length - pinnedRowCount + popoverTabs.length))
     return Math.max(10, Math.min(fill, 40))
   }, [readerAreaWidth, visibleTabSessions.length, pinnedRowCount, popoverTabs.length, verticalTabsWidth])

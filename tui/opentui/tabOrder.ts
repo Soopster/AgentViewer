@@ -18,6 +18,17 @@ export function moveTabKey(keys: readonly string[], key: string, delta: -1 | 1, 
   return next
 }
 
+/** `keys` in strip order with `key` moved to where `target` is (a drag along the strip); never across the pinned/unpinned boundary. */
+export function moveTabKeyTo(keys: readonly string[], key: string, target: string, pinned: ReadonlySet<string>): string[] {
+  const ordered = orderTabs(keys, (value) => value, pinned)
+  const from = ordered.indexOf(key)
+  const to = ordered.indexOf(target)
+  if (from < 0 || to < 0 || from === to || pinned.has(target) !== pinned.has(key)) return [...keys]
+  const next = ordered.filter((entry) => entry !== key)
+  next.splice(to, 0, key)
+  return next
+}
+
 export function togglePinnedKey(pinned: readonly string[], key: string): string[] {
   return pinned.includes(key) ? pinned.filter((entry) => entry !== key) : [...pinned, key]
 }

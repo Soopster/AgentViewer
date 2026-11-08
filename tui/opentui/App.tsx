@@ -7,7 +7,7 @@ import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGH
 import { panelSurfaceAvailability } from '../../lib/rightPanel'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
-import { SessionTabConnection } from './SessionTabConnection'
+import { SessionTabConnection, tabIndexAt } from './SessionTabConnection'
 import { liveMessageSessionKey, upsertThreadedMessage } from './liveTranscriptState'
 import { formatAsyncQuestionAnswers } from '../../lib/asyncQuestions'
 import { createSidebarSessionSearch } from './sidebarSessionSearch'
@@ -23,7 +23,7 @@ import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/plugin
 import { createSessionAlertTracker, sessionAlertDelivery, sessionAlertText } from './sessionAlerts'
 import { loadSessionAlertMode, readSessionAlertMode } from './sessionAlertsStore'
 import { readPinnedTabs, readPinnedTabsRow, togglePinnedTab, togglePinnedTabsRow, usePinnedTabs, usePinnedTabsRow } from './tabPinsStore'
-import { moveTabKey } from './tabOrder'
+import { moveTabKey, moveTabKeyTo } from './tabOrder'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
@@ -3397,6 +3397,7 @@ function OpenTuiWorkspace() {
   const pinnedTabs = usePinnedTabs()
   const pinnedTabsRowOption = usePinnedTabsRow()
   const sessionInsightsOn = !useDisabledPlugins().has('session-insights')
+  const tabManagerPluginOn = !useDisabledPlugins().has('tab-manager')
   const coordinatorRunGoals = useSyncExternalStore(subscribeCoordinatorRunGoals, getCoordinatorRunGoals)
   useEffect(() => {
     const ids = sessions.flatMap(session => parseCoordinatorSessionTitle(session.customTitle ?? session.summary ?? '')?.runId ?? [])
@@ -4350,6 +4351,16 @@ function OpenTuiWorkspace() {
       return next.map((entry) => byKey.get(entry)!)
     })
   })
+  // A drag along the strip: the tab takes the dragged-over tab's place.
+  const moveSessionTabTo = useStableEvent((session: Session, target: Session) => {
+    setOpenTabSessions((current) => {
+      const next = moveTabKeyTo(current.map(sessionKey), sessionKey(session), sessionKey(target), readPinnedTabs())
+      if (next.every((entry, index) => entry === sessionKey(current[index]!))) return current
+      const byKey = new Map(current.map((tab) => [sessionKey(tab), tab]))
+      return next.map((entry) => byKey.get(entry)!)
+    })
+  })
+  const openTabManagerFromStrip = useStableEvent(() => runPluginCommandId('tab-manager'))
   const toggleSessionTabsRow = useStableEvent((): boolean => {
     const on = togglePinnedTabsRow()
     showNotice('info', on ? 'Pinned tabs on their own row' : 'Pinned tabs back in the strip')
@@ -5300,6 +5311,10 @@ function OpenTuiWorkspace() {
       sessionPressRef.current = { session, fromPane, x: event.x, y: event.y, dragging: false, onClick }
       setSessionPressing(true)
     },
+    pressStripTab: (session, event, onClick) => {
+      sessionPressRef.current = { session, fromPane: null, x: event.x, y: event.y, dragging: false, onClick, strip: true }
+      setSessionPressing(true)
+    },
     pressSurface: (surface, fromPane, event) => {
       sessionPressRef.current = { session: null, surface, fromPane, x: event.x, y: event.y, dragging: false }
       setSessionPressing(true)
@@ -5318,6 +5333,15 @@ function OpenTuiWorkspace() {
       // Two cells of travel make it a drag, so a slightly shaky click is still a click.
       if (!press.dragging && Math.abs(event.x - press.x) + Math.abs(event.y - press.y) < 2) return
       press.dragging = true
+      // Along the strip a tab reorders live, as Chrome's do; off it, it drags onto the windows.
+      const strip = press.strip ? tabSelectRef.current : null
+      if (strip && press.session && event.y === strip.y) {
+        setSessionDrag(null)
+        const index = tabIndexAt(strip, event.x)
+        const target = index === null ? null : visibleTabSessions[pinnedRowCount + index]
+        if (target && sessionKey(target) !== sessionKey(press.session)) moveSessionTabTo(press.session, target)
+        return
+      }
       const target = dropTargetAt(event)
       setSessionDrag({ session: press.session, surface: press.surface, tab: press.tab, reader: press.reader, fromPane: press.fromPane, ...target, x: event.x, y: event.y })
     },
@@ -5331,6 +5355,7 @@ function OpenTuiWorkspace() {
         return
       }
       setSessionDrag(null)
+      if (press.strip && tabSelectRef.current && event.y === tabSelectRef.current.y) return
       const target = dropTargetAt(event)
       const targetKey = target.pane !== null && windowItems[target.pane] ? windowItemKey(windowItems[target.pane]!) : null
       const movingKey = press.tab ?? (press.session ? sessionKey(press.session) : press.surface ? surfaceWindowKey(press.surface) : null)
@@ -6484,6 +6509,7 @@ function OpenTuiWorkspace() {
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity} />}
         onNewSession={openNewSessionModal}
+        onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}

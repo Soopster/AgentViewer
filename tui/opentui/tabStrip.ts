@@ -25,3 +25,11 @@ export function tabStripActivity(name: string, tabWidth: number, activity: strin
 export function tabStripWidth(readerAreaWidth: number): number {
   return Math.max(readerAreaWidth - 24, 1)
 }
+
+/** ` ▾ ` (the tab list) before the tabs and ` + ` (new session) after them, as Chrome's strip. */
+export const TAB_STRIP_BUTTON_WIDTH = 3
+
+/** The cells the tabs themselves share, once both strip buttons have theirs. */
+export function tabStripTabsWidth(readerAreaWidth: number): number {
+  return Math.max(tabStripWidth(readerAreaWidth) - 2 * TAB_STRIP_BUTTON_WIDTH, 1)
+}

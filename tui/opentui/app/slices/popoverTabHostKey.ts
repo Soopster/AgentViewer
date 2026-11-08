@@ -65,6 +65,8 @@ export function usePopoverTabHostKeyGroup(ctx: UsePopoverTabHostKeyGroupContext)
   const sessionDragHandlers = useMemo(() => ({
     /** `onClick` runs on a release that did not move: whichever of the row or the layer gets it. */
     press: (session: Session, fromPane: number | null, event: { x: number; y: number }, onClick?: () => void) => sessionDragImplRef.current.press(session, fromPane, event, onClick),
+    /** A tab of the strip: dragged along the strip it reorders, off it it drags like any session. */
+    pressStripTab: (session: Session, event: { x: number; y: number }, onClick?: () => void) => sessionDragImplRef.current.pressStripTab(session, event, onClick),
     move: (event: { x: number; y: number }) => sessionDragImplRef.current.move(event),
     release: (event: { x: number; y: number }) => sessionDragImplRef.current.release(event),
   }), [])
