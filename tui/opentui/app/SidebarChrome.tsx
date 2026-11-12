@@ -44,18 +44,22 @@ export function SidebarGroupHeading({ id, label, count, width, dateGroup, disclo
 }) {
   const countLabel = `${count}`
   const headingWidth = Math.max(width - (dateGroup ? 3 : 2), 1)
-  // A date sub-group sits right under its project (no blank row) outside comfortable density:
-  // a blank row above every Today / This week header spent a third of a short rail on air.
   // Spacing steps up with density's opposite: dense leaves a blank row before a project only; balanced also
   // before a date header that follows sessions (not one directly under its project); comfortable rows already
   // end in a blank row, so a header there adds none.
+  const labelWidth = Math.max(headingWidth - countLabel.length - 1, 1)
+  const title = fitText(`${disclosure}${label}`, Math.max(labelWidth - 2, 1)).trimEnd()
+  const rule = labelWidth - title.length > 1 ? ` ${'─'.repeat(labelWidth - title.length - 1)}` : ' '.repeat(Math.max(labelWidth - title.length, 0))
+  const ruleColor = mixHexColor(sidebarQuietColor(theme), theme.surface, 0.55) ?? theme.border
   const gap = density === 'comfortable' || first ? 0 : !dateGroup ? 1 : density === 'balanced' && !afterHeading ? 1 : 0
   return <box id={id} paddingX={1} paddingLeft={dateGroup ? 2 : 1} marginTop={gap}
     flexDirection="row" height={1} flexShrink={0} backgroundColor={selected ? theme.surface3 : theme.surface}
     onMouseDown={event => { if (event.button === 0 && onPress) { event.stopPropagation(); onPress() } }}>
     <text fg={selected || !dateGroup ? theme.text : sidebarQuietColor(theme)} attributes={dateGroup ? undefined : TextAttributes.BOLD} wrapMode="none" selectable={false}>
-      {fitText(`${disclosure}${label}`, Math.max(headingWidth - countLabel.length - 1, 1))}
+      {dateGroup ? fitText(`${disclosure}${label}`, labelWidth) : title}
     </text>
+    {/* A project header is a section break: a rule runs from its name to its count, using no extra row. */}
+    {dateGroup ? null : <text fg={ruleColor} wrapMode="none" selectable={false}>{rule}</text>}
     <text fg={sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{` ${countLabel}`}</text>
   </box>
 }

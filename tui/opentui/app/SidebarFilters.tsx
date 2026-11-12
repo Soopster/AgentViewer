@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { mixHexColor } from './transcriptStyle'
 import { sidebarQuietColor } from './SidebarChrome'
 import React from 'react'
 import type { TuiThemePalette } from '../../theme'
@@ -81,6 +82,10 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
       {note ? <box id={`${idPrefix}-filter-note`} height={1} flexShrink={0} marginLeft={2} onMouseDown={event => { if (event.button === 0 && onClearNote) { event.stopPropagation(); onClearNote() } }}>
         <text fg={quiet} wrapMode="none" selectable={false}>{note}</text>
       </box> : null}
+    </box>
+    {/* One rule between the controls (how the list is filtered) and the list itself. */}
+    <box id={`${idPrefix}-filters-rule`} height={1} flexShrink={0} marginX={1} overflow="hidden">
+      <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
     </box>
   </box>
 }
