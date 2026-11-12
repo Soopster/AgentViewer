@@ -72,7 +72,7 @@ import type { ContextMenuItem } from './ContextMenu'
 import { startSpacesBackground } from './spacesBackground'
 import { SpacesController, canonicalSpacePath } from './spacesStore'
 import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useQuietWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
-import { WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
+import { WorkspaceTabs, WorkspaceLauncher, SpacesManager, NEW_SPACE_ID } from './SpacesNavigation'
 import { SidebarFilters } from './app/SidebarFilters'
 import { SidebarStatus } from './app/SidebarChrome'
 import { useSessionSidebarState } from './app/state/sessionSidebarState'
@@ -3339,8 +3339,32 @@ function OpenTuiWorkspace() {
   })
 
   const handleNewSessionFolderSelected = useStableEvent((path: string) => {
-    setNewSessionCwd(path)
     setFolderPickerForNewSession(false)
+    // The picker was opened from "New space": hand the folder back to it.
+    if (folderPickerForSpaceRef.current) {
+      folderPickerForSpaceRef.current = false
+      setSpacesPickedFolder(path)
+      openSpaces(NEW_SPACE_ID)
+      return
+    }
+    setNewSessionCwd(path)
+  })
+  // The Spaces manager's "New space" borrows the new-session folder picker. Both take keys ahead of the
+  // workspace, and the manager's come first, so it closes while the picker is up and reopens with the result.
+  const folderPickerForSpaceRef = useRef(false)
+  const [spacesPickedFolder, setSpacesPickedFolder] = useState<string | undefined>()
+  const browseFolderForSpace = useStableEvent((from: string) => {
+    if (!isPluginEnabled('files')) { showNotice('info', 'Folder browsing needs Files · turn it on in Plugins'); return }
+    folderPickerForSpaceRef.current = true
+    setSpacesMenuOpen(false)
+    setNewSessionCwd(from.trim() || process.cwd())
+    setFolderPickerForNewSession(true)
+  })
+  const closeFolderPickerFor = useStableEvent(() => {
+    if (!folderPickerForSpaceRef.current) { closeFolderPicker(); return }
+    folderPickerForSpaceRef.current = false
+    setFolderPickerForNewSession(false)
+    openSpaces(NEW_SPACE_ID)
   })
 
   const prepareCreatedSessionForComposer = useStableEvent(async (draft: Session) => runPrepareCreatedSessionForComposer({
@@ -6788,7 +6812,8 @@ function OpenTuiWorkspace() {
       renderTerminal={(panelWidth, panelHeight, focused, register, capture) => <PluginSurfaceHost surfaceId="terminal" placement="panel" cwd={gitRepoCwd || workspaceCwd} provided={pluginServices} theme={theme} width={panelWidth} height={panelHeight} focused={focused} onClose={() => engineeringLayout.setPreferences(previous => ({ ...previous, drawerOpen: false }))} onCaptureChange={capture} onKeyHandlerReady={handler => register(key => { handler(key); return true })} />}
     >
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
-      {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => setSpacesMenuOpen(false)} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }} /> : null}
+      {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => { setSpacesMenuOpen(false); setSpacesPickedFolder(undefined) }} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }}
+        initialFolder={spacesPickedFolder} onBrowseFolder={browseFolderForSpace} /> : null}
       {workspacesEnabled && !fullscreenMode ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
       <FloatingWindowLayer presentationActive={Boolean(windowPresentation)} maximized={windowZoom === FLOATING_PANE_INDEX} floatingItem={floatingItem} floatingWindow={floatingWindow} fullscreenMode={fullscreenMode} windowSurfacePeek={windowSurfacePeek} readerAreaWidth={readerAreaWidth} windowAreaHeight={windowAreaHeight} windowAreaRef={windowAreaRef} sidebarWidth={sidebarWidth} verticalTabsWidth={verticalTabsWidth} tabsEnabled={tabsEnabled} theme={theme} rectOf={rectOf} startFloatGesture={startFloatGesture} moveFloatGesture={moveFloatGesture} endFloatGesture={endFloatGesture} renderSplitPane={renderSplitPane} dockFloatingWindow={dockFloatingWindow} />
           {windowPresentation ? <box id="presentation-restore" position="absolute" top={windowAreaRef.current?.y ?? 0} right={rightPanelsWidth} height={1} zIndex={60} backgroundColor={theme.surface2}
@@ -7148,7 +7173,7 @@ function OpenTuiWorkspace() {
           width={width}
           height={height}
           focused
-          onClose={closeFolderPicker}
+          onClose={closeFolderPickerFor}
           onKeyHandlerReady={registerFolderPickerKeys}
         />
       ) : null}

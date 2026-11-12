@@ -34,25 +34,77 @@ export function SpacesRail({ theme, width, onManage, under = false }: { theme: T
     const label = space.name === path.basename(space.cwd) ? space.name : `${space.name} · ${path.basename(space.cwd)}`
     return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={1} flexShrink={0} flexDirection="row" paddingX={1} backgroundColor={theme.surface3}
       onMouseDown={event => { if (event.button === 0 || event.button === 2) { event.stopPropagation(); onManage(event.button === 2 ? space.id : undefined) } }}>
-      <text id={`space:${space.id}`} fg={theme.cyan} wrapMode="none">{fit(`${badge || '▸'} ${label}`, Math.max(width - 10, 4))}</text>
+      <text id={`space:${space.id}`} fg={theme.cyan} wrapMode="none">{fit(`▸ ${label}`, Math.max(width - 12, 4))}</text>
       <box flexGrow={1} />
-      <text fg={sidebarQuietColor(theme)} wrapMode="none">+ ⋯</text>
+      <text fg={badgeColor(badge ?? '', theme)} wrapMode="none" selectable={false}>{badge ? `${badge} ` : ''}</text>
+      <RailButton id="spaces-add" theme={theme} label=" + " onPress={() => onManage(NEW_SPACE_ID)} />
+      <RailButton id="spaces-menu" theme={theme} label=" ⋯ " onPress={() => onManage()} />
     </box>
   }
   // The heading in the rail's quiet grey (muted is orange in some palettes), and a rule under the list: it
   // separates where you are from the search and filters below it, as the filters' own rule does from the list.
   const quiet = sidebarQuietColor(theme)
+  const activeIndex = state.spaces.findIndex(space => space.id === state.activeSpaceId)
+  const shown = state.spaces.slice(Math.max(0, activeIndex - 3), Math.max(4, activeIndex + 1))
+  const labels = spaceLabels(state.spaces)
   return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 2} flexShrink={0} flexDirection="column" border={[]} borderColor={theme.border}>
-    <box height={1} paddingX={1} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={quiet}>Spaces</text><box flexGrow={1} /><text fg={quiet}>+ · menu</text></box>
-    {state.spaces.slice(Math.max(0, state.spaces.findIndex(space => space.id === state.activeSpaceId) - 3), Math.max(4, state.spaces.findIndex(space => space.id === state.activeSpaceId) + 1)).map(space => <box key={space.id} id={`space:${space.id}`} height={1} paddingX={1} backgroundColor={space.id === state.activeSpaceId ? theme.surface3 : theme.surface}
-      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.activate(space.id) } else if (event.button === 2) { event.stopPropagation(); onManage(space.id) } }}>
-      <text fg={space.id === state.activeSpaceId ? theme.cyan : theme.text} wrapMode="none">{fit(`${space.workspaces.map(workspace => workspaceBadge(context.controller, workspace)).find(Boolean) || (space.id === state.activeSpaceId ? '▸' : ' ')} ${space.name === path.basename(space.cwd) ? space.name : `${space.name} · ${path.basename(space.cwd)}`}`, width - 4)}</text>
-    </box>)}
+    <box height={1} paddingX={1} flexDirection="row">
+      <text fg={quiet} wrapMode="none" selectable={false}>Spaces</text>
+      <box flexGrow={1} />
+      <RailButton id="spaces-add" theme={theme} label=" + " onPress={() => onManage(NEW_SPACE_ID)} />
+      <RailButton id="spaces-menu" theme={theme} label=" ⋯ " onPress={() => onManage()} />
+    </box>
+    {shown.map(space => {
+      // Which space you are in is the band and the accent; what is happening in a space is a separate column on
+      // the right, so an activity mark never takes the place of "current".
+      const current = space.id === state.activeSpaceId
+      const badge = space.workspaces.map(workspace => workspaceBadge(context.controller, workspace)).find(Boolean) ?? ''
+      return <box key={space.id} id={`space:${space.id}`} height={1} paddingX={1} flexDirection="row" backgroundColor={current ? theme.surface3 : theme.surface}
+        onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.activate(space.id) } else if (event.button === 2) { event.stopPropagation(); onManage(space.id) } }}>
+        <text fg={current ? theme.cyan : quiet} wrapMode="none" selectable={false}>{current ? '▸ ' : '  '}</text>
+        <text fg={current ? theme.cyan : theme.text} wrapMode="none">{fit(labels.get(space.id) ?? space.name, Math.max(width - 10, 4))}</text>
+        <box flexGrow={1} />
+        <text fg={badgeColor(badge, theme)} wrapMode="none" selectable={false}>{badge ? ` ${badge}` : ''}</text>
+      </box>
+    })}
     <box id="spaces-rule" height={1} flexShrink={0} marginX={1} overflow="hidden">
       <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
     </box>
   </box>
 }
+/** A text control lit under the pointer, like the sessions rail's `+ New`. */
+function RailButton({ id, theme, label, onPress }: { id: string; theme: TuiThemePalette; label: string; onPress: () => void }) {
+  const [hover, setHover] = useState(false)
+  return <box id={id} height={1} flexShrink={0} backgroundColor={hover ? theme.surface3 : undefined}
+    onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}
+    onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
+    <text fg={hover ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{label}</text>
+  </box>
+}
+
+function badgeColor(badge: string, theme: TuiThemePalette): string {
+  return badge === '!' ? theme.amber : badge === '●' ? theme.green : sidebarQuietColor(theme)
+}
+
+/**
+ * What the rail calls each space. A name alone, or `name · folder` when the two differ; when two spaces would read
+ * the same, the one thing that tells them apart is added — the parent folder when they are different checkouts,
+ * else a number in the order they were made, since two spaces on one folder differ only by being two.
+ */
+export function spaceLabels(spaces: readonly { id: string; name: string; cwd: string }[]): Map<string, string> {
+  const base = (space: { name: string; cwd: string }) => space.name === path.basename(space.cwd) ? space.name : `${space.name} · ${path.basename(space.cwd)}`
+  const groups = new Map<string, typeof spaces[number][]>()
+  for (const space of spaces) groups.set(base(space), [...(groups.get(base(space)) ?? []), space])
+  const labels = new Map<string, string>()
+  for (const [label, group] of groups) {
+    if (group.length === 1) { labels.set(group[0]!.id, label); continue }
+    const parents = group.map(space => path.basename(path.dirname(space.cwd)))
+    const parentsDiffer = new Set(parents).size === group.length
+    group.forEach((space, index) => labels.set(space.id, parentsDiffer ? `${label} · ${parents[index]}/` : `${label} ${index + 1}`))
+  }
+  return labels
+}
+
 // `under` drops the bar beneath the layer while a full-screen popover covers the
 // screen: above it, the bar painted over the popover's own top border.
 export function WorkspaceTabs({ theme, width, onManage, under = false }: { theme: TuiThemePalette; width: number; onManage: (id?: string, close?: boolean) => void; under?: boolean }) {
@@ -103,13 +155,26 @@ export function WorkspaceLauncher({ theme, cwd, onOpenSession, onNewAgent, onTer
     {([['open-session', '[1] Open session', onOpenSession], ['start-agent', '[2] Start agent', onNewAgent], ['open-terminal', '[3] Open terminal', onTerminal], ['apply-layout', '[4] Apply saved layout', onLayout]] as const).map(([id, label, action]) => <box id={`workspace-launcher:${id}`} key={id} height={2} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); action() } }}><text fg={theme.text}>{label}</text></box>)}
   </box>
 }
-export function SpacesManager({ controller, theme, width, height, initialId, closeId, onClose, onKeyHandlerReady }: { controller: SpacesController; theme: TuiThemePalette; width: number; height: number; initialId?: string; closeId?: string; onClose: () => void; onKeyHandlerReady: (handler: (key: Key) => boolean) => void }) {
+/** Passed as the manager's `initialId` to open it straight on "New space" (the rail's `+`). */
+export const NEW_SPACE_ID = 'new-space'
+
+export function SpacesManager({ controller, theme, width, height, initialId: requestedId, closeId, onClose, onKeyHandlerReady, initialFolder, onBrowseFolder }: {
+  controller: SpacesController; theme: TuiThemePalette; width: number; height: number; initialId?: string; closeId?: string; onClose: () => void
+  onKeyHandlerReady: (handler: (key: Key) => boolean) => void
+  /** The folder a browse came back with: "New space" opens filled in with it. */
+  initialFolder?: string
+  /** Tab on "New space" (or a click on its hint): pick the folder in the Files browser, as a new session does. */
+  onBrowseFolder?: (from: string) => void
+}) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+  const startAdding = requestedId === NEW_SPACE_ID
+  const initialId = startAdding ? undefined : requestedId
   const rows = useMemo(() => state.spaces.flatMap(space => [{ id: space.id, label: space.name, space, workspace: null as Workspace | null }, ...space.workspaces.map(workspace => ({ id: workspace.id, label: `  ${workspace.name}`, space, workspace }))]), [state])
   const [query, setQuery] = useState('')
   const [heldId, setHeldId] = useState<string | null>(initialId ?? controller.activeWorkspace()?.id ?? null)
   const [cursor, setCursor] = useState(() => Math.max(0, rows.findIndex(row => row.id === (initialId ?? controller.activeWorkspace()?.id))))
-  const [edit, setEdit] = useState<{ kind: 'space' | 'rename'; id?: string; text: string } | null>(state.spaces.length ? null : { kind: 'space', text: controller.launchCwd })
+  const [edit, setEdit] = useState<{ kind: 'space' | 'rename'; id?: string; text: string } | null>(
+    state.spaces.length && !startAdding ? null : { kind: 'space', text: initialFolder ?? controller.activeSpace()?.cwd ?? controller.launchCwd })
   const [confirm, setConfirm] = useState<{ id: string; lines: string[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const filtered = rows.filter(row => `${row.label} ${row.space.cwd}`.toLowerCase().includes(query.toLowerCase()))
@@ -151,6 +216,7 @@ export function SpacesManager({ controller, theme, width, height, initialId, clo
     if (edit) {
       if (key.name === 'escape') { if (state.spaces.length) setEdit(null); else onClose(); return true }
       if (key.name === 'return') { submit(); return true }
+      if (key.name === 'tab' && edit.kind === 'space' && onBrowseFolder) { onBrowseFolder(edit.text); return true }
       return false
     }
     if (confirm) { if (key.name === 'y' || key.name === 'return') closeItem(confirm.id); else if (key.name === 'escape' || key.name === 'n') setConfirm(null); return true }
@@ -164,7 +230,7 @@ export function SpacesManager({ controller, theme, width, height, initialId, clo
     if (key.ctrl && key.name === 'x' && selected) { requestClose(selected.id); return true }
     if (key.ctrl && (key.name === 'left' || key.name === 'right') && selected) { setHeldId(selected.id); controller.move(selected.id, key.name === 'left' ? -1 : 1); return true }
     return false
-  }, [edit, confirm, selected, index, filtered.length, state, controller, onClose])
+  }, [edit, confirm, selected, index, filtered.length, state, controller, onClose, onBrowseFolder])
   useEffect(() => { onKeyHandlerReady(handle) }, [handle, onKeyHandlerReady])
   const popWidth = Math.max(24, Math.min(width - 2, 90)); const popHeight = Math.max(10, Math.min(height - 2, 28))
   const pageSize = Math.max(1, popHeight - 8); const start = Math.floor(index / pageSize) * pageSize
@@ -175,6 +241,10 @@ export function SpacesManager({ controller, theme, width, height, initialId, clo
       <box flexGrow={1} flexDirection="column">{filtered.slice(start, start + pageSize).map((row, offset) => <box key={row.id} height={1} backgroundColor={start + offset === index ? theme.surface3 : theme.surface} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); controller.activate(row.space.id, row.workspace?.id); onClose() } }}><text fg={row.workspace ? theme.text : theme.cyan} wrapMode="none">{fit(`${row.label} · ${row.space.cwd}`, popWidth - 4)}</text></box>)}</box>
     </>}
     {error || controller.persistenceError || controller.recoveryWarning ? <text fg={theme.red} wrapMode="word">{error ?? controller.persistenceError ?? controller.recoveryWarning}</text> : null}
-    <text fg={theme.dim} wrapMode="word">{confirm ? 'Enter/y close · Escape/n cancel' : edit ? 'Enter save · Escape cancel' : '↑↓ select · Enter open · Ctrl+N workspace · Ctrl+A space · Ctrl+R rename · Ctrl+X close · Ctrl+←/→ reorder · Esc'}</text>
+    {edit?.kind === 'space' && onBrowseFolder ? <box id="spaces-manager:browse" height={1} flexShrink={0} flexDirection="row"
+      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onBrowseFolder(edit.text) } }}>
+      <text fg={theme.cyan} wrapMode="none" selectable={false}>→ Browse folders…</text>
+    </box> : null}
+    <text fg={theme.dim} wrapMode="word">{confirm ? 'Enter/y close · Escape/n cancel' : edit ? edit.kind === 'space' && onBrowseFolder ? 'Enter add · Tab browse folders · Escape cancel' : 'Enter save · Escape cancel' : '↑↓ select · Enter open · Ctrl+N workspace · Ctrl+A space · Ctrl+R rename · Ctrl+X close · Ctrl+←/→ reorder · Esc'}</text>
   </box>
 }

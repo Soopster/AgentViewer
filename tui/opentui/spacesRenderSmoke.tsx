@@ -6,7 +6,7 @@
 import React from 'react'
 import { testRender, act } from './testRender'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Session } from '../../lib/types'
@@ -145,6 +145,48 @@ await waitFor('previous space layout', () => !!setup.renderer.root.findDescendan
   const rule = setup.renderer.root.findDescendantById('spaces-rule')
   check(rule && rule.y === rail.y + rail.height - 1, 'the spaces list has no closing rule')
   check(setup.captureCharFrame().split('\n')[rule!.y]!.includes('───'), 'the spaces rule is not drawn')
+}
+// The current space is marked ▸; the other is not, whatever activity it shows (that is a column of its own).
+{
+  const lines = setup.captureCharFrame().split('\n')
+  const row = (id: string) => lines[setup.renderer.root.findDescendantById(`space:${id}`)!.y]!
+  const other = ctl.getSnapshot().spaces.find(entry => entry.id !== space.id)!
+  check(row(space.id).includes('▸ '), 'the current space is not marked')
+  check(!row(other.id).includes('▸'), 'a space you are not in is marked current')
+}
+// + opens the manager on "New space"; ⋯ opens it on the list.
+// (The composer window's backdrop covers the rail while it is open, so close it first.)
+await act(async () => { setup.mockInput.pressKey('o', { ctrl: true }) }); await settle(150)
+await click('spaces-add')
+await waitFor('new space prompt', () => setup.captureCharFrame().includes('New space · project directory'))
+// Tab browses for the folder in the Files picker, as a new session's Folder does; Esc there returns to the prompt.
+await act(async () => { setup.mockInput.pressTab() }); await settle(200)
+await waitFor('folder picker', () => setup.captureCharFrame().includes(' Choose ') && !setup.renderer.root.findDescendantById('spaces-manager'))
+await act(async () => { setup.mockInput.pressEscape() }); await settle(200)
+await waitFor('back to the new space prompt', () => setup.captureCharFrame().includes('New space · project directory'))
+// Choosing a folder (o: this folder) reopens the prompt filled in with it.
+await click('spaces-manager:browse')
+await waitFor('folder picker again', () => setup.captureCharFrame().includes(' Choose '))
+await act(async () => { setup.mockInput.pressKey('o') }); await settle(200)
+await waitFor('prompt with the chosen folder', () => setup.captureCharFrame().includes('New space · project directory'))
+{ const value = (setup.renderer.root.findDescendantById('spaces-manager:edit') as any)?.value; check(value === CWD || value === realpathSync(CWD), `the chosen folder did not fill the new space prompt: ${value}`) }
+await act(async () => { setup.mockInput.pressEscape() }); await settle(100)
+await act(async () => { setup.mockInput.pressEscape() }); await settle(100)
+check(!setup.renderer.root.findDescendantById('spaces-manager'), 'the spaces manager did not close')
+await click('spaces-menu')
+await waitFor('spaces list', () => setup.captureCharFrame().includes('Spaces and workspaces'))
+await act(async () => { setup.mockInput.pressEscape() }); await settle(100)
+// Two spaces that would read the same are told apart.
+{
+  const { spaceLabels } = await import('./SpacesNavigation')
+  const labels = spaceLabels([
+    { id: 'a', name: 'app', cwd: '/work/app' }, { id: 'b', name: 'app', cwd: '/work/app' },
+    { id: 'c', name: 'api', cwd: '/one/api' }, { id: 'd', name: 'api', cwd: '/two/api' },
+    { id: 'e', name: 'solo', cwd: '/x/solo' },
+  ])
+  check(labels.get('a') === 'app 1' && labels.get('b') === 'app 2', `same folder spaces are not numbered: ${[...labels]}`)
+  check(labels.get('c') === 'api · one/' && labels.get('d') === 'api · two/', `different checkouts are not told apart by folder: ${[...labels]}`)
+  check(labels.get('e') === 'solo', 'a unique space gained a suffix')
 }
 ctl.flush()
 const restored = new store.SpacesController(CWD)
