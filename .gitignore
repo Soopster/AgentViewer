@@ -14,3 +14,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 tmp/
+
+# Scratch output from test runs and measurements
+/run-artifacts/
+/work/
