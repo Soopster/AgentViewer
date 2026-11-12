@@ -5,6 +5,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { DARK_THEME, LIGHT_THEME, type TuiDensity } from '../theme'
 import { act, testRender } from './testRender'
 import { SessionRail } from './app/overlays/SessionRail'
+import { SidebarStatus } from './app/SidebarChrome'
 import { runBuildSidebarRow, type BuildSidebarRowContext } from './app/actions/sidebarRow'
 import type { SidebarEntry } from './app/types'
 import { sessionKey } from './app/sessionList'
@@ -23,6 +24,7 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
   let created = 0
   let scopeChanged = 0
   let collapsed = ''
+  let sortToggled = 0
   let chosen = ''
   const scroll = React.createRef<ScrollBoxRenderable>()
   const context: BuildSidebarRowContext = {
@@ -40,8 +42,8 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     const [view, setView] = useState<'sessions' | 'coordinator'>('sessions')
     return <box width={width} height={24}>
     <SessionRail onViewChange={setView} showRail sidebarWidth={width} sidebarExtraRows={0} mainContentHeight={22} sidebarView={view}
-      effectiveFocus="sessions" theme={theme} coordinatorSidebarHeader="Coordinator" sidebarHeaderBaseText="SESSIONS 25 · CODEX"
-      toggleSidebarSort={() => {}} showToggleOutcome={() => {}} sidebarSort="project" sidebarHeaderPrefixWidth={14}
+      effectiveFocus="sessions" theme={theme} coordinatorSidebarHeader="Coordinator" sidebarHeaderBaseText="SESSIONS · CODEX" status={<SidebarStatus theme={theme} count="25 of 26" note="1 hidden" onClearNote={() => {}} />}
+      toggleSidebarSort={() => { sortToggled++ }} showToggleOutcome={() => {}} sidebarSort="project" sidebarHeaderPrefixWidth={11}
       sidebarProviderBadgeText="CODEX" sidebarProviderAccent={theme.cyan} workspacesEnabled={false} openSpaces={() => {}}
       fullScreenPopoverOpen={false} setAllProjects={() => { scopeChanged++ }} allProjects={false} sidebarInnerWidth={width - 5}
       sidebarRowBudget={20} density={density} sidebarScrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
@@ -73,6 +75,13 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     }
     await click('sidebar-new-session')
     assert.equal(created, 1, 'Compose action opens session creation')
+    // The sort is painted into the bottom border, on its last row, and toggles on click.
+    const sortLine = frame.split('\n').findLast(line => line.includes('└'))!
+    assert.match(sortLine, width < 40 ? /└─ ↕ / : /└─ ↕ by project ─/, `${density}: sort sits in the bottom border\n${frame}`)
+    assert.ok(!/SESSIONS \d/.test(frame), `${density}: the title carries no count`)
+    assert.match(sortLine, width < 34 ? /25 of 26/ : /─ 25 of 26 · 1 hidden ─┘/, `${density}: count and hidden note sit at the bottom border's right end`)
+    await click('sidebar-sort-toggle')
+    assert.equal(sortToggled, 1, 'Clicking the border sort toggles it')
     await click('sidebar-project-scope')
     assert.equal(scopeChanged, 1)
     await click('sidebar:date:today')

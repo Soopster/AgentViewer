@@ -74,6 +74,7 @@ import { SpacesController, canonicalSpacePath } from './spacesStore'
 import { WorkspaceContext, WorkspaceViewContext, useWorkspaceContext, useWorkspaceState, useQuietWorkspaceState, useAppState, useWorkspaceRef, workspaceStorageKey } from './workspaceContext'
 import { WorkspaceTabs, WorkspaceLauncher, SpacesManager } from './SpacesNavigation'
 import { SidebarFilters } from './app/SidebarFilters'
+import { SidebarStatus } from './app/SidebarChrome'
 import { useSessionSidebarState } from './app/state/sessionSidebarState'
 import { LIGHT_THEME } from '../theme'
 import { WindowHistory } from './windowHistory'
@@ -1412,7 +1413,7 @@ function OpenTuiWorkspace() {
     selectedSessionTarget, subagentSummariesReadRef, setProviderSubagentSummaries,
   }), [selectedSessionTarget])
 
-  // Why the rail shows fewer sessions than the scope holds (the title's n/m): what is hidden, and
+  // Why the rail shows fewer sessions than the scope holds (the bottom border's `n of m`): what is hidden, and
   // which filter narrows it. A click clears the tag and activity filters.
   const hiddenNote = [
     scratchFilter.hidden ? `${scratchFilter.hidden} scratch` : '',
@@ -1422,7 +1423,7 @@ function OpenTuiWorkspace() {
     sidebarActivity ? SIDEBAR_ACTIVITY_OPTIONS.find(([value]) => value === sidebarActivity)?.[1] ?? '' : '',
     sidebarTag ? `#${sidebarTag}` : '',
   ].filter(Boolean)
-  // Short enough to sit at the end of the chips row on an ordinary rail: the count alone when
+  // Short enough to sit beside the count in the bottom border: the count alone when
   // hidden sessions are the only reason; the kinds are named once a filter makes it a longer note.
   const hiddenCount = scratchFilter.hidden + settledFilter.hidden
   const sidebarFilterNote = narrowingNote.length
@@ -2378,7 +2379,7 @@ function OpenTuiWorkspace() {
   const {
     activeStripIndex, tabStripLength, surfacePanelHeight, sidebarExtraRows, sidebarRowBudget,
     sidebarInnerWidth, showProviderInSessionRows, sidebarProviderBadgeText,
-    sidebarHeaderPrefixWidth, sidebarHeaderBaseText, sidebarProviderAccent,
+    sidebarHeaderPrefixWidth, sidebarHeaderBaseText, sidebarProviderAccent, sidebarCountLabel,
     coordinatorSidebarHeader, imessageStyle, transcriptDiffControls, selectAgentTool,
     refreshSessions, markSessionRunning, clearSessionRunning, refreshSessionMetadata,
   } = useActiveStripIndexGroup({
@@ -6805,7 +6806,8 @@ function OpenTuiWorkspace() {
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
           tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
-          note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
+          />}
+        sidebarStatus={<SidebarStatus theme={theme} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
         onNewSession={openNewSessionModal}
         onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}

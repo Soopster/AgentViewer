@@ -130,15 +130,17 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
-  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? (spacesState.spaces.length === 1 ? 1 : Math.min(4, spacesState.spaces.length) + 1) + 1 : 0), 4)
+  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? (spacesState.spaces.length === 1 ? 1 : Math.min(4, spacesState.spaces.length) + 2) + 1 : 0), 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   // A provider listed across several instances (ACP agents, accounts) is
   // several stores' sessions, and a row has to say whose it is.
   const showProviderInSessionRows = provider === 'all'
     || new Set(sessions.map((session) => session.providerInstanceId ?? session.provider)).size > 1
-  const sidebarSessionCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0 || filteredSessionsForSidebar.length !== spaceSessions.length
-    ? `SESSIONS ${filteredSessionsForSidebar.length}/${spaceSessions.length}`
-    : `SESSIONS ${spaceSessions.length}`
+  // The count lives in the rail's bottom border (`58 of 59`); the title only names the list.
+  const sidebarCountLabel = normalizedSessionQuery || scratchFilter.hidden > 0 || settledFilter.hidden > 0 || filteredSessionsForSidebar.length !== spaceSessions.length
+    ? `${filteredSessionsForSidebar.length} of ${spaceSessions.length}`
+    : `${spaceSessions.length}`
+  const sidebarSessionCountLabel = 'SESSIONS'
   const sidebarProviderLabel = provider === 'all'
     ? 'ALL'
     : providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId)?.label.toUpperCase() ?? formatProviderLabel(provider)
@@ -224,7 +226,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   return {
     activeStripIndex, tabStripLength, surfacePanelHeight, sidebarExtraRows, sidebarRowBudget,
     sidebarInnerWidth, showProviderInSessionRows, sidebarProviderBadgeText,
-    sidebarHeaderPrefixWidth, sidebarHeaderBaseText, sidebarProviderAccent,
+    sidebarHeaderPrefixWidth, sidebarHeaderBaseText, sidebarProviderAccent, sidebarCountLabel,
     coordinatorSidebarHeader, imessageStyle, transcriptDiffControls, selectAgentTool,
     refreshSessions, markSessionRunning, clearSessionRunning, refreshSessionMetadata,
   }

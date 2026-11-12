@@ -13,15 +13,16 @@ import { Spinner } from '../chrome'
 import { SectionFrame } from '../borders'
 import { PaneResizeHandle } from '../../paneResize'
 import { SidebarTitlePreview } from '../SidebarTitlePreview'
-import { SidebarHeading, SidebarNewSession, sidebarQuietColor } from '../SidebarChrome'
+import { SidebarHeading, SidebarNewSession, SidebarSortToggle, sidebarQuietColor } from '../SidebarChrome'
 
 const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
 
-export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, previewEnabled = effectiveFocus === 'sessions' }: {
+export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, status, previewEnabled = effectiveFocus === 'sessions' }: {
   onViewChange: (view: 'sessions' | 'coordinator') => void
   onFocus?: () => void
   previewEnabled?: boolean
   controls?: React.ReactNode
+  status?: React.ReactNode
   onNewSession: () => void
   showRail: boolean
   sidebarWidth: number
@@ -92,6 +93,9 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             {sidebarView === 'sessions' ? <>
               <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
+              <SidebarSortToggle theme={theme} width={sidebarWidth} sort={sidebarSort}
+                onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
+              {status}
             </> : null}
             {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
             {sidebarView === 'sessions' && controls ? controls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}

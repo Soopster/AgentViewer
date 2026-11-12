@@ -139,6 +139,13 @@ await waitFor('new space launcher', () => !!setup.renderer.root.findDescendantBy
 check(ctl.activeSpace()?.name === 'Other project', 'space did not change')
 await act(async () => { ctl.activate(space.id, first.id) }); await settle(1400)
 await waitFor('previous space layout', () => !!setup.renderer.root.findDescendantById('split-pane:0'))
+// With two spaces the rail lists them under a heading, and a rule closes the list off from the search below.
+{
+  const rail = setup.renderer.root.findDescendantById('spaces-rail')!
+  const rule = setup.renderer.root.findDescendantById('spaces-rule')
+  check(rule && rule.y === rail.y + rail.height - 1, 'the spaces list has no closing rule')
+  check(setup.captureCharFrame().split('\n')[rule!.y]!.includes('───'), 'the spaces rule is not drawn')
+}
 ctl.flush()
 const restored = new store.SpacesController(CWD)
 check(restored.getSnapshot().spaces.length === 2, 'spaces did not persist')

@@ -14,7 +14,7 @@ const SCOPES = [['repo', 'This project'], ['all', 'All projects']] as const
 const ACTIVITIES = SIDEBAR_ACTIVITY_OPTIONS
 
 /** One filter surface across views; the shell owns its dropdowns and keyboard routing. */
-export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees, note, onClearNote }: {
+export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees }: {
   idPrefix: string; theme: TuiThemePalette; query: string; searchFocused: boolean
   onSearchFocus: () => void; onQuery: (query: string) => void; onSubmit: () => void
   scope: 'repo' | 'all'; activity: SidebarActivity
@@ -28,8 +28,6 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
   includeWorktrees?: boolean
   onIncludeWorktrees?: (value: boolean) => void
   /** What is narrowing the list ("1 settled hidden · Running"); a click clears the tag and activity filters. */
-  note?: string
-  onClearNote?: () => void
 }) {
   const activityLabel = ACTIVITIES.find(([value]) => value === (activity ?? 'all'))![1]
   // A chip at its default is quiet; one that narrows the list is filled and cyan, so the narrowing is visible.
@@ -79,12 +77,6 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
           ...(tags.length === 0 ? [{ id: `${idPrefix}-tag:none`, label: '  No tags yet: right-click a session → Add tags', run: () => {} }] : []),
         ] })
       }}>{chip(tag ? `#${tag}` : 'Tag', Boolean(tag))}</box> : null}
-      {/* Right-aligned at the end of the chips row when it fits (a line of its own when it does not), so it reads as
-          a status rather than a fourth control. A bare count is dimmer still; a note that can be cleared (×) is not. */}
-      {note ? <box id={`${idPrefix}-filter-note`} height={1} flexGrow={1} flexShrink={0} marginLeft={2} flexDirection="row" justifyContent="flex-end"
-        onMouseDown={event => { if (event.button === 0 && onClearNote) { event.stopPropagation(); onClearNote() } }}>
-        <text fg={note.includes('×') ? quiet : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{note}</text>
-      </box> : null}
     </box>
     {/* One rule between the controls (how the list is filtered) and the list itself. */}
     <box id={`${idPrefix}-filters-rule`} height={1} flexShrink={0} marginX={1} overflow="hidden">

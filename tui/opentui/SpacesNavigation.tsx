@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { sidebarQuietColor } from './app/SidebarChrome'
+import { mixHexColor } from './app/transcriptStyle'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -38,12 +39,18 @@ export function SpacesRail({ theme, width, onManage, under = false }: { theme: T
       <text fg={sidebarQuietColor(theme)} wrapMode="none">+ ⋯</text>
     </box>
   }
-  return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 1} flexShrink={0} flexDirection="column" border={[]} borderColor={theme.border}>
-    <box height={1} paddingX={1} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={theme.muted}>Spaces</text><box flexGrow={1} /><text fg={theme.dim}>+ · menu</text></box>
+  // The heading in the rail's quiet grey (muted is orange in some palettes), and a rule under the list: it
+  // separates where you are from the search and filters below it, as the filters' own rule does from the list.
+  const quiet = sidebarQuietColor(theme)
+  return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 2} flexShrink={0} flexDirection="column" border={[]} borderColor={theme.border}>
+    <box height={1} paddingX={1} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={quiet}>Spaces</text><box flexGrow={1} /><text fg={quiet}>+ · menu</text></box>
     {state.spaces.slice(Math.max(0, state.spaces.findIndex(space => space.id === state.activeSpaceId) - 3), Math.max(4, state.spaces.findIndex(space => space.id === state.activeSpaceId) + 1)).map(space => <box key={space.id} id={`space:${space.id}`} height={1} paddingX={1} backgroundColor={space.id === state.activeSpaceId ? theme.surface3 : theme.surface}
       onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.activate(space.id) } else if (event.button === 2) { event.stopPropagation(); onManage(space.id) } }}>
       <text fg={space.id === state.activeSpaceId ? theme.cyan : theme.text} wrapMode="none">{fit(`${space.workspaces.map(workspace => workspaceBadge(context.controller, workspace)).find(Boolean) || (space.id === state.activeSpaceId ? '▸' : ' ')} ${space.name === path.basename(space.cwd) ? space.name : `${space.name} · ${path.basename(space.cwd)}`}`, width - 4)}</text>
     </box>)}
+    <box id="spaces-rule" height={1} flexShrink={0} marginX={1} overflow="hidden">
+      <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
+    </box>
   </box>
 }
 // `under` drops the bar beneath the layer while a full-screen popover covers the

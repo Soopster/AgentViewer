@@ -137,7 +137,7 @@ try {
   await settle(5600) // through a sidebar poll, which must not put it back
   if (row('Alpha work')) fail('A settled session stayed in the list after the cursor moved on')
   // A narrow rail drops the `1 settled` suffix; the count still says one is hidden.
-  if (!frame().includes('SESSIONS 2/3')) fail('The header does not count the settled session it hides')
+  if (!frame().includes('2 of 3')) fail('The rail does not count the settled session it hides')
   if (!row('Beta work')) fail('Settling one session hid another')
 
   console.log('Settled sessions smoke passed (cross-process store read, x marks + writes, x reopens, hidden once left and counted, survives a poll)')

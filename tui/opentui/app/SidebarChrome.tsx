@@ -28,6 +28,31 @@ export function SidebarNewSession({ theme, width, onPress }: { theme: TuiThemePa
   </box>
 }
 
+/** The sort, painted into the rail's bottom border: clicking the SESSIONS title also toggles it, but nothing said so. */
+export function SidebarSortToggle({ theme, width, sort, onPress }: { theme: TuiThemePalette; width: number; sort: 'project' | 'time'; onPress: () => void }) {
+  const [hover, setHover] = useState(false)
+  // A narrow rail keeps the glyph alone, leaving the right end to the count.
+  const label = width < 40 ? ' ↕ ' : ` ↕ ${sort === 'project' ? 'by project' : 'recent'} `
+  return <box id="sidebar-sort-toggle" position="absolute" bottom={-1} left={1} width={label.length} height={1} backgroundColor={theme.surface}
+    onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}
+    onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
+    <text fg={hover ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{label}</text>
+  </box>
+}
+
+/** The bottom border's right end: how many sessions show (`58 of 59`) and, when filters hide some, why. A note
+ *  that names a tag or activity filter ends in × and clears them on click; a bare hidden count is dimmer. */
+export function SidebarStatus({ theme, count, note, onClearNote }: { theme: TuiThemePalette; count: string; note: string; onClearNote: () => void }) {
+  const quiet = sidebarQuietColor(theme)
+  const clearable = note.includes('×')
+  return <box id="sidebar-status" position="absolute" bottom={-1} right={1} height={1} flexDirection="row" backgroundColor={theme.surface}>
+    <text fg={quiet} wrapMode="none" selectable={false}>{` ${count}${note ? ' · ' : ' '}`}</text>
+    {note ? <box id="sidebar-filter-note" height={1} flexShrink={0} onMouseDown={event => { if (event.button === 0 && clearable) { event.stopPropagation(); onClearNote() } }}>
+      <text fg={clearable ? theme.cyan : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{`${note} `}</text>
+    </box> : null}
+  </box>
+}
+
 export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent, onPress }: {
   theme: TuiThemePalette; width: number; text: string; prefixWidth: number; badge: string; accent: string; onPress?: () => void
 }) {

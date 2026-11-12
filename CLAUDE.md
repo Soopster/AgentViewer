@@ -507,10 +507,12 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   with the draft; a sidebar session is one row outside `comfortable` density,
   with its age right-aligned and the activity glyph standing in for the word;
   the pane title carries state (`● LIVE`, `READING`), not the theme's name.
-  The rail's `SESSIONS n · PROVIDER` header is painted into its top border (an
+  The rail's `SESSIONS · PROVIDER` header is painted into its top border (an
   absolute box at `top: -1`, because a `title` string cannot carry the badge or
   the click that toggles the sort), and the first group has no blank row above
-  it. Marks sit before the age so ages form one flush column.
+  it. Its bottom border carries the sort (`↕ by project`, clickable) on the left
+  and the count (`58 of 59`) plus why sessions are hidden on the right — the same
+  absolute-box trick at `bottom: -1`, so the filter chips never wrap a note. Marks sit before the age so ages form one flush column.
   The coordinator rail follows the same form: a run is a `TITLE / n` heading in
   its status colour, and an agent is one row — tree glyph, name in its
   provider's colour, then state glyph and task. Role and provider are not
