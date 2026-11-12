@@ -80,11 +80,11 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             titleColor={theme.cyan}
           >
             <PaneResizeHandle kind="sidebar" extent={sidebarWidth} edge="right" inset={-1} />
-            <box id="sidebar-tabs" height={1} flexShrink={0} paddingX={1} flexDirection="row" overflow="hidden">
+            <box id="sidebar-tabs" height={1} flexShrink={0} paddingRight={1} flexDirection="row" overflow="hidden">
               {SIDEBAR_VIEWS.map(view => <box key={view} id={`sidebar-tab:${view}`} height={1} flexShrink={0}
                 backgroundColor={sidebarView === view ? theme.surface3 : theme.surface}
                 onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onViewChange(view) } }}>
-                <text fg={sidebarView === view ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{/* A narrow rail drops the tabs' trailing space so + New still fits beside them. */ `${view === 'sessions' ? ' Sessions' : ' Coordinator'}${sidebarWidth < 34 ? '' : ' '}`}</text>
+                <text fg={sidebarView === view ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{/* No left padding: a tab's own leading space puts its label in the gutter column the rows below start in. A narrow rail drops the tabs' trailing space so + New still fits beside them. */ `${view === 'sessions' ? ' Sessions' : ' Coordinator'}${sidebarWidth < 34 ? '' : ' '}`}</text>
               </box>)}
               <box flexGrow={1} />
               {sidebarView === 'sessions' ? <SidebarNewSession theme={theme} width={sidebarWidth} onPress={onNewSession} /> : null}

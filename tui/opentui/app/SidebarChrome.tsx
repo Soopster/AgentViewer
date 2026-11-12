@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React from 'react'
+import React, { useState } from 'react'
 import { TextAttributes } from '@opentui/core'
 import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { fitText } from '../textLayout'
@@ -19,9 +19,12 @@ export function sidebarQuietColor(theme: TuiThemePalette): string {
 }
 
 export function SidebarNewSession({ theme, width, onPress }: { theme: TuiThemePalette; width: number; onPress: () => void }) {
-  return <box id="sidebar-new-session" height={1} flexShrink={0} backgroundColor={mixHexColor(theme.cyan, theme.surface, 0.2) ?? theme.surface3}
+  // Plain accent text, so it does not read as a third tab; it fills only under the pointer.
+  const [hover, setHover] = useState(false)
+  return <box id="sidebar-new-session" height={1} flexShrink={0} backgroundColor={hover ? mixHexColor(theme.cyan, theme.surface, 0.2) ?? theme.surface3 : undefined}
+    onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}
     onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
-    <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>{/* Narrow rails keep the tabs whole and the button to its glyph. */ width < 34 ? ' + ' : ' + New '}</text>
+    <text fg={theme.cyan} attributes={hover ? TextAttributes.BOLD : 0} wrapMode="none" selectable={false}>{/* Narrow rails keep the tabs whole and the button to its glyph. */ width < 34 ? ' + ' : ' + New '}</text>
   </box>
 }
 

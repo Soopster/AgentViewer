@@ -36,15 +36,16 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
   const quiet = sidebarQuietColor(theme)
   const chip = (label: string, narrowing: boolean) => <text fg={narrowing ? theme.cyan : quiet} bg={narrowing ? theme.surface3 : undefined}
     wrapMode="none" selectable={false}>{narrowing ? ` ${label} ▾ ` : `${label} ▾`}</text>
-  const separator = <text fg={quiet} wrapMode="none" selectable={false}>{' · '}</text>
+  // Space, not a dot: the carets already mark each chip as a control.
+  const separator = <text wrapMode="none" selectable={false}>{'  '}</text>
   return <box flexShrink={0} flexDirection="column">
-    {/* A glyph so the row reads as an input, and the key that jumps to it. */}
+    {/* A glyph so the row reads as an input; the key that jumps to it is in the placeholder, beside the words it
+        refers to, rather than adrift at the far edge. */}
     <box height={1} paddingX={1} flexShrink={0} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onSearchFocus() } }}>
       <text fg={searchFocused ? theme.cyan : quiet} wrapMode="none" selectable={false}>{'⌕ '}</text>
       <box flexGrow={1} height={1}>
-        <input id={`${idPrefix}-input:search`} placeholder="Search sessions…" maxLength={SEARCH_MAX_CHARS} value={query} focused={searchFocused} onInput={onQuery} onSubmit={onSubmit} />
+        <input id={`${idPrefix}-input:search`} placeholder="Search sessions  /" maxLength={SEARCH_MAX_CHARS} value={query} focused={searchFocused} onInput={onQuery} onSubmit={onSubmit} />
       </box>
-      {searchFocused || query ? null : <text fg={quiet} wrapMode="none" selectable={false}>{' /'}</text>}
     </box>
     <box flexShrink={0} flexDirection="row" flexWrap="wrap" paddingX={1}>
       <box id={`${idPrefix}-scope`} height={1} flexShrink={0} onMouseDown={event => {
@@ -78,9 +79,11 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
           ...(tags.length === 0 ? [{ id: `${idPrefix}-tag:none`, label: '  No tags yet: right-click a session → Add tags', run: () => {} }] : []),
         ] })
       }}>{chip(tag ? `#${tag}` : 'Tag', Boolean(tag))}</box> : null}
-      {/* The end of the chips row when it fits; the row wraps it to a line of its own when it does not. */}
-      {note ? <box id={`${idPrefix}-filter-note`} height={1} flexShrink={0} marginLeft={2} onMouseDown={event => { if (event.button === 0 && onClearNote) { event.stopPropagation(); onClearNote() } }}>
-        <text fg={quiet} wrapMode="none" selectable={false}>{note}</text>
+      {/* Right-aligned at the end of the chips row when it fits (a line of its own when it does not), so it reads as
+          a status rather than a fourth control. A bare count is dimmer still; a note that can be cleared (×) is not. */}
+      {note ? <box id={`${idPrefix}-filter-note`} height={1} flexGrow={1} flexShrink={0} marginLeft={2} flexDirection="row" justifyContent="flex-end"
+        onMouseDown={event => { if (event.button === 0 && onClearNote) { event.stopPropagation(); onClearNote() } }}>
+        <text fg={note.includes('×') ? quiet : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{note}</text>
       </box> : null}
     </box>
     {/* One rule between the controls (how the list is filtered) and the list itself. */}
