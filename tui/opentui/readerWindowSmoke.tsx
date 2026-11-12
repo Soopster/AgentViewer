@@ -116,7 +116,9 @@ const viewportRow = (): { row: number; first: number } | null => {
 }
 
 // Sample after every tree pass: the layout a frame was painted from.
-type Sample = { row: number; first: number; scrollTop?: number; mounted?: number; frame?: number }
+type Sample = { row: number; first: number; scrollTop?: number; mounted?: number; frame?: number; thumb?: number }
+// The transcript scrollbar's thumb row: the viewport on the whole transcript, not the mounted window.
+const thumbRow = () => setup.renderer.root.findDescendantById('transcript-scrollbar-thumb')?.y
 let samples: Sample[] | null = null
 let tracking = false
 let frameNo = 0
@@ -125,7 +127,7 @@ let frameNo = 0
 setup.renderer.on('frame', () => {
   if (!tracking) return
   const sample = viewportRow()
-  if (sample && samples) samples.push({ ...sample, scrollTop: scrollbox().scrollTop, mounted: mountedCards(scrollbox()).length, frame: frameNo++ })
+  if (sample && samples) samples.push({ ...sample, scrollTop: scrollbox().scrollTop, mounted: mountedCards(scrollbox()).length, frame: frameNo++, thumb: thumbRow() })
 })
 
 const settle = async (ms = 160) => {
@@ -145,6 +147,9 @@ const key = async (name: string, ms = 160) => {
 // the cards the slide added or removed — far more than a notch, and back again
 // a frame later. So: never against the wheel, never further than a notch goes.
 const MAX_NOTCH_ROWS = 12
+// The thumb steps a row or so at a time; a window slide that rescaled it jumped many.
+const MAX_THUMB_STEP = 2
+let thumbSamples = 0
 async function wheel(direction: 'up' | 'down', notches: number) {
   const viewport = scrollbox().viewport
   const sign = direction === 'down' ? 1 : -1
@@ -160,6 +165,11 @@ async function wheel(direction: 'up' | 'down', notches: number) {
       if (last) {
         const moved: number = (sample.row - last.row) * sign
         assert.ok(moved >= 0, `the viewport moved ${-moved} rows against the wheel (window start ${last.first} → ${sample.first})`)
+        if (last.thumb !== undefined && sample.thumb !== undefined) {
+          const thumbMoved: number = (sample.thumb - last.thumb) * sign
+          assert.ok(thumbMoved >= 0 && thumbMoved <= MAX_THUMB_STEP, `the scrollbar thumb moved ${thumbMoved} rows ${thumbMoved < 0 ? 'against' : 'in one frame of'} the wheel (window start ${last.first} → ${sample.first})`)
+          thumbSamples += 1
+        }
       }
       last = sample
     }

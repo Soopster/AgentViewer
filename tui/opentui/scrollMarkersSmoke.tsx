@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/react */
-// The track marks where prompts, edits and errors sit — by laid-out height, the
-// scale the scrollbar thumb uses, not by message order. Pure mapping first, then
-// a real scrollbox of uneven cards, measured and painted.
+// The transcript scrollbar draws the viewport on the WHOLE transcript, not on the mounted card window
+// the scrollbox holds: its thumb must not move when the window slides under an unchanged view, it is
+// sized against every card, markers cover unmounted cards, and they sit beside the track, not on it.
 import React from 'react'
 import assert from 'node:assert/strict'
+import type { ScrollBoxRenderable } from '@opentui/core'
 import { testRender, act } from './testRender'
-import { ScrollMarkers, scrollMarkerRows, scrollMarkerTargets, useScrollLayout, type ScrollLayout } from './app/ScrollMarkers'
+import { TranscriptScrollbar, scrollMarkerRows, scrollMarkerTargets, trackThumb, trackOffsetAt, type TranscriptTrack } from './app/ScrollMarkers'
+import { RowHeightIndex } from './rowHeightIndex'
 import { DARK_THEME } from '../theme'
 import type { TuiTranscriptCard } from '../format'
 
@@ -15,59 +17,74 @@ const card = (key: string, extra: Partial<TuiTranscriptCard> & { tone?: string }
   ...extra,
 }) as unknown as TuiTranscriptCard
 
-const cards = [
+// Pure mapping: markers by height on the transcript's scale.
+const small = [
   card('p', { role: 'user' as never }),
   card('a'), card('b', { tone: 'result_error' }), card('c'),
   card('d', { fileEdits: [{ path: 'f.ts', added: 1, removed: 0 }] as never }),
   card('e', { role: 'user' as never, tone: 'result_error' }),
 ]
+const trackOf = (heights: number[], top = 0, viewport = 5): TranscriptTrack => ({ lead: 0, cards: new RowHeightIndex(heights), trail: 0, top, viewport })
+const uneven = trackOf([1, 1, 12, 1, 1, 4])
+assert.deepEqual([...scrollMarkerRows(small, uneven, 20)], [[0, 'prompt'], [8, 'error'], [15, 'edit'], [18, 'error']])
+assert.deepEqual([...scrollMarkerRows(small, uneven, 2)], [[0, 'error'], [1, 'error']], 'the most urgent kind wins a shared row')
+assert.equal(scrollMarkerTargets(small, uneven, 2).get(0)?.key, 'b', 'a collision clicks through to the displayed card')
+assert.equal(scrollMarkerRows(small, null, 10).size, 0)
+// Thumb: sized by viewport / whole transcript, placed by position over the scrollable range.
+assert.deepEqual(trackThumb(trackOf(Array(100).fill(2), 0, 20), 20), { top: 0, size: 2 })
+assert.deepEqual(trackThumb(trackOf(Array(100).fill(2), 180, 20), 20), { top: 18, size: 2 })
+assert.deepEqual(trackThumb(trackOf(Array(100).fill(2), 90, 20), 20), { top: 9, size: 2 })
+assert.equal(trackOffsetAt(trackOf(Array(100).fill(2), 0, 20), 20, 18, 0), 180, 'the last row reaches the end')
 
-const layoutOf = (heights: Record<string, number>): ScrollLayout => {
-  let top = 0
-  const placed = new Map<string, { top: number; height: number }>()
-  for (const [key, height] of Object.entries(heights)) { placed.set(key, { top, height }); top += height }
-  return { contentHeight: top, cards: placed }
-}
-
-// Uneven cards: the error card ('b') is the tall one, so it owns the middle of the
-// track; by message order alone it would sit a fifth of the way down.
-const uneven = layoutOf({ p: 1, a: 1, b: 12, c: 1, d: 1, e: 4 })
-const rows = scrollMarkerRows(cards, uneven, 20)
-assert.deepEqual([...rows].map(([row, kind]) => [row, kind]), [[0, 'prompt'], [8, 'error'], [15, 'edit'], [18, 'error']])
-// Squeezed into two rows the most urgent kind in each row wins.
-assert.deepEqual([...scrollMarkerRows(cards, uneven, 2)], [[0, 'error'], [1, 'error']])
-// A card with no layout (outside the mounted window) gets no marker; no layout, no markers.
-assert.deepEqual([...scrollMarkerRows(cards, layoutOf({ b: 5, c: 5 }), 10)], [[2, 'error']])
-assert.equal(scrollMarkerRows(cards, null, 10).size, 0)
-assert.equal(scrollMarkerTargets(cards, uneven, 2).get(0)?.key, 'b', 'Collision clicks target the displayed highest-priority card')
-
-// The real thing: a scrollbox of boxes with those heights, measured by the hook.
-const heights: Record<string, number> = { p: 1, a: 1, b: 12, c: 1, d: 1, e: 4 }
-let jumped: string | null = null
+// The real thing: 100 cards of two rows, of which the scrollbox mounts a 20-card window.
+const TOTAL = 100
+const cards = Array.from({ length: TOTAL }, (_, i) => card(`c${i}`, i === 90 ? { tone: 'result_error' } : i % 10 === 0 ? { role: 'user' as never } : {}))
+const heightsRef = { current: { rows: new RowHeightIndex(Array(TOTAL).fill(2)) } }
+let setWindow: (start: number) => void = () => {}
+const seeks: Array<[number, number]> = []
+const scrollRef: { current: ScrollBoxRenderable | null } = { current: null }
 const Harness = () => {
-  const ref = React.useRef<import('@opentui/core').ScrollBoxRenderable | null>(null)
-  const layout = useScrollLayout(ref, true)
+  const [start, setStart] = React.useState(20)
+  setWindow = setStart
   return (
-    <box width={12} height={10}>
-      <scrollbox ref={ref} style={{ height: 10 }} scrollY>
-        {cards.map((c) => <box key={c.key} id={`card:${c.key}`} height={heights[c.key]!}><text>{c.key}</text></box>)}
+    <box width={14} height={20} paddingX={1}>
+      <scrollbox ref={scrollRef} style={{ height: 20 }} scrollY scrollbarOptions={{ trackOptions: { foregroundColor: DARK_THEME.surface2, backgroundColor: DARK_THEME.surface2 } }}>
+        {cards.slice(start, start + 20).map((c) => <box key={c.key} id={`card:${c.key}`} height={2}><text>{c.key}</text></box>)}
       </scrollbox>
-      <ScrollMarkers cards={cards} layout={layout} rows={10} theme={DARK_THEME} onJump={key => { jumped = key }} />
+      <TranscriptScrollbar scrollRef={scrollRef} heightsRef={heightsRef} cards={cards} rows={20} theme={DARK_THEME} focused markers onSeek={(index, offset) => { seeks.push([index, offset]) }} />
     </box>
   )
 }
-const setup = await testRender(<Harness />, { width: 12, height: 10 })
-for (let i = 0; i < 20; i++) await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, 30)) })
+const setup = await testRender(<Harness />, { width: 14, height: 20 })
+const settle = async () => { for (let i = 0; i < 6; i++) await act(async () => { await setup.flush(); await new Promise((resolve) => setTimeout(resolve, 20)) }) }
+const thumb = () => {
+  const node = setup.renderer.root.findDescendantById('transcript-scrollbar-thumb')
+  assert.ok(node, 'the thumb is drawn')
+  return { top: node.y, size: node.height }
+}
+await settle()
+// Card 30 at the top of a window starting at card 20: 60 of 180 scrollable rows.
+await act(async () => { scrollRef.current!.scrollTo(20) })
+await settle()
+const before = thumb()
+assert.deepEqual(before, { top: 6, size: 2 }, 'the thumb is the viewport on all 100 cards, not on the 20 mounted')
+// The window slides to start at card 25 and the view is held on card 30, as the reader's fixup does.
+await act(async () => { setWindow(25) })
+await act(async () => { scrollRef.current!.scrollTo(10) })
+await settle()
+assert.deepEqual(thumb(), before, 'a window slide under an unchanged view does not move the thumb')
+
 const frame = setup.captureCharFrame().split('\n')
-const errorMarker = setup.renderer.root.findDescendantById('scroll-marker:error:4')!
-assert.ok(errorMarker)
-await act(async () => { await setup.mockMouse.click(errorMarker.x, errorMarker.y) })
-assert.equal(jumped, 'b', 'Clicking the error marker jumps to its card')
+const markerColumn = 13 // right={0} inside the 14-wide box: beside the track at column 12
+const column = frame.map((line) => line[markerColumn])
+assert.equal(column[0], '·', 'the first prompt marks the top')
+assert.equal(column[18], '▪', 'an error on an unmounted card (90) is marked at its place')
+assert.equal(frame.map((line) => line[12]).filter((ch) => ch === '▪' || ch === '·').length, 0, 'no marker is drawn on the track itself')
+
+// Pressing the track's last row seeks to the end; a press on the thumb keeps its grab point.
+const bar = setup.renderer.root.findDescendantById('transcript-scrollbar')!
+await act(async () => { await setup.mockMouse.click(bar.x, bar.y + 19) })
+assert.deepEqual(seeks.at(-1), [TOTAL - 10, 0], 'the bottom of the track is the last viewport')
 await act(async () => { setup.renderer.destroy() })
-const col = 10 // right={1} inside a 12-wide box
-const markers = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((r) => frame[r]![col]!)
-assert.equal(markers[0], '·', 'the prompt is at the top')
-assert.equal(markers.indexOf('▪') > 1, true, 'the tall error card marks the middle of the track, not row 1')
-assert.equal(markers.filter((ch) => ch === '▪').length >= 2, true, 'edit and trailing error are marked too')
-console.log('Scroll markers smoke passed (laid-out height, unmounted cards, measured scrollbox)')
+console.log('Transcript scrollbar smoke passed (whole-transcript thumb, stable across slides, markers beside the track)')
 process.exit(0)

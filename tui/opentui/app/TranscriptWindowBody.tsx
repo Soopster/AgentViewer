@@ -40,7 +40,13 @@ export type ReaderScrollFixup =
   | { kind: 'cursor'; cardKey: string; committed: boolean }
 // The window the reader is heading for (the mounted one trails it by a few
 // commits after a jump), and whether it has arrived.
-export type ReaderWindowGauge = { start: number; end: number; total: number; settled: boolean; maxStart?: number; cursorStart?: (index: number) => number }
+export type ReaderWindowGauge = {
+  start: number; end: number; total: number; settled: boolean; maxStart?: number; cursorStart?: (index: number) => number
+  /** Every card's height, estimated or measured: the whole transcript's scale, which the scrollbar draws. */
+  rows?: RowHeightIndex
+}
+// Cards whose measured height is remembered past their unmounting; a guard, far above any window.
+const MEASURED_HEIGHTS_MAX = 20_000
 export type ReaderWindowOutput = {
   // First mounted card's index: cardDisplayData is relative to it.
   start: number
@@ -291,7 +297,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   const windowVisible = useWindowVisible()
   const {
     visibleTranscriptCards, followTail, isScrollbackView, scrollbackExpanded, scrollbackToggledKeys,
-    resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, viewSpec, focused,
+    resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, viewSpec, focused, transcriptView,
     isPreviewMode, isChatLikeView, isContinuousView, groupedToolView, liveCardCount, resumeMarkerIndex,
     unreadBoundaryIndex, pendingNewCount, provider, shouldEnableSyntaxHighlighting, searchMatches, searchMatchIndex,
     bookmarkKeys, agentToolCursorByGroupKey, transcriptCursorKey, cursorIndex, sessionKey, readerWindowGaugeRef,
@@ -332,14 +338,24 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
   // Source estimates are cheap; native layout refines only the mounted rows.
   // A card-count cap still protects pathological runs of one-line cards.
   const rowBudget = Math.max(120, inputs.viewportRows * 6)
-  const rowIndex = useMemo(() => new RowHeightIndex(visibleTranscriptCards.map(card => {
-    const expanded = viewSpec.foldDefault === 'expand-all' || resolvedExpandedKeys.has(card.key)
-      || isScrollbackView && scrollbackExpanded
-      || isChatLikeView && (card.category === 'conversation' || card.category === 'insight')
+  // A card's measured height outlives the window that measured it, so a card scrolled past keeps its
+  // real height when the index is rebuilt (every poll that adds a message rebuilds it). Without it the
+  // whole-transcript scale fell back to estimates whenever the window slid, and the scrollbar jumped.
+  // Keyed on what changes a card's layout; anything else that does is caught by re-measuring when mounted.
+  const measureContext = `${rightPaneWidth}:${densityState.cardGap}:${transcriptView}`
+  const measuredHeights = useMemo(() => new Map<string, { expanded: boolean; height: number }>(), [measureContext])
+  const cardExpanded = useMemo(() => visibleTranscriptCards.map(card => viewSpec.foldDefault === 'expand-all' || resolvedExpandedKeys.has(card.key)
+    || isScrollbackView && scrollbackExpanded
+    || isChatLikeView && (card.category === 'conversation' || card.category === 'insight')),
+  [visibleTranscriptCards, viewSpec, resolvedExpandedKeys, isScrollbackView, scrollbackExpanded, isChatLikeView])
+  const rowIndex = useMemo(() => new RowHeightIndex(visibleTranscriptCards.map((card, index) => {
+    const expanded = cardExpanded[index]!
+    const measured = measuredHeights.get(card.key)
+    if (measured && measured.expanded === expanded) return measured.height
     const lines = expanded ? card.expandedLines : card.lines
     const prose = expanded && card.markdownContent ? Math.ceil(card.markdownContent.length / Math.max(rightPaneWidth - 8, 20)) : 0
     return 3 + densityState.cardGap + Math.max(lines.length, prose)
-  })), [visibleTranscriptCards, viewSpec, resolvedExpandedKeys, isScrollbackView, scrollbackExpanded, isChatLikeView, rightPaneWidth, densityState.cardGap])
+  })), [visibleTranscriptCards, cardExpanded, rightPaneWidth, densityState.cardGap, measuredHeights])
   const targetWindow = deriveRowReaderWindow(rowIndex, READER_CARD_WINDOW, rowBudget, followTail, readerWindowStart)
   useEffect(() => {
     if (!windowVisible) return
@@ -347,11 +363,18 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       const sb = transcriptScrollRef.current
       if (!sb) return
       const rows = (sb.content.getChildren() as Renderable[]).filter(row => readerRowKey(row))
-      measureReaderRowHeights(rows, readerWindowOutputRef.current.start, rowIndex, densityState.cardGap)
+      const start = readerWindowOutputRef.current.start
+      measureReaderRowHeights(rows, start, rowIndex, densityState.cardGap)
+      const cache = measuredHeights
+      if (cache.size > MEASURED_HEIGHTS_MAX) cache.clear()
+      for (let relative = 0; relative < rows.length; relative++) {
+        const card = visibleTranscriptCards[start + relative]
+        if (card && readerRowKey(rows[relative]!) === card.key) cache.set(card.key, { expanded: cardExpanded[start + relative]!, height: rowIndex.height(start + relative) })
+      }
     }
     renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
     return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
-  }, [renderer, rowIndex, transcriptScrollRef, densityState.cardGap, windowVisible])
+  }, [renderer, rowIndex, transcriptScrollRef, densityState.cardGap, windowVisible, visibleTranscriptCards, cardExpanded, measuredHeights])
   // What the last commit mounted, and for which session. Read during render to
   // decide how far this commit may move: it only changes at a commit, so a
   // render repeated without one derives the same window.
@@ -403,6 +426,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       settled: windowSettled,
       maxStart: targetWindow.maxStart,
       cursorStart: index => Math.min(targetWindow.maxStart, rowIndex.at(Math.max(0, rowIndex.offset(index) - rowBudget / 2))),
+      rows: rowIndex,
     }
   }, [totalTranscriptCards, targetWindow.start, targetWindow.end, targetWindow.maxStart, windowSettled, rowIndex, rowBudget])
   // Browse-mode preview renders every card COLLAPSED. Text cards are expanded

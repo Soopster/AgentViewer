@@ -29,7 +29,8 @@ import { calculateSplitPaneBodyRows } from '../splitPaneState'
 import { useDisabledPlugins } from '../../../lib/plugins/useDisabledPlugins'
 import { TaskStrip } from './TaskStrip'
 import { latestTaskStrip, taskStripRows } from './todoStripModel'
-import { ScrollMarkers, useScrollLayout } from './ScrollMarkers'
+import { TranscriptScrollbar } from './ScrollMarkers'
+import { useStableEvent } from '../useStableEvent'
 import { type CardLandmark, type AgentToolGroupCard, type DensityState } from './types'
 import { EMPTY_EXPANDED_KEYS } from './timing'
 import { DOUBLE_CLICK_MS, READER_SCROLL_POLL_MS, SPLIT_PANE_CARD_WINDOW, READER_FIXUP_RETRY_MS, FLOATING_PANE_INDEX, MESSAGE_SCROLL_ACCEL } from './layoutConstants'
@@ -964,8 +965,10 @@ export function SplitTranscriptPaneInner({
   const scrollbarOptions = useMemo(
     // `visible` only to hide: passing true forces the bar on where it would auto-hide.
     // The thumb takes the frame's border colour (lit when focused), as the session rail's does.
-    () => ({ ...(scrollbarVisible ? {} : { visible: false }), trackOptions: { foregroundColor: focused ? theme.cyan : theme.border, backgroundColor: theme.surface2 } }),
-    [theme.cyan, theme.border, theme.surface2, scrollbarVisible, focused],
+    // Its thumb is painted in the track's colour: the scrollbox measures only the mounted card window,
+    // so TranscriptScrollbar draws the thumb over the gutter on the whole transcript's scale instead.
+    () => ({ ...(scrollbarVisible ? {} : { visible: false }), trackOptions: { foregroundColor: theme.surface2, backgroundColor: theme.surface2 } }),
+    [theme.surface2, scrollbarVisible],
   )
 
   const accent = transcriptAccent('assistant', session.provider ?? undefined)
@@ -984,7 +987,6 @@ export function SplitTranscriptPaneInner({
   // The Session insights plugin owns the track markers and the task strip.
   const insightsOn = !useDisabledPlugins().has('session-insights')
   const markersOn = insightsOn && viewSpec.scrollbar === 'markers'
-  const scrollLayout = useScrollLayout(scrollRef, markersOn && visible && allPaneCards.length > 1)
   const taskStrip = useMemo(() => (insightsOn ? latestTaskStrip(allPaneCards) : null), [insightsOn, allPaneCards])
   const [taskStripOpen, setTaskStripOpen] = useState(false)
   const stripRows = taskStripRows(taskStrip, taskStripOpen)
@@ -1051,6 +1053,21 @@ export function SplitTranscriptPaneInner({
     store: windowStore, scrollRef, gaugeRef: windowGaugeRef, fixupRef: scrollFixupRef,
     cards: allPaneCards, cursorKey, cursorIndex, followTail, setFollowTail, active: visible, holdRef: restoreHold,
     scrollbackSyncedKeyRef: paneScrollbackLike ? scrollbackSyncedCursorKeyRef : undefined,
+  })
+  const jumpToMarker = useStableEvent((cardKey: string) => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) })
+  // A scrollbar press or drag: scroll straight to a mounted card's row; an unmounted one is jumped to
+  // (the window slides to it), and the drag's next move lands precisely once it is mounted.
+  const seekScrollbar = useStableEvent((index: number, offset: number) => {
+    onActivate(paneIndex)
+    const card = allPaneCards[index]
+    const sb = scrollRef.current
+    if (!card || !sb) return
+    const row = findReaderCard(sb.content, `card:${card.key}`)
+    if (!row) { navigationHandle.current?.jumpToKey(card.key, false); return }
+    const top = row.y - sb.content.y + offset
+    const limit = Math.max(sb.scrollHeight - sb.viewport.height, 0)
+    sb.scrollTo(Math.max(0, Math.min(top, limit)))
+    settleScrollRef.current(sb, sb.scrollTop, limit)
   })
   const thinkingFullKeys = useMemo(() => thinkingMode
     ? new Set(allPaneCards.filter(card => card.lines.some(line => line.tone === 'thinking')).map(card => card.key))
@@ -1180,7 +1197,8 @@ export function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
-        {markersOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={viewSpec.scrollMarkerJump ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
+        {scrollbarVisible && visible && allPaneCards.length > 0 ? <TranscriptScrollbar scrollRef={scrollRef} heightsRef={windowGaugeRef} cards={allPaneCards} rows={bodyRows} theme={theme} focused={focused} markers={markersOn && allPaneCards.length > 1}
+          onJump={viewSpec.scrollMarkerJump ? jumpToMarker : undefined} onSeek={seekScrollbar} /> : null}
         {stickyCard && !viewSpec.promptNavigation ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
       {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}
