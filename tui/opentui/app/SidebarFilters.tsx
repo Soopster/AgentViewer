@@ -31,20 +31,12 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
 }) {
   const activityLabel = ACTIVITIES.find(([value]) => value === (activity ?? 'all'))![1]
   // A chip at its default is quiet; one that narrows the list is filled and cyan, so the narrowing is visible.
-  const quiet = sidebarQuietColor(theme)
-  const chip = (label: string, narrowing: boolean) => <text fg={narrowing ? theme.cyan : quiet} bg={narrowing ? theme.surface3 : undefined}
-    wrapMode="none" selectable={false}>{narrowing ? ` ${label} ▾ ` : `${label} ▾`}</text>
+  const chip = (label: string, narrowing: boolean) => <SidebarChip theme={theme} label={label} narrowing={narrowing} />
   // Space, not a dot: the carets already mark each chip as a control.
   const separator = <text wrapMode="none" selectable={false}>{'  '}</text>
   return <box flexShrink={0} flexDirection="column">
-    {/* A glyph so the row reads as an input; the key that jumps to it is in the placeholder, beside the words it
-        refers to, rather than adrift at the far edge. */}
-    <box height={1} paddingX={1} flexShrink={0} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onSearchFocus() } }}>
-      <text fg={searchFocused ? theme.cyan : quiet} wrapMode="none" selectable={false}>{'⌕ '}</text>
-      <box flexGrow={1} height={1}>
-        <input id={`${idPrefix}-input:search`} placeholder="Search sessions  /" maxLength={SEARCH_MAX_CHARS} value={query} focused={searchFocused} onInput={onQuery} onSubmit={onSubmit} />
-      </box>
-    </box>
+    <SidebarSearchRow idPrefix={idPrefix} theme={theme} placeholder="Search sessions  /" query={query} focused={searchFocused}
+      onFocus={onSearchFocus} onQuery={onQuery} onSubmit={onSubmit} />
     <box flexShrink={0} flexDirection="row" flexWrap="wrap" paddingX={1}>
       <box id={`${idPrefix}-scope`} height={1} flexShrink={0} onMouseDown={event => {
         if (event.button !== 0) return
@@ -78,9 +70,33 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
         ] })
       }}>{chip(tag ? `#${tag}` : 'Tag', Boolean(tag))}</box> : null}
     </box>
-    {/* One rule between the controls (how the list is filtered) and the list itself. */}
-    <box id={`${idPrefix}-filters-rule`} height={1} flexShrink={0} marginX={1} overflow="hidden">
-      <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
+    <SidebarFiltersRule idPrefix={idPrefix} theme={theme} />
+  </box>
+}
+
+/** A glyph so the row reads as an input; the key that jumps to it is in the placeholder, beside the words it refers
+ *  to, rather than adrift at the far edge. Shared by both rail tabs. */
+export function SidebarSearchRow({ idPrefix, theme, placeholder, query, focused, onFocus, onQuery, onSubmit }: {
+  idPrefix: string; theme: TuiThemePalette; placeholder: string; query: string; focused: boolean
+  onFocus: () => void; onQuery: (query: string) => void; onSubmit: () => void
+}) {
+  return <box height={1} paddingX={1} flexShrink={0} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onFocus() } }}>
+    <text fg={focused ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{'⌕ '}</text>
+    <box flexGrow={1} height={1}>
+      <input id={`${idPrefix}-input:search`} placeholder={placeholder} maxLength={SEARCH_MAX_CHARS} value={query} focused={focused} onInput={onQuery} onSubmit={onSubmit} />
     </box>
   </box>
+}
+
+/** One rule between the controls (how the list is filtered) and the list itself. */
+export function SidebarFiltersRule({ idPrefix, theme }: { idPrefix: string; theme: TuiThemePalette }) {
+  return <box id={`${idPrefix}-filters-rule`} height={1} flexShrink={0} marginX={1} overflow="hidden">
+    <text fg={mixHexColor(sidebarQuietColor(theme), theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
+  </box>
+}
+
+/** A dropdown chip: quiet at its default, filled and cyan once it narrows the list. */
+export function SidebarChip({ theme, label, narrowing }: { theme: TuiThemePalette; label: string; narrowing: boolean }) {
+  return <text fg={narrowing ? theme.cyan : sidebarQuietColor(theme)} bg={narrowing ? theme.surface3 : undefined}
+    wrapMode="none" selectable={false}>{narrowing ? ` ${label} ▾ ` : `${label} ▾`}</text>
 }

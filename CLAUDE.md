@@ -513,10 +513,25 @@ a node rather than hiding it — hide with `false`. Nothing here sets `visible`.
   it. Its bottom border carries the sort (`↕ by project`, clickable) on the left
   and the count (`58 of 59`) plus why sessions are hidden on the right — the same
   absolute-box trick at `bottom: -1`, so the filter chips never wrap a note. Marks sit before the age so ages form one flush column.
-  The coordinator rail follows the same form: a run is a `TITLE / n` heading in
-  its status colour, and an agent is one row — tree glyph, name in its
-  provider's colour, then state glyph and task. Role and provider are not
-  spelled out, and an idle agent with no task says nothing.
+  The coordinator rail follows the same form: `COORDINATOR · n runs` on top, a
+  search row (runs by title, agents by name or task; `/` and Esc as for
+  sessions) and the agent-state filter as a chip (`f` cycles it), then the rule;
+  its bottom border counts agents and who waits on you (`3 agents · !1 · ✓1`).
+  A run is a project-style header — status glyph, title in sentence case, a
+  rule to its agent count, then its age, which is what tells apart runs that
+  share a prompt. An agent is one row — tree glyph, name in its provider's
+  colour, then state glyph and task, the tree and task in the quiet grey. Role
+  and provider are not spelled out, and an idle agent with no task says nothing.
+  Agents waiting on you are lifted into a NEEDS YOU group at the top (key
+  `needs:` + the agent's; the selection follows a row across the lift). Runs sit
+  under the sessions rail's date buckets, and This month / Older start folded. A
+  run starts folded to its heading once it has ended or has been quiet for a day
+  — nothing finalizes many runs, which then say "running" for weeks. A click on a
+  heading flips it; `e` opens everything or restores the defaults; a search
+  unfolds all. Levels step one column each: bucket, run, agents (tree glyph under
+  the run's status glyph). `shapeEntries` in the store does all of it.
+  The search, filter and folds live in `coordinatorStore`, so the root's only
+  coordinator subscription is the run count for the title.
 - **Only the focused surface has a lit border.** The composer dock used the
   focused-pane border colour whenever it was merely open in a stream view, so
   two frames looked focused at once; it is accented only when routed or when it

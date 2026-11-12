@@ -187,7 +187,7 @@ import { fitText, joinMeta } from './textLayout'
 import { Slot } from './slots'
 import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
 import './slotRegistrations'
-import { coordinatorSidebarHeaderText } from './CoordinatorSidebar'
+import { coordinatorSidebarHeaderText, CoordinatorFilters } from './CoordinatorSidebar'
 import {
   getCoordinatorState,
   setCoordinatorSelectedKey,
@@ -1523,18 +1523,15 @@ function OpenTuiWorkspace() {
 
 
   // The rail owns this state now (coordinatorStore). The root needs only the
-  // header counts, for the rail's box title — a string prop, so it cannot come
-  // from a memoized child. Key handlers read the store imperatively instead, so
+  // run count, for the rail's box title — a string prop, so it cannot come
+  // from a memoized child; the agent counts are drawn by the rail itself, in
+  // its bottom border. Key handlers read the store imperatively instead, so
   // this is the root's ONLY coordinator subscription, and a refresh that
-  // changes rows without changing counts never reaches this component.
+  // changes rows without changing the run count never reaches this component.
   const coordinatorHeaderCounts = useSyncExternalStore(
     subscribeCoordinator,
-    () => {
-      const { agentEntries, runs, filter, stateCounts } = getCoordinatorState()
-      const total = Object.values(stateCounts).reduce((sum, count) => sum + count, 0)
-      return `${agentEntries.length}/${runs.length}/${filter}/${stateCounts.blocked}/${stateCounts.done}/${total}`
-    },
-    () => '0/0/all/0/0/0',
+    () => `${getCoordinatorState().runs.length}`,
+    () => '0',
   )
   const moveCoordinatorSelection = useStableEvent((delta: number) => {
     const { agentEntries, selectedKey } = getCoordinatorState()
@@ -6807,6 +6804,8 @@ function OpenTuiWorkspace() {
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
           tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
           />}
+        coordinatorControls={<CoordinatorFilters theme={theme} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
+          onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onSubmit={() => setSessionSearchMode(false)} />}
         sidebarStatus={<SidebarStatus theme={theme} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
         onNewSession={openNewSessionModal}
         onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}

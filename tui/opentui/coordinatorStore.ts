@@ -16,6 +16,7 @@ import { readCoordinatorReviewed } from '../../lib/tui/coordinatorReviewed'
 import { coordinatorRequestScope } from '../../lib/tui/coordinatorRequests'
 import { coordinatorAttention } from '../../lib/coordinatorAttention'
 import { listWatchedMachines, readMachineRoster, subscribeMachineRunChanges, type MachineRoster } from '../../lib/tui/machines'
+import { isDateBucketCollapsedByDefault, sidebarDateBucket } from '../../lib/sessionSidebarModel'
 import {
   COORDINATOR_PICKER_FILTERS,
   coordinatorPickerState,
@@ -28,7 +29,12 @@ export type CoordinatorMachineRef = { name: string; baseUrl: string }
 
 export type CoordinatorSidebarEntry =
   | { type: 'machine'; key: string; machine: CoordinatorMachineRef; agentCount: number; error: string | null }
-  | { type: 'run'; key: string; runId: string; run: ProtocolRun; agentCount: number; machine?: CoordinatorMachineRef }
+  | { type: 'run'; key: string; runId: string; run: ProtocolRun; agentCount: number; machine?: CoordinatorMachineRef
+      /** A finished run with nobody waiting on the user starts folded; a click or `e` changes it. */
+      defaultFolded: boolean; folded: boolean }
+  | { type: 'group'; key: string; label: string; count: number }
+  /** Today / Yesterday / … over runs by when they started, as the sessions rail buckets sessions. */
+  | { type: 'date'; key: string; label: string; count: number; defaultFolded: boolean; folded: boolean }
   | { type: 'agent'; key: string; runId: string; agent: ProtocolAgent; isLast: boolean; taskTitle: string | null; state: CoordinatorPickerState; machine?: CoordinatorMachineRef }
 
 export type CoordinatorState = {
@@ -39,6 +45,10 @@ export type CoordinatorState = {
   readonly machines: readonly MachineRoster[]
   /** Herdr's Goto-picker filter: only agents in this state are listed. */
   readonly filter: CoordinatorPickerFilter
+  /** The rail's search: a run whose title matches keeps its agents, otherwise only agents whose name or task matches. */
+  readonly query: string
+  /** Runs whose fold the user flipped from its default (a run key, local or `machine/`-scoped). */
+  readonly foldToggles: ReadonlySet<string>
   /** Every agent's state before filtering, so the header can say what is hidden. */
   readonly stateCounts: Readonly<Record<CoordinatorPickerState, number>>
   /** Derived here so `getSnapshot` is stable and every reader agrees. */
@@ -63,18 +73,113 @@ export function buildCoordinatorEntries(
   filter: CoordinatorPickerFilter = 'all',
   reviewedFor: (snapshot: ProtocolRunSnapshot) => readonly string[] = reviewedForRun,
   machines: readonly MachineRoster[] = [],
+  query = '',
+  foldToggles: ReadonlySet<string> = new Set(),
 ): CoordinatorSidebarEntry[] {
-  const entries = buildRunEntries(runs, snapshots, filter, reviewedFor)
+  return shapeEntries(buildListedEntries(runs, snapshots, filter, reviewedFor, machines, query), filter, query, foldToggles)
+}
+
+function buildListedEntries(
+  runs: readonly ProtocolRun[],
+  snapshots: ReadonlyMap<string, ProtocolRunSnapshot>,
+  filter: CoordinatorPickerFilter,
+  reviewedFor: (snapshot: ProtocolRunSnapshot) => readonly string[],
+  machines: readonly MachineRoster[],
+  query: string,
+): CoordinatorSidebarEntry[] {
+  const entries = buildRunEntries(runs, snapshots, filter, reviewedFor, undefined, query)
   for (const roster of machines) {
     const machine = { name: roster.name, baseUrl: roster.baseUrl }
-    const remote = buildRunEntries(roster.runs, roster.snapshots, filter, reviewedFor, machine)
+    const remote = buildRunEntries(roster.runs, roster.snapshots, filter, reviewedFor, machine, query)
     const agentCount = remote.filter((entry) => entry.type === 'agent').length
     // A machine that cannot be read is always shown: a list that silently
     // drops a machine answers "nobody there needs you" when it does not know.
-    if (filter !== 'all' && agentCount === 0 && !roster.error) continue
+    if ((filter !== 'all' || query.trim()) && agentCount === 0 && !roster.error) continue
     entries.push({ type: 'machine', key: `machine:${roster.name}`, machine, agentCount, error: roster.error }, ...remote)
   }
   return entries
+}
+
+const ENDED_RUN_STATUSES = new Set(['completed', 'failed', 'stopped'])
+const STALE_RUN_MS = 24 * 60 * 60 * 1000
+export const NEEDS_YOU_GROUP_KEY = 'group:needs-you'
+
+/**
+ * The sessions rail's shape, applied to agents.
+ *
+ * - Anyone waiting on the user is lifted into a NEEDS YOU group at the top (its own key, `needs:` + the agent's,
+ *   since a key names one row) and leaves its run's tree, as a lifted session leaves its project. Under a state
+ *   filter the list is already that state, so nothing is lifted.
+ * - Runs fall into the sessions rail's date buckets by when they started, and This month and Older start folded
+ *   as they do there. Nobody waiting is hidden by that: anyone waiting is already in NEEDS YOU.
+ * - A run starts folded to its heading once it has ended, or once nothing has happened in it
+ *   for `STALE_RUN_MS`: a run nothing ever finalized still says "running" weeks later.
+ *
+ * A search unfolds everything: a match hidden in a folded run is not a match anyone can see.
+ */
+function shapeEntries(
+  entries: readonly CoordinatorSidebarEntry[],
+  filter: CoordinatorPickerFilter,
+  query: string,
+  foldToggles: ReadonlySet<string>,
+  now = new Date(),
+): CoordinatorSidebarEntry[] {
+  const lifted = filter === 'all'
+    ? entries.filter((entry): entry is Extract<CoordinatorSidebarEntry, { type: 'agent' }> => entry.type === 'agent' && entry.state === 'blocked')
+    : []
+  const liftedKeys = new Set(lifted.map((entry) => entry.key))
+  const searching = Boolean(query.trim())
+  const isFolded = (key: string, byDefault: boolean) => !searching && (foldToggles.has(key) ? !byDefault : byDefault)
+  const bucketKeyOf = new Map<string, string>()
+  const buckets = new Map<string, { label: string; count: number }>()
+  for (const entry of entries) {
+    if (entry.type !== 'run') continue
+    const label = sidebarDateBucket(Date.parse(entry.run.createdAt) || 0, now)
+    const key = `date:${entry.machine ? `${entry.machine.name}/` : ''}${label}`
+    bucketKeyOf.set(entry.key, key)
+    const bucket = buckets.get(key) ?? { label, count: 0 }
+    bucket.count += 1
+    buckets.set(key, bucket)
+  }
+  const rest: CoordinatorSidebarEntry[] = []
+  let currentBucket: string | null = null
+  let bucketFolded = false
+  let runFolded = false
+  for (const entry of entries) {
+    if (entry.type === 'machine') {
+      currentBucket = null
+      bucketFolded = runFolded = false
+      rest.push(entry)
+    } else if (entry.type === 'run') {
+      const bucketKey = bucketKeyOf.get(entry.key)!
+      if (bucketKey !== currentBucket) {
+        currentBucket = bucketKey
+        const bucket = buckets.get(bucketKey)!
+        const defaultFolded = isDateBucketCollapsedByDefault(bucket.label)
+        bucketFolded = isFolded(bucketKey, defaultFolded)
+        rest.push({ type: 'date', key: bucketKey, label: bucket.label, count: bucket.count, defaultFolded, folded: bucketFolded })
+      }
+      runFolded = isFolded(entry.key, entry.defaultFolded)
+      if (!bucketFolded) rest.push({ ...entry, folded: runFolded })
+    } else if (entry.type === 'agent') {
+      if (!bucketFolded && !runFolded && !liftedKeys.has(entry.key)) rest.push(entry)
+    } else {
+      rest.push(entry)
+    }
+  }
+  // Removing lifted agents can leave a tree whose last row is not marked last.
+  const shaped = rest.map((entry, index) => {
+    if (entry.type !== 'agent') return entry
+    const next = rest[index + 1]
+    const isLast = !(next?.type === 'agent' && next.runId === entry.runId)
+    return entry.isLast === isLast ? entry : { ...entry, isLast }
+  })
+  if (lifted.length === 0) return shaped
+  return [
+    { type: 'group', key: NEEDS_YOU_GROUP_KEY, label: 'NEEDS YOU', count: lifted.length },
+    ...lifted.map((entry, index) => ({ ...entry, key: `needs:${entry.key}`, isLast: index === lifted.length - 1 })),
+    ...shaped,
+  ]
 }
 
 function buildRunEntries(
@@ -83,9 +188,11 @@ function buildRunEntries(
   filter: CoordinatorPickerFilter,
   reviewedFor: (snapshot: ProtocolRunSnapshot) => readonly string[],
   machine?: CoordinatorMachineRef,
+  query = '',
 ): CoordinatorSidebarEntry[] {
   // Run and agent ids are only unique within one ledger.
   const scope = machine ? `${machine.name}/` : ''
+  const needle = query.trim().toLowerCase()
   const entries: CoordinatorSidebarEntry[] = []
   for (const run of runs) {
     const snapshot = snapshots.get(run.id)
@@ -101,11 +208,19 @@ function buildRunEntries(
       agent,
       state: snapshot ? coordinatorPickerState(agent, snapshot, reviewed, attention) : 'unknown' as const,
     }))
-    const visible = filter === 'all' ? stated : stated.filter((entry) => entry.state === filter)
+    const taskTitleOf = (agent: ProtocolAgent) => (agent.taskId ? tasksById.get(agent.taskId)?.title : undefined) ?? null
+    const byState = filter === 'all' ? stated : stated.filter((entry) => entry.state === filter)
+    const titleMatches = !needle || run.prompt.toLowerCase().includes(needle)
+    const visible = titleMatches ? byState : byState.filter(({ agent }) =>
+      agent.name.toLowerCase().includes(needle) || (taskTitleOf(agent) ?? '').toLowerCase().includes(needle))
     // A filtered list is a list of agents, as herdr's picker is; a run with
-    // none of them is noise between the ones that matter.
+    // none of them is noise between the ones that matter. A search keeps a run
+    // whose title matches even when it has no agents to show.
     if (filter !== 'all' && visible.length === 0) continue
-    entries.push({ type: 'run', key: `run:${scope}${run.id}`, runId: run.id, run, agentCount: stated.length, ...(machine ? { machine } : {}) })
+    if (needle && !titleMatches && visible.length === 0) continue
+    // Anyone waiting in a folded run is still listed: NEEDS YOU lifts them out of it.
+    const defaultFolded = ENDED_RUN_STATUSES.has(run.status) || Date.now() - (Date.parse(run.updatedAt) || 0) > STALE_RUN_MS
+    entries.push({ type: 'run', key: `run:${scope}${run.id}`, runId: run.id, run, agentCount: stated.length, defaultFolded, folded: defaultFolded, ...(machine ? { machine } : {}) })
     visible.forEach(({ agent, state }, index) => {
       entries.push({
         type: 'agent',
@@ -113,7 +228,7 @@ function buildRunEntries(
         runId: run.id,
         agent,
         isLast: index === visible.length - 1,
-        taskTitle: (agent.taskId ? tasksById.get(agent.taskId)?.title : undefined) ?? null,
+        taskTitle: taskTitleOf(agent),
         state,
         ...(machine ? { machine } : {}),
       })
@@ -136,15 +251,11 @@ function reviewedForRun(snapshot: ProtocolRunSnapshot): readonly string[] {
 function countStates(
   runs: readonly ProtocolRun[],
   snapshots: ReadonlyMap<string, ProtocolRunSnapshot>,
-  entries: readonly CoordinatorSidebarEntry[],
-  filter: CoordinatorPickerFilter,
   machines: readonly MachineRoster[],
 ): Record<CoordinatorPickerState, number> {
   const counts: Record<CoordinatorPickerState, number> = { blocked: 0, working: 0, done: 0, idle: 0, unknown: 0 }
-  // Unfiltered entries already carry every state; a filtered list has to be
-  // rebuilt unfiltered to count what it hides.
-  const all = filter === 'all' ? entries : buildCoordinatorEntries(runs, snapshots, 'all', reviewedForRun, machines)
-  for (const entry of all) if (entry.type === 'agent') counts[entry.state] += 1
+  // Every agent, whatever the filter, search or folding hides: the counts say what is there, not what is shown.
+  for (const entry of buildListedEntries(runs, snapshots, 'all', reviewedForRun, machines, '')) if (entry.type === 'agent') counts[entry.state] += 1
   return counts
 }
 
@@ -156,15 +267,20 @@ function derive(
   selectedKey: string | null,
   filter: CoordinatorPickerFilter = state?.filter ?? 'all',
   machines: readonly MachineRoster[] = state?.machines ?? [],
+  query: string = state?.query ?? '',
+  foldToggles: ReadonlySet<string> = state?.foldToggles ?? new Set(),
 ): CoordinatorState {
-  const entries = buildCoordinatorEntries(runs, snapshots, filter, reviewedForRun, machines)
+  const entries = buildCoordinatorEntries(runs, snapshots, filter, reviewedForRun, machines, query, foldToggles)
   return {
     runs,
     snapshots,
-    selectedKey,
+    // An agent lifted into NEEDS YOU (or put back) changes key; the selection follows it.
+    selectedKey: followSelection(entries, selectedKey),
     machines,
     filter,
-    stateCounts: countStates(runs, snapshots, entries, filter, machines),
+    query,
+    foldToggles,
+    stateCounts: countStates(runs, snapshots, machines),
     entries,
     agentEntries: entries.filter(
       (entry): entry is Extract<CoordinatorSidebarEntry, { type: 'agent' }> => entry.type === 'agent',
@@ -172,7 +288,13 @@ function derive(
   }
 }
 
-let state: CoordinatorState = derive([], EMPTY_SNAPSHOTS, null, 'all', [])
+function followSelection(entries: readonly CoordinatorSidebarEntry[], selectedKey: string | null): string | null {
+  if (!selectedKey || entries.some((entry) => entry.key === selectedKey)) return selectedKey
+  const other = selectedKey.startsWith('needs:') ? selectedKey.slice('needs:'.length) : `needs:${selectedKey}`
+  return entries.some((entry) => entry.key === other) ? other : selectedKey
+}
+
+let state: CoordinatorState = derive([], EMPTY_SNAPSHOTS, null, 'all', [], '', new Set())
 const listeners = new Set<() => void>()
 
 function commit(next: CoordinatorState) {
@@ -214,9 +336,44 @@ export function setCoordinatorFilter(filter: CoordinatorPickerFilter): void {
   commit(selectionVisible ? next : { ...next, selectedKey: next.agentEntries[0]?.key ?? null })
 }
 
+/** The rail's search. Like the filter, the selection follows to the first match when its row is searched away. */
+export function setCoordinatorQuery(query: string): void {
+  if (state.query === query) return
+  const next = derive(state.runs, state.snapshots, state.selectedKey, state.filter, state.machines, query)
+  const selectionVisible = next.agentEntries.some((entry) => entry.key === next.selectedKey)
+  commit(selectionVisible ? next : { ...next, selectedKey: next.agentEntries[0]?.key ?? null })
+}
+
+/** Fold or unfold one run's agents, or one date bucket's runs, under its heading. */
+export function toggleCoordinatorFold(runKey: string): void {
+  const toggles = new Set(state.foldToggles)
+  if (toggles.has(runKey)) toggles.delete(runKey)
+  else toggles.add(runKey)
+  commitFolds(toggles)
+}
+
+/** `e`: unfold every run while any is folded, otherwise put every run back to its default. */
+export function toggleAllCoordinatorFolds(): 'expanded' | 'defaults' {
+  const anyFolded = state.entries.some((entry) => (entry.type === 'run' || entry.type === 'date') && entry.folded)
+  if (!anyFolded) { commitFolds(new Set()); return 'defaults' }
+  // Every default-folded heading flipped open, including runs a folded date bucket was hiding.
+  const all = buildCoordinatorEntries(state.runs, state.snapshots, state.filter, reviewedForRun, state.machines, state.query, new Set())
+  const opened = new Set(all.flatMap((entry) => entry.type === 'date' && entry.defaultFolded ? [entry.key] : []))
+  const reopened = buildCoordinatorEntries(state.runs, state.snapshots, state.filter, reviewedForRun, state.machines, state.query, opened)
+  for (const entry of reopened) if (entry.type === 'run' && entry.defaultFolded) opened.add(entry.key)
+  commitFolds(opened)
+  return 'expanded'
+}
+
+function commitFolds(toggles: ReadonlySet<string>) {
+  const next = derive(state.runs, state.snapshots, state.selectedKey, state.filter, state.machines, state.query, toggles)
+  const selectionVisible = next.agentEntries.some((entry) => entry.key === next.selectedKey)
+  commit(selectionVisible ? next : { ...next, selectedKey: next.agentEntries[0]?.key ?? null })
+}
+
 /** Reset for tests; the app keeps one feed for the process lifetime. */
 export function resetCoordinatorStore(): void {
-  commit(derive([], EMPTY_SNAPSHOTS, null, 'all', []))
+  commit(derive([], EMPTY_SNAPSHOTS, null, 'all', [], '', new Set()))
 }
 
 let feedHolders = 0

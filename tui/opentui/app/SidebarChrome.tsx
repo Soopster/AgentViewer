@@ -66,12 +66,16 @@ export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent,
   </box>
 }
 
-export function SidebarGroupHeading({ id, label, count, width, dateGroup, disclosure, first, afterHeading = false, selected = false, density, theme, onPress }: {
-  id: string; label: string; count: number; width: number; dateGroup?: boolean; disclosure: string; first: boolean; afterHeading?: boolean; selected?: boolean
+export function SidebarGroupHeading({ id, label, count, width, dateGroup, inset = dateGroup ? 2 : 1, disclosure, first, afterHeading = false, selected = false, density, theme, onPress }: {
+  id: string; label: string; count: number; width: number; dateGroup?: boolean
+  /** Left padding. A date header sits a step inside its project; where dates are the top level (the
+   *  Coordinator's runs) it sits at the edge. */
+  inset?: number
+  disclosure: string; first: boolean; afterHeading?: boolean; selected?: boolean
   density: TuiDensity; theme: TuiThemePalette; onPress?: () => void
 }) {
   const countLabel = `${count}`
-  const headingWidth = Math.max(width - (dateGroup ? 3 : 2), 1)
+  const headingWidth = Math.max(width - inset - 1, 1)
   // Spacing steps up with density's opposite: dense leaves a blank row before a project only; balanced also
   // before a date header that follows sessions (not one directly under its project); comfortable rows already
   // end in a blank row, so a header there adds none.
@@ -80,7 +84,7 @@ export function SidebarGroupHeading({ id, label, count, width, dateGroup, disclo
   const rule = labelWidth - title.length > 1 ? ` ${'─'.repeat(labelWidth - title.length - 1)}` : ' '.repeat(Math.max(labelWidth - title.length, 0))
   const ruleColor = mixHexColor(sidebarQuietColor(theme), theme.surface, 0.55) ?? theme.border
   const gap = density === 'comfortable' || first ? 0 : !dateGroup ? 1 : density === 'balanced' && !afterHeading ? 1 : 0
-  return <box id={id} paddingX={1} paddingLeft={dateGroup ? 2 : 1} marginTop={gap}
+  return <box id={id} paddingX={1} paddingLeft={inset} marginTop={gap}
     flexDirection="row" height={1} flexShrink={0} backgroundColor={selected ? theme.surface3 : theme.surface}
     onMouseDown={event => { if (event.button === 0 && onPress) { event.stopPropagation(); onPress() } }}>
     <text fg={selected || !dateGroup ? theme.text : sidebarQuietColor(theme)} attributes={dateGroup ? undefined : TextAttributes.BOLD} wrapMode="none" selectable={false}>

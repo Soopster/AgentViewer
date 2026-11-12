@@ -17,12 +17,13 @@ import { SidebarHeading, SidebarNewSession, SidebarSortToggle, sidebarQuietColor
 
 const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
 
-export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, status, previewEnabled = effectiveFocus === 'sessions' }: {
+export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, coordinatorControls, status, previewEnabled = effectiveFocus === 'sessions' }: {
   onViewChange: (view: 'sessions' | 'coordinator') => void
   onFocus?: () => void
   previewEnabled?: boolean
   controls?: React.ReactNode
   status?: React.ReactNode
+  coordinatorControls?: React.ReactNode
   onNewSession: () => void
   showRail: boolean
   sidebarWidth: number
@@ -98,7 +99,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
               {status}
             </> : null}
             {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
-            {sidebarView === 'sessions' && controls ? controls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}
+            {sidebarView === 'sessions' && controls ? controls : sidebarView === 'coordinator' && coordinatorControls ? coordinatorControls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}
             <box flexGrow={1} minHeight={0} paddingX={1} flexDirection="column">
               {sidebarView === 'coordinator' ? (
                 <Slot

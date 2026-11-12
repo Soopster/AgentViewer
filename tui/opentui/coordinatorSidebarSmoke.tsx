@@ -34,10 +34,21 @@ const nova = (await coordination.joinExternalProtocolRun({
   participantName: 'Sidebar Nova',
 })).participant
 
+// A second run, already stopped: a finished run with nobody waiting starts folded to its heading.
+const finished = await coordination.createExternalProtocolRun({
+  prompt: 'Finished smoke run',
+  provider: 'codex',
+  baseCwd: process.cwd(),
+  participantName: 'Finished Lead',
+  maxAgents: 1,
+})
+await coordination.stopProtocolRun(finished.participant.runId)
+
 const { default: OpenTuiApp } = await import('./App')
 
 const setup = await testRender(<OpenTuiApp />, { width: 120, height: 40, kittyKeyboard: true })
-const { captureCharFrame } = setup
+// Only the rail's columns: the reader beside it previews the newest real session, whose text can name anything.
+const captureCharFrame = () => setup.captureCharFrame().split('\n').map((line) => line.slice(0, 42)).join('\n')
 
 await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
@@ -97,7 +108,7 @@ if (!frame.includes('Sidebar Orion')) {
 act(() => { setup.mockInput.pressKey('j') })
 await act(async () => { await setup.flush() })
 frame = captureCharFrame()
-if (!frame.includes('▎├─ Sidebar Nova')) {
+if (!frame.includes('▎  ├─ Sidebar Nova')) {
   console.error(`j did not move the Coordinator selection onto the teammate row:\n${frame}`)
   process.exit(1)
 }
@@ -129,22 +140,22 @@ async function settle(until: (frame: string) => boolean, what: string) {
 // State rides the agent's own row, after its name: glyph, then what it is about.
 frame = await settle((f) => f.includes('Sidebar Nova ! needs') && f.includes('Sidebar Orion ✓'),
   'the rail did not mark a teammate waiting on the lead and one with an unreviewed result')
-if (!frame.includes('COORDINATOR 3') || !frame.includes('!1 ✓1')) {
-  console.error(`the rail header did not count blocked and unreviewed agents:\n${frame}`)
+if (!/COORDINATOR · 2 runs─/.test(frame) || !/4 agents · !1 · ✓1/.test(frame)) {
+  console.error(`the rail's title and bottom border did not count runs, blocked and unreviewed agents:\n${frame}`)
   process.exit(1)
 }
 
 // f cycles all → blocked → working → done → idle → all. Filtering to
 // blocked keeps Nova (still selected) and drops Orion.
 act(() => { setup.mockInput.pressKey('f') })
-frame = await settle((f) => f.includes('BLOCKED 1/3'), 'f did not switch the rail to the blocked filter')
+frame = await settle((f) => f.includes('Needs you ▾') && f.includes('1 of 4 agents'), 'f did not switch the rail to the blocked filter')
 if (!frame.includes('Sidebar Nova') || frame.includes('Sidebar Orion')) {
   console.error(`the blocked filter did not list exactly the blocked teammate:\n${frame}`)
   process.exit(1)
 }
 // Blocked counts stay in the header under any filter.
 act(() => { setup.mockInput.pressKey('f') })
-frame = await settle((f) => f.includes('WORKING 0/3'), 'f did not advance to the working filter')
+frame = await settle((f) => f.includes('Working ▾') && f.includes('0 of 4 agents'), 'f did not advance to the working filter')
 if (!frame.includes('!1')) {
   console.error(`a filter hid the count of agents waiting on the user:\n${frame}`)
   process.exit(1)
@@ -152,19 +163,60 @@ if (!frame.includes('!1')) {
 // Done: Nova's row is filtered out, so the selection must follow to Orion —
 // Enter must never open a row the list no longer shows.
 act(() => { setup.mockInput.pressKey('f') })
-frame = await settle((f) => f.includes('DONE 1/3'), 'f did not advance to the done filter')
-if (!frame.includes('▎└─ Sidebar Orion') || frame.includes('Sidebar Nova')) {
+frame = await settle((f) => f.includes('To review ▾') && f.includes('1 of 4 agents'), 'f did not advance to the done filter')
+if (!frame.includes('▎  └─ Sidebar Orion') || frame.includes('Sidebar Nova')) {
   console.error(`the done filter did not list and select the teammate with a result:\n${frame}`)
   process.exit(1)
 }
 act(() => { setup.mockInput.pressKey('f') })
-await settle((f) => f.includes('IDLE 1/3'), 'f did not advance to the idle filter')
+await settle((f) => f.includes('Idle ▾') && f.includes('1 of 4 agents'), 'f did not advance to the idle filter')
 act(() => { setup.mockInput.pressKey('f') })
-frame = await settle((f) => f.includes('COORDINATOR 3'), 'f did not wrap back to all')
+frame = await settle((f) => f.includes('All ▾') && f.includes(' 4 agents'), 'f did not wrap back to all')
 if (!frame.includes('Sidebar Nova') || !frame.includes('Sidebar Orion')) {
   console.error(`the all filter did not list every agent again:\n${frame}`)
   process.exit(1)
 }
+
+// The run heading is the sessions rail's project header: sentence case, a rule to its agent count.
+if (!/[●○!×✓·] \S[^\n]* ─+ 3 /.test(frame)) {
+  console.error(`the run heading is not a ruled header with its agent count:\n${frame}`)
+  process.exit(1)
+}
+
+// Nova is waiting on the user: lifted into NEEDS YOU at the top and out of its run's tree, so it is listed once.
+if (!frame.includes('NEEDS YOU') || frame.split('Sidebar Nova').length !== 2 || frame.indexOf('NEEDS YOU') > frame.indexOf('Sidebar Lead')) {
+  console.error(`the blocked teammate was not lifted into NEEDS YOU, once, above the runs:\n${frame}`)
+  process.exit(1)
+}
+// Runs sit under the sessions rail's date buckets.
+if (!/▾ Today\s+2/.test(frame)) {
+  console.error(`the runs are not under a Today bucket:\n${frame}`)
+  process.exit(1)
+}
+// The stopped run is folded to its heading; a click opens it and e puts every run back to its default.
+if (frame.includes('Finished Lead') || !/▸ \S Finished smoke run/.test(frame)) {
+  console.error(`the finished run did not start folded:\n${frame}`)
+  process.exit(1)
+}
+{
+  const heading = setup.renderer.root.findDescendantById(`sidebar:run:${finished.participant.runId}`)!
+  await act(async () => { await setup.mockMouse.click(heading.x + 2, heading.y) })
+}
+frame = await settle((f) => f.includes('Finished Lead') && /▾ \S Finished smoke run/.test(f), 'clicking a folded run did not open it')
+act(() => { setup.mockInput.pressKey('e') })
+frame = await settle((f) => !f.includes('Finished Lead'), 'e did not put the finished run back to folded')
+act(() => { setup.mockInput.pressKey('e') })
+frame = await settle((f) => f.includes('Finished Lead'), 'e did not open every folded run')
+act(() => { setup.mockInput.pressKey('e') })
+frame = await settle((f) => !f.includes('Finished Lead'), 'e did not restore the defaults')
+
+// / searches agents by name or task; Esc clears it and lists everyone again.
+act(() => { setup.mockInput.pressKey('/') })
+await act(async () => { await setup.flush() })
+await act(async () => { await setup.mockInput.typeText('orion') })
+frame = await settle((f) => f.includes('Sidebar Orion') && !f.includes('Sidebar Nova') && f.includes('1 of 4 agents'), 'search did not narrow the rail to the matching agent')
+act(() => { setup.mockInput.pressEscape() })
+frame = await settle((f) => f.includes('Sidebar Nova') && f.includes('Sidebar Orion'), 'Esc did not clear the coordinator search')
 
 act(() => { setup.mockInput.pressKey('a') })
 await act(async () => {

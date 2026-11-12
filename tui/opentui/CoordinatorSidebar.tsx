@@ -11,15 +11,23 @@ import { memo, useEffect, useRef, useSyncExternalStore } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { getProviderAccent } from '../theme'
 import type { TuiDensity, TuiThemePalette } from '../theme'
-import { fitText, joinMeta } from './textLayout'
+import { TextAttributes } from '@opentui/core'
+import { fitText } from './textLayout'
+import { SidebarGroupHeading, sidebarQuietColor } from './app/SidebarChrome'
+import { mixHexColor } from './app/transcriptStyle'
+import { timeAgo } from './app/format'
 import {
   acquireCoordinatorFeed,
   getCoordinatorState,
+  setCoordinatorFilter,
+  setCoordinatorQuery,
   setCoordinatorSelectedKey,
   subscribeCoordinator,
+  toggleCoordinatorFold,
   type CoordinatorSidebarEntry,
 } from './coordinatorStore'
-import type { CoordinatorPickerFilter, CoordinatorPickerState } from '../../lib/coordinatorSignals'
+import { COORDINATOR_PICKER_FILTERS, type CoordinatorPickerFilter, type CoordinatorPickerState } from '../../lib/coordinatorSignals'
+import { SidebarChip, SidebarFiltersRule, SidebarSearchRow, type SidebarFilterMenu } from './app/SidebarFilters'
 
 // Herdr's Goto-picker states. The glyph follows the agent's name and the label
 // is what it says when the agent has no task to name instead; `idle` says
@@ -40,12 +48,14 @@ export type CoordinatorSidebarProps = {
   scrollbarOptions: unknown
 }
 
-function CoordinatorRow({ entry, selected, first, theme, innerWidth, density }: {
+function CoordinatorRow({ entry, selected, first, afterAgent, theme, innerWidth, density }: {
   entry: CoordinatorSidebarEntry
   selected: boolean
   // The rail's title sits directly above the first heading; a blank row there
   // separates it from nothing.
   first: boolean
+  /** A heading gets a blank row above it only after an open tree; folded runs stack like session rows. */
+  afterAgent: boolean
   theme: TuiThemePalette
   innerWidth: number
   density: TuiDensity
@@ -63,22 +73,39 @@ function CoordinatorRow({ entry, selected, first, theme, innerWidth, density }: 
     )
   }
 
+  if (entry.type === 'group') {
+    // NEEDS YOU: the sessions rail's lifted group, with its rule and count.
+    return <SidebarGroupHeading id={`sidebar:${entry.key}`} label={entry.label} count={entry.count} width={innerWidth}
+      disclosure="" first={first} density={density} theme={theme} />
+  }
+
+  if (entry.type === 'date') {
+    return <SidebarGroupHeading id={`sidebar:${entry.key}`} label={entry.label} count={entry.count} width={innerWidth}
+      dateGroup inset={1} disclosure={entry.folded ? '▸ ' : '▾ '} first={first} density={density} theme={theme}
+      onPress={() => toggleCoordinatorFold(entry.key)} />
+  }
+
   if (entry.type === 'run') {
-    // A heading in the session rail's own form — `TITLE / n` — with the run's
-    // status in its colour. The band and the rule of dashes it used to carry
-    // were the loudest thing in a list whose content is the agents.
-    const title = (entry.run.prompt.split('\n')[0]?.trim() || entry.run.id).toUpperCase()
-    const countLabel = ` / ${entry.agentCount}`
-    const tone = entry.run.status === 'failed' ? theme.red
-      : entry.run.status === 'blocked' ? theme.amber
-      : entry.run.status === 'running' || entry.run.status === 'synthesizing' ? theme.green
-      : entry.run.status === 'planning' ? theme.cyan
-      : theme.dim
+    // The session rail's project header: the title in sentence case, a rule to
+    // its agent count, then its age — which is what tells apart the many runs
+    // that share a prompt. The run's status is one glyph in its colour rather
+    // than the whole line in it, so a list of finished runs is not a wall of green.
+    const quiet = sidebarQuietColor(theme)
+    const title = entry.run.prompt.split('\n')[0]?.trim() || entry.run.id
+    const status = runStatusMark(entry.run.status, theme)
+    const tail = ` ${entry.agentCount}  ${timeAgo(entry.run.updatedAt || entry.run.createdAt)}`
+    const disclosure = entry.folded ? '▸ ' : '▾ '
+    const labelWidth = Math.max(innerWidth - 3 - disclosure.length - 2 - tail.length, 4)
+    const shown = fitText(title, Math.max(labelWidth - 2, 1)).trimEnd()
+    const rule = labelWidth - shown.length > 1 ? ` ${'─'.repeat(labelWidth - shown.length - 1)}` : ' '.repeat(Math.max(labelWidth - shown.length, 0))
     return (
-      <box id={`sidebar:${entry.key}`} paddingX={1} marginTop={first ? 0 : 1} backgroundColor={theme.surface}>
-        <text fg={tone} wrapMode="none">
-          {`${fitText(title, Math.max(innerWidth - 2 - countLabel.length, 4)).trimEnd()}${countLabel}`}
-        </text>
+      <box id={`sidebar:${entry.key}`} paddingLeft={2} paddingRight={1} marginTop={first || !afterAgent ? 0 : 1} flexDirection="row" height={1} flexShrink={0} backgroundColor={theme.surface}
+        onMouseDown={(event) => { if (event.button === 0) { event.stopPropagation(); toggleCoordinatorFold(entry.key) } }}>
+        <text fg={quiet} wrapMode="none" selectable={false}>{disclosure}</text>
+        <text fg={status.color} wrapMode="none" selectable={false}>{`${status.glyph} `}</text>
+        <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>{shown}</text>
+        <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{rule}</text>
+        <text fg={quiet} wrapMode="none" selectable={false}>{tail}</text>
       </box>
     )
   }
@@ -88,17 +115,25 @@ function CoordinatorRow({ entry, selected, first, theme, innerWidth, density }: 
   // is the state and the task it is about. An idle agent with no task says
   // nothing — "○ CLAUDE · unassigned" on every other row was most of the rail.
   const accent = getProviderAccent(entry.agent.provider)
-  const glyph = entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
+  // Colour is for the provider tint on the name and the state glyph; the tree and the task are quiet.
+  const quiet = sidebarQuietColor(theme)
+  // A lifted row (NEEDS YOU) hangs from no tree, so it draws none: the state glyph and the task say why it is there.
+  const lifted = entry.key.startsWith('needs:')
+  const glyph = lifted ? '' : entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
   const marker = PICKER_STATE_MARKERS[entry.state]
   const statusColor = entry.state === 'blocked' ? theme.amber
     : entry.state === 'working' || entry.state === 'done' ? theme.green
     : entry.agent.status === 'failed' ? theme.amber
-    : theme.dim
+    : quiet
   const detail = entry.taskTitle ?? marker.label
   const showState = entry.state !== 'idle' || Boolean(entry.taskTitle)
-  const rowWidth = innerWidth - 3
-  const head = `${glyph} ${entry.agent.name}`
+  // Levels step by one column: bucket heading, its run (disclosure), the run's agents (tree glyph under the
+  // run's status glyph). A lifted row sits one step inside NEEDS YOU. The selection bar stays at the row's edge.
+  const indent = lifted ? '' : '  '
+  const rowWidth = innerWidth - 3 - indent.length
+  const head = glyph ? `${glyph} ${entry.agent.name}` : entry.agent.name
   const headText = fitText(head, Math.min(head.length, rowWidth)).trimEnd()
+  const nameText = glyph ? headText.slice(glyph.length + 1) : headText
   const detailWidth = Math.max(rowWidth - headText.length - 3, 0)
   return (
     <box
@@ -113,13 +148,13 @@ function CoordinatorRow({ entry, selected, first, theme, innerWidth, density }: 
         setCoordinatorSelectedKey(entry.key)
       }}
     >
-      <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
-      <text fg={theme.dim} wrapMode="none">{`${glyph} `}</text>
-      <text fg={accent} wrapMode="none">{headText.slice(glyph.length + 1)}</text>
+      <text fg={selected ? accent : quiet} wrapMode="none">{selected ? '▎' : ' '}</text>
+      {glyph ? <text fg={quiet} wrapMode="none">{`${indent}${glyph} `}</text> : null}
+      <text fg={accent} wrapMode="none">{nameText}</text>
       {showState && detailWidth > 0 ? (
         <>
           <text fg={statusColor} wrapMode="none">{` ${marker.glyph} `}</text>
-          <text fg={selected ? theme.text : theme.muted} wrapMode="none">{fitText(detail, detailWidth).trimEnd()}</text>
+          <text fg={selected ? theme.text : quiet} wrapMode="none">{fitText(detail, detailWidth).trimEnd()}</text>
         </>
       ) : null}
     </box>
@@ -137,13 +172,16 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
     if (state.selectedKey) scroll.current?.scrollChildIntoView(`sidebar:${state.selectedKey}`)
   }, [state.selectedKey])
 
+  const status = <CoordinatorStatus theme={props.theme} shown={state.agentEntries.length} counts={state.stateCounts} />
   if (state.entries.length === 0) {
-    const empty = state.filter === 'all'
-      ? 'No coordinator runs — ⌃K n to start one'
-      : `No ${state.filter} agents — f for the next filter`
-    return <text fg={props.theme.dim}>{fitText(empty, props.innerWidth)}</text>
+    const empty = state.query.trim() ? 'No runs or agents match the search'
+      : state.filter === 'all' ? 'No coordinator runs — ⌃K n to start one'
+      : `No ${COORDINATOR_FILTER_LABELS[state.filter].toLowerCase()} agents — f for the next filter`
+    return <>{status}<text fg={sidebarQuietColor(props.theme)}>{fitText(empty, props.innerWidth)}</text></>
   }
   return (
+    <>
+    {status}
     <scrollbox
       id="coordinator-sidebar-rows"
       ref={scroll}
@@ -159,6 +197,7 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
           key={entry.key}
           entry={entry}
           first={index === 0}
+          afterAgent={state.entries[index - 1]?.type === 'agent'}
           selected={entry.type === 'agent' && entry.key === state.selectedKey}
           theme={props.theme}
           innerWidth={props.innerWidth}
@@ -166,24 +205,68 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
         />
       ))}
     </scrollbox>
+    </>
   )
 })
 
 /**
- * Header text for the rail's box title. Kept beside the rows it describes.
- * Ordered by importance, because the rail is narrow and the title is cut from
- * the end: which filter is on (it changes what the list means), then how many
- * agents wait on the user or hold an unreviewed result — kept under any
- * filter, since hiding them behind `f working` is how a question sits
- * unanswered — then the key hints.
+ * The Coordinator tab's controls, in the Sessions tab's form: search (runs by title, agents by name or task), the
+ * agent-state filter as a chip (the `f` key cycles the same filter), and the rule. It reads the store itself, so
+ * typing a search re-renders this row and the list, never the root. There is no project scope here: the
+ * Coordinator lists every run this ledger holds.
  */
-export function coordinatorSidebarHeaderText(
-  agentCount: number,
-  runCount: number,
-  filter: CoordinatorPickerFilter = 'all',
-  counts: { blocked: number; done: number; total?: number } = { blocked: 0, done: 0 },
-): string {
-  const title = filter === 'all' ? `COORDINATOR ${agentCount}` : `${filter.toUpperCase()} ${agentCount}/${counts.total ?? agentCount}`
-  const attention = [counts.blocked ? `!${counts.blocked}` : '', counts.done ? `✓${counts.done}` : ''].filter(Boolean).join(' ')
-  return joinMeta([title, attention, 'f filter', `${runCount} run${runCount === 1 ? '' : 's'}`, 'a sessions'])
+export const CoordinatorFilters = memo(function CoordinatorFilters({ theme, searchFocused, onSearchFocus, onSubmit, onOpenMenu }: {
+  theme: TuiThemePalette; searchFocused: boolean; onSearchFocus: () => void; onSubmit: () => void
+  onOpenMenu: (menu: SidebarFilterMenu) => void
+}) {
+  const state = useSyncExternalStore(subscribeCoordinator, getCoordinatorState, getCoordinatorState)
+  return <box flexShrink={0} flexDirection="column">
+    <SidebarSearchRow idPrefix="coordinator" theme={theme} placeholder="Search runs and agents  /" query={state.query}
+      focused={searchFocused} onFocus={onSearchFocus} onQuery={setCoordinatorQuery} onSubmit={onSubmit} />
+    <box flexShrink={0} flexDirection="row" paddingX={1}>
+      <box id="coordinator-filter" height={1} flexShrink={0} onMouseDown={event => {
+        if (event.button !== 0) return
+        event.stopPropagation()
+        onOpenMenu({ x: event.x, y: event.y, title: 'Agents', items: COORDINATOR_PICKER_FILTERS.map(filter => ({
+          id: `coordinator-filter:${filter}`, label: `${state.filter === filter ? '✓ ' : '  '}${COORDINATOR_FILTER_LABELS[filter]}`, run: () => setCoordinatorFilter(filter),
+        })) })
+      }}><SidebarChip theme={theme} label={COORDINATOR_FILTER_LABELS[state.filter]} narrowing={state.filter !== 'all'} /></box>
+    </box>
+    <SidebarFiltersRule idPrefix="coordinator" theme={theme} />
+  </box>
+})
+
+/** The chip labels for herdr's picker filter: the words the rows already use for each state. */
+export const COORDINATOR_FILTER_LABELS: Record<CoordinatorPickerFilter, string> = {
+  all: 'All', blocked: 'Needs you', working: 'Working', done: 'To review', idle: 'Idle',
+}
+
+function runStatusMark(status: string, theme: TuiThemePalette): { glyph: string; color: string } {
+  switch (status) {
+    case 'running': case 'synthesizing': return { glyph: '●', color: theme.green }
+    case 'planning': return { glyph: '○', color: theme.cyan }
+    case 'blocked': return { glyph: '!', color: theme.amber }
+    case 'failed': return { glyph: '×', color: theme.red }
+    case 'completed': return { glyph: '✓', color: sidebarQuietColor(theme) }
+    default: return { glyph: '·', color: sidebarQuietColor(theme) }
+  }
+}
+
+/** The bottom border's right end, as the sessions rail's: how many agents show, then who waits on you and what
+ *  waits for review — kept under any filter or search, since hiding them is how a question sits unanswered. */
+function CoordinatorStatus({ theme, shown, counts }: { theme: TuiThemePalette; shown: number; counts: Readonly<Record<CoordinatorPickerState, number>> }) {
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0)
+  const quiet = sidebarQuietColor(theme)
+  const count = `${shown === total ? total : `${shown} of ${total}`} agent${total === 1 ? '' : 's'}`
+  return <box id="coordinator-status" position="absolute" bottom={-1} right={0} height={1} flexDirection="row" backgroundColor={theme.surface}>
+    <text fg={quiet} wrapMode="none" selectable={false}>{` ${count} `}</text>
+    {counts.blocked ? <text fg={theme.amber} wrapMode="none" selectable={false}>{`· !${counts.blocked} `}</text> : null}
+    {counts.done ? <text fg={quiet} wrapMode="none" selectable={false}>{`· ✓${counts.done} `}</text> : null}
+  </box>
+}
+
+/** The rail's box title: what the list is, in the sessions rail's form. Filter state is the chip under the
+ *  search, and the agent counts are in the bottom border. */
+export function coordinatorSidebarHeaderText(runCount: number): string {
+  return `COORDINATOR · ${runCount} run${runCount === 1 ? '' : 's'}`
 }

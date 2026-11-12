@@ -4,7 +4,7 @@ import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import React from 'react'
 import { type TuiSidebarSort } from '../../../../lib/tui/service'
-import { cycleCoordinatorFilter } from '../../coordinatorStore'
+import { cycleCoordinatorFilter, toggleAllCoordinatorFolds } from '../../coordinatorStore'
 import { type SidebarEntry, type PaneFocus, type NoticeTone } from '../types'
 
 /** Returns true when one of these branches handled the key. */
@@ -81,6 +81,12 @@ export function handleSidebarKeys({
 
     if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'return') {
       handled(() => openSelectedCoordinatorAgent())
+      return true
+    }
+
+    // e, as on the Sessions tab: open every folded run and date bucket, or put them back to their defaults.
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'e' && !key.ctrl && !key.meta && !key.shift) {
+      handled(() => showToggleOutcome('Runs:', toggleAllCoordinatorFolds() === 'expanded' ? 'all open' : 'finished folded'))
       return true
     }
 

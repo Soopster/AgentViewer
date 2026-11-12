@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { setCoordinatorQuery } from '../../coordinatorStore'
 import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { KeyEvent } from '@opentui/core'
 import type { Dispatch } from 'react'
@@ -274,6 +275,8 @@ export function handleModalDialogKeys({
         handled(() => {
           setSessionSearchMode(false)
           setSessionSearchQuery('')
+          // The Coordinator tab's search shares the mode and the keys, and Esc clears it the same way.
+          setCoordinatorQuery('')
         })
       }
       return true

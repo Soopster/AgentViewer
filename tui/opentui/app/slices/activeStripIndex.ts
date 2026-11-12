@@ -12,7 +12,6 @@ import { type TuiSessionDetail, type TuiProviderInstanceChoice } from '../../../
 import { type ContextUsage, type ProviderSelection, type RunningSessionRef, type Session } from '../../../../lib/types'
 import { fitText, joinMeta } from '../../textLayout'
 import { coordinatorSidebarHeaderText } from '../../CoordinatorSidebar'
-import { type CoordinatorPickerFilter } from '../../../../lib/coordinatorSignals'
 import { type PendingInboxEdit } from '../types'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote } from '../transcriptDiffSelection'
 import { type TranscriptDiffControls } from '../SplitTranscriptPane'
@@ -167,17 +166,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   }`
   const sidebarProviderAccent = getProviderAccent(provider)
   const coordinatorSidebarHeader = useMemo(
-    () => {
-      const [agents, runs, filter, blocked, done, total] = coordinatorHeaderCounts.split('/')
-      return fitText(
-        coordinatorSidebarHeaderText(Number(agents) || 0, Number(runs) || 0, filter as CoordinatorPickerFilter, {
-          blocked: Number(blocked) || 0,
-          done: Number(done) || 0,
-          total: Number(total) || 0,
-        }),
-        Math.max(sidebarInnerWidth - 2, 12),
-      )
-    },
+    () => fitText(coordinatorSidebarHeaderText(Number(coordinatorHeaderCounts) || 0), Math.max(sidebarInnerWidth - 2, 12)).trimEnd(),
     [sidebarInnerWidth, coordinatorHeaderCounts],
   )
   const imessageStyle = themeMode === 'imessage'
