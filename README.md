@@ -1,170 +1,203 @@
 # Agent Viewer
 
-Agent Viewer is a local tool for browsing, searching, and continuing coding-agent conversations. It presents the same underlying session data in two frontends:
+Agent Viewer is a local workbench for coding agents. It reads the sessions every agent CLI on your machine has already recorded — Claude Code, Codex, OpenCode, GitHub Copilot, Pi, any Agent Client Protocol agent and LM Studio — and lets you browse, search, continue, review and coordinate them from one place.
 
-- a Next.js web app
-- an OpenTUI terminal app
+It runs as:
 
-It is designed for a single local developer machine. The app reads provider sessions from local SDKs and CLIs, keeps viewer-specific state under `.agent-viewer-data/`, and avoids direct browser access to provider runtimes.
+- a **terminal app** (OpenTUI, the default `agent-viewer` command)
+- a **web app** (Next.js, `agent-viewer web`), usable from a paired phone or second browser
+- an optional **desktop shell** (Tauri, `npm run desktop:dev`) around the web app
 
-## Current Shape
+All three sit on the same backend. Sessions are always read and driven through each provider's own SDK, CLI or protocol; Agent Viewer never parses provider transcripts itself, and keeps its own state (tags, titles, inbox, search index, layouts) under `.agent-viewer-data/`. It is built for one developer's machine, not hosted multi-user use.
 
-The project currently centers on a shared provider backend plus two UIs:
-
-- `app/` and `components/` power the browser UI.
-- `tui/opentui/` is the primary terminal UI.
-- `tui/` still contains the legacy Ink terminal UI for fallback and comparison.
-- `lib/sessionBackend.ts` is the main orchestration layer that adapts each provider into one shared session model.
-- `lib/sessionPersistence.ts` mirrors sessions and messages into a local SQLite index for search and stats.
-- `lib/codex-schema/` is generated Codex protocol code, not hand-maintained application logic.
-
-Supported providers today are:
-
-- Claude
-- Codex
-- OpenCode
-- GitHub Copilot
-- Pi
-- Claude (ACP) and Codex (ACP), alternate transports that drive `claude-agent-acp`/`codex-acp` over the Agent Client Protocol instead of the native SDK/app-server
-- `all`, which merges sessions across providers
-
-## Quick Start
-
-Install dependencies:
+## Quick start
 
 ```bash
 npm install
+npm run tui        # terminal app (needs Bun on PATH)
+npm run dev        # web app on http://localhost:3000
 ```
 
-Run the web app:
+From a published package the same entry points are `npx agent-viewer` (terminal), `npx agent-viewer web` (web daemon) and `npx agent-viewer --legacy` (the older Ink terminal UI).
+
+To keep agent turns running after the terminal closes, host them in a background daemon and attach to it:
 
 ```bash
-npm run dev
+agent-viewer --daemon              # start (or reuse) a daemon and attach the TUI to it
+agent-viewer daemon status|start|stop
+agent-viewer --attach 3000         # attach to an `agent-viewer web` already running
 ```
 
-Open `http://localhost:3000`.
+Choose the startup provider with `AGENT_VIEWER_PROVIDER` (`claude`, `codex`, `opencode`, `copilot`, `pi`, `claude-acp`, `codex-acp`, `acp`, `lmstudio` or `all`). The in-app picker remembers the choice in `.agent-viewer-data/provider.json`.
 
-Run the primary terminal app:
+## Features
 
-```bash
-npm run tui
-```
+### Sessions and transcripts
 
-`npm run tui` uses OpenTUI and requires Bun on `PATH`.
+- One session list across every provider and every configured account, grouped by project and date, with **NEEDS YOU**, **RUNNING** and **PINNED** groups lifted to the top.
+- A session inbox: pin, settle, reopen, snooze, tag, rename, and link a pull request so the session settles itself when the PR merges.
+- Full-text search over titles, tags, working directories and message text, backed by a local SQLite index.
+- Live-updating transcripts with tool cards for every tool, diffs, reasoning, subagent conversations, Coordinator mail and raw provider frames (`RAW`) for when a card looks wrong.
+- Composable **views**: 13 built-in transcript presets (stream, scrollback, engineering, …) and a View Studio for building your own. Custom views are shared between the web and terminal apps.
+- About 30 themes, shared names between web and terminal; the terminal can follow the terminal emulator's light/dark mode or use its own palette.
 
-## What You Can Do
+### Composer
 
-- Browse sessions by provider or across all providers.
-- Search session titles, tags, working directories, and indexed message text.
-- Open multiple session tabs and inspect live-updating transcripts.
-- Send messages, interrupt active turns, and keep per-session drafts.
-- Rename sessions, manage tags, and use provider-specific actions when supported.
-- Switch models, reasoning settings, themes, density, and focus modes where the provider or UI supports them.
-- Inspect diagnostics, context usage, analytics, Git state, and exports.
-- Rebuild the local search index from the command palette or the API.
+- Send, steer a running turn, queue follow-ups, interrupt, and keep per-session drafts and a durable stash.
+- Native permission and question prompts, plan approval, model / effort / permission-mode switching where the provider supports them.
+- Each CLI's own slash commands answer in place (`/model`, `/rewind`, `/fork`, `/diff`, `/mcp`, `/export`, `/plan`, …), `!command` shell mode, `@` file mentions ranked by frecency, prompt history and ⌃R search.
+- Saved prompt templates, session goals that keep working until done, voice input (on-device; see [docs/voice.md](docs/voice.md)).
+- Route the composer into a Claude Code session open in another terminal (channel bridge) or act as the IDE for one (IDE bridge).
 
-The UI is capability-driven. If a provider cannot do something, the action is hidden or disabled for that session instead of failing late.
+### Workspace (terminal app)
+
+- **Spaces** per project and **workspace tabs** per working set; each keeps its own windows, layout, drafts and undo history, and restores after a restart.
+- Tiling windows: tmux-style `⌃B` splits, stacks, grids, tabs, floating windows, zoom, drag-and-drop with the mouse, saved layouts and undoable layout changes.
+- Any tool can be a window, a tab or a docked side panel: shells, dev-server logs, files, diff, editor, pull request, browser, analytics and more.
+- Broadcast one prompt to several sessions, jump to whichever window needs attention, and watch a whole agent team as a workspace.
+
+### Code and review
+
+- **Git**: working tree, diff review with notes and per-hunk accept/reject, commit and branch workspace, sibling worktrees and paused merges.
+- **Checkpoints**: a working-tree snapshot per agent turn, restore, and per-file history you can scrub through and undo a hunk from.
+- **Editor**: a real terminal editor with language servers, incremental syntax highlighting, quick open, symbol search and safe saves.
+- **Pull requests and GitHub** through `gh`: PR review, inbox, issues, Actions runs and logs, releases and security alerts, with guarded merge.
+- **Code provenance**: which session and prompt wrote a line.
+- Agent-driven review: agents can read and annotate an open review through MCP (`review_read`, `review_apply`, `review_reload`).
+
+### Multiple agents
+
+- **Coordinator**: turn any chat into the lead of a team of teammates on any provider, with a shared task board, typed mailbox, path locks, isolated git worktrees, plan approval, completion gates, budgets, merge previews and durable recovery.
+- Unattended workers (`agent-viewer coord worker`) that supervise a CLI session through a run and survive crashes and restarts.
+- Cross-session messaging, and teams on other machines listed beside your own (`agent-viewer machines`).
+
+### Insight
+
+- Per-session analytics (tokens, tools, timing, health score), diagnostics (context usage, permission rules, hooks, MCP servers), task lists, file and tool insights.
+- A daily summary of what every agent did, a Bloomberg-style "desk" over all sessions, recaps for sessions that went quiet, and alerts when a session needs you.
+
+### Access from elsewhere
+
+- Pair a phone or second browser with a QR code (`agent-viewer pair`), with per-device revocation and `full` or `read-only` scopes; Tailscale addresses are offered when available.
+- Script everything: `agent-viewer session …`, `coord …`, `terminal …` and `review …` (see [Command line](#command-line)).
+
+## Supported providers
+
+| Provider | Accessed through | Notes |
+|---|---|---|
+| Claude | `@anthropic-ai/claude-agent-sdk` | Fork, rewind, file checkpoints, diagnostics, subagents, multiple accounts via provider instances |
+| Codex | `codex app-server` (the `codex` CLI on `PATH`) | Rollback/revert, plan mode, sub-agents, multiple accounts |
+| OpenCode | `@opencode-ai/sdk` (1.x) and `@opencode/client` (2.x) | Server version is detected; a managed server is started if none is running |
+| GitHub Copilot | `@github/copilot-sdk` | Auto-starts the Copilot CLI |
+| Pi | `@earendil-works/pi-coding-agent` | Session branches for forking |
+| Claude (ACP), Codex (ACP) | `claude-agent-acp` / `codex-acp` over the Agent Client Protocol | Alternate transports for the same two agents |
+| ACP | Any agent that speaks ACP (Gemini CLI, Goose, `opencode acp`, `copilot --acp`, …) | Configure the command; each agent can be its own instance |
+| LM Studio | LM Studio's OpenAI-compatible server | Local models; `LMSTUDIO_BASE_URL` (default `http://localhost:1234/v1`) |
+| All | — | Merges every provider and instance into one list |
+
+The UI is capability-driven: an operation a provider cannot do is hidden or disabled for that session rather than failing late.
 
 ## Architecture
 
-The repository is organized around a few stable boundaries:
+```text
+            Web (Next.js)        OpenTUI terminal        Desktop (Tauri)
+                 │                      │                      │
+           app/api/* routes      lib/tui/service.ts      (wraps the web app)
+                 └──────────┬───────────┘   --attach ──► web daemon over HTTP
+                            ▼
+       lib/sessionReads.ts (read path)   lib/sessionBackend.ts (send path)
+                 │                                │
+       lib/adapters/<provider>.ts        lib/extensions/providers/<id>/runtime.ts
+                 └──────────────┬─────────────────┘
+                                ▼
+               provider SDKs, CLIs and protocols (server-side only)
 
-- `app/api/` contains the browser-facing API routes.
-- `components/` contains the React UI for the web app.
-- `lib/*Client.ts` handles provider-specific SDK or CLI access.
-- `lib/*Mapper.ts` converts provider-native data into the shared view model.
-- `lib/provider.ts` defines per-provider capabilities.
-- `lib/providerComposer.ts` defines provider-specific composer copy and prompts.
-- `lib/sessionBackend.ts` is the central facade used by API routes and shared services.
-- `lib/sessionPersistence.ts` manages the SQLite-backed local index.
-- `tui/opentui/` contains the current terminal runtime.
-- `tui/App.tsx` remains as the legacy Ink runtime.
-- `bin/agent-viewer.mjs` is the packaged `npx agent-viewer` entrypoint.
-
-Web and OpenTUI share feature plugin metadata, enablement and behavior contracts.
-Plugins can contribute surfaces, executable commands, application observers,
-composer accessories, Web dashboards and reader slots, and shared before-turn
-hooks. The shell owns session identity, layout, focus and runtime lifetimes;
-plugins use declared capabilities and own their scoped presentation state.
-
-Tasks demonstrates a reader contribution: metadata declares its panel and width,
-the host allocates the column and dispatches open/toggle requests, and the plugin
-owns visibility, task derivation and controls. Its Web and OpenTUI adapters share
-the task registry logic. Bridge views similarly consume shared service contracts;
-a view lease keeps presentation connected, while composer routing independently
-retains its transport. Closing or disabling a bridge view leaves an active route
-running until routing is turned off. Feature disablement does not interrupt a
-provider run.
-
-Start with the [plugin authoring skill](.agents/skills/agent-viewer-plugins/SKILL.md)
-to add a trusted bundled plugin or customize an existing surface. Registration
-uses static source loader lists. The [migration audit](docs/plugin-shell-audit.md)
-records migrated built-ins and remaining direct shell integrations.
-
-Some implementation choices matter:
-
-- Browser components should call API routes, not provider SDKs directly.
-- Provider SDKs and CLIs stay server-side because they rely on Node APIs like filesystem and process access.
-- Session identity should always include provider, configured provider instance and session ID, because native IDs can overlap across runtimes and accounts.
-- New provider work usually touches the provider type, capability table, client, mapper, `sessionBackend.ts`, and the provider selection lists in the web and TUI layers.
-
-## Provider Setup
-
-You can choose the startup provider with:
-
-```bash
-AGENT_VIEWER_PROVIDER=claude npm run dev
+   Shared: lib/types.ts (wire format) · lib/threading.ts (render blocks)
+           lib/sessionPersistence.ts (SQLite index) · plugins/* (features)
 ```
 
-Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, `claude-acp`, `codex-acp`, and `all`. The in-app provider picker persists the choice to `.agent-viewer-data/provider.json`.
+- **Providers are extensions** under `lib/extensions/providers/<id>/`: a manifest (capabilities, composer), an adapter for reads (list, transcript, models, diagnostics…) and a runtime for sends (turns, fork, rewind, interrupt). Every provider produces the same `SessionMessage` shape, and `lib/adapters/registry.ts` checks at load time that declared capabilities and implemented methods agree. Scaffold a new one with `npm run providers:scaffold -- <id> "<Name>"` ([docs/provider-extensions.md](docs/provider-extensions.md)).
+- **The read path never loads the send path.** Browsing sessions does not start provider runtimes, and provider SDKs load only when that provider is used. This keeps the terminal app's memory and startup cost low.
+- **Session identity is provider + provider instance + session id**, because native ids overlap across runtimes and accounts.
+- **Features are plugins** under `plugins/<id>/`: a metadata-only manifest plus a web view and/or a terminal view that reach the host only through the shell SDK. Plugins contribute surfaces (panel, window, overlay), commands, composer accessories and before-turn hooks; the host owns layout, focus and session identity. Start with the [plugin authoring skill](.agents/skills/agent-viewer-plugins/SKILL.md); [docs/plugin-shell-audit.md](docs/plugin-shell-audit.md) records what has migrated.
+- **The terminal app** (`tui/opentui/`) runs under Bun, keeps heavy work (threading, formatting, metadata) in a worker isolate, and renders a bounded window of transcript cards so cost does not grow with conversation length. `tui/` still holds the legacy Ink UI.
+- **Protocols**: an MCP server for Claude/Codex/other CLIs (`agent-viewer mcp`), the Microsoft Agent Host Protocol for Coordinator runs (`agent-viewer ahp`), an optional A2A 1.0 facade, and an ACP agent endpoint so editors such as Zed can drive any provider through Agent Viewer (`agent-viewer acp`).
 
-### Provider instances and thread inbox
+### Bundled plugins
 
-The picker can target multiple local Claude or Codex configurations. Add
-`.agent-viewer-data/provider-instances.json` (kept local and gitignored):
+| Plugin | What it does |
+|---|---|
+| analytics | Token, tool, timing and health views over a session |
+| bridges | Claude CLI channel bridge and IDE bridge panels |
+| browser | A local dev server or any URL beside the transcript |
+| checkpoints | Per-turn working-tree snapshots, restore, rejectable hunks |
+| composer-context / composer-tools | Expand attached references before sending; reuse the last prompt |
+| coordination | The agent control center and a conversation's teammates panel |
+| desk | Bloomberg-style monitor over every session |
+| diagnostics | Runtime status, context, permission rules, hooks, MCP servers |
+| editor | Project editor with language servers and highlighting |
+| file-history | Scrub a file through turn checkpoints, undo a hunk |
+| files | Project tree and previews |
+| git | Working tree, diff review with notes, commits and branches |
+| github | Inbox, PRs, issues, Actions, releases, security, through `gh` |
+| goals | A session goal that keeps working until done |
+| messaging | Send from one session to another |
+| prompt-library | Saved prompt templates with fill-in fields |
+| pull-requests | PR diff, notes, discussion and checks |
+| recaps | One-line recap and suggested next message for quiet sessions |
+| session-alerts | Notify when a session needs input or finishes |
+| session-insights | Files touched, tool timing, facet search, rail badges |
+| subagents | Captured subagent conversations (terminal) |
+| tab-manager | Pin and reorder tabs |
+| tasks | A session's todos and background tasks |
+| terminal | Dev-server processes with logs, and interactive shells |
+
+### Repository map
+
+| Path | Contents |
+|---|---|
+| `app/`, `components/` | Web routes, API routes (`app/api/`) and React UI |
+| `tui/opentui/` | Primary terminal app; `tui/opentui/app/` holds its extracted modules |
+| `tui/` | Legacy Ink terminal app and shared card formatters (`tui/format.ts`) |
+| `lib/` | Provider clients and mappers, adapters, backend facades, persistence, Coordinator, remote access |
+| `lib/extensions/providers/` | One extension per provider |
+| `plugins/` | Bundled feature plugins |
+| `bin/` | `agent-viewer` CLI, MCP/AHP/ACP entry points, Coordinator and session CLIs |
+| `channels/` | Claude Code channel and IDE bridge servers |
+| `src-tauri/` | Desktop shell |
+| `scripts/` | Smoke tests, live checks and benchmarks |
+| `docs/` | Design notes, audits and protocol mappings |
+| `lib/codex-schema/` | Generated Codex protocol types (do not edit by hand) |
+
+## Provider setup
+
+### Provider instances
+
+Several Claude or Codex accounts, and any number of ACP agents, can be configured in `.agent-viewer-data/provider-instances.json` (local and gitignored):
 
 ```json
 {
   "version": 1,
   "instances": [
     { "id": "claude-work", "provider": "claude", "displayName": "Claude · Work", "environment": { "CLAUDE_CONFIG_DIR": "/path/to/work" } },
-    { "id": "codex-personal", "provider": "codex", "displayName": "Codex · Personal", "executable": "codex" }
+    { "id": "codex-personal", "provider": "codex", "displayName": "Codex · Personal", "executable": "codex" },
+    { "id": "gemini", "provider": "acp", "displayName": "Gemini", "executable": "gemini --experimental-acp" }
   ]
 }
 ```
 
-Sessions carry `providerInstanceId`; the inbox supports pin, settle, reopen, and
-one-hour snooze. Inbox state is stored separately in
-`.agent-viewer-data/session-inbox.json`, so identical native session IDs remain
-distinct across instances.
+A session is always read and prompted through the instance that listed it. Inbox state lives in `.agent-viewer-data/session-inbox.json`, so identical native ids stay distinct across instances.
 
 ### Claude
 
-Claude sessions are read through `@anthropic-ai/claude-agent-sdk`.
+Supports listing, reading, sending, renaming, tagging, deleting, forking, resuming from a message, file rewind, diagnostics, models, context usage and subagent transcripts. Diagnostics can add or remove session MCP servers, reload plugins and skills, and search a redacted hook timeline.
 
-Supported viewer operations include listing, reading messages, sending, renaming, tagging, deleting, forking, resuming from a message, file rewind, diagnostics, models, context usage, and subagent messages where the SDK exposes them.
+- **SQLite session store** (optional): `AGENT_VIEWER_CLAUDE_SESSION_STORE=sqlite` mirrors transcripts into `.agent-viewer-data/claude-session-store/index.sqlite` (or `AGENT_VIEWER_CLAUDE_SESSION_STORE_PATH`). Store-backed sessions keep durable resume but not file rewind.
+- **Remote workers over SSH**: set `AGENT_VIEWER_CLAUDE_SSH_HOST` and `AGENT_VIEWER_CLAUDE_SSH_COMMAND` (optionally `_USER`, `_PORT`, `_IDENTITY_FILE`, `_KNOWN_HOSTS_FILE`, `_LOCAL_ROOT`, `_REMOTE_ROOT`). Strict host-key checking is used, and Claude secrets are not forwarded unless `AGENT_VIEWER_CLAUDE_SSH_FORWARD_SECRETS=1`. Custom transports can register a spawner with `registerClaudeProcessSpawner` (`lib/claudeProcessSpawner.ts`).
 
-Coordinator-dispatched Claude tasks carry native Agent SDK role policy (tools, skills, model/effort, permission mode, sandbox, per-agent MCP servers, initial prompt, turn cap, memory, background/observer configuration, and critical reminders) plus remaining token and USD budgets. The USD remainder is enforced by the SDK's `maxBudgetUsd`, while observed SDK usage remains the durable run-level accounting source.
+#### Channel bridge to a running Claude Code CLI
 
-Claude diagnostics can add or remove dynamic session MCP servers, surface connection and authentication-required states, reload plugins/skills, and search the durable hook timeline. Lifecycle, tool, permission, compaction, subagent, configuration, worktree, and file hooks are redacted, size-rotated, and removed with the session. File previews use the SDK control channel's `readFile()` when a Claude session is selected, so hosted workers do not require a shared local filesystem for file contents.
-
-Claude transcript mirroring can optionally use Agent Viewer's durable SQLite-backed Agent SDK `SessionStore`:
-
-```bash
-AGENT_VIEWER_CLAUDE_SESSION_STORE=sqlite \
-AGENT_VIEWER_CLAUDE_SESSION_STORE_PATH=/path/to/claude-sessions.sqlite \
-npm run dev
-```
-
-The path defaults to `.agent-viewer-data/claude-session-store/index.sqlite`. The SDK requires local transcript persistence alongside the mirror and currently rejects file checkpointing with a `SessionStore`, so store-backed sessions retain durable transcript resume but not file rewind. Cross-project session listing continues to use the SDK's local index because the alpha store API can list only one project key at a time.
-
-Custom Claude process transports can register a `spawnClaudeCodeProcess` adapter with `registerClaudeProcessSpawner` from `lib/claudeProcessSpawner.ts` before creating or pre-warming queries. The adapter must return the complete SDK `SpawnedProcess` interface (live stdin/stdout streams and exit/error lifecycle methods) and forward `SpawnOptions.signal`. Explicit registration overrides the built-in opt-in SSH transport.
-
-For a concrete hosted worker, set `AGENT_VIEWER_CLAUDE_SSH_HOST` and `AGENT_VIEWER_CLAUDE_SSH_COMMAND`. The SSH adapter uses batch authentication, strict host-key verification (the default known-hosts file unless `AGENT_VIEWER_CLAUDE_SSH_KNOWN_HOSTS_FILE` is supplied), keepalives, abort propagation, and transport health reporting. Optional settings are `AGENT_VIEWER_CLAUDE_SSH_USER`, `AGENT_VIEWER_CLAUDE_SSH_PORT`, `AGENT_VIEWER_CLAUDE_SSH_IDENTITY_FILE`, and local/remote root mapping via `AGENT_VIEWER_CLAUDE_SSH_LOCAL_ROOT` plus `AGENT_VIEWER_CLAUDE_SSH_REMOTE_ROOT`. Claude/Anthropic secret environment variables are not forwarded in the SSH command by default; provision credentials on the worker, or explicitly opt in with `AGENT_VIEWER_CLAUDE_SSH_FORWARD_SECRETS=1` after accepting process-list exposure on the remote host.
-
-#### Durable Claude CLI channel bridge
-
-Agent Viewer can route its Claude composer into a Claude Code session that is already open in another terminal. Start the CLI from the packaged `channels/` directory so its `.mcp.json` loads the bridge, and bind the bridge to the same session ID:
+Route the composer into a Claude Code session open in another terminal. Start the CLI from `channels/` so its `.mcp.json` loads the bridge:
 
 ```bash
 cd channels
@@ -173,248 +206,113 @@ AGENTVIEWER_CHANNEL_SESSION_ID=<claude-session-id> \
   --dangerously-load-development-channels server:agentviewer
 ```
 
-Open the Channel Bridge in the web or OpenTUI composer and enable **Route composer through bridge**. Messages carry a stable ID and the selected Agent Viewer session ID. Both frontends persist unsent messages locally and replay them in FIFO order after reconnect; the bridge persists accepted-but-unprocessed deliveries, rejects a mismatched configured session, suppresses duplicate message IDs, and asks Claude to acknowledge each delivery through `ack_delivery`. Delivery state is visible as queued, accepted, or processed.
-
-The bridge defaults to `http://127.0.0.1:8790`. Use `AGENTVIEWER_CHANNEL_PORT` on the Claude process and the matching `AGENTVIEWER_CHANNEL_URL` in OpenTUI, or the bridge settings in the web UI, to run multiple session-bound bridges. `AGENTVIEWER_CHANNEL_TOKEN` enables the existing loopback authentication check. `AGENTVIEWER_CHANNEL_STATE_DIR` relocates the bridge-side durable state; otherwise it is stored below `.agent-viewer-data/channel-bridge/` in the Claude process working directory.
-
-Claude Channels acknowledge only that an event was written to their transport, not that the model processed it. The explicit `ack_delivery` tool supplies the stronger processed receipt, but a model that never calls the tool leaves the message pending and it will be replayed after the bridge restarts. This is intentionally at-least-once delivery with duplicate suppression at the bridge boundary, not a guarantee that arbitrary model-side effects are exactly once.
-
-#### Claude and Codex CLI MCP bridge
-
-Agent Viewer can expose cross-provider session search and transcripts, message bookmarks, and the human-attention inbox to standalone Claude and Codex CLIs over stdio. Start the web daemon first so the bridge and any attached TUI share one runtime:
-
-```bash
-npx agent-viewer web --port 3000
-```
-
-Register the packaged bridge with Claude Code:
-
-```bash
-claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
-```
-
-Or register it with Codex:
-
-```bash
-codex mcp add agent-viewer \
-  --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 \
-  -- npx -y agent-viewer mcp
-```
-
-The CLI then sees session tools (`search_sessions`, `list_sessions`, `message_session`, `get_session_transcript`, `set_bookmark`, and `post_attention`), live code review tools (`review_read`, `review_apply`, and `review_reload`), plus the full `coord_*` tool surface for Coordinator mode under the `agent-viewer` MCP server. Transcript reads support provider selection plus offset/limit or tail pagination, and return Agent Viewer’s canonical messages without discarding tool calls, tool results, reasoning, or system events. Search needs no session context. Transcript, bookmark, and attention calls must supply `session_id`, unless the MCP configuration sets `AGENT_VIEWER_SESSION_ID`. The bridge defaults to `http://127.0.0.1:3000`; `--attach`, `AGENT_VIEWER_ATTACH`, or `AGENT_VIEWER_MCP_URL` can point it at another local daemon.
-
-Open the Git or PR review in Agent Viewer and call `review_read` without `source` to list active comparisons and their view IDs. Read one source with its `files`, `hunks`, `revision`, notes, and checklist; use `include_content` only when line-level context is needed. `review_apply` accepts a versioned note, reply, hunk decision, or explicit navigation request. `review_reload` refreshes an active working, branch, or turn view after reading its current view ID; PR and commit comparisons are read-only through these agent controls. Replies preserve note ownership; approvals are tied to stable hunk content; navigation is acknowledged only after the open UI reaches the requested location. Review notes are private local data and do not post GitHub comments. When only the terminal app is available, the same operations are exposed by `agent-viewer review read`, `agent-viewer review reload --source working --view-id <id> --request-id <stable-id>`, and `agent-viewer review apply --file request.json`.
-
-The bridge uses the MCP TypeScript SDK v2 and serves the `2026-07-28` protocol through `server/discover` and per-request capability envelopes. Its stdio entry also serves older initialize-based clients, so existing Claude/Codex registrations continue to work while modern clients can pin or auto-negotiate the new revision. Tool results include both a text fallback and `structuredContent` for hosts that can render richer output.
-
-Three optional MCP extensions make Coordinator workflows easier to discover, inspect, and resume:
-
-- MCP Apps (`io.modelcontextprotocol/ui`): `coord_status` links to the self-contained `ui://agent-viewer/coordinator-dashboard.html` resource. Apps-capable hosts render the current run, open-task, inbox, lock, task, and agent state; text-only hosts keep receiving the normal JSON result.
-- Skills over MCP (`io.modelcontextprotocol/skills`, experimental SEP-2640): `skill://index.json` advertises the bundled `coordinate-agents` and `agent-viewer-plugins` skills. The plugin-authoring skill is also available at [`.agents/skills/agent-viewer-plugins/SKILL.md`](.agents/skills/agent-viewer-plugins/SKILL.md) and `skill://agent-viewer-plugins/SKILL.md`; it covers Web/OpenTUI surfaces, shared behavior hooks, customization services and validation. The `coordinate_agents` prompt points compatible clients at the Coordinator workflow guidance.
-- Push supervision: after `coord_create_run`, `coord_join_run`, or `coord_resume`, the result identifies the private `coord://agent-viewer/current-run` resource. MCP 2026 clients can subscribe once through `subscriptions/listen`; another participant's AHP board action then emits `notifications/resources/updated`. Re-read the zero-TTL private resource for the authoritative board and `actionable` digest. Bursts are coalesced and liveness-clock-only refreshes are suppressed.
-- Progress: when a non-Tasks client supplies a `progressToken` on a blocking `coord_wait`, the bridge emits monotonic `notifications/progress` updates for the lifetime of that request. Progress stops before the tool response; task-augmented waits use task state instead, as required by the Tasks extension.
-- Tasks (`io.modelcontextprotocol/tasks`, experimental): a Tasks-capable request to `coord_wait` with a non-zero timeout receives a durable asynchronous handle instead of holding the MCP request open. `coord_await_run` creates a whole-run monitor for independently supervised or unattended runs and surfaces pending lead plan reviews as `input_required` elicitations. Clients retrieve state and final tool results through `tasks/get`, submit those reviews through `tasks/update`, and cooperatively cancel the wait/monitor through `tasks/cancel`. The handle survives bridge restarts in a mode-0600 ledger next to the Coordinator identity file; `AGENT_VIEWER_MCP_TASK_FILE` overrides that path.
-
-MCP Tasks wrap long-running protocol operations; they do not replace Coordinator board tasks. Ownership, dependencies, path locks, mailboxes, findings, completion gates, and synthesis remain under the `coord_*` tools. Cancelling an MCP Task stops its wait or monitor, not the underlying multi-agent run. Resource subscriptions are the preferred MCP 2026 push path; `coord_wait` and `tasks/get` remain compatibility fallbacks for hosts that do not subscribe. The bridge carries a small compatibility adapter because the stable MCP TypeScript SDK v2 does not yet ship the experimental Tasks server runtime, and the smoke suite pins the published draft shapes to catch SDK drift.
-
-Coordinator operations—including run discovery—use a persistent AHP WebSocket by default. `agent-viewer web`, `npm run dev`, and `npm start` start that host automatically on the web port plus one (`ws://127.0.0.1:3001` for the default web port). MCP bridges and workers reconnect with the same AHP client identity and run subscriptions; reads and idempotent mutations get one safe transport retry, and the bridge supplies an idempotency key when a tool call omits one. Use `--ahp-port` or `AGENT_VIEWER_AHP_PORT` to choose another sidecar port, and set the matching `AGENT_VIEWER_AHP_URL` on remote MCP bridges or workers. `--no-ahp` disables the sidecar; `AGENT_VIEWER_COORD_TRANSPORT=http` keeps the previous HTTP Coordinator transport as an explicit compatibility mode.
-
-These internal transports do not become public when A2A is enabled. CLI hosts retain the `coord_*` MCP surface, and the app and bridges retain persistent AHP connections to the same SQLite-backed Coordinator ledger. A2A 1.0 is a separate, default-off external facade over that core:
-
-```bash
-AGENT_VIEWER_A2A_ENABLED=1 \
-AGENT_VIEWER_A2A_TOKEN='replace-with-a-long-random-token' \
-npm run dev
-```
-
-When enabled, `/.well-known/agent-card.json` advertises the JSON-RPC interface at `/api/a2a`. Operation requests require `Authorization: Bearer ...`, `Content-Type: application/json`, and `A2A-Version: 1.0`. The facade implements the A2A 1.0 PascalCase task methods, streaming over SSE, cursor-style task listing, and persisted push configurations for task status updates while intentionally refusing to create runs or launch CLI processes. `SendMessage` therefore requires `message.contextId` for an existing Coordinator run; set `configuration.returnImmediately` when the caller wants the submitted task immediately. Continuing an existing task through `SendMessage` is not currently supported and returns A2A’s unsupported-operation error. The legacy A2A 0.3 method names are not accepted.
-
-This follows the protocols’ complementary roles: a remote autonomous peer uses A2A for the high-level, stateful task, while each hosted CLI agent uses MCP tools internally to claim it, coordinate with teammates, access locks and mail, and report completion. MCP hosts can discover the enabled facade by reading the live `a2a://agent-viewer/coordinator/agent-card.json` resource, which proxies the daemon’s public Agent Card. Agent Viewer deliberately does not wrap A2A conversational operations as stateless MCP tools or duplicate an A2A task as an MCP Task.
-
-For interactive collaboration, one client calls `coord_create_run` and shares only the returned run ID. Additional clients call `coord_join_run`. The bridge persists each capability in a mode-0600 identity file and authenticates later `coord_*` calls without exposing the token to the model. Prefer one subscription to the returned `pushResource`; on each invalidation, read it and act on the current `actionable` digest. Use `coord_wait` when the MCP host cannot subscribe.
-
-External clients negotiate the Coordinator protocol when they create, join, or resume a run. Current MCP bridges advertise protocol v2, session resume, tool families, and concurrency; managed workers additionally advertise unattended execution plus filesystem/git access. Omitted negotiation remains compatible as legacy v1. The negotiated version and capabilities appear on the participant roster so leads can make provider-aware assignments, while clients newer than the server fail early with an upgrade instruction instead of silently drifting.
-
-Coordinator mail is typed and durable. `coord_send_message` requires the message body in `message` and accepts `kind` (`request`, `response`, `status`, `finding`, `handoff`, `review_request`, or `review_result`), `priority` (`urgent`, `normal`, or `status`), `reply_required`, `correlation_id`, and `in_reply_to`. Status messages are held until three updates accumulate or 15 seconds elapse, then delivered as one summary. Reply-required requests stay in the recipient's actionable digest until a correlated response resolves them.
-
-Agent Viewer also exposes Coordinator runs directly through the Microsoft Agent Host Protocol. The standalone commands are useful when the Next.js UI is not running:
-
-```bash
-# Reliable ordered JSON-RPC frames on stdin/stdout
-agent-viewer ahp
-
-# The same newline-framed protocol on a local TCP socket
-agent-viewer ahp --listen 127.0.0.1:8765
-
-# WebSocket transport used by the official AHP clients
-agent-viewer ahp --ws 127.0.0.1:8765
-```
-
-The host negotiates the protocol versions exported by the installed AHP reference SDK (currently AHP `0.7.0`, with its supported compatibility fallbacks) rather than maintaining a second hard-coded version list. A Coordinator run is an `ahp-session:` channel, its lead and teammates are `ahp-chat:` channels, and external participants appear as session `activeClients`. The task board, path locks, durable mailbox, plan approvals, and completion gates are preserved under the namespaced `dev.agent-viewer.coordinator` session metadata key. Standard snapshots, ordered and version-filtered `action` envelopes, write-ahead rejection reconciliation, and reconnect replay/snapshot fallback keep multiple AHP clients converged. See `docs/ahp-coordinator.md` for the mapping.
-
-For unattended work, use the bounded supervisor. It resumes the same provider session for one useful tick, heartbeats while the CLI works, waits for the next Coordinator event, retries crashes with backoff, and exits when the run is terminal:
-
-```bash
-agent-viewer coord worker --start "Implement the release" --playbook release --name codex-lead --provider codex --max-agents 4 --attach 3000
-agent-viewer coord worker --join <run-id> --name claude-api --provider claude --attach 3000
-```
-
-For interactive work, the lead can use
-`coord_delegate(title, detail, to?, paths?, verify_commands?, request_id?)`.
-Omit `to` to reuse an available teammate or create one within a managed run’s
-agent limit. External-only runs require an existing joined teammate.
-It creates and assigns a task, records the checkout baseline, acquires its paths,
-and queues a teammate notification in one transaction. The result identifies
-the task, teammate, and provider session when available. For follow-up reviews,
-address the same teammate again after completion; for work already in progress,
-use `coord_send_message` to steer it. Busy agents, lock conflicts, and unmet
-dependencies reject the delegation without leaving a task behind. `queued`
-means the assignment is durable, not that the provider has started or finished.
-`coord_create_task` also accepts `assign_to` for delegation with advanced task options.
-
-The Coordinator’s **Ask another agent** panel provides this flow for active
-managed runs: submit a task, watch its status and result, open the teammate’s
-transcript, send a message, or follow up in the same session. A failed response
-retains the original request for safe retry. Follow-ups require an active run.
-
-For multi-agent startup, seed the full board with `--playbook` before teammates join; an unseeded `--start` is intended only for a lead planning turn. Start-time controls also include `--max-agents 2..16`, `--gate-command <cmd>`, and `--require-plan-approval`. Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
-
-Add `--detach` to start a worker in the background and return after its identity
-and worker registration are saved:
-
-```bash
-agent-viewer coord worker --start "Implement the release" --name lead --provider codex --detach
-agent-viewer coord worker --join latest --name reviewer --provider claude --detach
-agent-viewer coord workers
-agent-viewer coord logs lead -f
-```
-
-Closing the launching terminal or stopping log following leaves the detached
-worker running. The Agent Viewer daemon must remain available. Detach preserves
-the original supervisor/provider processes; a machine restart still requires
-resuming the saved identity. Startup acknowledgement confirms registration,
-not provider authentication or task completion. If startup is reported as
-unconfirmed, inspect the worker list before retrying: the original process may
-still finish starting.
-
-Restart a supervisor with `agent-viewer coord worker --identity <file>`. A bridge can also load that file with `agent-viewer mcp --identity <file>` or `AGENT_VIEWER_COORD_IDENTITY_FILE`. The older run ID, agent ID, and token environment variables remain supported for compatibility. Treat identity files as secrets.
-
-Workers register their PID, provider session, lifecycle status, observed activity, last classified failure, and log path outside the secret identity file. Inspect or recover the fleet with:
-
-```bash
-agent-viewer coord doctor --json --attach 3000
-agent-viewer coord workers --json
-agent-viewer coord workers --status stale --limit 20
-agent-viewer coord workers --activity blocked
-agent-viewer coord workers --activity awaiting_approval
-agent-viewer coord logs <agent-name|agent-id|identity-file> -n 200
-agent-viewer coord logs <agent-name|agent-id|identity-file> -f
-agent-viewer coord restart <agent-name|agent-id|identity-file>
-```
-
-`coord restart` waits for the replacement worker to register before reporting
-success; startup failures surface as errors.
-
-`coord doctor` is read-only and checks daemon reachability, protocol compatibility, provider CLI availability, identity validity/mode, and registered worker liveness. Provider probes run concurrently, and worker detail is bounded by `--limit` while the summary still covers the full registry. `coord workers --status stale` selects dead supervisors whose last persisted lifecycle state was active; `--status running` returns only live supervisors. Worker logs and registry records default to `~/.agent-viewer/coordinator/workers/`; set `AGENT_VIEWER_COORD_HOME` to relocate them.
-
-`coord workers` shows supervisor lifecycle and activity separately. Activity is
-`working` while a provider turn executes, `ready` when runnable work is paced,
-`blocked` for a blocked owned task, `awaiting_approval` for a plan gate, `idle`
-while waiting for work, or `unknown` when observation fails. JSON includes the
-observation time, reason, and owned task ID when available. Activity filters
-select live supervisors only; use `--status stale` to find crashed workers.
-These are supervisor and board observations, not inference from terminal text.
-
-Provider exits are classified as rate limit, authentication, context exhaustion, approval blockage, missing CLI, transient transport, or generic provider failure. A durable classified failure while a worker owns a task calls `coord_handoff_task`: it records a checkpoint, releases locks, returns the task to pending, marks the worker blocked, and sends the lead an urgent durable handoff. Transient transport failures retain bounded exponential retry behavior; an unclassified failure is handed off after three consecutive attempts.
+Then enable **Route composer through bridge** in the Channel Bridge panel. Delivery is at-least-once with duplicate suppression: unsent messages are persisted and replayed in order, and each shows queued, accepted or processed (Claude confirms processing by calling `ack_delivery`). The bridge defaults to `http://127.0.0.1:8790`; `AGENTVIEWER_CHANNEL_PORT` / `AGENTVIEWER_CHANNEL_URL` run several, `AGENTVIEWER_CHANNEL_TOKEN` enables loopback auth, and `AGENTVIEWER_CHANNEL_STATE_DIR` relocates its state.
 
 ### Codex
 
-Codex uses the local `codex` CLI by spawning:
-
-```bash
-codex app-server --listen stdio://
-```
-
-The `codex` binary must be on `PATH`. The viewer uses the app-server protocol for thread listing, reading, sending, model selection, diagnostics, fork or continuation APIs where available, and rollback. Codex titles are written through the app-server; tags are stored locally by Agent Viewer.
+Spawns `codex app-server --listen stdio://`; `codex` must be on `PATH`. Titles are written through the app-server, tags are stored locally. Reads avoid loading threads, so browsing Codex sessions does not start their MCP servers.
 
 ### OpenCode
 
-OpenCode uses `@opencode-ai/sdk`.
-
-If a server is already running, the viewer tries these URLs in order:
-
-1. `OPENCODE_BASE_URL`
-2. `OPENCODE_SERVER_URL`
-3. `http://127.0.0.1:4096`
-
-If none is reachable, it attempts to start a managed OpenCode server. Optional settings:
-
-```bash
-OPENCODE_PORT=4096
-OPENCODE_START_TIMEOUT_MS=15000
-```
-
-If managed startup fails because provider or model resolution blocks startup, run `opencode serve` yourself and set `OPENCODE_BASE_URL`.
-For a password-protected server, set `OPENCODE_SERVER_PASSWORD`. Set `OPENCODE_SERVER_USERNAME` when its HTTP Basic username differs from the default `opencode`.
+Tries `OPENCODE_BASE_URL`, then `OPENCODE_SERVER_URL`, then `http://127.0.0.1:4096`, and otherwise starts a managed server (`OPENCODE_PORT`, `OPENCODE_START_TIMEOUT_MS`). OpenCode 1.x and 2.x are both supported; the version is asked of the server. For a password-protected server set `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` if not `opencode`). If managed startup fails, run `opencode serve` yourself and set `OPENCODE_BASE_URL`.
 
 ### GitHub Copilot
 
-Copilot uses `@github/copilot-sdk`.
-
-By default the SDK auto-starts the Copilot CLI over stdio. Optional settings:
-
-```bash
-COPILOT_CLI_URL=http://localhost:3000
-COPILOT_CLI_PATH=/path/to/copilot
-```
-
-If the CLI is not available, install `@github/copilot` globally or point `COPILOT_CLI_PATH` at the binary. Copilot title and tag overrides are stored locally because the viewer does not mutate Copilot session metadata on disk.
-Set `COPILOT_AUTO_TIER` to `efficiency`, `balance`, `intelligence`, or `fast` to opt into Copilot's Auto model routing preference for created and resumed sessions. The CLI runtime must support Auto tier routing; an unsupported runtime reports its own error.
+The SDK auto-starts the Copilot CLI over stdio. Optional: `COPILOT_CLI_URL`, `COPILOT_CLI_PATH`, and `COPILOT_AUTO_TIER` (`efficiency`, `balance`, `intelligence`, `fast`) for Auto model routing. Titles and tags are stored locally.
 
 ### Pi
 
-Pi uses `@earendil-works/pi-coding-agent` and its session manager.
+Uses Pi's session manager; set `PI_SESSION_DIR` if sessions live outside the default location. Titles and tags are stored locally; forking uses session branches.
 
-Use this when Pi sessions live outside the default location:
+### ACP agents
 
-```bash
-PI_SESSION_DIR=/path/to/pi/sessions
-```
+`claude-acp` and `codex-acp` drive `claude-agent-acp` / `codex-acp` (install separately, or point `CLAUDE_AGENT_ACP_PATH` / `CODEX_ACP_PATH` at them). The generic `acp` provider runs any ACP agent: set `AGENT_VIEWER_ACP_COMMAND` for the default instance, or add `provider: "acp"` instances. Listing, history and models are used where the agent advertises and actually supports them; operations ACP lacks (rewind, rollback) are unavailable.
 
-Pi title and tag overrides are stored locally. Forking uses Pi session branches.
+### LM Studio
 
-### ACP transport (Claude, Codex)
+Start LM Studio's local server and select `lmstudio`. Set `LMSTUDIO_BASE_URL` if it is not on `http://localhost:1234/v1`.
 
-`claude-acp` and `codex-acp` are alternate transports for the same two SDK-backed providers: instead of the native `@anthropic-ai/claude-agent-sdk` or Codex app-server integration, they drive `claude-agent-acp` / `codex-acp` as a subprocess over the [Agent Client Protocol](https://agentclientprotocol.com) (`session/new` → `session/prompt` → `session/update`). They are separate provider ids, not a flag on the native providers, and appear as their own entries in the provider picker.
+## Coordinator
 
-These are **optional peer tools**, not npm dependencies — install them separately and make sure they resolve on `PATH`, or point directly at a binary with `CLAUDE_AGENT_ACP_PATH` / `CODEX_ACP_PATH`. A missing binary fails clearly at session-create time.
+The Coordinator runs teams of agents across providers on one SQLite-backed ledger: a lead plans and delegates, teammates claim tasks, and everyone talks through a durable mailbox.
 
-ACP-transport sessions are process-local and transient: the protocol has no session-listing, fork, rewind/rollback, delete, or model-listing RPC, so those operations are unsupported and the session list only ever shows sessions created and still pooled in this process (nothing persists across a server restart). Sending messages, permission/elicitation approval, and interrupt all work the same as the native providers.
+**From the apps**: press `⌃K t` in the terminal app (or open the Teammates panel on the web) to make the current chat a lead, `⌃⇧N` to launch a coordinated workflow, and `⌃⇧A` for the Agent Operations board. Teammates work in isolated git worktrees by default; plan approval, completion gates (e.g. `npx tsc --noEmit`) and teammate count are set when the run starts.
 
-## Local Data
-
-Agent Viewer stores local state in:
-
-```text
-.agent-viewer-data/
-```
-
-This directory is intentionally not part of source control. It is used for:
-
-- selected provider state
-- local title or tag metadata for providers that need viewer-side storage
-- the SQLite session and message index
-- migrated legacy JSON index data
-
-The session index is refreshed opportunistically when sessions and messages are read. It powers command-palette message search and aggregate stats.
-
-Disable the local index with:
+**From other CLIs** over MCP. Start the daemon, then register the bridge:
 
 ```bash
-AGENT_VIEWER_DISABLE_SESSION_INDEX=1 npm run dev
+npx agent-viewer web --port 3000
+claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
+codex mcp add agent-viewer --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 -- npx -y agent-viewer mcp
 ```
 
-Index APIs:
+The CLI then gets session tools (`search_sessions`, `list_sessions`, `message_session`, `get_session_transcript`, `set_bookmark`, `post_attention`), review tools (`review_read`, `review_apply`, `review_reload`) and the `coord_*` tool set. One client calls `coord_create_run`, others `coord_join_run`; identities are kept in mode-0600 files and never shown to the model. Leads assign work with `coord_delegate`. The bridge speaks MCP `2026-07-28` (and older initialize-based clients) and supports MCP Apps (a run dashboard), Skills over MCP, resource subscriptions for push updates, progress, and experimental Tasks for long waits.
+
+**Unattended workers** supervise a provider session through a run, heartbeat, retry with backoff and hand work back when they fail:
+
+```bash
+agent-viewer coord worker --start "Implement the release" --playbook release --name lead --provider codex --max-agents 4 --attach 3000
+agent-viewer coord worker --join <run-id> --name reviewer --provider claude --attach 3000 --detach
+agent-viewer coord worker --join latest --name gemini --acp-command "gemini --experimental-acp"
+agent-viewer coord workers | logs <name> -f | restart <name> | doctor
+```
+
+**Scripting** a run from a shell: `agent-viewer coord run|join|status|delegate|send|inbox|wait|runs|whoami|tools|call <tool>` prints JSON, binds to the directory it was started in, and exits 3 when a `wait` times out.
+
+**Other transports**: Coordinator traffic uses a persistent AHP WebSocket on the web port plus one (`--ahp-port`, `AGENT_VIEWER_AHP_PORT`, `--no-ahp`); `agent-viewer ahp [--listen|--ws host:port]` serves the Agent Host Protocol standalone ([docs/ahp-coordinator.md](docs/ahp-coordinator.md)). An A2A 1.0 facade is off by default:
+
+```bash
+AGENT_VIEWER_A2A_ENABLED=1 AGENT_VIEWER_A2A_TOKEN='long-random-token' npm run dev
+```
+
+It advertises `/.well-known/agent-card.json`, serves JSON-RPC at `/api/a2a` (bearer auth, `A2A-Version: 1.0`), and works on existing runs only — it never creates runs or launches processes.
+
+Workflow guidance for agents lives in the bundled skill, [`.agents/skills/coordinate-agents/SKILL.md`](.agents/skills/coordinate-agents/SKILL.md). User-level command hooks for run events go in `<coordinator home>/hooks.json` (default `~/.agent-viewer/coordinator/`, or `AGENT_VIEWER_COORD_HOME`).
+
+## Command line
+
+| Command | Purpose |
+|---|---|
+| `agent-viewer` | Terminal app (`--attach <port>`, `--daemon`, `--no-mouse`, `--full-repaint`, `--legacy`) |
+| `agent-viewer web` | Web app and daemon (`--port`, `--host`, `--production`, `--ahp-port`, `--no-ahp`) |
+| `agent-viewer daemon status\|start\|stop` | Manage a background daemon |
+| `agent-viewer pair [--scope read-only]` | Pair a phone or browser via QR code |
+| `agent-viewer machines list\|add\|remove` | Show other machines' Coordinator teams in the rail |
+| `agent-viewer session list\|get\|read\|prompt\|wait\|interrupt\|report\|explain` | Script ordinary chats |
+| `agent-viewer terminal list\|read\|send\|keys\|run\|wait` | Drive the shells a running terminal app holds |
+| `agent-viewer review read\|reload\|apply` | Agent controls for an open Git or PR review |
+| `agent-viewer coord …` | Coordinator runs, workers and scripting (see above) |
+| `agent-viewer mcp` | MCP bridge for other CLIs |
+| `agent-viewer ahp` / `agent-viewer acp` | Agent Host Protocol host / ACP agent endpoint for editors |
+
+## Terminal app essentials
+
+| Key | Action |
+|---|---|
+| `?` | Command palette |
+| `/` | Search sessions; `/` in a window searches its history |
+| `v` | Choose a transcript view (`n`/`e` opens the View Studio) |
+| `p` | Provider and instance picker |
+| `⌃B` then `?` | Window keys: `%` split, `o` focus, `x` close, `w` layouts, `m` zoom, `u` undo, `p` switcher, `b` broadcast |
+| `⌃B S` | Spaces and workspaces manager |
+| `⌃K` then a key | Tools: `t` teammates, `s` daily summary, `b` desk, `l` processes, `v` page the transcript in `$PAGER` |
+| `⇧O` | Side panel (browser, shell, files, diff, PR, agents) |
+| `⇧D` | Diagnostics; `⇧U` checkpoints |
+| `⌃⇧N` / `⌃⇧A` | Launch a team / Agent Operations board |
+
+Hesitating after `⌃B` or `⌃K` shows the available keys. `⌃K` chords and custom commands can be rebound in `~/.config/agent-viewer/keys.json` (or `$AGENT_VIEWER_KEYS_FILE`).
+
+Rendering knobs: `AGENT_VIEWER_TUI_MAX_FPS` (10–240; default 120, 60 on Windows), `--full-repaint` for terminals that leave stale fragments, `--no-mouse` to hand selection back to the terminal (useful in tmux and over SSH), `AGENT_VIEWER_DISABLE_TERMINAL_BROWSER=1` to open URLs in the desktop browser instead of a `terminal-browser` split. Inside tmux, `⌃B` belongs to tmux — use the command palette or send the prefix through.
+
+## Remote access
+
+Off by default. `agent-viewer pair` (or the Remote Access panel) mints a single-use, ~10-minute pairing code shown as a QR; the paired device receives its own session credential, stored only as a hash and revocable individually. Devices are either `full` or `read-only`, and what read-only may reach is declared per API route in `lib/routeScopes.ts` (undeclared routes are write-only). Cross-origin mutations to `/api/*` are blocked.
+
+## Local data
+
+`.agent-viewer-data/` (gitignored) holds the selected provider, provider instances, local titles and tags, the session inbox, saved layouts, remote-access state and the search index at `.agent-viewer-data/session-index/index.sqlite`. Deleting it resets Agent Viewer; provider-owned sessions are untouched. Terminal-app preferences live in `tui.json` alongside.
+
+The index refreshes as sessions are read. Disable it with `AGENT_VIEWER_DISABLE_SESSION_INDEX=1`, or use the API:
 
 ```text
 GET  /api/session-index/search?q=term&provider=all
@@ -422,94 +320,37 @@ GET  /api/session-index/stats?provider=all
 POST /api/session-index/rebuild
 ```
 
-## Scripts
+## Development
 
 ```bash
-npm run dev        # Next.js development server
-npm run build      # production build
-npm run start      # production server
-npm run tui        # OpenTUI terminal app
-npm run tui:dev    # OpenTUI with watch mode
-npm run tui:check  # type-check the OpenTUI surface
-npm run tui:ink    # legacy Ink terminal app
-npm run tui:ink:dev
-npm run tui:smoke  # OpenTUI render smoke check
-npm run doctor     # React diagnostics helper
+npm run dev          # Next.js dev server
+npm run build        # production build (npm start serves it)
+npm run tui          # OpenTUI app; tui:dev watches
+npm run tui:ink      # legacy Ink app
+npm run desktop:dev  # Tauri desktop shell
 ```
 
-## TUI Status
-
-OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired through the shared TUI service.
-
-When a provider asks for permission to open a URL, OpenTUI uses the installed `terminal-browser` package to open a borderless browser in a right-hand terminal split (`terminal-browser open <url> --split right --app-mode`). Set `AGENT_VIEWER_DISABLE_TERMINAL_BROWSER=1` to use the native desktop opener instead, or `AGENT_VIEWER_TERMINAL_BROWSER` to select a different executable.
-
-### Surface panel
-
-Both UIs can dock an auxiliary surface beside the transcript instead of covering it: a **browser**, a **shell**, the **file** browser, the **diff**, this branch's **pull request**, or **agents**. The panel is a shell around the components the full-screen overlays already use, so a surface shows the same thing in either place; the overlays and their shortcuts are unchanged.
-
-On the web, the panel-right button in the transcript top bar (or `Ctrl+B`, or the command palette) opens it. With nothing open it shows a launcher — `B`, `T`, `F`, `D`, `P`, `A` pick a surface — and after that a tab strip with a `+` for more, so a browser, a shell and a diff can stay open together. Browser, terminal and file surfaces can each be opened more than once; the rest are singletons because their content comes entirely from the active project. Drag the panel's left edge to resize it, or use the expand button to give it the whole content area.
-
-In OpenTUI, `⇧O` opens the panel and takes focus; `⇧O` again returns focus, and once more closes it. `Escape` leaves the panel without closing it, `⌃N` / `⌃P` move between surface tabs, `⌃T` adds one, `⌃W` closes one, `=` expands the panel to everything the reader's minimum leaves, and `<` / `>` resize it. It is mouse-driven too: click a launcher card to open a surface, a tab to switch, its `×` to close, `⌃T +` to add — and clicking anywhere in the panel takes focus, while clicking the transcript or composer hands it back. The panel runs the full height of the window, past the composer, which stops short of its column. The terminal's browser surface hands the URL to `terminal-browser` (see below) rather than pretending to render a page in a text cell, and its shell surface runs one command at a time in the workspace.
-
-OpenTUI has **spaces** for projects and **workspace tabs** for independent working sets. Choose a space in the sidebar, then use its top tabs or `+` to switch or create a workspace. Each workspace keeps its windows, layout, reading positions, drafts, and undo history; the same agent session can appear in several workspaces with separate drafts. New workspaces show a launcher (`1` session, `2` agent, `3` terminal, `4` saved layout).
-
-`Ctrl+B S` opens the searchable spaces/workspaces manager. Use arrows and Enter to switch, `Ctrl+N` for a workspace, `Ctrl+A` for a project space, `Ctrl+R` to rename, `Ctrl+Left/Right` to reorder, and `Ctrl+X` to close. You can also right-click a space or workspace tab to manage it. Closing warns about drafts, queued prompts, editor buffers, and running terminals; agent sessions continue. The session list defaults to the space’s directory; click **Project sessions** to include all projects.
-
-Inactive workspaces keep agent turns and terminals running and show passive attention badges. Spaces, active tabs, windows, and drafts restore from local data after restart. Shell windows start fresh shells when revisited; previously running commands are not replayed. Saved layouts remain snapshots applied to the current workspace. Run `npm run tui:spaces:smoke` for the focused state, background, and rendered checks.
-
-Transcript splits use a tmux-style `Ctrl+B` prefix (`Ctrl+B %` to add, `Ctrl+B o` to focus, and `Ctrl+B x` to close the focused pane). Inside tmux, tmux consumes `Ctrl+B`; use the `?` command palette for split actions, or send tmux's prefix through before the Agent Viewer chord. Undo window changes with `Ctrl+B u` (or **Undo window change** in the palette): closing, moving, replacing and resizing panes can be recovered, including a divider drag as one step. On small terminals, hidden windows appear in a one-row overflow strip and return in their original order when space is available. Saving a layout includes those hidden windows.
-
-Session and tool windows share the same title menu (`≡`, right-click, or `Ctrl+B Enter`). Use it to split, zoom, float/dock, group tabs, or move a window to another workspace. `Ctrl+K w` enters window management even while a shell or text input owns the keyboard: arrows focus, Shift+arrows swap, digits select the displayed window number, `[` / `]` resize, and Escape or Enter finishes. `Ctrl+K q` briefly shows window numbers. Zoom (`Ctrl+B m`, or **Fill** in the layout menu) preserves neighbouring windows and restores them when toggled again. `Ctrl+B X` reopens the last closed window; `Ctrl+B U` redoes an undone layout change.
-
-`Ctrl+B w` opens the window layout menu. Hover or move between choices to preview their geometry before applying; a dragged session also previews the resulting frames. Use `s` to save, `n` to save with a name, and `r`, `u`, or `x` on a saved layout to rename, update from the current windows, or delete it. Session windows show unread output, errors, and pending-input badges; `Ctrl+B a` jumps to the next window needing attention. Background activity leaves focus where it is. The active window prefix shows its shortcuts in the status bar and reveals the full key guide after a short pause.
-
-`Ctrl+B p` opens the quick window switcher. Search by title, provider, or project, then press Enter to focus a match. Hidden session windows swap into the reader; hidden surfaces open temporarily at full size, with Escape returning to the layout.
-
-**Watch this run:** press `O` in the Teammates panel or Agent Operations board to open the lead and teammates as a workspace. Teammates keep their registration order; new readable participants append without taking focus. Board tasks open their owner’s existing pane, and hidden teammates can be brought into view with the quick switcher while retaining the lead. Pending reviews and replies stay badged until resolved in Coordinator. Save the workspace with `Ctrl+B w` to restore its run binding and windows later; `Ctrl+B u` undoes opening it. Use **Stop watching Coordinator run** in the command palette to detach its status feed while keeping the windows. Broadcast prompts remain separate from task-board assignments.
-
-`Ctrl+B b` opens broadcast input. Select session windows with Space or a click, use Tab to edit the prompt, then press Ctrl+Enter to review the exact targets and text. Enter on the review sends once to each selected session. Each destination keeps its own model and permission settings; running turns accept steering when supported, and idle sessions start a turn. Delivery results are shown separately, and unconfirmed deliveries are never retried automatically.
-
-### Agent Teams
-
-Press `Ctrl+Shift+N` anywhere in the OpenTUI app to launch a coordinated workflow directly, or `Ctrl+Shift+A` to open Agent Operations first and press `n` from there. The launcher creates a lead that decomposes the request, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard. Teammates use isolated git worktrees by default; turn off **Isolate teammates in git worktrees** in the launcher only when they should deliberately share the current checkout.
-
-OpenTUI limits on-demand rendering to 60 FPS on Windows and 120 FPS elsewhere. Linux/WSL sessions also use Windows pacing when Windows Terminal passes `WT_SESSION` through. Streaming text is coalesced before updating transcript cards (about 34 ms on Windows, 16 ms on macOS). Set `AGENT_VIEWER_TUI_MAX_FPS` to a number from 10 to 240 to tune the cap; 30 or 60 can reduce output pressure in a slow terminal. Idle screens still render only when needed. `--full-repaint` is a workaround for stale fragments: it writes the whole screen each frame and can make streaming, scrolling, and resizing slower. Leave it off unless needed for display correctness.
-
-For a reproducible Windows Terminal output comparison, run this in PowerShell from the repository, then repeat with `30` and `120`. Run once for each scenario (`stream`, `scroll`, `resize`) at the same terminal size. The harness runs for three seconds and prints JSON after restoring the terminal:
-
-```powershell
-$env:OUTPUT_REAL_TERMINAL = "1"
-$env:AGENT_VIEWER_TUI_MAX_FPS = "60"
-$env:OUTPUT_SCENARIO = "scroll"
-bun tui/opentui/terminalOutputPerf.ts
-```
-
-The output diagnostic measures native ANSI delivery and backpressure, including byte/write counts and renderer frame durations. It uses a synthetic screen to isolate output cost; it does not measure the emulator's pixel paint or the full app's input latency. Without `OUTPUT_REAL_TERMINAL=1`, it writes to a simulated sink; `OUTPUT_BYTES_PER_SECOND=250000` can limit that sink for local comparisons. `OUTPUT_POLICY_PLATFORM=win32` selects the Windows pacing policy on a different OS for simulation; it does not emulate Windows. `AGENT_VIEWER_FULL_REPAINT=1` enables the same full-screen workaround as the app. Use `npm run tui:rendering:smoke` for live-text ordering/completion checks and `npm run tui:inputperf` for full-app CPU measurements in memory. The CPU harness retains its strict 8.33 ms gate independently of the output cap.
-
-OpenTUI enables enhanced keyboard reporting for terminals that support Kitty/CSI-u. In legacy terminals that cannot distinguish `Ctrl+letter` from `Ctrl+Shift+letter`, the raw `Ctrl+A` and `Ctrl+G` sequences fall back to the coordinator and pull-request shortcuts; analytics and Git status remain available from the command palette.
-
-The start modal defaults plan approval on: teammates submit a `task.planned` approach first, Claude teammates are dispatched in plan mode for that planning turn, and the lead must emit `plan.approved` before implementation can complete. Use `Ctrl+P` to toggle plans, `Ctrl+T` to cycle teammate count, and the `gate` field for a command such as `npx tsc --noEmit` that must pass before a teammate task completes.
-
-On the board, use `Enter` to open a teammate transcript, `m` to message the selected teammate or lead, `Shift+M` to broadcast, `x` to interrupt a selected teammate turn, `w` to stage-merge a teammate worktree, `f` to mark a stuck task failed, and `c` to clean up completed clean worktrees.
-
-The legacy Ink UI remains available through:
+There is no unit-test runner; verification is type-checking plus smoke suites:
 
 ```bash
-npm run tui:ink
-npx agent-viewer --legacy
+npx tsc --noEmit            # web and shared code
+npm run tui:check           # OpenTUI
+npm run composer:smoke      # fast, no network
+npm run routes:smoke        # remote-access scope table covers every route
+npm run adapters:smoke      # every provider's read path against your local sessions
+npm run plugins:smoke       # plugin boundaries
+npm run tui:smoke           # terminal app (slow)
 ```
+
+Performance and memory harnesses for the terminal app include `tui:navperf`, `tui:inputperf`, `tui:editortypingperf`, `tui:memrun` and `tui:memphases`. Contributor guidance, including the load-bearing design rules, is in [CLAUDE.md](CLAUDE.md).
 
 ## Troubleshooting
 
-- If the web app behaves oddly after branch changes, clear `.next/` and rebuild.
-- If the default CLI fails with a Bun error, install Bun and make sure the current terminal inherited the updated `PATH`.
-- If OpenCode cannot start, run `opencode serve` separately and set `OPENCODE_BASE_URL`.
-- If Copilot cannot start, set `COPILOT_CLI_URL`, set `COPILOT_CLI_PATH`, or install `@github/copilot` globally.
-- If Pi sessions are not found, set `PI_SESSION_DIR`.
-- If indexed search looks stale, rebuild the index from the command palette or call `POST /api/session-index/rebuild`.
-
-## Notes
-
-- Agent Viewer is intended for one local developer environment, not hosted multi-user use.
-- Some behavior is provider-specific because the underlying SDKs and CLIs expose different capabilities.
-- Local viewer metadata can be deleted by removing `.agent-viewer-data/`; provider-owned session data remains in the provider's own storage.
+- **Bun error on launch**: install Bun and open a new terminal so `PATH` is updated.
+- **Web app odd after switching branches**: delete `.next/` and rebuild.
+- **OpenCode won't start**: run `opencode serve` and set `OPENCODE_BASE_URL`.
+- **Copilot won't start**: set `COPILOT_CLI_PATH` or `COPILOT_CLI_URL`, or install `@github/copilot` globally.
+- **Pi sessions missing**: set `PI_SESSION_DIR`.
+- **ACP agent missing**: check the binary resolves on `PATH`, or set its path variable / command.
+- **Search looks stale**: rebuild the index from the command palette or `POST /api/session-index/rebuild`.
+- **Attached TUI reports a version mismatch**: restart the daemon (`agent-viewer daemon stop && agent-viewer daemon start`).
