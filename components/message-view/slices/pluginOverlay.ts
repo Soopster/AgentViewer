@@ -2,7 +2,6 @@ import type { ComposerSessions } from '../../../lib/composerSessions'
 import type { Session } from '../../../lib/types'
 import { type ProtocolAgent } from '@/lib/agentProtocol'
 import { useState, useRef, useMemo } from 'react'
-import { type SessionDiagnosticSection } from '@/lib/types'
 import { getPluginSurface, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import { useComposerSessionState } from '@/lib/composerSessions'
@@ -42,8 +41,6 @@ export function usePluginOverlayGroup(ctx: UsePluginOverlayGroupContext) {
       attentionChanged: updateTeamAttention,
     },
   }), [session, onOpenSession, onInspectTeammate, returnToChat, updateTeamAttention])
-  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
-  const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [cliPopoverOpen, setCliPopoverOpen] = useState(false)
@@ -67,7 +64,6 @@ export function usePluginOverlayGroup(ctx: UsePluginOverlayGroupContext) {
 
   return {
     pluginOverlay, setPluginOverlay, disabledPlugins, teammatesTab, teammatesServices,
-    diagnosticsLoading, setDiagnosticsLoading, diagnosticSections, setDiagnosticSections,
     exporting, setExporting, deleting, setDeleting, cliPopoverOpen, setCliPopoverOpen,
     cliPopoverRef, viewDropdownOpen, setViewDropdownOpen, viewDropdownRef, actionsDropdownOpen,
     setActionsDropdownOpen, actionsDropdownRef, sessionActionLoading, setSessionActionLoading,

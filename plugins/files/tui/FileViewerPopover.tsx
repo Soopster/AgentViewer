@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { PopoverDetachButton } from '../../../tui/opentui/shell/sdk'
 import { useWorkspaceState } from '../../../tui/opentui/shell/sdk'
-import { displayHighlightClient } from '../../../tui/opentui/displayHighlightClient'
+import { displayHighlightClient } from '../../../tui/opentui/shell/sdkHighlight'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
 import { open, readdir, stat } from 'node:fs/promises'

@@ -81,11 +81,31 @@ The repository is organized around a few stable boundaries:
 - `tui/App.tsx` remains as the legacy Ink runtime.
 - `bin/agent-viewer.mjs` is the packaged `npx agent-viewer` entrypoint.
 
+Web and OpenTUI share feature plugin metadata, enablement and behavior contracts.
+Plugins can contribute surfaces, executable commands, application observers,
+composer accessories, Web dashboards and reader slots, and shared before-turn
+hooks. The shell owns session identity, layout, focus and runtime lifetimes;
+plugins use declared capabilities and own their scoped presentation state.
+
+Tasks demonstrates a reader contribution: metadata declares its panel and width,
+the host allocates the column and dispatches open/toggle requests, and the plugin
+owns visibility, task derivation and controls. Its Web and OpenTUI adapters share
+the task registry logic. Bridge views similarly consume shared service contracts;
+a view lease keeps presentation connected, while composer routing independently
+retains its transport. Closing or disabling a bridge view leaves an active route
+running until routing is turned off. Feature disablement does not interrupt a
+provider run.
+
+Start with the [plugin authoring skill](.agents/skills/agent-viewer-plugins/SKILL.md)
+to add a trusted bundled plugin or customize an existing surface. Registration
+uses static source loader lists. The [migration audit](docs/plugin-shell-audit.md)
+records migrated built-ins and remaining direct shell integrations.
+
 Some implementation choices matter:
 
 - Browser components should call API routes, not provider SDKs directly.
 - Provider SDKs and CLIs stay server-side because they rely on Node APIs like filesystem and process access.
-- Session identity should always include the provider, because IDs can overlap across runtimes.
+- Session identity should always include provider, configured provider instance and session ID, because native IDs can overlap across runtimes and accounts.
 - New provider work usually touches the provider type, capability table, client, mapper, `sessionBackend.ts`, and the provider selection lists in the web and TUI layers.
 
 ## Provider Setup
@@ -190,7 +210,7 @@ The bridge uses the MCP TypeScript SDK v2 and serves the `2026-07-28` protocol t
 Three optional MCP extensions make Coordinator workflows easier to discover, inspect, and resume:
 
 - MCP Apps (`io.modelcontextprotocol/ui`): `coord_status` links to the self-contained `ui://agent-viewer/coordinator-dashboard.html` resource. Apps-capable hosts render the current run, open-task, inbox, lock, task, and agent state; text-only hosts keep receiving the normal JSON result.
-- Skills over MCP (`io.modelcontextprotocol/skills`, experimental SEP-2640): `skill://index.json` advertises `skill://coordinate-agents/SKILL.md`, served directly from the canonical `.agents/skills/coordinate-agents/SKILL.md`, and the `coordinate_agents` prompt points compatible clients at that progressively disclosed workflow guidance.
+- Skills over MCP (`io.modelcontextprotocol/skills`, experimental SEP-2640): `skill://index.json` advertises the bundled `coordinate-agents` and `agent-viewer-plugins` skills. The plugin-authoring skill is also available at [`.agents/skills/agent-viewer-plugins/SKILL.md`](.agents/skills/agent-viewer-plugins/SKILL.md) and `skill://agent-viewer-plugins/SKILL.md`; it covers Web/OpenTUI surfaces, shared behavior hooks, customization services and validation. The `coordinate_agents` prompt points compatible clients at the Coordinator workflow guidance.
 - Push supervision: after `coord_create_run`, `coord_join_run`, or `coord_resume`, the result identifies the private `coord://agent-viewer/current-run` resource. MCP 2026 clients can subscribe once through `subscriptions/listen`; another participant's AHP board action then emits `notifications/resources/updated`. Re-read the zero-TTL private resource for the authoritative board and `actionable` digest. Bursts are coalesced and liveness-clock-only refreshes are suppressed.
 - Progress: when a non-Tasks client supplies a `progressToken` on a blocking `coord_wait`, the bridge emits monotonic `notifications/progress` updates for the lifetime of that request. Progress stops before the tool response; task-augmented waits use task state instead, as required by the Tasks extension.
 - Tasks (`io.modelcontextprotocol/tasks`, experimental): a Tasks-capable request to `coord_wait` with a non-zero timeout receives a durable asynchronous handle instead of holding the MCP request open. `coord_await_run` creates a whole-run monitor for independently supervised or unattended runs and surfaces pending lead plan reviews as `input_required` elicitations. Clients retrieve state and final tool results through `tasks/get`, submit those reviews through `tasks/update`, and cooperatively cancel the wait/monitor through `tasks/cancel`. The handle survives bridge restarts in a mode-0600 ledger next to the Coordinator identity file; `AGENT_VIEWER_MCP_TASK_FILE` overrides that path.

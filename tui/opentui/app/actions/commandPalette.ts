@@ -55,7 +55,6 @@ export type ExecuteCommandPaletteContext = {
   runPluginCommand: (command: ResolvedPluginCommand, session?: Session | null) => void
   selectedSession: Session | null
   openNewSessionModal: () => void
-  reuseLastPrompt: () => void
   openProviderMenu: () => void
   setAttentionOpen: React.Dispatch<React.SetStateAction<boolean>>
   jumpToNextAttention: () => void
@@ -63,7 +62,6 @@ export type ExecuteCommandPaletteContext = {
   setSessionSearchMode: React.Dispatch<React.SetStateAction<boolean>>
   setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
   setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
-  openSessionGoalDialog: () => void
   selectedWorktreeTask: WorktreeTask | null
   setWorktreeConfirm: React.Dispatch<React.SetStateAction<'merge' | 'discard' | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
@@ -186,7 +184,6 @@ export type ExecuteCommandPaletteContext = {
   setComposerEnableWorkflow: React.Dispatch<React.SetStateAction<boolean>>
   setPluginManagerOpen: React.Dispatch<React.SetStateAction<boolean>>
   openHandoffBrief: () => void
-  openPromptLibrary: () => void
   setRenameSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>
   copyCliCommand: () => Promise<void>
@@ -209,10 +206,9 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
   const persistPreference = (write: () => Promise<unknown>) => ctx.isolatedView ? Promise.resolve() : write()
   const {
     focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
-    runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
+    runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
-    openSessionGoalDialog,
     openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
@@ -240,7 +236,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     closeSessionTab, setComposerHidden, setComposerActive, openComposerWindow,
     pasteSystemClipboardToComposer, toggleComposerHidden, stashComposerPrompt, popComposerStash,
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
-    openHandoffBrief, openPromptLibrary, setRenameSessionKey, setRenameDraft, copyCliCommand,
+    openHandoffBrief, setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
@@ -271,9 +267,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     case 'new':
       openNewSessionModal()
       break
-    case 'reuse':
-      reuseLastPrompt()
-      break
     case 'provider':
       openProviderMenu()
       break
@@ -290,9 +283,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     case 'worktree-new':
       setWorktreeDraft('')
       setWorktreeModalOpen(true)
-      break
-    case 'goal':
-      openSessionGoalDialog()
       break
     case 'worktree-merge':
       if (selectedWorktreeTask) setWorktreeConfirm('merge')
@@ -771,9 +761,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       break
     case 'handoff-brief':
       openHandoffBrief()
-      break
-    case 'prompt-library':
-      openPromptLibrary()
       break
     case 'rename':
       if (focusedSession) {

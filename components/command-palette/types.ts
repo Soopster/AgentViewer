@@ -25,12 +25,6 @@ export type CommandPaletteProps = {
   messageViewFullscreen: boolean
   canMaximizeMessageView: boolean
   canOpenGit: boolean
-  canOpenTasks: boolean
-  canOpenPromptLibrary: boolean
-  canOpenChannelBridge: boolean
-  channelBridgeRouting: boolean
-  canOpenIdeBridge: boolean
-  ideBridgeRouting: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void
@@ -43,13 +37,6 @@ export type CommandPaletteProps = {
   onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
-  onOpenCrossSessionMessaging: () => void
-  onOpenTasks: () => void
-  onOpenPromptLibrary: () => void
-  onOpenChannelBridge: () => void
-  onToggleChannelBridgeRoute: () => void
-  onOpenIdeBridge: () => void
-  onToggleIdeBridgeRoute: () => void
   onOpenBookmarks: () => void
   onOpenProvenance: () => void
   onOpenRemoteAccess: () => void

@@ -8,18 +8,19 @@ export const manifest = {
   id: 'tasks',
   title: 'Task list',
   description: "A session's todos and background tasks, grouped by state, with stop and jump.",
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
+  reader: [{ id: 'tasks', surface: 'tasks', width: 360 }],
   surfaces: [{
     id: 'tasks',
     title: '☑ Tasks',
     pin: 'session',
     single: false,
     keys: 'window',
-    placements: ['overlay', 'window'],
+    placements: ['overlay', 'window', 'panel'],
     windowLabel: 'Task list in a window',
     services: ['session-transcript', 'session'],
-    optionalServices: ['live-transcript', 'task-control'],
+    optionalServices: ['live-transcript', 'task-control', 'reader-slot'],
   }],
   commands: [{
     // `tasks` is the host's side-panel command; this id is the palette's old one.
@@ -32,5 +33,14 @@ export const manifest = {
     tuiKey: { name: 'l', shift: true },
     tuiKeyLabel: '⇧L',
     keywords: ['tasks', 'todos', 'background', 'bashes', 'lineage'],
+  }, {
+    id: 'open-task-panel', label: 'Open task panel', category: 'Transcript',
+    opens: 'tasks', requires: 'session', scope: 'session', renderers: ['web'],
+    webReader: 'tasks', keywords: ['tasks', 'todos', 'background', 'lineage', 'registry'],
+  }, {
+    id: 'toggle-task-panel', label: 'Toggle task panel', category: 'Transcript',
+    opens: 'tasks', requires: 'session', scope: 'session', renderers: ['web'],
+    webReader: 'tasks', webReaderAction: 'toggle', webViewMenuLabel: 'Tasks',
+    keywords: ['tasks', 'todos', 'rail', 'panel'],
   }],
 } as const satisfies PluginManifest

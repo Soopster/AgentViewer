@@ -9,7 +9,7 @@ export const manifest = {
   id: 'diagnostics',
   title: 'Session diagnostics',
   description: "A session's runtime status, context, permission rules, hooks and MCP servers, with their controls.",
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'diagnostics',
@@ -28,9 +28,10 @@ export const manifest = {
     category: 'Session',
     opens: 'diagnostics',
     requires: 'session',
-    renderers: ['tui'],
+    renderers: ['web', 'tui'],
     tuiKey: { name: 'd', shift: true },
     tuiKeyLabel: '⇧D',
+    webToolbarLabel: 'Diagnostics',
     keywords: ['diagnostics', 'mcp', 'hooks', 'permissions', 'status', 'context'],
   }],
 } as const satisfies PluginManifest

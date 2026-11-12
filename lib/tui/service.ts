@@ -294,17 +294,13 @@ export async function listTuiAddressableSessions(excludeSessionId?: string): Pro
   return listAddressableSessions(excludeSessionId)
 }
 
-export async function sendTuiCrossSessionMessage(params: {
-  fromSessionId?: string
-  fromName: string
-  toName: string
-  text: string
-}): Promise<SendCrossSessionMessageResult> {
+export async function sendTuiCrossSessionMessage(params: import('../crossSessionMessagingTypes').SendCrossSessionMessageParams): Promise<SendCrossSessionMessageResult> {
   if (isRemoteAttached()) {
     return remoteJson<SendCrossSessionMessageResult>('/api/agents/message', {
       method: 'POST',
       body: JSON.stringify({
         fromSessionId: params.fromSessionId,
+        fromAddress: params.fromAddress,
         fromName: params.fromName,
         to: params.toName,
         text: params.text,

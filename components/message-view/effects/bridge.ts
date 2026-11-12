@@ -70,7 +70,9 @@ export function runBridgeLoadEffect(ctx: BridgeLoadEffectContext) {
   let isMounted = true
   ;(async () => {
     try {
-      const res = await fetch(`/api/bridge-messages?provider=${encodeURIComponent(session.provider ?? 'claude')}&sessionId=${encodeURIComponent(session.sessionId)}`)
+      const query = new URLSearchParams({ provider: session.provider ?? 'claude', sessionId: session.sessionId })
+      if (session.providerInstanceId) query.set('providerInstanceId', session.providerInstanceId)
+      const res = await fetch(`/api/bridge-messages?${query}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json() as { messages: Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }> }
       if (isMounted) {

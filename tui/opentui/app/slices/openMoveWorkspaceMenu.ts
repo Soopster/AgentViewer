@@ -69,7 +69,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   dailySummaryOpen: boolean
   playbookManagerOpen: boolean
   attentionOpen: boolean
-  promptLibraryOpen: boolean
   handoffBriefOpen: boolean
   fileHistoryPath: string | null
   gitRepoCwd: string
@@ -117,7 +116,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen, promptLibraryOpen,
+    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, coordModalOpen,
@@ -187,7 +186,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
     ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen,
-    playbooks: playbookManagerOpen, attention: attentionOpen, 'prompt-library': promptLibraryOpen,
+    playbooks: playbookManagerOpen, attention: attentionOpen,
     handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),
     teammates: teammatesModalOpen,

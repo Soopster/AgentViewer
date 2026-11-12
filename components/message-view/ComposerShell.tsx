@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { useState } from 'react'
 import type { DragEvent } from 'react'
@@ -29,8 +30,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
-import { type WebPluginServices } from '../shell/pluginTypes'
-import { ArrowUp, BookOpen, ChevronDown, CircleAlert, CircleCheck, Clock3, GitBranch, LoaderCircle, Minimize2, MonitorUp, Paperclip, Plug, Radio, RotateCcw, Square, TriangleAlert } from 'lucide-react'
+import { ArrowUp, ChevronDown, CircleAlert, CircleCheck, Clock3, GitBranch, LoaderCircle, Minimize2, MonitorUp, Paperclip, Plug, Radio, RotateCcw, Square, TriangleAlert } from 'lucide-react'
 import { type WebViewMode } from '../MessageItem'
 import ProviderIcon from '../ProviderIcon'
 import BranchSwitcher from '../BranchSwitcher'
@@ -43,11 +43,18 @@ import { PlanApprovalCard } from './PlanApprovalCard'
 import { AskUserQuestionPicker } from './AskUserQuestionPicker'
 import { ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopoverHintStyle, composerPopoverItemStyle, ComposerContextUsageRing } from './composerUi'
 import { attachmentImagePreviewSrc, attachmentDisplayName } from './composerStorage'
-import { compactNativeSelectClassName, PierrePatchDiffView, PromptLibrary, ChannelBridgePanel, IdeBridgePanel, PluginSurfaceHost } from './lazyPanels'
-import { SessionGoalDock } from './SessionGoalDock'
+import { compactNativeSelectClassName, PierrePatchDiffView, PluginSurfaceHost, WEB_COMPOSER_PLUGIN_COMMANDS } from './lazyPanels'
+import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
+import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
+import type { WebPluginServices } from '../shell/pluginTypes'
+import { canOfferWebPluginCommand } from '../shell/commandAvailability'
+import { ComposerAccessoryHost } from '../shell/ComposerAccessoryHost'
+import type { ComposerAccessoryBinding } from '../../lib/plugins/useComposerAccessories'
 import { ReasoningStatus } from './ThinkingSummary'
 
 type ComposerShellProps = {
+  pluginServices: WebPluginServices
+  composerAccessories: ComposerAccessoryBinding
   isProject: boolean
   composerCollapsed: boolean
   handleComposerDragEnter: (event: React.DragEvent<HTMLDivElement>) => void
@@ -168,16 +175,8 @@ type ComposerShellProps = {
   channelBridge: ChannelBridge
   composerQueueTargetKey: string | null
   setAttachmentPanelOpen: Dispatch<SetStateAction<boolean>>
-  setPromptLibraryOpen: Dispatch<SetStateAction<boolean>>
-  promptLibraryOpen: boolean
-  insertPromptText: (text: string) => void
-  setChannelBridgeOpen: Dispatch<SetStateAction<boolean>>
-  channelBridgeOpen: boolean
   canUseIdeBridge: boolean
-  setIdeBridgeOpen: Dispatch<SetStateAction<boolean>>
   ideBridge: IdeBridge
-  ideBridgeOpen: boolean
-  handleDiffCommentToComposer: (prompt: string) => void
   contextUsage: ContextUsage | null
   reattachedRunning: boolean
   sendMessage: (retryOverride?: { text: string; attachments: SendAttachment[]; turnRequestId?: string; }) => Promise<void>
@@ -212,6 +211,8 @@ type ComposerShellProps = {
 }
 
 export function ComposerShell(props: ComposerShellProps) {
+  const disabledPlugins = useDisabledPlugins()
+  const { composerAccessories } = props
   const {
     isProject, composerCollapsed, handleComposerDragEnter, handleComposerDragOver,
     handleComposerDragLeave, handleComposerDrop, timelineWidth, viewMode, composerDropActive,
@@ -238,9 +239,8 @@ export function ComposerShell(props: ComposerShellProps) {
     setHistoryIndex, draftBeforeHistoryRef, setSendError, setSendState, updateComposerHints,
     setMentionQuery, setSlashOpen, isComposingRef, handleKeyDown, handleComposerPaste,
     composerPlaceholder, canUseChannelBridge, channelBridge, composerQueueTargetKey,
-    setAttachmentPanelOpen, setPromptLibraryOpen, promptLibraryOpen, insertPromptText,
-    setChannelBridgeOpen, channelBridgeOpen, canUseIdeBridge, setIdeBridgeOpen, ideBridge,
-    ideBridgeOpen, handleDiffCommentToComposer, contextUsage, reattachedRunning, sendMessage,
+    setAttachmentPanelOpen,
+    canUseIdeBridge, ideBridge, pluginServices, contextUsage, reattachedRunning, sendMessage,
     canSubmitMessage, activeToolCount, backgroundClaudeTasks, backgroundingTasks, cancelSend,
     awaitingPersistedTurn, composerStatusColor, composerRuntime, composerStatusDetail,
     composerStatus, codexThinking, composerGitBranch, setBranchSwitcherOpen, composerWorkingDirectory,
@@ -265,6 +265,11 @@ export function ComposerShell(props: ComposerShellProps) {
     if (session.providerInstanceId) params.set('providerInstanceId', session.providerInstanceId)
     void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/recap?${params}`, { method: 'DELETE' }).catch(() => undefined)
   }
+  const accessoryServices = useMemo(() => ({ composer: { sendDraft: (text: string) => {
+    const capturedAttachments = attachments
+    setInputText(''); inputTextRef.current = ''; setAttachments([]); resizeComposer()
+    return sendMessage({ text, attachments: capturedAttachments })
+  } } }), [attachments, setInputText, inputTextRef, setAttachments, resizeComposer, sendMessage])
   return (
     !isProject && !composerCollapsed && <div
         className="av-web-composer-shell"
@@ -1136,19 +1141,8 @@ export function ComposerShell(props: ComposerShellProps) {
                   })}
                 </div>
               )}
-              <SessionGoalDock
-                session={session}
-                draft={inputText}
-                disabled={sendBusy || !canSubmitMessage}
-                onStart={(objective) => {
-                  const goalAttachments = attachments
-                  setInputText('')
-                  inputTextRef.current = ''
-                  setAttachments([])
-                  resizeComposer()
-                  void sendMessage({ text: objective, attachments: goalAttachments })
-                }}
-              />
+              <ComposerAccessoryHost key={`accessories:${composerDraftKey}`} session={session} draft={inputText} disabled={sendBusy || !canSubmitMessage}
+                controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={accessoryServices} />
               <ContextComposer
                 key={composerDraftKey}
                 attachments={loadedComposerDraftKey === composerDraftKey ? attachments : []}
@@ -1225,153 +1219,14 @@ export function ComposerShell(props: ComposerShellProps) {
               >
                 <Paperclip size={16} />
               </Button>
-              <Button
-                type="button"
-                data-prompt-library-trigger="true"
-                onClick={() => setPromptLibraryOpen((open) => !open)}
-                variant="outline"
-                aria-label="Prompt library"
-                title="Prompt library — saved prompts you can insert into the composer"
-                style={{
-                  flexShrink: 0,
-                  width: 34,
-                  height: 34,
-                  padding: 0,
-                  background: promptLibraryOpen ? 'var(--surface-3)' : 'transparent',
-                  border: '1px solid transparent',
-                  borderRadius: 6,
-                  color: promptLibraryOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                }}
-              >
-                <BookOpen size={15} />
-              </Button>
-              {promptLibraryOpen && (
-                <PromptLibrary
-                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
-                  activeProvider={session?.provider}
-                  onInsert={insertPromptText}
-                  onClose={() => setPromptLibraryOpen(false)}
-                />
-              )}
-              {canUseChannelBridge ? (
-                <Button
-                  type="button"
-                  data-channel-bridge-trigger="true"
-                  onClick={() => setChannelBridgeOpen((open) => !open)}
-                  variant="outline"
-                  aria-label="Live CLI bridge"
-                  aria-pressed={channelBridge.routeComposer}
-                  title={channelBridge.routeComposer
-                    ? 'Live CLI bridge — composer is routing to the live `claude` CLI session (click to open)'
-                    : 'Live CLI bridge — push messages into a `claude` CLI session running alongside agentViewer'}
-                  style={{
-                    position: 'relative',
-                    flexShrink: 0,
-                    width: 34,
-                    height: 34,
-                    padding: 0,
-                    background: channelBridgeOpen || channelBridge.routeComposer ? 'var(--surface-3)' : 'transparent',
-                    border: '1px solid transparent',
-                    borderRadius: 6,
-                    color: channelBridgeOpen || channelBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                  }}
-                >
-                  <Radio size={15} />
-                  {channelBridge.unread > 0 && !channelBridgeOpen && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: 'absolute',
-                        top: 3,
-                        right: 3,
-                        minWidth: 13,
-                        height: 13,
-                        padding: '0 3px',
-                        borderRadius: 999,
-                        background: `var(${composerConfig.cssAccentVar})`,
-                        color: 'var(--surface)',
-                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        lineHeight: '13px',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {channelBridge.unread > 9 ? '9+' : channelBridge.unread}
-                    </span>
-                  )}
+              {WEB_COMPOSER_PLUGIN_COMMANDS.filter(command => !disabledPlugins.has(command.pluginId) && (command.requires !== 'session' || Boolean(session && !isProject)) && canOfferWebPluginCommand(command, session, pluginServices)).map(command => (
+                <Button key={command.id} type="button" variant="outline"
+                  data-plugin-command={command.id} aria-label={command.webComposerLabel} title={command.label}
+                  onClick={() => dispatchPluginCommand(command.id)}
+                  style={{ flexShrink: 0, width: 34, height: 34, padding: 0, background: 'transparent', border: '1px solid transparent', borderRadius: 6, color: 'var(--text-2)' }}>
+                  {command.webComposerGlyph ?? <Plug size={15} />}
                 </Button>
-              ) : null}
-              {canUseChannelBridge && channelBridgeOpen && (
-                <ChannelBridgePanel
-                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
-                  bridge={channelBridge}
-                  onClose={() => setChannelBridgeOpen(false)}
-                />
-              )}
-              {canUseIdeBridge ? (
-                <Button
-                  type="button"
-                  data-ide-bridge-trigger="true"
-                  onClick={() => setIdeBridgeOpen((open) => !open)}
-                  variant="outline"
-                  aria-label="IDE bridge"
-                  aria-pressed={ideBridge.routeComposer}
-                  title={ideBridge.routeComposer
-                    ? 'IDE bridge — composer is pushing @mentions to the connected `claude` session (click to open)'
-                    : 'IDE bridge — host a Claude Code IDE endpoint a `claude` CLI session connects to'}
-                  style={{
-                    position: 'relative',
-                    flexShrink: 0,
-                    width: 34,
-                    height: 34,
-                    padding: 0,
-                    background: ideBridgeOpen || ideBridge.routeComposer ? 'var(--surface-3)' : 'transparent',
-                    border: '1px solid transparent',
-                    borderRadius: 6,
-                    color: ideBridgeOpen || ideBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                  }}
-                >
-                  <Plug size={15} />
-                  {ideBridge.unread > 0 && !ideBridgeOpen && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: 'absolute',
-                        top: 3,
-                        right: 3,
-                        minWidth: 13,
-                        height: 13,
-                        padding: '0 3px',
-                        borderRadius: 999,
-                        background: `var(${composerConfig.cssAccentVar})`,
-                        color: 'var(--surface)',
-                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        lineHeight: '13px',
-                        textAlign: 'center',
-                      }}
-                    >
-                      {ideBridge.unread > 9 ? '9+' : ideBridge.unread}
-                    </span>
-                  )}
-                </Button>
-              ) : null}
-              {canUseIdeBridge && ideBridgeOpen && (
-                <IdeBridgePanel
-                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
-                  bridge={ideBridge}
-                  onClose={() => setIdeBridgeOpen(false)}
-                  onSendComment={handleDiffCommentToComposer}
-                />
-              )}
+              ))}
               <ComposerContextUsageRing usage={contextUsage} />
               {sendState === 'sending' || reattachedRunning ? (
                 <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>

@@ -40,22 +40,19 @@ function Fixture() {
         }}
         onChangeProvider={noop} scopeMode={scopeMode} scopeProjectName="alpha" canScopeToProject
         includeWorktrees onChangeScope={setScopeMode} onToggleWorktrees={noop}
-        onOpenCommandPalette={() => setOpen(true)} onOpenCoordinator={noop} onOpenCrossSessionMessaging={noop}
+        onOpenCommandPalette={() => setOpen(true)} onOpenCoordinator={noop}
         canOpenGit={false} onOpenGit={noop} />
     </div>
     <CommandPalette open={open} onOpenChange={setOpen} sessions={sessions} selectedSession={sessions[0]!}
       selectedProject={null} provider="all" providerInstanceId="all" providerInstances={[]}
       scopeMode={scopeMode} scopeProjectName="alpha" includeWorktrees
       messagePaneCollapsed={false} messageViewMaximized={false} messageViewFullscreen={false}
-      canMaximizeMessageView={false} canOpenGit={false} canOpenTasks={false} canOpenPromptLibrary={false}
-      canOpenChannelBridge={false} channelBridgeRouting={false} canOpenIdeBridge={false} ideBridgeRouting={false}
-      onSelectSession={(session, messageId) => record(`message:${session.sessionId}:${messageId ?? ''}`)}
+      canMaximizeMessageView={false} canOpenGit={false} onSelectSession={(session, messageId) => record(`message:${session.sessionId}:${messageId ?? ''}`)}
       onSelectProject={noop} onChangeProvider={noop} onChangeScope={setScopeMode} onToggleWorktrees={noop}
       onToggleMessagePane={noop} rightPanelOpen={false} rightPanelAvailability={availability}
       onToggleRightPanel={noop} onOpenRightPanelSurface={noop} onToggleMessageViewMaximized={noop}
-      onEnterMessageViewFullscreen={noop} onOpenCrossSessionMessaging={noop} onOpenTasks={noop}
-      onOpenPromptLibrary={noop} onOpenChannelBridge={noop} onToggleChannelBridgeRoute={noop}
-      onOpenIdeBridge={noop} onToggleIdeBridgeRoute={noop} onOpenBookmarks={noop} onOpenProvenance={noop}
+      onEnterMessageViewFullscreen={noop}
+      onOpenBookmarks={noop} onOpenProvenance={noop}
       onOpenRemoteAccess={noop} onOpenPlugins={noop} />
   </SidebarProvider>
 }

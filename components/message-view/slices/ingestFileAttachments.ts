@@ -13,7 +13,7 @@ import type { CodexPlanStep } from '../../../lib/taskRegistry'
 import { type ContextComposerHandle } from '../../ContextComposer'
 import { createContextAttachment, readComposerContext, restoreContextAttachments, removeContextReference } from '@/lib/composerContext'
 import { useState, useRef, useCallback, useMemo } from 'react'
-import { type SessionDiagnosticSection, type SendAttachment } from '@/lib/types'
+import { type SendAttachment } from '@/lib/types'
 import { readJsonResponse } from '@/lib/httpResponse'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, computeTurnDurationsMs, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage } from '@/lib/threading'
 import { measureSync } from '@/lib/clientPerf'
@@ -23,12 +23,10 @@ import { buildTaskActiveFormsForWeb } from '../../messageItemShared'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos } from '@/lib/taskRegistry'
 import { mergeComposerAttachments } from '@/lib/composerAttachments'
 import { type FailedSend } from '../types'
-import { withProviderQuery, threadedMessageKey, threadedMessageEqual } from '../threadedCompare'
-import { normalizeSelectValue } from '../composerUi'
+import { threadedMessageKey, threadedMessageEqual } from '../threadedCompare'
 import { runIngestFileAttachments } from '../actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from '../actions/permissions'
-import { runHandleForkFromMessage, runRunSessionAction, runRunClaudeSessionAction } from '../actions/sessionActions'
-import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runAddClaudeMcpServer, runToggleDiagnostics } from '../actions/claude'
+import { runHandleForkFromMessage, runRunSessionAction } from '../actions/sessionActions'
 
 export type UseIngestFileAttachmentsGroupContext = {
   activeComposerDraftKeyRef: RefObject<string | null>
@@ -53,7 +51,6 @@ export type UseIngestFileAttachmentsGroupContext = {
   onDelete: SessionDeleteCallback | undefined
   sessionActionLoading: string | null
   setSessionActionLoading: Dispatch<SetStateAction<string | null>>
-  setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>
   setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
   commitClaudePermissionSelection: (nextMode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions') => void
   forking: boolean
@@ -65,21 +62,12 @@ export type UseIngestFileAttachmentsGroupContext = {
   setComposerCollapsed: Dispatch<SetStateAction<boolean>>
   setHistoryIndex: Dispatch<SetStateAction<number>>
   draftBeforeHistoryRef: RefObject<{ text: string; cursorPos: number; }>
-  setDiagnosticsLoading: Dispatch<SetStateAction<boolean>>
-  selectedModelValue: string | null
-  setSelectedModel: Dispatch<SetStateAction<string>>
-  showDiagnostics: boolean
-  setShowDiagnostics: Dispatch<SetStateAction<boolean>>
-  diagnosticSections: SessionDiagnosticSection[]
-  diagnosticsLoading: boolean
   prevThreadingRef: RefObject<IncrementalThreadingCache | null>
   messages: SessionMessage[]
   threadedCacheRef: { current: Map<string, ThreadedMessage>; }
   showTools: boolean
   bridgeTranscriptEntries: { kind: 'sent' | 'reply'; text: string; timestamp: string; }[]
   taskActiveFormsRef: { current: Map<string, string>; }
-  openCodeTodos: OpenCodeTodo[] | undefined
-  codexPlan: { plan: CodexPlanStep[]; explanation: string | null; } | undefined
   projectView: { key: string; sessionCount: number; providerMode: 'current' | 'all'; } | undefined
 }
 
@@ -89,13 +77,12 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
     inputTextRef, setInputText, setAttachments, failedSend, sendInFlightRef,
     awaitingPersistedTurnRef, setFailedSend, resizeComposer, textareaRef, session, deleting,
     sessionCapabilities, setDeleting, setSessionActionError, setSessionActionNotice, onDelete,
-    sessionActionLoading, setSessionActionLoading, setDiagnosticSections, setPendingPermissions,
+    sessionActionLoading, setSessionActionLoading, setPendingPermissions,
     commitClaudePermissionSelection, forking, setForking, onFork, forkingMessageId,
     setForkingMessageId, setResumeFromMessageId, setComposerCollapsed, setHistoryIndex,
-    draftBeforeHistoryRef, setDiagnosticsLoading, selectedModelValue, setSelectedModel,
-    showDiagnostics, setShowDiagnostics, diagnosticSections, diagnosticsLoading, prevThreadingRef,
+    draftBeforeHistoryRef, prevThreadingRef,
     messages, threadedCacheRef, showTools, bridgeTranscriptEntries, taskActiveFormsRef,
-    openCodeTodos, codexPlan, projectView,
+    projectView,
   } = ctx
 
   const ingestFileAttachments = useCallback(async (files: File[]) => runIngestFileAttachments({
@@ -177,8 +164,7 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
 
   const runSessionAction = useCallback(async (action: string) => runRunSessionAction({
     session, sessionActionLoading, setSessionActionLoading, setSessionActionError,
-    setSessionActionNotice, setDiagnosticSections,
-  }, action), [session, sessionActionLoading])
+    setSessionActionNotice, }, action), [session, sessionActionLoading])
 
   const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject', permissionMode?: 'acceptEdits' | 'default') => runRespondToPermission({
     setSessionActionLoading, setSessionActionError, setPendingPermissions, session,
@@ -313,52 +299,6 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
     focusComposer()
   }, [focusComposer, sessionCapabilities?.resumeAtMessage, inputTextRef, setInputText, setAttachments])
 
-  const refreshDiagnostics = useCallback(async () => {
-    if (!session) return
-    setDiagnosticsLoading(true)
-    try {
-      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider, session.providerInstanceId))
-      const data = await res.json()
-      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setDiagnosticSections(data.sections ?? [])
-      const diagnosticsModel = normalizeSelectValue(data.currentModel)
-      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to refresh diagnostics')
-    } finally {
-      setDiagnosticsLoading(false)
-    }
-  }, [selectedModelValue, session, setSelectedModel])
-
-  const [claudeMcpBusy, setClaudeMcpBusy] = useState<string | null>(null)
-  const [claudeHookQuery, setClaudeHookQuery] = useState('')
-  const [claudeHookSearching, setClaudeHookSearching] = useState(false)
-  // Tracks only policies applied in this viewer. Absence is deliberately shown
-  // as unknown rather than guessing the SDK's current per-server override.
-  const [claudeMcpPermissionModes, setClaudeMcpPermissionModes] = useState<Record<string, 'default' | 'auto'>>({})
-  const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => runRunClaudeSessionAction({
-    session, setClaudeMcpBusy, setSessionActionError, setSessionActionNotice, refreshDiagnostics,
-  }, action, extra, busyKey, successNotice), [refreshDiagnostics, session])
-
-  const applyClaudeMcpPermissionMode = useCallback(async (serverName: string, permissionModeKey: string, mode: 'default' | 'auto' | null, previous: 'default' | 'auto' | undefined) => runApplyClaudeMcpPermissionMode({
-    setClaudeMcpPermissionModes, runClaudeSessionAction,
-  }, serverName, permissionModeKey, mode, previous), [runClaudeSessionAction])
-
-  const addClaudeMcpServer = useCallback(async () => runAddClaudeMcpServer({
-    runClaudeSessionAction, setSessionActionError,
-  }), [runClaudeSessionAction])
-
-  const searchClaudeHookEvents = useCallback(async () => runSearchClaudeHookEvents({
-    session, setClaudeHookSearching, setSessionActionError, claudeHookQuery, setDiagnosticSections,
-    setSessionActionNotice,
-  }), [claudeHookQuery, session])
-
-  const toggleDiagnostics = useCallback(async () => runToggleDiagnostics({
-    session, showDiagnostics, setShowDiagnostics, diagnosticSections, diagnosticsLoading,
-    setDiagnosticsLoading, setDiagnosticSections, selectedModelValue, setSelectedModel,
-    setSessionActionError,
-  }), [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics, setSelectedModel])
-
   const threadedFull = useMemo(() => measureSync('threading.build', () => {
     const prev = prevThreadingRef.current
     const nextMessages = (prev ? buildThreadedMessagesIncremental(messages, prev) : null)
@@ -420,23 +360,6 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
     taskActiveFormsRef.current = result
     return result
   }, [threadedWithBridge])
-  const taskRegistry = useMemo(() => {
-    const registry = buildTaskRegistry(threadedWithBridge)
-    if (openCodeTodos && openCodeTodos.length > 0) {
-      const todosRegistry = buildTaskRegistryFromTodos(openCodeTodos)
-      for (const [id, task] of todosRegistry) {
-        registry.set(id, task)
-      }
-    }
-    if (codexPlan && codexPlan.plan.length > 0) {
-      const planRegistry = buildTaskRegistryFromCodexPlan(codexPlan.plan)
-      for (const [id, task] of planRegistry) {
-        registry.set(id, task)
-      }
-    }
-    return registry
-  }, [threadedWithBridge, openCodeTodos, codexPlan])
-  const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
 
@@ -446,10 +369,7 @@ export function useIngestFileAttachmentsGroup(ctx: UseIngestFileAttachmentsGroup
     handleDeleteSession, runSessionAction, respondToPermission, respondToQuestion, respondToPlan,
     handleFork, handleForkFromMessage, toggleResumeFromMessage, handleReusePrompt,
     handleQuoteMessage, handleQuestionAnswerToComposer, handleDiffCommentToComposer,
-    handleEditFromMessage, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeHookSearching,
-    claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode,
-    addClaudeMcpServer, searchClaudeHookEvents, toggleDiagnostics, threadedFull, threaded,
-    turnDurations, threadedWithBridge, taskActiveForms, taskRegistry, taskRailOpen,
-    setTaskRailOpen, isProject, dirName,
+    handleEditFromMessage, threadedFull, threaded,
+    turnDurations, threadedWithBridge, taskActiveForms, isProject, dirName,
   }
 }

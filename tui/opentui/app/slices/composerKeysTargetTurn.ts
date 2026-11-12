@@ -18,6 +18,7 @@ import { runQuestionPickerPlan } from '../derived/questionPicker'
 import { runComposerStatusBlockHeight } from '../derived/composerStatus'
 
 export type UseComposerKeysTargetTurnGroupContext = {
+  accessoryRows?: number
   visibleComposerSending: boolean
   reattachedRunning: boolean
   visibleComposerError: string | null
@@ -146,10 +147,12 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
   // The reservation below and the render both read this plan, so they cannot
   // disagree about how tall the card is.
   const questionPickerPlan = useMemo(() => runQuestionPickerPlan({
+    accessoryRows: ctx.accessoryRows,
     pendingPermissions, questionFocusIndex, questionOptionIndex, questionPreviewLines, height,
     workspacesEnabled, searchMode, sessionSearchMode, embeddedComposer, composerDockHeight,
     composerPopoverHeight,
   }), [
+    ctx.accessoryRows,
     composerDockHeight,
     composerPopoverHeight,
     height,
@@ -187,6 +190,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     - (searchMode || sessionSearchMode ? 4 : fullscreenMode || statusBarInDock ? 0 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
     - composerPopoverHeight
+    - (ctx.accessoryRows ?? 0)
     - composerStatusBlockHeight,
     8,
   )

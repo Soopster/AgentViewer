@@ -20,7 +20,7 @@ export function WorkBriefSection({ props, button, sectionTitle, checks, criterio
         {sectionTitle('Objective')}
         <text fg={brief.objective ? theme.text : theme.dim}>{brief.objective || 'What does done look like?'}</text>
         {button('edit-objective', 'Edit objective', () => openEditor('objective'))}
-        {!brief.objective && props.goalObjective ? button('use-goal', 'Use current session goal', () => props.setBrief(previous => editTaskBrief(previous, 'objective', props.goalObjective!))) : null}
+        {!brief.objective && props.composerContext ? button('use-goal', 'Use current objective', () => props.setBrief(previous => editTaskBrief(previous, 'objective', props.composerContext!))) : null}
         {sectionTitle('Acceptance criteria')}
         {brief.criteria.map(item => button(`criterion:${item.id}`, `${item.id === criterion?.id ? '›' : ' '} [${item.review === 'accepted' ? 'x' : item.review === 'needs-work' ? '!' : ' '}] ${item.text}`, () => setCriterionId(item.id)))}
         {button('edit-criteria', brief.criteria.length ? 'Edit criteria' : 'Add criteria', () => openEditor('criteria'))}

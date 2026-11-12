@@ -20,8 +20,11 @@ import { recordVoice } from './voiceRecorder'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
 import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
-import { createSessionAlertTracker, sessionAlertDelivery, sessionAlertText } from './sessionAlerts'
-import { loadSessionAlertMode, readSessionAlertMode } from './sessionAlertsStore'
+import { useApplicationPlugins } from '../../lib/plugins/useApplicationPlugins'
+import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
+import { tuiPluginCommands } from './shell/pluginCommands'
+import { tuiApplicationPlugins } from './shell/applicationPlugins'
+import type { PluginApplicationServices } from '../../lib/plugins/application'
 import { readPinnedTabs, readPinnedTabsRow, togglePinnedTab, togglePinnedTabsRow, usePinnedTabs, usePinnedTabsRow } from './tabPinsStore'
 import { moveTabKey, moveTabKeyTo } from './tabOrder'
 import { applyPluginSettings, isPluginEnabled } from '../../lib/plugins/enablement'
@@ -144,7 +147,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -175,6 +178,7 @@ import { filterComposerMentionFilesAsync } from './composerMentionWorkerClient'
 import {
   attachedTranscriptCardsForVariant,
   readTuiSessionsAsync,
+  readTuiSessionDetailAsync,
   readTuiSubagentSummariesAsync,
   readTuiSubagentTranscriptAsync,
   formatTranscriptCardsAsync,
@@ -285,8 +289,8 @@ import { keepEmpty, keepFiltered, sameKeys, touchMapEntry, pruneSessionCaches } 
 import { ExitConfirmOverlay } from './app/overlays/ExitConfirmOverlay'
 import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
 import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
-import { SessionGoalOverlay } from './app/overlays/SessionGoalOverlay'
-import { SessionGoalStrip } from './app/SessionGoalStrip'
+import { useComposerAccessories } from '../../lib/plugins/useComposerAccessories'
+import { ComposerAccessoryHost } from './shell/ComposerAccessoryHost'
 import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
@@ -308,7 +312,7 @@ import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
 import { cycleDensityValue, currentProjectName } from './app/viewHelpers'
 import { TUI_HANDOFF_COMMAND, CODEX_LIVE_ASSISTANT_UUID, CLAUDE_LIVE_ASSISTANT_UUID_PREFIX, TUI_SLASH_HINTS } from './app/composerConstants'
 import { pluginSurfaceWants, TUI_KEYED_PLUGIN_COMMANDS } from './app/pluginCommands'
-import { PluginManagerPopover, PromptLibraryPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover, PlaybookManagerPopover } from './app/lazyOverlays'
+import { PluginManagerPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover, PlaybookManagerPopover } from './app/lazyOverlays'
 import { handleLetterShortcutKeys } from './app/keys/letterShortcuts'
 import { handleReaderKeys } from './app/keys/readerKeys'
 import { handleWindowAndTabKeys } from './app/keys/windowTabKeys'
@@ -326,7 +330,7 @@ import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId,
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
-import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runReuseLastPrompt, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments, runFetchComposerAffordances } from './app/actions/composer'
+import { cancelComposerSend as cancelComposerSendAction, runPasteFilePathToComposer, runInsertMentionAtCursor, runPrepareComposerSubmission, runActiveComposerPromptPartRanges, runMoveComposerHistory, runRestoreComposerPromptPartExtmarks, runInsertComposerPasteMarker, runBuildComposerStatsSegments, runFetchComposerAffordances } from './app/actions/composer'
 import { runSendComposerMessage } from './app/actions/sendComposerMessage'
 import { sendTerminalPrompt, listComposerTerminals, readTerminalAgentState, terminalAnswerBytes, sendTerminalAnswer, queueTerminalPrompt, cancelQueuedTerminalPrompts, queuedTerminalPromptCount, releaseQueuedTerminalPrompts, parseTerminalAddressing, terminalHandle } from './terminalPrompt'
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
@@ -361,7 +365,6 @@ import { useQuestionPickerState } from './app/state/questionPickerState'
 import { useComposerListState } from './app/state/composerListState'
 import { useComposerInputState } from './app/state/composerInputState'
 import { useBookmarkScrollState } from './app/state/bookmarkScrollState'
-import { useSessionGoalState } from './app/state/sessionGoalState'
 import { useSessionRecapSuggestion } from './app/state/sessionRecapState'
 import { useBridgeAttentionState } from './app/state/bridgeAttentionState'
 import { useMenuState } from './app/state/menuState'
@@ -670,8 +673,8 @@ function OpenTuiWorkspace() {
     setFolderPickerForNewSession, newSessionKeyHandlerRef, pluginOverlay, setPluginOverlay,
     pluginOpenRequests, setPluginOpenRequests, pluginManagerOpen, setPluginManagerOpen,
     pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef, handoffBriefOpen,
-    setHandoffBriefOpen, handoffBriefKeyHandlerRef, promptLibraryOpen, setPromptLibraryOpen,
-    promptLibraryKeyHandlerRef, channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
+    setHandoffBriefOpen, handoffBriefKeyHandlerRef,
+    channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
     routeComposerToBridgeRef, routeComposerToIde, setRouteComposerToIde, routeComposerToIdeRef,
   } = useLoadingSessionsGroup({
     workspaceCwd,
@@ -817,6 +820,7 @@ function OpenTuiWorkspace() {
       }
     }
   }, [composerSessions])
+  const composerAccessories = useComposerAccessories('tui', composerOwnerKey)
   const {
     composerInterruptPendingRef, composerTextareaRef, composerPastePartTypeIdRef,
     composerCursorOffsetRef, terminalSelectionRef, liveToolIndexesRef, liveToolInputJsonRef,
@@ -831,10 +835,11 @@ function OpenTuiWorkspace() {
     teammatesKeyHandlerRef, windowedPopoverKinds, teammatesModalOpen, remoteCoordinatorTarget,
     setRemoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef, composerFocusBlocked,
   } = useComposerInterruptPendingRefGroup({
+    composerAccessoryModal: composerAccessories.snapshot.modal,
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
     pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen, handoffBriefOpen,
-    promptLibraryOpen, bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
+    bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
   })
@@ -1038,30 +1043,12 @@ function OpenTuiWorkspace() {
     composerPreferredTargetKey, sessions, queuedComposerSends,
   })
   useLayoutEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
-  const sessionGoal = useSessionGoalState(composerTargetSession ?? selectedSession)
   useSessionRecapSuggestion({
     session: composerTargetSession ?? selectedSession,
     draft: composerDraft,
     sending: composerSendState === 'sending',
     livePromptSuggestion,
     setLivePromptSuggestion,
-  })
-  /** Start (or save) the goal dialog's content, then send the objective itself. */
-  const submitSessionGoal = useStableEvent(() => {
-    const state = sessionGoal
-    void (async () => {
-      if (state.goal) { await state.save(); return }
-      const objective = await state.start()
-      if (!objective) return
-      // The objective becomes this turn. Leaving it in the composer would send
-      // the same text again on the next Enter.
-      composerTextareaRef.current?.setText('')
-      composerTextareaRef.current?.extmarks.clear()
-      setComposerDraft('')
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
-      void sendComposerMessage(objective)
-    })()
   })
   const canUseChannelBridge = Boolean(
     selectedSessionTarget
@@ -1569,6 +1556,7 @@ function OpenTuiWorkspace() {
     composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
     tuiModelOverride, tuiReportedModelByKey, contextUsage, modelPickerOptions, modelPickerQuery,
   })
+  const composerAccessoryRows = composerWindowOpen || composerHidden || presentationHidesComposer ? 0 : composerAccessories.snapshot.rows
   const highlightedModelPickerOption = filteredModelPickerOptions[modelPickerIndex]
   const modelPickerEffortOptions = useMemo(
     () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
@@ -2005,6 +1993,7 @@ function OpenTuiWorkspace() {
     splitPinnedSessions, splitAxisStacked, windowBudgetHeight, pinnedWindowSessions, sessionsByKey,
     orderedWindowKeys, windowZoom,
   } = useComposerKeysTargetTurnGroup({
+    accessoryRows: composerAccessoryRows,
     visibleComposerSending, reattachedRunning, visibleComposerError, visibleAwaitingPersistedTurn,
     embeddedComposer, activeQueuedComposerSends, visibleComposerLiveText, steeredSendNotice,
     pendingPermissions, questionFocusIndex, questionOptionIndex, height, workspacesEnabled,
@@ -3132,10 +3121,6 @@ function OpenTuiWorkspace() {
     openAttentionSession(target)
   })
 
-  const reuseLastPrompt = useStableEvent(() => runReuseLastPrompt({
-    sessionDetail, setComposerActive, composerTextareaRef, setComposerDraft,
-  }))
-
   // Digits 1-9 jump straight to a fleet cell on the visible page.
   const jumpToFleetEntry = useStableEvent((index: number) => {
     const entry = visibleFleetEntries[index]
@@ -3557,33 +3542,27 @@ function OpenTuiWorkspace() {
     }
   })
 
-  // Session alerts (plugin): a session that needs an answer, or finished a long turn, tells the user
-  // when they are away. The tracker always observes, so turning the plugin on never replays what
-  // already happened; it only delivers while the plugin is on.
-  const [sessionAlertTracker] = useState(() => createSessionAlertTracker())
-  const alertContextRef = useRef({ sessions, openTabSessions, selectedSessionKey })
-  alertContextRef.current = { sessions, openTabSessions, selectedSessionKey }
-  useEffect(() => {
-    loadSessionAlertMode()
-    const alerts = sessionAlertTracker.observe(sidebarSessionActivity, Date.now())
-    if (alerts.length === 0 || !isPluginEnabled('session-alerts')) return
-    const context = alertContextRef.current
-    for (const alert of alerts) {
-      const session = context.sessions.find((entry) => sessionKey(entry) === alert.key) ?? context.openTabSessions.find((entry) => sessionKey(entry) === alert.key)
-      const title = session ? formatSessionTitle(session) : 'A session'
-      const delivery = sessionAlertDelivery(readSessionAlertMode(), context.selectedSessionKey === alert.key, terminalFocusedRef.current)
-      const text = sessionAlertText(alert.kind, title)
-      if (delivery.notice) showNotice('info', `${title} ${text.title}`, 6000)
-      if (delivery.desktop) notifyTeamEvent(text.title, text.body.slice(0, 160))
-    }
-  }, [sidebarSessionActivity])
-
   // Interactive teammates notify on transitions, not on what a read already
   // held (the store baselines each conversation's first read). Herdr's rule for
   // quiet: the user is looking at that team AND the terminal is not known to be
   // blurred — focus is unknown until the terminal reports it, which counts as
   // focused so a terminal without focus reporting is not spammed.
   const terminalFocusedRef = useRef<boolean | null>(null)
+  const applicationNotice = useStableEvent((text: string) => showNotice('info', text, 6000))
+  const applicationServices = useMemo<PluginApplicationServices>(() => ({ notifications: {
+    notice: applicationNotice,
+    desktop: notifyTeamEvent,
+  } }), [applicationNotice, notifyTeamEvent])
+  const { publish: publishApplicationActivity, observesActivity } = useApplicationPlugins('tui', tuiApplicationPlugins, applicationServices)
+  useEffect(() => {
+    if (!runningRegistryReady || !observesActivity) return
+    publishApplicationActivity({
+      now: Date.now(), activity: sidebarSessionActivity,
+      sessions: [...sessions, ...openTabSessions].map(session => ({ key: sessionKey(session), title: formatSessionTitle(session) })),
+      selectedKey: selectedSessionKey, focused: terminalFocusedRef.current,
+    })
+  }, [runningRegistryReady, observesActivity, sidebarSessionActivity, sessions, openTabSessions, selectedSessionKey, publishApplicationActivity])
+
   useEffect(() => runRendererListenersEffect({
     terminalFocusedRef, renderer, showNotice, notifyTeamEvent,
   }), [renderer])
@@ -4556,7 +4535,7 @@ function OpenTuiWorkspace() {
   })
   const {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, openHandoffBrief, openPromptLibrary, toggleComposerBridgeRoute,
+    openBookmarksOverlay, openHandoffBrief, toggleComposerBridgeRoute,
     toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   } = useCopySelectedMessageGroup({
@@ -4564,8 +4543,8 @@ function OpenTuiWorkspace() {
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
     setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen, rememberComposerCursor,
-    setPromptLibraryOpen, canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
+    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen,
+    canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
     splitArrangement, splitOrientation, splitReaderLast, splitReaderShare, splitSecondaryShare,
@@ -4680,6 +4659,7 @@ function OpenTuiWorkspace() {
     selectTabSession(session)
     setSessionMenuRequest({ key: sessionKey(session), action })
   })
+  const runDeferredSessionCommand = useStableEvent((id: string) => runPluginCommandId(id, composerTargetSession))
   useEffect(() => {
     if (!sessionMenuRequest) return
     if (!composerTargetSession || sessionKey(composerTargetSession) !== sessionMenuRequest.key) {
@@ -4687,11 +4667,10 @@ function OpenTuiWorkspace() {
       return
     }
     if (!sessionMenuRequest.ready) { setSessionMenuRequest({ ...sessionMenuRequest, ready: true }); return }
-    if (sessionMenuRequest.action === 'goal' && sessionGoal.loading) return
     setSessionMenuRequest(null)
-    if (sessionMenuRequest.action === 'goal') sessionGoal.openDialog()
-    else void openModelPicker()
-  }, [sessionMenuRequest, composerTargetSession, sessionGoal.openDialog, sessionGoal.loading, openModelPicker])
+    if (sessionMenuRequest.action === 'model') void openModelPicker()
+    else runDeferredSessionCommand(sessionMenuRequest.action)
+  }, [sessionMenuRequest, composerTargetSession, runDeferredSessionCommand, openModelPicker])
   const sessionMenuTranscript = useStableEvent(async (session: Session, action: 'copy' | 'export' | 'pager') => {
     try {
       const detail = await loader.read(session, density, showToolCalls, undefined)
@@ -4739,7 +4718,6 @@ function OpenTuiWorkspace() {
         { label: 'Unlink pull request', run: () => changeSessionInbox(session, 'unlink-pr') },
       ] : []),
       { label: 'Open composer', run: () => { selectTabSession(session); setComposerActive(true) } },
-      { label: 'Session goal', hint: '⇧D', run: () => openSessionMenuDialog(session, 'goal') },
       { label: 'Change model', run: () => openSessionMenuDialog(session, 'model') },
     )
     const capabilities = getProviderCapabilities(session.provider ?? 'claude')
@@ -4932,7 +4910,6 @@ function OpenTuiWorkspace() {
     else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'attention') setAttentionOpen(open)
-    else if (kind === 'prompt-library') setPromptLibraryOpen(open)
     else if (kind === 'playbooks') setPlaybookManagerOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
@@ -4943,7 +4920,7 @@ function OpenTuiWorkspace() {
   const openPopoverKind = (): PopoverWindowKind | null => (
     fileHistoryPath && gitRepoCwd ? 'file-history'
     : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary'
-    : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention' : promptLibraryOpen ? 'prompt-library'
+    : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention'
     : handoffBriefOpen ? 'handoff'
     : teammatesModalOpen ? 'teammates' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
@@ -5088,12 +5065,50 @@ function OpenTuiWorkspace() {
   // this pin when there is one (the open-popover effect routes it), else as an overlay.
   // `session` is the one the command is for (a pane's, a slash command's
   // target); by default the selected one.
-  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand, session: Session | null = selectedSession) => runRunPluginCommand({
+  const sendAccessoryDraft = useStableEvent((text: string) => {
+    composerTextareaRef.current?.setText('')
+    composerTextareaRef.current?.extmarks.clear()
+    setComposerDraft(''); setComposerMentionAttachments([]); setComposerPromptParts([])
+    return sendComposerMessage(text)
+  })
+  const composerAccessoryServices = useMemo(() => ({ composer: { sendDraft: sendAccessoryDraft } }), [sendAccessoryDraft])
+  const executeSessionPluginAction = usePluginCommands('tui', tuiPluginCommands, composerOwnerKey)
+  const executeApplicationPluginAction = usePluginCommands('tui', tuiPluginCommands, 'application')
+  const executeRepositoryPluginAction = usePluginCommands('tui', tuiPluginCommands, gitRepoCwd)
+  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand, session: Session | null = selectedSession) => {
+    if (command.handler) {
+      if ((command.services.includes('composer-accessories') || command.services.includes('bridge-routing')) && session && sessionKey(session) !== (composerTargetSession ? sessionKey(composerTargetSession) : null)) {
+        openSessionMenuDialog(session, command.id)
+        return
+      }
+      if (!isPluginEnabled(command.pluginId)) { showNotice('info', `${command.label} is off · turn its plugin on in Plugins`); return }
+      const notices = { show: (kind: NoticeTone, text: string) => showNotice(kind, text) }
+      const target = { session: command.scope === 'application' ? null : session, cwd: command.scope === 'application' ? null : session?.cwd || gitRepoCwd || null }
+      const run = command.scope === 'application' ? executeApplicationPluginAction : command.scope === 'repository' ? executeRepositoryPluginAction : executeSessionPluginAction
+      const source = session && pluginSelectedDetail.key === sessionKey(session) ? pluginSelectedDetail.detail?.threadedMessages : undefined
+      void run(command.id, target, command.scope === 'session' && session ? {
+        ...(canUseChannelBridge || canUseIdeBridge ? { 'bridge-routing': {
+          ...(canUseChannelBridge ? { channel: { toggle: toggleComposerBridgeRoute } } : {}),
+          ...(canUseIdeBridge ? { ide: { toggle: toggleComposerIdeRoute } } : {}),
+        } } : {}),
+        'composer-accessories': { open: id => { if (!composerAccessories.controller.open(id)) throw new Error(`Composer accessory unavailable: ${id}`) } },
+        transcript: { read: async () => source ?? (await readTuiSessionDetailAsync(session, density, showToolCalls)).threadedMessages },
+        composer: {
+          insertText: text => { insertComposerTextAtCursor(text); setComposerActive(true) },
+          replaceText: text => { applyComposerSnapshot({ text, attachments: [], promptParts: [], cursorOffset: text.length }); setComposerActive(true) },
+        },
+        notices,
+      } : { notices }).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) showNotice('error', error instanceof Error ? error.message : 'Plugin command failed') })
+      return
+    }
+    if (isPluginSurfaceId(command.opens) && pluginSurfaceWants(command.opens, 'composer')) rememberComposerCursor()
+    runRunPluginCommand({
     selectedSession, showNotice, pluginServiceGaps, gitRepoCwd, setEditorInitialPath,
     setEditorInitialLine, setCheckpointFocusPrompt, setCoordBoardRunId, openTeammatesPanel,
     setSurfacePanelOpen, setSurfacePanelFocused, setSurfacePanel, setPluginOpenRequests,
     setPluginOverlay,
-  }, command, session))
+  }, command, session)
+  })
   const runPluginCommandId = useStableEvent((id: string, session?: Session | null) => {
     const command = getPluginCommand(id)
     if (command) runPluginCommand(command, session === undefined ? selectedSession : session)
@@ -5129,6 +5144,7 @@ function OpenTuiWorkspace() {
       load: (signal: AbortSignal) => readTuiSubagentTranscriptAsync(subagentTranscriptSelection.parent, subagentTranscriptSelection.agent.agentId, density, signal),
     } } : {}),
     composer: {
+      insertPrompt: insertComposerPromptText,
       appendDiffNote: (prompt: string, notice?: string) => {
         appendDiffCommentPromptToComposer(prompt)
         showNotice('info', notice ?? 'Diff comment added to composer')
@@ -5166,11 +5182,18 @@ function OpenTuiWorkspace() {
     'task-control': {
       jumpTo: jumpToTaskCard,
       readOutput: (session: Session, taskId: string) => readTaskOutput(session, taskId),
-      stop: (session: Session, taskId: string) => stopTaskInSession(session, taskId),
+      stop: async (session: Session, taskId: string, signal?: AbortSignal) => {
+        signal?.throwIfAborted()
+        if (session.provider !== 'claude' || session.isPending) throw new Error('This session cannot stop background tasks')
+        const result = await runTuiSessionAction(session, { action: 'stopTask', taskId, provider: 'claude' })
+        signal?.throwIfAborted()
+        if (result.stopped !== true) throw new Error('No running task to stop (session not warm)')
+      },
     },
+    messaging: { list: (exclude?: string) => listTuiAddressableSessions(exclude), send: sendTuiCrossSessionMessage },
     'session-diagnostics': {
       read: async (session: Session) => (await readTuiSessionDiagnostics(session)).sections ?? [],
-      run: (session: Session, action: string, extra: Record<string, unknown>) => runTuiSessionAction(session, { action, ...extra }),
+      run: (session: Session, action: string, extra: Record<string, unknown>) => runTuiSessionAction(session, { ...extra, action }),
       hasControls: (session: Session) => session.provider === 'claude',
     },
     // The bridges are offered only while a Claude session can use one (pluginServiceGaps says so otherwise).
@@ -5829,7 +5852,7 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [pluginOverlay, dailySummaryOpen, attentionOpen, promptLibraryOpen, playbookManagerOpen,
+  }, [pluginOverlay, dailySummaryOpen, attentionOpen, playbookManagerOpen,
     handoffBriefOpen, fileHistoryPath])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
@@ -6028,10 +6051,9 @@ function OpenTuiWorkspace() {
     return runExecuteCommandPalette({
     isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
-    runPluginCommand, selectedSession, openNewSessionModal, reuseLastPrompt, openProviderMenu,
+    runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
-    openSessionGoalDialog: () => sessionGoal.openDialog(composerDraft),
     openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
@@ -6059,7 +6081,7 @@ function OpenTuiWorkspace() {
     closeSessionTab, setComposerHidden, setComposerActive, openComposerWindow,
     pasteSystemClipboardToComposer, toggleComposerHidden, stashComposerPrompt, popComposerStash,
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
-    openHandoffBrief, openPromptLibrary, setRenameSessionKey, setRenameDraft, copyCliCommand,
+    openHandoffBrief, setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
@@ -6086,7 +6108,7 @@ function OpenTuiWorkspace() {
   const describeOverviewWindow = (key: string, tab = false): OverviewWindow => {
     const target = overviewTargets.get(key)
     const mark = windowAttention.get(key)
-    const visible = windowPresentation ? windowPresentation.target === key : shownPopoverTab && key === surfaceWindowKey(shownPopoverTab) ? windowZoom === null || windowZoom === 'reader' 
+    const visible = windowPresentation ? windowPresentation.target === key : shownPopoverTab && key === surfaceWindowKey(shownPopoverTab) ? windowZoom === null || windowZoom === 'reader'
       : key === floatingKey || (fittedWindowKeys.includes(key) && (windowZoom === null || fittedWindowKeys.indexOf(key) === windowZoom))
     return { key,
       title: target?.title ?? windowKeyTitle(key), detail: tab ? `tab · ${target?.detail ?? ''}` : target?.detail ?? 'window',
@@ -6174,7 +6196,7 @@ function OpenTuiWorkspace() {
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen, promptLibraryOpen,
+    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, coordModalOpen,
@@ -6261,24 +6283,10 @@ function OpenTuiWorkspace() {
     if (transcriptViewMenuOpen && !key.ctrl && !key.meta && (key.sequence === 'n' || key.sequence === 'c' || key.sequence === 'e')) {
       if (handleViewMenuKey(key.sequence)) { handled(() => {}); return }
     }
-    // The goal dialog owns every key while it is open: Tab moves between its
-    // two fields, ^P pauses or resumes, ^D clears the goal, everything else
-    // falls through to the focused input.
     if (key.name === 'escape' && paneResize.cancel()) { handled(() => {}); return }
-    if (sessionGoal.dialogOpen) {
-      if (key.name === 'escape') {
-        handled(() => sessionGoal.closeDialog())
-      } else if (key.name === 'tab') {
-        handled(() => sessionGoal.setGoalFocus((current) => current === 'objective' ? 'budget' : 'objective'))
-      } else if (isCtrl('p') && sessionGoal.goal) {
-        // The one way out of a runaway goal from the keyboard: the strip is a
-        // readout, so stopping it has to live where the goal is edited.
-        handled(() => { void sessionGoal.setStatus(sessionGoal.goal?.status === 'active' ? 'paused' : 'active') })
-      } else if (isCtrl('d') && sessionGoal.goal) {
-        handled(() => { void sessionGoal.clear() })
-      }
-      return
-    }
+    const accessoryKey = composerAccessories.controller.handleKey(key)
+    if (accessoryKey === 'input') return
+    if (accessoryKey) { handled(() => {}); return }
     if (!windowControlsBlocked) {
       const result = engineeringKeyRef.current?.(key)
       if (result === 'input') return
@@ -6370,7 +6378,7 @@ function OpenTuiWorkspace() {
       toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused,
       surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef,
       newSessionModalOpen, newSessionKeyHandlerRef, handoffBriefOpen, handoffBriefKeyHandlerRef,
-      promptLibraryOpen, promptLibraryKeyHandlerRef, chordHelp, setChordHelp, bookmarksOverlayOpen,
+      chordHelp, setChordHelp, bookmarksOverlayOpen,
       isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex,
       bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef,
       renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen,
@@ -6419,6 +6427,7 @@ function OpenTuiWorkspace() {
     })) return
     if (!windowControlsBlocked && windowPresentation && key.name === 'escape') { handled(restoreWindowPresentation); return }
     if (handleGlobalChordKeys({
+      composerActive,
       commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl,
       showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted,
       toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit,
@@ -6435,7 +6444,7 @@ function OpenTuiWorkspace() {
       showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal,
       runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled,
       setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft,
-      setWorktreeModalOpen, openPromptLibrary, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
+      setWorktreeModalOpen, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
       taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden,
       openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
     })) return
@@ -6490,13 +6499,9 @@ function OpenTuiWorkspace() {
       setDiffLayout, showToggleOutcome, setError, searchMatches, jumpToSearchMatch,
       jumpToMatchingCard,
     })) return
-    if (!composerActive && isShifted('D')) {
-      handled(() => sessionGoal.openDialog(composerDraft))
-      return
-    }
     if (handleLetterShortcutKeys({
       sequence, composerActive, handled, setComposerHidden, setComposerActive,
-      normalizedSearchQuery, openNewSessionModal, reuseLastPrompt, setThinkingMode,
+      normalizedSearchQuery, openNewSessionModal, setThinkingMode,
       showToggleOutcome, setShowToolCalls, setError, toggleVelocityScroll, setCommandPaletteIndex,
       setCommandPaletteQuery, setCommandPaletteOpen, key, openProviderMenu, openThemeMenu,
       stickyHeaders, setStickyHeaders, tabsEnabled, setTabsEnabled, railVisible, setRailVisible,
@@ -6686,7 +6691,7 @@ function OpenTuiWorkspace() {
     surfacePluginKeyRef, surfacePluginCaptureChange, runCommandForPlugin, taskPanelMessages,
     composerLiveTodos, selectedSession, visibleTranscriptCards, jumpToTranscriptIndex,
     liveSubagentText, attentionItems, attentionRespondingId, respondToAttentionItem,
-    openAttentionSession, dismissAttentionItem, selectedSessionTarget, insertComposerPromptText,
+    openAttentionSession, dismissAttentionItem,
     showNotice, sessionDetail, handleCoordPlaybooksChanged, pinnedSessionOf, bookmarkKeys,
     renderer, appendDiffCommentPromptToComposer,
   }, kind, box, close, focused, slot, panelCwd)
@@ -6749,7 +6754,7 @@ function OpenTuiWorkspace() {
   })
 
   const paneResize = usePaneResize({
-    blocked: windowControlsBlocked || sessionGoal.dialogOpen, width: terminalWidth, height: terminalHeight, theme,
+    blocked: windowControlsBlocked || composerAccessories.snapshot.modal, width: terminalWidth, height: terminalHeight, theme,
     bindings: {
       sidebar: {
         min: MIN_SIDEBAR_WIDTH, max: maxSidebarWidth, available: sidebarWidth + readerAreaWidth,
@@ -6812,7 +6817,7 @@ function OpenTuiWorkspace() {
       layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
       theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
       coordination={watchedCoordinator} onOpenCoordinator={runId => { if (runId) setCoordBoardRunId(runId); runPluginCommandId('coord-board') }} onOpenCoordinatorAgent={openCoordinationAgentSession}
-      sessions={sessions} sessionsLoading={loadingSessions} transcriptLoading={loadingDetail} getSelectedMessageKey={() => selectedWindowHandleRef.current?.()?.getCursorCard()?.key ?? readTranscriptCursorKey()} goalObjective={sessionGoal.goal?.objective}
+      sessions={sessions} sessionsLoading={loadingSessions} transcriptLoading={loadingDetail} getSelectedMessageKey={() => selectedWindowHandleRef.current?.()?.getCursorCard()?.key ?? readTranscriptCursorKey()} composerContext={composerAccessories.snapshot.summary ?? undefined}
       onOpenSession={key => { const target = sessions.find(session => sessionKey(session) === key) ?? openTabByKey.get(key); if (!target) { showNotice('info', 'Session is not in the loaded catalog'); return false }; selectTabSession(target); return true }}
       session={selectedSession} cards={transcriptCards} messages={taskPanelMessages}
       attention={attentionItems} running={runningSessions} recent={recentlyWrittenKeys} blocked={windowControlsBlocked}
@@ -7063,9 +7068,10 @@ function OpenTuiWorkspace() {
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
 
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? (
-        <SessionGoalStrip goal={sessionGoal.goal} theme={theme} width={composerAreaWidth} marginLeft={composerAreaOffset} />
-      ) : null}
+      <ComposerAccessoryHost key={composerOwnerKey} session={composerTargetSession ?? selectedSession}
+        draft={composerDraft} disabled={composerSendState === 'sending'} visible={!composerWindowOpen && !composerHidden && !presentationHidesComposer}
+        controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={composerAccessoryServices}
+        theme={theme} width={composerAreaWidth} viewportWidth={width} height={height} marginLeft={composerAreaOffset} />
 
       <ComposerStatusStack
         presentationHidesComposer={presentationHidesComposer}
@@ -7116,7 +7122,7 @@ function OpenTuiWorkspace() {
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
       {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
 
-      {composerTerminalTargets.length > 0 && !composerWindowOpen && !composerHidden && !presentationHidesComposer ? <TerminalTargetStrip targets={composerTerminalTargets} theme={theme} left={composerAreaOffset} width={composerAreaWidth} bottom={composerDockHeight} /> : null}
+      {composerTerminalTargets.length > 0 && !composerWindowOpen && !composerHidden && !presentationHidesComposer ? <TerminalTargetStrip targets={composerTerminalTargets} theme={theme} left={composerAreaOffset} width={composerAreaWidth} bottom={composerDockHeight + composerAccessoryRows} /> : null}
       <ComposerDock
         composerWindowOpen={composerWindowOpen}
         composerHidden={composerHidden}
@@ -7353,38 +7359,6 @@ function OpenTuiWorkspace() {
           onDetach={() => offerPopoverPlacement('handoff')}
         />
       ) : null}
-
-      {promptLibraryOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {promptLibraryOpen ? (
-        <PromptLibraryPopover
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={width}
-          height={height}
-          activeProvider={selectedSessionTarget?.provider}
-          loadPrompts={readTuiPrompts}
-          loadPrompt={readTuiPrompt}
-          savePrompt={saveTuiPrompt}
-          deletePrompt={deleteTuiPrompt}
-          onInsert={insertComposerPromptText}
-          onClose={() => setPromptLibraryOpen(false)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { promptLibraryKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('prompt-library')}
-        />
-      ) : null}
-
 
       {composerWindowOpen && !presentationHidesComposer ? rectsAround(width, height, composerBackdropHole).map((rect, index) => (
         <box
@@ -7668,21 +7642,7 @@ function OpenTuiWorkspace() {
       ) : null}
 
       <WorktreeModalOverlay worktreeModalOpen={worktreeModalOpen} width={width} height={height} theme={theme} worktreeDraft={worktreeDraft} setWorktreeDraft={setWorktreeDraft} submitWorktreeTask={submitWorktreeTask} worktreeBusy={worktreeBusy} />
-      <SessionGoalOverlay
-        open={sessionGoal.dialogOpen}
-        goal={sessionGoal.goal}
-        objective={sessionGoal.objective}
-        setObjective={sessionGoal.setObjective}
-        budget={sessionGoal.budget}
-        setBudget={sessionGoal.setBudget}
-        focus={sessionGoal.goalFocus}
-        busy={sessionGoal.busy}
-        error={sessionGoal.error}
-        width={width}
-        height={height}
-        theme={theme}
-        onSubmit={submitSessionGoal}
-      />
+
 
       <WorktreeConfirmOverlay worktreeConfirm={worktreeConfirm} selectedWorktreeTask={selectedWorktreeTask} width={width} height={height} theme={theme} />
 

@@ -7,8 +7,9 @@ export const manifest = {
   id: 'messaging',
   title: 'Cross-session messaging',
   description: 'Send a message from one session to another, steering a live turn or starting one.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
+  dashboards: [{ id: 'messaging', title: 'Messaging', glyph: '✉', launcherLabel: 'Open cross-session messaging', command: 'open-cross-session-messaging', surface: 'messaging' }],
   surfaces: [{
     id: 'messaging',
     title: '✉ Messaging',
@@ -17,8 +18,8 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window'],
     windowLabel: 'Cross-session messaging in a window',
-    services: ['session'],
-    optionalServices: ['notices'],
+    services: ['session', 'messaging'],
+    optionalServices: ['notices', 'page-location'],
   }],
   commands: [{
     id: 'messaging',
@@ -31,5 +32,9 @@ export const manifest = {
     tuiKey: { name: 'm', shift: true },
     tuiKeyLabel: '⇧M',
     keywords: ['message', 'send', 'handoff', 'steer', 'agents'],
+  }, {
+    id: 'open-cross-session-messaging', label: 'Cross-session messaging', category: 'Session',
+    opens: 'messaging', requires: null, scope: 'application', renderers: ['web'],
+    webDashboard: 'messaging', keywords: ['message', 'send', 'handoff', 'steer', 'agents'],
   }],
 } as const satisfies PluginManifest

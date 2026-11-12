@@ -3,7 +3,7 @@
 // Shared controller for the agentViewer IDE host (channels/agentviewer-ide.ts),
 // the third Claude composer flow. A single instance owns the connection, the
 // persisted config, the live activity log, and the "route composer through IDE"
-// binding so both the dedicated panel (components/IdeBridgePanel.tsx) and the
+// binding so both the dedicated panel (plugins/bridges/web/IdeBridgePanel.tsx) and the
 // main composer's send path (components/MessageView.tsx) share one connection.
 //
 // Unlike the channel bridge (a chat thread), the IDE protocol is one-way for
@@ -14,7 +14,7 @@
 //
 // See lib/ideBridge.ts and channels/agentviewer-ide.ts. Mirrors useChannelBridge.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_IDE_BRIDGE_URL,
   resolveIdeDiff,
@@ -106,7 +106,7 @@ function parseMention(text: string): { filePath: string; lineStart?: number; lin
 // `open` reflects whether the dedicated panel is visible. The connection stays
 // live whenever the panel is open OR composer routing is enabled; unread
 // counting only accrues while the panel is closed.
-export function useIdeBridge({ open, available }: { open: boolean; available: boolean }): IdeBridge {
+export function useIdeBridge({ open, available, ownerKey }: { open: boolean; available: boolean; ownerKey?: string }): IdeBridge {
   const [stored] = useState(loadStoredConfig)
   const [baseUrl, setBaseUrl] = useState(stored.baseUrl)
   const [token, setToken] = useState(stored.token)
@@ -117,6 +117,20 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [unread, setUnread] = useState(0)
+
+  // Pending results belong to the captured account, even if native IDs match.
+  const lifetime = useMemo(() => ({ active: true }), [ownerKey, available])
+  const [entriesOwner, setEntriesOwner] = useState(ownerKey)
+  useLayoutEffect(() => {
+    lifetime.active = true
+    setEntriesOwner(ownerKey)
+    setEntries([])
+    setSending(false)
+    setSendError(null)
+    setUnread(0)
+    setClaudeConnected(false)
+    return () => { lifetime.active = false }
+  }, [lifetime, ownerKey])
 
   const openRef = useRef(open)
 
@@ -164,9 +178,12 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
       setStatus('idle')
       return
     }
+    let subscribed = true
+    const current = () => subscribed && lifetime.active
     const unsubscribe = subscribeToIdeEvents(
       config,
       (event: IdeEvent) => {
+        if (!current()) return
         if (event.type === 'connected' || event.type === 'disconnected' || event.type === 'initialized') {
           setClaudeConnected(event.type !== 'disconnected')
           // Connection lifecycle is noisy on reconnect; only log transitions.
@@ -186,13 +203,14 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
         }
         if (!openRef.current) setUnread((n) => n + 1)
       },
-      (next) => setStatus(next),
+      (next) => { if (current()) setStatus(next) },
     )
-    return unsubscribe
-  }, [config, enabled])
+    return () => { subscribed = false; unsubscribe() }
+  }, [config, enabled, lifetime])
 
   const send = useCallback(
     async (text: string) => {
+      if (!lifetime.active) throw new Error('Bridge target is no longer active')
       if (!available) throw new Error('The IDE bridge is only available for Claude sessions')
       const trimmed = text.trim()
       if (!trimmed) throw new Error('Cannot send an empty at-mention')
@@ -201,6 +219,7 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
       try {
         const { filePath, lineStart, lineEnd } = parseMention(trimmed)
         const result = await sendIdeAtMention(config, filePath, lineStart, lineEnd)
+        if (!lifetime.active) return result
         setEntries((prev) => [...prev, { kind: 'mention', id: nextEntryId('mention'), filePath, lineStart, lineEnd }])
         if (!result.delivered) {
           setSendError('No `claude` session is connected to the IDE host yet')
@@ -208,17 +227,18 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
         return result
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to reach the IDE host'
-        setSendError(message)
+        if (lifetime.active) setSendError(message)
         throw err instanceof Error ? err : new Error(message)
       } finally {
-        setSending(false)
+        setSending(current => lifetime.active ? false : current)
       }
     },
-    [available, config],
+    [available, config, lifetime],
   )
 
   const respondDiff = useCallback(
     async (entry: Extract<IdeLogEntry, { kind: 'diff' }>, behavior: 'accept' | 'reject') => {
+      if (!lifetime.active) return
       if (!available) {
         setSendError('The IDE bridge is only available for Claude sessions')
         return
@@ -227,13 +247,14 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
       try {
         await resolveIdeDiff(config, entry.request.diff_id, behavior)
       } catch (err) {
+        if (!lifetime.active) return
         setEntries((prev) =>
           prev.map((item) => (item.id === entry.id && item.kind === 'diff' ? { ...item, resolved: undefined } : item)),
         )
         setSendError(err instanceof Error ? err.message : 'Failed to send the diff verdict')
       }
     },
-    [available, config],
+    [available, config, lifetime],
   )
 
   return {
@@ -243,9 +264,9 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
     setToken,
     status,
     claudeConnected,
-    entries,
-    sending,
-    sendError,
+    entries: entriesOwner === ownerKey ? entries : [],
+    sending: entriesOwner === ownerKey && sending,
+    sendError: entriesOwner === ownerKey ? sendError : null,
     setSendError,
     routeComposer,
     setRouteComposer,

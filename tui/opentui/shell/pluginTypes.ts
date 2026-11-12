@@ -5,7 +5,7 @@ import type { PluginPlacement, PluginTarget } from '../../../lib/plugins/types'
 import type { SelectionAskInput } from '../../../lib/selectionAsk'
 import type { TuiThemeMode, TuiThemePalette } from '../../theme'
 import type { TuiTranscriptCard } from '../../format'
-import type { AgentProvider, ContextUsage, Session, SessionDiagnosticSection } from '../../../lib/types'
+import type { AgentProvider, ContextUsage, Session } from '../../../lib/types'
 import type { ProtocolAgent, ProtocolRunSnapshot } from '../../../lib/agentProtocol'
 import type { ThreadedMessage } from '../../../lib/threading'
 
@@ -23,6 +23,7 @@ export type TuiPluginCapture = boolean | 'input' | 'terminal'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
+  messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {
     readonly detail: TuiSessionDetail | null
@@ -36,6 +37,8 @@ export type TuiPluginServices = {
     readonly label?: string
   }
   composer?: {
+    /** Insert a prompt at the cursor, separating it from existing text with a newline. */
+    readonly insertPrompt?: (text: string) => void
     /** Append a review note to the composer the user is writing in; `notice` replaces the host's confirmation. */
     readonly appendDiffNote: (prompt: string, notice?: string) => void
     /** Hand lines to an agent with what to do with them. */
@@ -74,23 +77,9 @@ export type TuiPluginServices = {
     readonly session: Session | null
   }
   /** Resolved by the host: empty unless the target is the session whose turn is streaming. */
-  'live-transcript'?: {
-    readonly messages: readonly ThreadedMessage[]
-  }
-  'task-control'?: {
-    /** Bring a task's most recent card into view in the reader. */
-    readonly jumpTo: (eventUuid: string) => void
-    /** Read a shell/Monitor tail from a warm Claude Query. */
-    readonly readOutput?: (session: Session, taskId: string) => Promise<{ available: boolean; output: string; totalBytes: number; truncated: boolean }>
-    /** Stop a running background task in the viewed session. */
-    readonly stop?: (session: Session, taskId: string) => void | Promise<void>
-  }
-  'session-diagnostics'?: {
-    readonly read: (session: Session) => Promise<SessionDiagnosticSection[]>
-    readonly run: (session: Session, action: string, extra: Record<string, unknown>) => Promise<Record<string, unknown>>
-    /** Whether the session's runtime has the MCP, hook and reload controls. */
-    readonly hasControls: (session: Session) => boolean
-  }
+  'live-transcript'?: import('../../../lib/plugins/tasks').PluginLiveTranscript
+  'task-control'?: import('../../../lib/plugins/tasks').PluginTaskControl
+  'session-diagnostics'?: import('../../../lib/plugins/diagnostics').PluginSessionDiagnosticsService
   'channel-bridge'?: {
     readonly routed: boolean
     readonly toggleRoute: () => void

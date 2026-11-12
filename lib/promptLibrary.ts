@@ -3,6 +3,8 @@ import path from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { isAgentProvider } from './provider'
 import type { AgentProvider } from './types'
+import { extractPlaceholders } from './promptTemplate'
+export { extractPlaceholders, applyPlaceholders } from './promptTemplate'
 
 // Prompt library entries are local-only state stored as markdown files (YAML
 // frontmatter + body) under .agent-viewer-data/prompts/ — one file per prompt,
@@ -36,7 +38,6 @@ export type PromptSummary = PromptMeta & {
   placeholders: string[]
 }
 
-const PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z][\w.-]*)\s*\}\}/g
 const PREVIEW_LENGTH = 220
 
 let dirReady: Promise<void> | null = null
@@ -88,26 +89,6 @@ function normalizeMeta(slug: string, data: Record<string, unknown>): PromptMeta 
     createdAt: typeof data.created_at === 'string' ? data.created_at : now,
     updatedAt: typeof data.updated_at === 'string' ? data.updated_at : now,
   }
-}
-
-export function extractPlaceholders(body: string): string[] {
-  const seen = new Set<string>()
-  const names: string[] = []
-  for (const match of body.matchAll(PLACEHOLDER_PATTERN)) {
-    const name = match[1]
-    if (!name || seen.has(name)) continue
-    seen.add(name)
-    names.push(name)
-  }
-  return names
-}
-
-/** Replace `{{name}}` tokens with provided values; tokens left unfilled (or filled with '') stay intact. */
-export function applyPlaceholders(body: string, values: Record<string, string>): string {
-  return body.replace(PLACEHOLDER_PATTERN, (full, name: string) => {
-    const value = values[name]
-    return value && value.length > 0 ? value : full
-  })
 }
 
 function buildPreview(body: string): string {

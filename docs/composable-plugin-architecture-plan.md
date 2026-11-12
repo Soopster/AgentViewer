@@ -1,5 +1,14 @@
 # Composable application core and feature plugins
 
+8 November 2026: the target now explicitly includes behavioral customization
+and a base shell in **both Web and OpenTUI**. See [the current built-in audit](plugin-shell-audit.md)
+for remaining root-owned features and acceptance boundaries. Shared server
+`beforeTurn` behavior contributions are implemented, with composer context as
+the first migrated consumer. Authoring guidance ships as
+`.agents/skills/agent-viewer-plugins/` and over MCP skill discovery. The older
+surface-only milestones below do not establish completion of the base-shell
+goal.
+
 Status, 25 October 2026: delivery steps 2–4's Git half are done. Every
 provider SDK runtime lives in its extension ([Provider extensions](provider-extensions.md)).
 The feature plugin host exists (`lib/plugins/`, `tui/opentui/shell/`,

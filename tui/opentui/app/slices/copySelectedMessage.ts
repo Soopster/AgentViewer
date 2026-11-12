@@ -50,8 +50,6 @@ export type UseCopySelectedMessageGroupContext = {
   setBookmarksOverlayIndex: React.Dispatch<React.SetStateAction<number>>
   setBookmarksOverlay: React.Dispatch<React.SetStateAction<MessageBookmark[]>>
   setHandoffBriefOpen: React.Dispatch<React.SetStateAction<boolean>>
-  rememberComposerCursor: () => void
-  setPromptLibraryOpen: React.Dispatch<React.SetStateAction<boolean>>
   canUseChannelBridge: boolean
   setRouteComposerToBridge: React.Dispatch<React.SetStateAction<boolean>>
   canUseIdeBridge: boolean
@@ -136,8 +134,8 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
     setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen, rememberComposerCursor,
-    setPromptLibraryOpen, canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
+    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen,
+    canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
     splitArrangement, splitOrientation, splitReaderLast, splitReaderShare, splitSecondaryShare,
@@ -206,16 +204,6 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
       return
     }
     setHandoffBriefOpen(true)
-  })
-
-  const openPromptLibrary = useStableEvent(() => {
-    if (!selectedSessionTarget) {
-      showNotice('error', 'No session selected')
-      return
-    }
-    rememberComposerCursor()
-    setComposerActive(true)
-    setPromptLibraryOpen(true)
   })
 
   const toggleComposerBridgeRoute = useStableEvent(() => {
@@ -334,7 +322,7 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
 
   return {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, openHandoffBrief, openPromptLibrary, toggleComposerBridgeRoute,
+    openBookmarksOverlay, openHandoffBrief, toggleComposerBridgeRoute,
     toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   }

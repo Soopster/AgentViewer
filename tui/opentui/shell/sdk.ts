@@ -18,5 +18,4 @@ export { normalizeBrowserUrl, openExternalUrl, terminalBrowserCommand, terminalB
 export { sessionIdentityKey } from '../sessionIdentity'
 
 export { createPluginResourceScope } from '../../../lib/plugins/lifecycle'
-
-export { cycleSessionAlertMode, useSessionAlertMode } from '../sessionAlertsStore'
+export type { TuiComposerAccessoryProps } from './composerPlugins'

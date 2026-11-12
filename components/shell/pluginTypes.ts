@@ -1,3 +1,4 @@
+import type { PluginSessionDiagnosticsService } from '../../lib/plugins/diagnostics'
 import type { ComponentType } from 'react'
 import type { AnalyticsInput } from '@/lib/analytics'
 import type { ProtocolAgent } from '@/lib/agentProtocol'
@@ -7,6 +8,18 @@ import type { SendAttachment } from '@/lib/types'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
+  'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
+  'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
+  'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService
+  'live-transcript'?: import('../../lib/plugins/tasks').PluginLiveTranscript
+  'task-control'?: import('../../lib/plugins/tasks').PluginTaskControl
+  messaging?: import('../../lib/plugins/messaging').PluginMessagingService
+  'page-location'?: {
+    readonly url: string
+    readonly replaceQuery: (name: string, value: string) => void
+  }
+  'session-diagnostics'?: PluginSessionDiagnosticsService
+  session?: { readonly session: Session | null }
   'session-transcript'?: AnalyticsInput
   repository?: {
     readonly cwd: string

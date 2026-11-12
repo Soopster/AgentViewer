@@ -1,5 +1,7 @@
 'use client'
 
+import { usePluginDashboards } from './shell/usePluginDashboards'
+import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
 import { useSidebarResize } from './session-list/useSidebarResize'
 
 import { providerNativeSelectClassName, collapsedPrimaryButtonStyle, sidebarHeaderPrimaryActionStyle, collapsedIconButtonStyle, sidebarHeaderIconActionStyle, segmentStyle } from './session-list/appearance'
@@ -39,7 +41,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
-import { BookOpen, Bot, Command, GitBranch, LayoutDashboard, ListTree, MessageSquare, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BookOpen, Bot, Command, GitBranch, LayoutDashboard, ListTree, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 import { useSessionListModel } from './session-list/useSessionListModel'
 
@@ -70,12 +72,12 @@ function SessionListInner({
   onToggleWorktrees,
   onOpenCommandPalette,
   onOpenCoordinator,
-  onOpenCrossSessionMessaging,
   canOpenGit,
   onOpenGit,
   onNewSession,
   creatingSession = false,
 }: SessionListProps) {
+  const pluginDashboards = usePluginDashboards()
   const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
   const colorTreatment = useSyncExternalStore<ColorTreatment>(
@@ -988,16 +990,12 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     >
                       <UsersRound size={16} strokeWidth={2.2} />
                     </Button>
-                    <Button
-                      onClick={onOpenCrossSessionMessaging}
-                      variant="outline"
-                      size="sm"
-                      aria-label="Open cross-session messaging"
-                      className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'messaging', accent: 'cyan' })}
-                    >
-                      <MessageSquare size={15} strokeWidth={2.2} />
-                    </Button>
+                    {pluginDashboards.map(dashboard => <Button key={dashboard.id}
+                      onClick={() => dispatchPluginCommand(dashboard.command)} variant="outline" size="sm"
+                      aria-label={dashboard.launcherLabel ?? `Open ${dashboard.title}`}
+                      className="av-hover-control" style={sidebarHeaderIconActionStyle({ active: selectedDashboard === dashboard.id, accent: 'cyan' })}>
+                      <span aria-hidden="true">{dashboard.glyph}</span>
+                    </Button>)}
                     <Button
                       onClick={onOpenCommandPalette}
                       variant="outline"

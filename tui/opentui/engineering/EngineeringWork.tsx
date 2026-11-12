@@ -29,7 +29,7 @@ export type EngineeringWorkProps = {
   coordinationFeed?: EngineeringCoordinationFeed
   onOpenCoordinator?: (runId?: string) => void
   onOpenCoordinatorAgent?: (agent: ProtocolAgent) => void
-  goalObjective?: string; selectedFile: string | null; sources: Map<string, ChangeEvidence[]>
+  composerContext?: string; selectedFile: string | null; sources: Map<string, ChangeEvidence[]>
   checks: WorkCheck[]; attention: AttentionItem[]
   onRunCheck: (command: string, criterionId?: string, filePaths?: string[]) => void
   onOpenFile: (path: string) => void; onChooseFile: (path: string) => void

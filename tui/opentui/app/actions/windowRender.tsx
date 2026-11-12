@@ -16,7 +16,7 @@ import { type SurfaceMeta } from '../../popoverWindows'
 import { type TuiTranscriptCard } from '../../../format'
 import { type ThreadedMessage } from '../../../../lib/threading'
 import { type TuiDensity } from '../../../theme'
-import { readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, type TuiSessionDetail } from '../../../../lib/tui/service'
+import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { type PlaybookSummary } from '../../../../lib/agentProtocol'
 import { type Session } from '../../../../lib/types'
 import { AttentionInboxPopover, type AttentionItem } from '../../AttentionInboxPopover'
@@ -26,7 +26,7 @@ import { writeClipboard } from '../clipboard'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, PinnedSessionDetail } from '../SplitTranscriptPane'
 import { pluginSurfaceWants } from '../pluginCommands'
-import { PromptLibraryPopover, DailySummaryPopover, PlaybookManagerPopover } from '../lazyOverlays'
+import { DailySummaryPopover, PlaybookManagerPopover } from '../lazyOverlays'
 import { type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { type TuiTranscriptView } from '../../../theme'
 import { type MouseEvent } from '@opentui/core'
@@ -89,8 +89,6 @@ export type RenderSurfaceBodyInnerContext = {
   respondToAttentionItem: (item: AttentionItem, response: PermissionResponse) => Promise<void>
   openAttentionSession: (item: AttentionItem) => void
   dismissAttentionItem: (item: AttentionItem) => void
-  selectedSessionTarget: Session | null
-  insertComposerPromptText: (text: string) => void
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   sessionDetail: TuiSessionDetail | null
   handleCoordPlaybooksChanged: (playbooks: PlaybookSummary[], preferredName?: string) => void
@@ -110,7 +108,7 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
     surfacePluginKeyRef, surfacePluginCaptureChange, runCommandForPlugin, taskPanelMessages,
     composerLiveTodos, selectedSession, visibleTranscriptCards, jumpToTranscriptIndex,
     liveSubagentText, attentionItems, attentionRespondingId, respondToAttentionItem,
-    openAttentionSession, dismissAttentionItem, selectedSessionTarget, insertComposerPromptText,
+    openAttentionSession, dismissAttentionItem,
     showNotice, sessionDetail, handleCoordPlaybooksChanged, pinnedSessionOf, bookmarkKeys,
     renderer, appendDiffCommentPromptToComposer,
   } = ctx
@@ -191,14 +189,6 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
           onRespond={(item, response) => { void respondToAttentionItem(item, response) }}
           onOpenSession={openAttentionSession} onDismiss={dismissAttentionItem}
           onClose={leave} onKeyHandlerReady={keysReady({ current: null })} />
-      )
-    case 'prompt-library':
-      return (
-        <PromptLibraryPopover docked theme={theme} accentColor={composerAccentColor} width={box.width} height={box.height}
-          activeProvider={selectedSessionTarget?.provider}
-          loadPrompts={readTuiPrompts} loadPrompt={readTuiPrompt} savePrompt={saveTuiPrompt} deletePrompt={deleteTuiPrompt}
-          onInsert={insertComposerPromptText} onClose={leave} onNotice={showNotice}
-          onKeyHandlerReady={keysReady({ current: null })} />
       )
     case 'playbooks':
       return (

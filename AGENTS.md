@@ -37,6 +37,35 @@ There is no test runner and no lint script. Type-checking is the verification st
 
 ## Architecture
 
+### Base shell and feature plugins (Web and OpenTUI)
+
+New app functionality should be implemented through the plugin system. Read
+`.agents/skills/agent-viewer-plugins/SKILL.md` for authoring and customization.
+Web and OpenTUI share manifests, enablement, identities, domain logic and behavior
+contracts; renderer adapters remain separate. The shell owns layout, focus,
+session identity, command dispatch and runtime lifetimes. Plugins own feature
+presentation, scoped state and behavior through declared services/contributions.
+Do not add feature-specific root state, renderer switches or palette callbacks
+when a plugin contribution can own them. If the API lacks a capability, extend
+a narrow shared host seam and consume it from the plugin in both renderers.
+Current shared server hooks live in `lib/plugins/behavior.ts`, with static lazy
+registration in `lib/plugins/serverBehaviors.ts`.
+Executable command contracts live in `lib/plugins/commands.ts`; application
+observers live in `lib/plugins/application.ts`. Their static renderer loader
+lists are `components/shell/{pluginCommands,applicationPlugins}.ts` and
+`tui/opentui/shell/{pluginCommands,applicationPlugins}.ts`. Prefer these shared
+contributions over root-owned action implementations or hidden plugin views.
+Composer accessories use `lib/plugins/composer.ts` and the two renderer
+`composerPlugins.ts` loader lists. Keep feature polling, modal state and keys in
+the accessory; the host owns bounded rows, target lifetime and send capabilities.
+Session runtime controls use the shared `lib/plugins/diagnostics.ts` service
+contract, with HTTP and native adapters. Plugin views own when those reads run.
+Web dashboard contributions use `lib/plugins/dashboard.ts` and manifest
+`dashboards`/command `webDashboard` metadata. Register pages through those
+contributions instead of adding sidebar callbacks or dashboard rendering cases.
+Cross-session messaging uses `lib/plugins/messaging.ts`; deliver by qualified
+address, preserving provider-instance identity.
+
 ### Multi-provider session backend
 
 The app is a unified UI over five separate agent runtimes: **Codex** (`@anthropic-ai/Codex-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk`), **GitHub Copilot** (`@github/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
@@ -79,7 +108,7 @@ goal per provider + instance + session, stored locally.
 - `lib/sessionGoalStore.ts` — `.agent-viewer-data/session-goals.json`.
 - `lib/sessionGoalEngine.ts` — the observer. `ensureSessionGoalEngine()` is armed by the goal route and by the TUI service; on a settle it waits 2s (transcript writes trail the running-entry clear), audits, then sends one continuation and drains the stream so the provider generator runs. Stops on budget, continuation cap, or a non-`continue` decision.
 - `app/api/sessions/[sessionId]/goal/route.ts` — GET/POST/PATCH/DELETE.
-- Web: `components/message-view/SessionGoalDock.tsx` above the composer. OpenTUI: `app/SessionGoalStrip.tsx` + `app/overlays/SessionGoalOverlay.tsx`, reached with `⇧D` or the `goal` palette command, state in `app/state/sessionGoalState.ts`.
+- Web and OpenTUI: `plugins/goals/{web,tui}/` composer accessories, reached with the `goal` palette command, state owned by the plugin.
 
 The only trigger is `onTurnSettled` in `lib/sessionRuntime.ts`, fired by
 `clearRunningSession` after an entry is actually deleted. Keep it that way:
@@ -165,10 +194,10 @@ Concrete recipes for typical asks. Each lists every file you usually need to tou
 - **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
 - **Add a provider** → new `lib/<provider>Client.ts` + `<provider>Mapper.ts`; extend the `AgentProvider` union and `isAgentProvider` in `lib/types.ts`/`lib/provider.ts`; add a `<PROVIDER>_CAPABILITIES` constant + branch in `getProviderCapabilities`; add provider branches throughout `lib/sessionBackend.ts` (every backend op switches on provider); add an entry to `PROVIDER_SELECT_OPTIONS` in `components/CommandPalette.tsx`.
 - **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
-- **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
+- **Add a feature command-palette entry** → its plugin manifest. Both palettes derive feature commands from `lib/plugins/catalog.ts`; edit `components/CommandPalette.tsx` only for core shell behavior.
 - **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).
 - **Add a session-level API action** → new folder under `app/api/sessions/[sessionId]/<action>/route.ts`; implement the backend method on `lib/sessionBackend.ts` (per-provider switch); reflect via a `SessionCapabilities` flag in `lib/provider.ts` if the UI gates it; thread it through `lib/tui/service.ts` if the TUIs need it too.
 - **Touch persistent search behavior** → `lib/sessionPersistence.ts` (SQL + aggregation), then the routes under `app/api/session-index/`. Don't import `node:sqlite` statically — use the existing `(0, eval)('import("node:sqlite")')` indirection.
-- **Add an OpenTUI keybinding or modal** → `tui/opentui/App.tsx`; grep for `useKeyboard`. Heavy work belongs in a new `tui/opentui/<thing>Worker.ts` + `<thing>WorkerClient.ts` pair, not on the render thread.
+- **Add an OpenTUI feature keybinding or modal** → its plugin manifest and TUI surface adapter. Core input precedence stays in `tui/opentui/App.tsx`; heavy work stays in workers, outside the render thread.
 
 Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner.

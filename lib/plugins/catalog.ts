@@ -4,6 +4,8 @@
 // tui/opentui/shell/pluginViews.ts); no root, palette or window-kind union
 // changes.
 import { manifest as subagents } from '../../plugins/subagents/manifest'
+import { manifest as goals } from '../../plugins/goals/manifest'
+import { manifest as composerTools } from '../../plugins/composer-tools/manifest'
 import { manifest as analytics } from '../../plugins/analytics/manifest'
 import { manifest as git } from '../../plugins/git/manifest'
 import { manifest as files } from '../../plugins/files/manifest'
@@ -22,11 +24,13 @@ import { manifest as desk } from '../../plugins/desk/manifest'
 import { manifest as sessionInsights } from '../../plugins/session-insights/manifest'
 import { manifest as tabManager } from '../../plugins/tab-manager/manifest'
 import { manifest as sessionAlerts } from '../../plugins/session-alerts/manifest'
+import { manifest as promptLibrary } from '../../plugins/prompt-library/manifest'
+import { manifest as composerContext } from '../../plugins/composer-context/manifest'
 import { manifest as recaps } from '../../plugins/recaps/manifest'
 import { manifest as github } from '../../plugins/github/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, sessionInsights, tabManager, sessionAlerts] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, goals] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
@@ -53,14 +57,20 @@ for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
   }
   for (const command of manifest.commands) {
     if (commands.has(command.id)) throw new Error(`Duplicate plugin command id: ${command.id}`)
-    if (!manifest.surfaces.some(surface => surface.id === command.opens)) throw new Error(`Plugin command ${command.id} opens an undeclared surface: ${command.opens}`)
-    if (!manifest.surfaces.find(surface => surface.id === command.opens)!.placements.includes(command.placement ?? 'overlay')) throw new Error(`Plugin command ${command.id} opens ${command.opens} where it cannot be placed`)
+    if (command.handler) {
+      if (command.opens !== undefined || command.placement !== undefined || !command.handler.trim()) throw new Error(`Invalid plugin action: ${command.id}`)
+    } else {
+      if (!manifest.surfaces.some(surface => surface.id === command.opens)) throw new Error(`Plugin command ${command.id} opens an undeclared surface: ${command.opens}`)
+      if (!manifest.surfaces.find(surface => surface.id === command.opens)!.placements.includes(command.webDashboard ? 'window' : command.webReader ? 'panel' : command.placement ?? 'overlay')) throw new Error(`Plugin command ${command.id} opens ${command.opens} where it cannot be placed`)
+    }
+    if (command.webDashboard && (!command.renderers.includes('web') || command.scope !== 'application' || command.requires !== null || !manifest.dashboards?.some(dashboard => dashboard.id === command.webDashboard && dashboard.command === command.id && dashboard.surface === command.opens))) throw new Error(`Invalid plugin dashboard command: ${command.id}`)
+    if (command.webReader && (!command.renderers.includes('web') || command.scope !== 'session' || command.requires !== 'session' || !manifest.reader?.some(spec => spec.id === command.webReader && spec.surface === command.opens))) throw new Error(`Invalid reader command: ${command.id}`)
     commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
   }
 }
 
-export function isPluginSurfaceId(id: string): id is PluginSurfaceId {
-  return surfaces.has(id)
+export function isPluginSurfaceId(id: unknown): id is PluginSurfaceId {
+  return typeof id === 'string' && surfaces.has(id)
 }
 
 export function isPluginPanelSurfaceId(id: string): id is PluginPanelSurfaceId {

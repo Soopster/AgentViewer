@@ -10,7 +10,7 @@ import { AWAITING_PERSISTED_TURN_TIMEOUT_MS } from '../constants'
 import { type SessionMessage } from '../../../lib/types'
 import { isDurableSessionMessage, sessionMessageFingerprint, messagesChangedSinceBaseline } from '../threadedCompare'
 import { type RefObject } from 'react'
-import { type SendState, type ContextUsage, type SessionComposerOptions, type SessionDiagnosticSection, type SendAttachment, type ReasoningEffortLevel } from '@/lib/types'
+import { type SendState, type ContextUsage, type SessionComposerOptions, type SendAttachment, type ReasoningEffortLevel } from '@/lib/types'
 import { type IncrementalThreadingCache } from '@/lib/threading'
 import { type TimelineScrollAnchor } from '@/lib/timelineVirtualizer'
 import { type TimelineEstimateBucket, type TimelineEstimateCalibration, type FailedSend, type RewindPreview, type RollbackPreview, type TimelineEstimateSample } from '../types'
@@ -219,8 +219,6 @@ export type SessionResetEffectContext = {
   setResumeFromMessageId: Dispatch<SetStateAction<string | null>>
   setRewindPreview: Dispatch<SetStateAction<RewindPreview | null>>
   setRollbackPreview: Dispatch<SetStateAction<RollbackPreview | null>>
-  setShowDiagnostics: Dispatch<SetStateAction<boolean>>
-  setDiagnosticSections: Dispatch<SetStateAction<SessionDiagnosticSection[]>>
   setAttachments: Dispatch<SetStateAction<SendAttachment[]>>
   setAttachmentPath: Dispatch<SetStateAction<string>>
   setSelectedEffort: Dispatch<SetStateAction<ReasoningEffortLevel | 'auto'>>
@@ -268,7 +266,7 @@ export function runSessionResetEffect(ctx: SessionResetEffectContext) {
   const {
     liveTurnSessionHandoffRef, session, sendInFlightRef, awaitingPersistedTurnRef, setContextUsage,
     setSessionActionError, setSessionActionNotice, setResumeFromMessageId, setRewindPreview,
-    setRollbackPreview, setShowDiagnostics, setDiagnosticSections, setAttachments,
+    setRollbackPreview, setAttachments,
     setAttachmentPath, setSelectedEffort, setSelectedAgent, setSelectedCopilotMode,
     setComposerOptions, setPendingPermissions, setOptimisticUserText, setSteeredUserTexts,
     clearLiveAssistantText, setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
@@ -300,8 +298,6 @@ export function runSessionResetEffect(ctx: SessionResetEffectContext) {
     setResumeFromMessageId(null)
     setRewindPreview(null)
     setRollbackPreview(null)
-    setShowDiagnostics(false)
-    setDiagnosticSections([])
     setAttachments([])
     setAttachmentPath('')
     setSelectedEffort('auto')

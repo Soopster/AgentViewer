@@ -1,31 +1,28 @@
+import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import type { Session } from '../../../lib/types'
 import { useState, useRef } from 'react'
+import { usePresentationInterest } from '../../../lib/plugins/usePresentationInterest'
 import { useIdeBridge } from '../../useIdeBridge'
 
 export type UseIdeBridgeOpenGroupContext = {
   projectView: { key: string; sessionCount: number; providerMode: 'current' | 'all'; } | undefined
   session: Session | null
-  ideBridgeOpenRequest: number
-  ideBridgeRouteToggleRequest: number
 }
 
 export function useIdeBridgeOpenGroup(ctx: UseIdeBridgeOpenGroupContext) {
   const {
-    projectView, session, ideBridgeOpenRequest, ideBridgeRouteToggleRequest,
+    projectView, session,
   } = ctx
 
   // IDE bridge — the third Claude composer flow (agentViewer hosts an IDE
   // endpoint an external `claude` connects to; see channels/agentviewer-ide.ts).
   // Shares the Claude-only availability gate with the channel bridge.
-  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
+  const idePresentation = usePresentationInterest()
   const canUseIdeBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
-  const ideBridge = useIdeBridge({ open: ideBridgeOpen, available: canUseIdeBridge })
-  const handledIdeBridgeOpenRequestRef = useRef(ideBridgeOpenRequest)
-  const handledIdeBridgeRouteRequestRef = useRef(ideBridgeRouteToggleRequest)
+  const ideBridge = useIdeBridge({ open: idePresentation.count > 0, available: canUseIdeBridge, ownerKey: session ? sessionIdentityKey(session) : undefined })
   const ideBridgeRef = useRef(ideBridge)
 
   return {
-    ideBridgeOpen, setIdeBridgeOpen, canUseIdeBridge, ideBridge, handledIdeBridgeOpenRequestRef,
-    handledIdeBridgeRouteRequestRef, ideBridgeRef,
+    canUseIdeBridge, ideBridge, ideBridgeRef, acquireIdeBridgeView: idePresentation.acquire,
   }
 }

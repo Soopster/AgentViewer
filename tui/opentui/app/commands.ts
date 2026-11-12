@@ -111,8 +111,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'composer-stash-pop', label: 'Pop composer stash', key: '', category: 'Session' },
   { id: 'composer-stash-list', label: 'List composer stash', key: '', category: 'Session' },
   { id: 'new', label: 'New agent session', key: '⇧N', category: 'Session' },
-  { id: 'reuse', label: 'Reuse last prompt', key: '⇧R', category: 'Session' },
-  { id: 'goal', label: 'Session goal — work until done', key: '⇧D', category: 'Session' },
   { id: 'rename', label: 'Rename session', key: '⌃R', category: 'Session' },
   { id: 'cli', label: 'Copy CLI resume command', key: '', category: 'Session' },
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
@@ -133,7 +131,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'fleet-prev', label: 'Previous fleet page', key: '{', category: 'View' },
   { id: 'fleet-next', label: 'Next fleet page', key: '}', category: 'View' },
   { id: 'handoff-brief', label: 'Handoff brief', key: '⇧H', category: 'Session' },
-  { id: 'prompt-library', label: 'Prompt library', key: '⇧P', category: 'Session' },
   { id: 'provider', label: 'Switch provider', key: 'p', category: 'Session' },
   { id: 'sort', label: 'Toggle sidebar sort', key: '⇧S', category: 'Session' },
   { id: 'scratch', label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
@@ -196,7 +193,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'refresh', label: 'Refresh sessions', key: 'r', category: 'App' },
   { id: 'quit', label: 'Quit', key: 'q / Esc / ⌃C', category: 'App' },
 ]
-type TuiCommandEquivalent = { palette: string}  | { notice: string} 
+type TuiCommandEquivalent = { palette: string}  | { notice: string}
 // Native CLI commands that belong to their terminal UI. Each is answered by the
 // agent-viewer surface that does the same job, or by why there is none, so no
 // command a native user types ends in "cannot run".

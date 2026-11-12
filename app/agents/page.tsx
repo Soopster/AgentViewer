@@ -1,8 +1,5 @@
-import StandaloneMessaging from '@/components/cross-session-messaging/StandaloneMessaging'
+import PluginPage from '@/components/shell/PluginPage'
 
-export default async function AgentsPage({ searchParams }: {
-  searchParams: Promise<{ to?: string | string[] }>
-}) {
-  const { to } = await searchParams
-  return <StandaloneMessaging initialRecipient={Array.isArray(to) ? to[0] : to} />
+export default function AgentsPage() {
+  return <PluginPage surfaceId="messaging" />
 }

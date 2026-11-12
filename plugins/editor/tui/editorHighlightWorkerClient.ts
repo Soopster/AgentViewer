@@ -2,7 +2,7 @@
 // one tokenizer per buffer id inside it. Responses are routed by buffer id;
 // the facade (editorSyntaxBuffer.ts) decides whether a response is still
 // current.
-import { tuiWorkerUrl } from '../../../tui/opentui/workerUrl'
+import { tuiWorkerUrl } from '../../../tui/opentui/shell/sdk'
 import type { EditorHighlightRequest, EditorHighlightResponse } from './editorHighlightProtocol'
 
 type Listener = (response: EditorHighlightResponse) => void

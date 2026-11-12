@@ -11,6 +11,8 @@ import { pluginState, useScopedPluginState, type PluginStateStore } from '@/lib/
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import type { PluginPlacement } from '@/lib/plugins/types'
 import type { WebPluginServices, WebPluginView, WebPluginViewProps } from './pluginTypes'
+import { webMessaging } from './messagingService'
+import { webSessionDiagnostics } from './sessionDiagnostics'
 import { webPluginViews } from './pluginViews'
 
 type Props = {
@@ -55,7 +57,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, s
   const [attempt, setAttempt] = useState(0)
   const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
-  const resolved = useMemo(() => resolvePluginServices(surface, offered), [surface, offered])
+  const resolved = useMemo(() => resolvePluginServices(surface, { messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
   useEffect(() => {

@@ -15,7 +15,7 @@ export function encodeTerminalPrompt(text: string, bracketedPaste: boolean, ente
 /** Running shells, the state of any agent in them included. Loads the stores on first use. */
 export async function listComposerTerminals(): Promise<ComposerTerminal[]> {
   const shells = await import('./shellStore')
-  const { readShellAgentState } = await import('../../plugins/terminal/tui/shellAgentState')
+  const { readShellAgentState } = await import('./shellAgentState')
   return shells.getShells().filter(shell => shell.status === 'running').map(shell => {
     const agent = readShellAgentState(shell)
     return { id: shell.id, name: shell.name, cwd: shell.cwd, agent: agent?.agent ?? null, agentState: agent?.state ?? null }
@@ -27,7 +27,7 @@ export type TerminalPromptResult = { ok: true; agentState: string | null } | { o
 /** Sends `text` to the shell and presses Enter. A shell that is gone is an error, never a silent drop. */
 export async function sendTerminalPrompt(id: string, text: string): Promise<TerminalPromptResult> {
   const shells = await import('./shellStore')
-  const { readShellAgentState } = await import('../../plugins/terminal/tui/shellAgentState')
+  const { readShellAgentState } = await import('./shellAgentState')
   const shell = shells.getShells().find(entry => entry.id === id)
   if (!shell) return { ok: false, error: `${id} is no longer open` }
   if (shell.status !== 'running') return { ok: false, error: `${shell.name} is ${shell.status}` }
@@ -38,7 +38,7 @@ export async function sendTerminalPrompt(id: string, text: string): Promise<Term
 
 export async function readTerminalAgentState(id: string): Promise<string | null> {
   const shells = await import('./shellStore')
-  const { readShellAgentState } = await import('../../plugins/terminal/tui/shellAgentState')
+  const { readShellAgentState } = await import('./shellAgentState')
   const shell = shells.getShells().find(entry => entry.id === id)
   return shell ? readShellAgentState(shell)?.state ?? null : null
 }

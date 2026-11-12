@@ -17,6 +17,7 @@ export type QuestionPickerPlan = {
 }
 
 export type QuestionPickerPlanContext = {
+  accessoryRows?: number
   pendingPermissions: PendingPermission[]
   questionFocusIndex: number
   questionOptionIndex: number
@@ -51,6 +52,7 @@ export function runQuestionPickerPlan(ctx: QuestionPickerPlanContext): QuestionP
     - (searchMode || sessionSearchMode ? 4 : 1)
     - (embeddedComposer ? 0 : composerDockHeight)
     - composerPopoverHeight
+    - (ctx.accessoryRows ?? 0)
     - QUESTION_PICKER_MIN_TRANSCRIPT_ROWS,
     QUESTION_PICKER_MIN_ROWS,
   )

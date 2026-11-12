@@ -14,6 +14,7 @@ import { type TranscriptDiffNoteDraft } from '../transcriptDiffSelection'
 import { useNavigationRefs } from '../state/navigationRefs'
 
 export type UseComposerInterruptPendingRefGroupContext = {
+  composerAccessoryModal?: boolean
   composerSessions: ComposerSessions
   composerOwnerKey: string
   windowSurfaces: string[]
@@ -29,7 +30,6 @@ export type UseComposerInterruptPendingRefGroupContext = {
   windowSwitcherOpen: boolean
   windowBroadcastOpen: boolean
   handoffBriefOpen: boolean
-  promptLibraryOpen: boolean
   bookmarksOverlayOpen: boolean
   coordModalOpen: boolean
   renameSessionKey: string | null
@@ -48,7 +48,7 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
     pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen, handoffBriefOpen,
-    promptLibraryOpen, bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
+    bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
   } = ctx
@@ -107,7 +107,8 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
   const remoteCoordinatorKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
 
   const composerFocusBlocked = Boolean(
-    spacesMenuOpen
+    ctx.composerAccessoryModal
+    || spacesMenuOpen
     || exitConfirmOpen
     || searchMode
     || sessionSearchMode
@@ -116,7 +117,6 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     || windowSwitcherOpen
     || windowBroadcastOpen
     || handoffBriefOpen
-    || promptLibraryOpen
     || bookmarksOverlayOpen
     || coordModalOpen
     || teammatesModalOpen

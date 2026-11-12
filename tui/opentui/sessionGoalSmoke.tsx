@@ -32,8 +32,8 @@ const {
 } = await import('../../lib/sessionGoals')
 type SessionGoal = import('../../lib/sessionGoals').SessionGoal
 const store = await import('../../lib/sessionGoalStore')
-const { SessionGoalStrip } = await import('./app/SessionGoalStrip')
-const { SessionGoalOverlay } = await import('./app/overlays/SessionGoalOverlay')
+const { SessionGoalStrip } = await import('../../plugins/goals/tui/SessionGoalStrip')
+const { SessionGoalOverlay } = await import('../../plugins/goals/tui/SessionGoalOverlay')
 const { DARK_THEME } = await import('../theme')
 
 function assert(condition: unknown, message: string): asserts condition {

@@ -1,5 +1,8 @@
 'use client'
 
+import { usePluginDashboards, usePluginDashboardCommands } from '@/components/shell/usePluginDashboards'
+import type { PluginDashboardId } from '@/lib/plugins/dashboard'
+import type { DashboardTab } from '@/components/viewer-navigation/model'
 import { DashboardViews, DashboardView } from '@/components/shell/DashboardViews'
 import { ReaderPane, ReaderPaneCollapseButton, CollapsedReaderPane } from '@/components/shell/ReaderPane'
 import { PanelPluginSurface } from '@/components/shell/PanelPluginSurface'
@@ -20,6 +23,7 @@ import { createSessionMetadataCallbacks, createSessionDeleteCallback, patchSessi
 import { type SessionIdentity } from '@/lib/sessionIdentity'
 import { useSessionCatalog } from '@/components/session-catalog/useSessionCatalog'
 import { useSessionCatalogQuery } from '@/components/session-catalog/useSessionCatalogQuery'
+import { ApplicationPluginHost } from '@/components/shell/ApplicationPluginHost'
 
 import { panelSurfaceAvailability } from '@/lib/rightPanel'
 
@@ -48,7 +52,6 @@ const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover')
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
 const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
-const CrossSessionMessaging = dynamic(() => import('@/components/cross-session-messaging/CrossSessionMessaging'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
 
@@ -93,14 +96,6 @@ export default function Home() {
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
   usePluginSettingsSync()
   const rightPanel = useRightPanel()
-  const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
-  const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
-  const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
-  const [channelBridgeRouteToggleRequest, setChannelBridgeRouteToggleRequest] = useState(0)
-  const [channelBridgeRouting, setChannelBridgeRouting] = useState(false)
-  const [ideBridgeOpenRequest, setIdeBridgeOpenRequest] = useState(0)
-  const [ideBridgeRouteToggleRequest, setIdeBridgeRouteToggleRequest] = useState(0)
-  const [ideBridgeRouting, setIdeBridgeRouting] = useState(false)
   const documentVisible = useDocumentVisible()
   const {
     messages: sessionMessages, loading: loadingSessionMessages,
@@ -137,8 +132,6 @@ export default function Home() {
       : undefined),
     [provider, selectedProject],
   )
-  const canUseChannelBridge = !selectedProject && !!selectedSession && (selectedSession.provider ?? 'claude') === 'claude'
-  const canUseIdeBridge = canUseChannelBridge
   const canMaximizeMessageView = !dashboardSelected && !selectedProject && !!selectedSession
   const {
     paneCollapsed: messagePaneCollapsed, maximized: isMessageViewMaximized, fullscreen: messageViewFullscreen,
@@ -183,18 +176,14 @@ export default function Home() {
     navigateDashboard('agents')
   }, [clearCreationError, clearProjectTranscript, navigateDashboard])
 
-  const openCrossSessionMessaging = useCallback(() => {
+  const pluginDashboards = usePluginDashboards({ includeDisabled: true })
+  const openPluginDashboard = useCallback((id: PluginDashboardId) => {
     clearCreationError()
     clearProjectTranscript()
-    navigateDashboard('messaging')
+    navigateDashboard(id)
   }, [clearCreationError, clearProjectTranscript, navigateDashboard])
+  usePluginDashboardCommands(openPluginDashboard)
 
-  const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
-  const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
-  const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
-  const toggleChannelBridgeRoute = useCallback(() => setChannelBridgeRouteToggleRequest((value) => value + 1), [])
-  const openIdeBridge = useCallback(() => setIdeBridgeOpenRequest((value) => value + 1), [])
-  const toggleIdeBridgeRoute = useCallback(() => setIdeBridgeRouteToggleRequest((value) => value + 1), [])
 
   const catalogProjectDir = sessionScope === 'project' ? activeProjectDir : null
   const catalogIncludesWorktrees = catalogProjectDir ? includeWorktrees : true
@@ -406,6 +395,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
+    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">
@@ -436,7 +426,6 @@ export default function Home() {
             onToggleWorktrees={setIncludeWorktrees}
             onOpenCommandPalette={openCommandPalette}
             onOpenCoordinator={openCoordinator}
-            onOpenCrossSessionMessaging={openCrossSessionMessaging}
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
             onNewSession={handleNewSession}
@@ -465,9 +454,10 @@ export default function Home() {
                     <DashboardView value="agents">
                       <PluginSurfaceHost surfaceId="coordination" placement="window" sessionKey={null} services={dashboardCoordinationServices} onClose={openRunDashboard} />
                     </DashboardView>
-                    <DashboardView value="messaging">
-                      <CrossSessionMessaging />
-                    </DashboardView>
+                    {pluginDashboards.map(dashboard => <DashboardView key={dashboard.id} value={dashboard.id as DashboardTab}>
+                      <PluginSurfaceHost surfaceId={dashboard.surface} placement="window" sessionKey={null}
+                        services={{ session: { session: selectedSession } }} onClose={openRunDashboard} />
+                    </DashboardView>)}
                   </DashboardViews>
                 ) : (
                   <MessageView
@@ -484,14 +474,6 @@ export default function Home() {
                     onSelectTab={selectOpenTab}
                     onCloseTab={closeTab}
                     onOpenSession={selectCommandPaletteSession}
-                    taskPanelOpenRequest={taskPanelOpenRequest}
-                    promptLibraryOpenRequest={promptLibraryOpenRequest}
-                    channelBridgeOpenRequest={channelBridgeOpenRequest}
-                    channelBridgeRouteToggleRequest={channelBridgeRouteToggleRequest}
-                    onChannelBridgeRoutingChange={setChannelBridgeRouting}
-                    ideBridgeOpenRequest={ideBridgeOpenRequest}
-                    ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
-                    onIdeBridgeRoutingChange={setIdeBridgeRouting}
                     composerInsertRequest={composerInsertRequest}
                     onComposerInsertConsumed={consumeComposerInsertRequest}
                     openCodeTodos={openCodeTodosForView}
@@ -524,12 +506,6 @@ export default function Home() {
                   messageViewFullscreen={messageViewFullscreen}
                   canMaximizeMessageView={canMaximizeMessageView}
                   canOpenGit={!!activeProjectDir}
-                  canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
-                  canOpenPromptLibrary={!selectedProject && !!selectedSession}
-                  canOpenChannelBridge={canUseChannelBridge}
-                  channelBridgeRouting={channelBridgeRouting}
-                  canOpenIdeBridge={canUseIdeBridge}
-                  ideBridgeRouting={ideBridgeRouting}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}
                   onChangeProvider={handleChangeProvider}
@@ -542,13 +518,6 @@ export default function Home() {
                   onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
-                  onOpenCrossSessionMessaging={openCrossSessionMessaging}
-                  onOpenTasks={openTaskPanel}
-                  onOpenPromptLibrary={openPromptLibrary}
-                  onOpenChannelBridge={openChannelBridge}
-                  onToggleChannelBridgeRoute={toggleChannelBridgeRoute}
-                  onOpenIdeBridge={openIdeBridge}
-                  onToggleIdeBridgeRoute={toggleIdeBridgeRoute}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                   onOpenProvenance={() => setProvenanceOpen(true)}
                   onOpenRemoteAccess={() => setRemoteAccessOpen(true)}

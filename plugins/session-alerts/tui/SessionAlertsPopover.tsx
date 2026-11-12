@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 // The switch for session alerts. The mode lives in the host (tui.json); this only shows and cycles it.
 import { useCallback, useEffect } from 'react'
-import { cycleSessionAlertMode, useSessionAlertMode, PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiPluginKeyEvent, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { cycleSessionAlertMode, useSessionAlertMode } from './modeStore'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiPluginKeyEvent, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 
 type Props = {
   theme: TuiThemePalette

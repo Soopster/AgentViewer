@@ -32,7 +32,6 @@ export type SessionListProps = {
   onToggleWorktrees: (include: boolean) => void
   onOpenCommandPalette: () => void
   onOpenCoordinator: () => void
-  onOpenCrossSessionMessaging: () => void
   canOpenGit: boolean
   onOpenGit: () => void
   onNewSession?: () => void

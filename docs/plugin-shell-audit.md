@@ -1,0 +1,179 @@
+# Base shell and plugin migration audit
+
+Inspected 13 November 2026. The target is a base shell in both Web and OpenTUI,
+with app functionality composed through plugins. Existing surface extraction is
+useful but does not by itself establish feature ownership.
+
+## Shared core boundary
+
+Keep session/provider-instance identity, provider runtime lifetimes, transcript
+measurement and virtualization, focus, layout, dispatch and capability routing
+in the shell. Features consume narrow services. A provider run or shell process
+outlives its presentation plugin. Feature disablement must not become an
+implicit interrupt or process kill.
+
+## Current evidence and migration targets
+
+| Family | Current implementation | Remaining migration |
+| --- | --- | --- |
+| Analytics, Git, Files, Terminal, Browser, Pull requests, Coordination, GitHub, Recaps | Shared manifests and separate lazy Web/TUI surface adapters in `plugins/` | Audit domain operations/state still supplied from roots; preserve runtime ownership |
+| Editor, checkpoints, file history, desk, insights, tab manager | Bundled plugins; renderer support varies by manifest | Expose equivalent capabilities where applicable on Web; do not assume a TUI surface establishes Web parity |
+| Composer context expansion | Now a headless `composer-context` plugin; shared ordered `beforeTurn` pipeline in `lib/sessionBackend.ts` | Context-chip presentation still belongs to the composer; disabled expansion does not remove chip controls |
+| Prompt library | Migrated to `plugins/prompt-library/` in Web and OpenTUI. One manifest retains existing command IDs and TUI window ID. Search/draft/fill state belongs to plugin instances; storage stays behind the prompt API/TUI service | Browser host and real TUI App checks cover lazy activation, placement draft retention, template insertion and disable/re-enable. Web additionally checks that late reads after close cannot insert into the composer |
+| Reuse last prompt | Migrated from TUI root/keys/palette into the headless `composer-tools` plugin. The same action is available on Web; no view is loaded | Shared command host checks identity/capabilities and cancels per invocation. Real TUI verifies ⇧R and typed-character precedence; real Web MessageView in StrictMode verifies account-switch cancellation, parked draft preservation and disable/re-enable |
+| Session alerts | Shared application observer and domain tracker in `plugins/session-alerts/`; separate Web and TUI settings/notification adapters. Root feature effect and host-owned mode/tracker modules removed | Shared contract smoke covers disable races, account isolation, private/coalesced snapshots and cleanup. Real TUI App emits an attention notification without loading the settings view. Browser host covers view-independent alerts, stopping disabled polling, permission and long-turn delivery with a mocked desktop sink. Native OS notification appearance remains untested |
+| Goals | `plugins/goals/{web,tui}` owns composer controls, polling, modal state and keys. Shared metadata, executable command and composer accessory contract; roots render generic hosts | Web interaction smoke checks StrictMode, account-switch cancellation, ordinary sending, pause/resume and disable polling. Real TUI checks palette, modal keys and disable/re-enable. Goal engine remains independent with the singular settled-turn trigger |
+| Playbooks / new coordinated run | TUI root and `CoordRunModal` own launch state; separate playbook manager | Add typed run-creation service and plugin-owned setup surface, retaining provider-instance targeting and validation |
+| Diagnostics | Shared manifest and `PluginSessionDiagnosticsService`; Web presentation and MCP controls moved from the transcript into `plugins/diagnostics/web`. Both renderer views own reads, state and cancellation | Browser checks actual MessageView with configured-account targeting, controls, errors, disable/re-enable and stale reads. Real TUI checks read-on-open, relocation and stale response rejection. Web session command ownership now follows command scope independently of surface pinning |
+| Messaging | Web and TUI now use `plugins/messaging/` and `PluginMessagingService`. Web dashboard/tab/sidebar/palette derive from metadata; `/agents` uses `PluginPage`. Both views own scoped drafts and cancellation | Browser checks standalone/embedded route isolation, commands, real placement remounts, disable/re-enable and stale sends. Backend integration checks configured-instance discovery and qualified steering/idle delivery; ambiguous IDs refuse. Native checks retained drafts, qualified recipients and disabled delivery responses |
+| Tasks | Shared manifest, task registry domain and separate Web/OpenTUI adapters in `plugins/tasks/`. Web reader metadata replaces the direct task rail and root-owned registry/open state | Browser checks actual MessageView: automatic 360px rail, explicit empty open, close/toggle, read-only project feed, stop errors, account-switch cancellation and disable/re-enable. Domain smoke checks live/persisted reconciliation and provider task snapshots; native host smoke checks opening the task surface |
+| CLI / IDE bridges | Shared manifest and typed view/routing services in `plugins/bridges/`; Web panels and route commands use lazy plugin contributions. Shell services retain transport and composer routing | Browser surface checks cover drafts/configuration, permission verdicts, errors/stale responses and diff actions with a stubbed diff renderer. Runtime browser checks actual MessageView/hooks, account-switch isolation and local HTTP/SSE routing across close/disable. Durable outbox and real history-route smokes cover colliding IDs, legacy compatibility, concurrent appends and write-failure recovery. Real provider bridge endpoints remain untested |
+| Bookmarks, provenance, remote access, Pi activity, run dashboard | Direct lazy feature imports in `app/page.tsx` | Shared surface contributions with renderer availability explicit in manifests |
+| Daily summary / handoff | Dedicated TUI lazy overlays, state and window cases | Plugin-owned views and commands; common domain services for Web equivalents |
+
+## Delivered shared behavior seam
+
+`PluginManifest.behavior` declares hooks and order without importing executable
+code. `createPluginBehaviorHost` loads enabled contributors lazily, validates
+identity/API, composes patches sequentially, supports explicit blocking, and
+invalidates pending work on disable. A turn captures its provider, configured
+instance and native session ID before any hook runs. Each hook gets its own
+request copy. Hook failure/refusal occurs before checkpoint/provider submission.
+
+Web and TUI enter the same `streamViewSessionTurn` boundary. Goal continuations
+that use ordinary sending pass through it too. Mid-turn steering, provider tool
+execution and arbitrary transcript rendering do not yet have feature hooks.
+Those need explicit extension points rather than claims of full mod support.
+
+The shared command contract now also supports `webComposerLabel` and
+`webComposerGlyph`. Composer buttons come from command metadata and dispatch
+through the same enabled command path as palettes. A session-required surface
+that declares the composer service is owned by the Web session host even when
+its window is unpinned. TUI prompt insertion uses a narrow composer service;
+the root no longer owns library-open state, keys, palette or window cases.
+
+`PluginManifest.application` now declares app-lifetime `sessionActivity`
+observers and their notification capability. Renderer-specific static loader
+lists load observer code separately from views; `createPluginApplicationHost`
+owns activation, per-plugin resource scopes, event snapshots and failure
+isolation. While an import is pending, only the newest snapshot is retained.
+Disabling cancels scope-owned work and invalidates pending imports. A fresh
+activation baselines the next fresh snapshot; disabled activity is not replayed.
+
+Web's `ApplicationPluginHost` adapts the shared runtime endpoint to canonical
+session identities and stops its polling when no observer wants activity. It
+continues background polling for explicitly enabled app observers, independent
+of hidden presentation lifetimes. TUI publishes its existing sidebar runtime
+snapshot after the first successful registry read. Both expose notification
+sinks with no feature policy. The runtime API route imports the read-only
+activity facade, so observation does not activate the send path.
+
+Commands marked `scope: 'application'` use the generic Web application surface
+host without a selected session or another page-level feature callback.
+
+## Executable command contributions
+
+Commands can now declare either a surface `opens` or an executable `handler`.
+Action metadata specifies its application/session/repository scope and required
+command services. Browser-safe manifests do not import implementations. Each
+renderer has a static command loader list; both can load the same pure module.
+Shared services include transcript reads, composer writes, notices and bridge
+routing. Hosts offer capabilities for their scope and immutable target context;
+unsupported capabilities refuse before loading. Bridge route commands use the
+same enabled command path as surface launchers, without loading a hidden view.
+
+`createPluginCommandHost` captures only provider/instance/session identity and
+repository context, validates handlers and binds capabilities once. Each call
+has a resource scope; cancellation/disabling, owner changes, unmounting and
+completion end its write lifetime. A delayed command cannot overwrite a new
+composer or modify the parked original draft. Failure is contained by the
+calling shell and does not prevent other commands from running.
+
+`tuiKeyContext: 'navigation'` lets command shortcuts yield to active composer
+input. Adding `composer-tools` removed the dedicated reuse callback, root key
+case, palette branch and host implementation. The contributor smoke adds both
+a panel and a headless action using only their packages and registration lists,
+then typechecks both applications.
+
+## Next acceptance boundaries
+
+1. Migrate remaining rows and remove compatibility paths after callers move.
+2. Keep proving new contributions change only their packages and registration lists.
+   Verify disable/re-enable, restore, hidden lifetimes, failure isolation and
+   provider-instance collisions in both actual renderers.
+
+This audit records incomplete work. Passing host typechecks and focused hook
+checks proves neither a fully reduced shell nor complete Web/TUI parity.
+
+## Composer accessory contributions
+
+`PluginManifest.composer` declares ordered accessory IDs, bounded terminal rows
+and required services. Both renderer loader lists use the same lazy registry and
+lifecycle boundary. The host captures an immutable session identity and cancels
+its lifetime on owner changes, disablement and unmount. A retained send
+capability refuses after that lifetime ends. Modal key routing and row budgeting
+are generic shell responsibilities; feature fields and commands stay in the plugin.
+
+Goals demonstrates inline status plus a plugin-owned modal without a hidden
+surface or root goal branch. Disabling presentation stops its reads and keys,
+while the server goal continues. Composer accessories are trusted bundled source
+contributions, matching the existing static registration model.
+
+Diagnostics is also a service consumer: `lib/plugins/diagnostics.ts` is the shared
+read/control contract, the Web shell adapts HTTP and the TUI shell adapts its
+service facade. Diagnostics selection is captured on open, independently of the
+current reader selection; the feature does not start another provider as the user
+browses. Disabled or closed presentation lifetimes reject late responses.
+
+## Dashboard contributions
+
+A Web dashboard is metadata (`PluginManifest.dashboards`) plus a command with
+`webDashboard`, a matching application scope and its ordinary lazy surface.
+Dashboard ID types derive from the catalog. The shell renders tabs, sidebar
+launchers and contents generically; session and application overlay hosts yield
+dashboard commands to the navigation owner. Disabled launchers disappear while
+an already selected dashboard can display the shared disabled-plugin view.
+`PluginPage` offers `page-location` for standalone query navigation without
+feature route props. Messaging demonstrates these contribution paths.
+
+
+## Reader contributions and task ownership
+
+`PluginManifest.reader` declares a Web reader slot ID, a panel-capable surface
+and its bounded width. Commands use `webReader` and an optional
+`webReaderAction: 'toggle'`; `webViewMenuLabel` contributes a generic View-menu
+entry. The host dispatches serial open/toggle requests through `reader-slot`,
+reserves width only while the plugin reports visible, and fences reports to the
+current owner and mounted instance. Disabling removes the contribution.
+OpenTUI retains its ordinary task surface and shortcut through the same manifest;
+its terminal layout uses the existing surface host rather than a Web column.
+
+The tasks plugin owns open state, its empty state, task registry derivation and
+local control feedback. A default empty rail stays hidden; explicit open shows
+an empty panel. Shared domain logic merges persisted and live transcript events
+by UUID, lets live snapshots replace persisted versions, and overlays OpenCode
+todos and Codex plan snapshots. Host services provide immutable session identity,
+transcript snapshots, navigation and available task controls. Project feeds have
+no session stop capability. Stop actions capture identity, cancel with their
+presentation lifetime, and display errors without a late notice in another
+account or session.
+
+## Bridge runtime and view leases
+
+Bridge services expose configuration, snapshots, send/approval operations and
+`acquireView()`, which returns a release callback. A plugin view owns this lease,
+its drafts and its pending presentation work. Releasing it on close, relocation
+or disablement removes that view's interest; it does not change composer routing.
+The shell transport remains active while either a view lease or composer route
+needs it. Turning routing off releases the route's interest independently.
+Provider runtime and bridge transport ownership therefore remain separate from
+the plugin's presentation lifetime. Configured provider-instance identity must
+remain part of every session-targeted operation.
+
+The focused browser fixtures use actual shell components and plugin hosts with
+mocked provider APIs. The bridge runtime fixture uses local HTTP/SSE endpoints,
+while the bridge panel fixture stubs the diff renderer. These checks establish
+the covered lifecycle and routing behavior, not live provider interoperability,
+full diff rendering, native OS terminal behavior or complete renderer parity.
+The task domain smoke and OpenTUI host smoke provide additional focused coverage;
+they do not exercise live task stopping against a provider.

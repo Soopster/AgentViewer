@@ -3,7 +3,8 @@ import { steerViewSession } from './sessionSteering'
 import { listPendingProviderPermissionPayloads } from './sessionControlPlane'
 import { getProviderRuntime } from "./extensions/providers/registry";
 import type { ProviderCreateRequest, ProviderPrewarmRequest, ProviderSessionRequest } from "./extensions/providers/types";
-import { projectComposerContext } from "./composerContext";
+import { applyPluginBeforeTurn } from './plugins/serverBehaviors';
+import { PluginTurnBlockedError } from './plugins/behavior';
 import { coordinatorPermissionToken } from "./coordinatorNativePermission";
 import { extractPendingPermissions } from "./permissions";
 import { recordContextTransfer } from "./contextTransfers";
@@ -13,7 +14,7 @@ import { createTurnCheckpoint } from "./checkpoints";
 import { timeSendPhase } from "./sendPhaseTrace";
 import { currentProviderInstanceId } from "./providerInstances";
 import { updateSessionInboxState } from "./sessionInbox";
-import type { AgentProvider, SendAttachment } from "./types";
+import type { AgentProvider } from "./types";
 // The read half of this router lives in lib/sessionReads.ts, which deliberately
 // imports no provider client, SDK, or send-path module: reading a session used
 // to evaluate the machinery for sending one (~72MB of footprint against ~16MB),
@@ -32,23 +33,29 @@ type ForkParams = {
     provider?: AgentProvider;
 };
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
+    const provider = await resolveProvider(params.provider);
+    const providerInstanceId = currentProviderInstanceId(provider);
     try {
-        const raw = Array.isArray(params.body.attachments) ? params.body.attachments.filter((a): a is SendAttachment => !!a && typeof a === 'object') : [];
-        const projected = projectComposerContext(String(params.body.message ?? ''), raw);
-        params = { ...params, body: { ...params.body, message: projected.text, attachments: projected.attachments } };
+        params = { ...params, body: await applyPluginBeforeTurn({
+            target: { provider, providerInstanceId, sessionId: params.sessionId },
+            signal: params.signal,
+            body: params.body,
+        }) };
     }
     catch (error) {
-        return Response.json({ error: error instanceof Error ? error.message : 'Invalid context' }, { status: 400 });
+        const aborted = params.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+        return Response.json({ error: error instanceof Error ? error.message : 'Plugin behavior failed' }, {
+            status: aborted ? 499 : error instanceof PluginTurnBlockedError ? 400 : 500,
+        });
     }
     const userMessage = String(params.body.message ?? '').trim();
     if (!userMessage) {
         return Response.json({ error: 'message is required' }, { status: 400 });
     }
-    const provider = await resolveProvider(params.provider);
     void updateSessionInboxState({
         provider,
         sessionId: params.sessionId,
-        providerInstanceId: currentProviderInstanceId(provider),
+        providerInstanceId,
         action: 'reopen',
     }).catch(() => { });
     // Start the checkpoint immediately, but overlap it with provider setup. Each
@@ -66,7 +73,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
         })).catch(() => null)
         : undefined;
     const runtime = await getProviderRuntime(provider);
-    return runtime.streamTurn({ ...params, provider, providerInstanceId: currentProviderInstanceId(provider) }, checkpoint);
+    return runtime.streamTurn({ ...params, provider, providerInstanceId }, checkpoint);
 }
 export async function forkViewSession(params: ForkParams): Promise<{
     sessionId: string;

@@ -4,6 +4,7 @@
 // It reads once per open, for the session it was opened on, and holds that
 // session while the selection moves: a diagnostics read can activate a session
 // (Copilot), so following the selection would do that on every keystroke.
+import { createPluginResourceScope } from '../../../lib/plugins/lifecycle'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { Session, SessionDiagnosticSection } from '../../../lib/types'
@@ -18,6 +19,7 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
   const [session, setSession] = useState<Session | null>('session', null)
   const [loadedRequest, setLoadedRequest] = useState<number | null>('request', null)
   const [loading, setLoading] = useState('loading', false)
+  const [loaded, setLoaded] = useState('loaded', false)
   const [sections, setSections] = useState<SessionDiagnosticSection[]>('sections', [])
   const [error, setError] = useState<string | null>('error', null)
   const [notice, setNotice] = useState<string | null>('notice', null)
@@ -26,25 +28,42 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
   const [mcpPolicies, setMcpPolicies] = useState<Record<string, McpPolicy>>('mcpPolicies', {})
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
 
+  const request = target.request ?? 0
+  const lifetime = useRef<AbortSignal | null>(null)
+  const readSequence = useRef(0)
+  const actionBusy = useRef(false)
+  useEffect(() => {
+    const scope = createPluginResourceScope('diagnostics')
+    lifetime.current = scope.signal
+    actionBusy.current = false
+    setBusy(null)
+    setLoading(false)
+    return () => scope.dispose()
+  }, [request, setBusy, setLoading])
+
   const refresh = useCallback(async (target: Session) => {
+    const signal = lifetime.current
+    if (!signal || signal.aborted) return
+    const sequence = ++readSequence.current
     setLoading(true)
     setError(null)
     try {
-      setSections(await diagnostics.read(target))
+      const next = await diagnostics.read(target, signal)
+      if (!signal.aborted && sequence === readSequence.current) { setSections(next); setLoaded(true) }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load diagnostics')
+      if (!signal.aborted && sequence === readSequence.current) setError(err instanceof Error ? err.message : 'Failed to load diagnostics')
     } finally {
-      setLoading(false)
+      if (!signal.aborted && sequence === readSequence.current) setLoading(false)
     }
-  }, [diagnostics, setError, setLoading, setSections])
+  }, [diagnostics, setError, setLoading, setSections, setLoaded])
 
   // A new open (the host's request count moved) reads the session it names.
-  const request = target.request ?? 0
   useEffect(() => {
-    if (session && loadedRequest === request) return
+    if (session && loadedRequest === request && loaded) return
     if (!offered) return
     setSession(offered)
     setLoadedRequest(request)
+    setLoaded(false)
     setMcpIndex(0)
     void refresh(offered)
   // Only a new request or a first session starts a read; see the header.
@@ -55,12 +74,17 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
   const mcpRows = useMemo(() => sections.find((s) => s.id === 'mcp')?.items.filter((i) => i !== 'None') ?? [], [sections])
 
   const runAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
-    if (!session || !diagnostics.hasControls(session)) return null
+    const signal = lifetime.current
+    if (!session || !signal || signal.aborted || actionBusy.current || !diagnostics.hasControls(session)) return null
+    ++readSequence.current
+    actionBusy.current = true
+    setLoading(false)
     setBusy(busyKey)
     setError(null)
     setNotice(null)
     try {
-      const result = await diagnostics.run(session, action, extra)
+      const result = await diagnostics.run(session, action, extra, signal)
+      if (signal.aborted) return null
       if (action === 'resolveSettings') {
         const sources = typeof result.sourceCount === 'number'
           ? result.sourceCount
@@ -102,10 +126,10 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
       if (action !== 'listHookEvents') await refresh(session)
       return result
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed')
+      if (!signal.aborted) setError(err instanceof Error ? err.message : 'Action failed')
       return null
     } finally {
-      setBusy(null)
+      if (!signal.aborted) { actionBusy.current = false; setBusy(null) }
     }
   }, [diagnostics, refresh, session, setBusy, setError, setNotice, setSections])
 

@@ -103,8 +103,8 @@ async function handle(request: ControlRequest): Promise<ControlReply> {
   if (request.op === 'windows' || request.op === 'window') return handleWindows(request)
   const shells = await import('./shellStore')
   const processes = await import('./processStore')
-  const { readShellAgentState } = await import('../../plugins/terminal/tui/shellAgentState')
-  const { readVisibleScreenText, readAllScreenText } = await import('../../plugins/terminal/tui/shellScreen')
+  const { readShellAgentState } = await import('./shellAgentState')
+  const { readVisibleScreenText, readAllScreenText } = await import('./shellScreen')
   type Source = Parameters<typeof readVisibleScreenText>[0]
 
   const shellView = (shell: ReturnType<typeof shells.getShells>[number]) => {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { DIFF_HIGHLIGHTER_OPTIONS } from '@/components/pierreDiffWorker'
+import { DIFF_HIGHLIGHTER_OPTIONS } from '@/components/shell/sdkDiff'
 import { CodeView, type CodeViewAnnotationArgs, type CodeViewHandle, WorkerPoolContextProvider } from '@pierre/diffs/react'
 import {
   parsePatchFiles,

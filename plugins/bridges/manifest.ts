@@ -1,16 +1,15 @@
 import { PLUGIN_API_VERSION, type PluginManifest } from '../../lib/plugins/types'
 
-// The bridge panels: the live CLI channel bridge and the IDE bridge. Only the
-// panels are here. Routing the composer through a bridge (⌃R, the palette's
-// route toggles) and the bridges themselves are the composer's, so they keep
-// working with this plugin off; the panels' services are offered only while a
+// The live CLI channel and IDE bridge presentations and routing commands.
+// Long-lived transports and the composer's routing binding stay in the host,
+// so an existing routed connection keeps working with this plugin off; the panels' services are offered only while a
 // Claude session can use a bridge, and their commands say why otherwise.
 export const manifest = {
   apiVersion: PLUGIN_API_VERSION,
   id: 'bridges',
   title: 'Bridge panels',
   description: 'The live CLI channel bridge and IDE bridge panels: activity, approvals and messages.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'channel-bridge',
@@ -21,7 +20,7 @@ export const manifest = {
     placements: ['overlay', 'window'],
     windowLabel: 'Live CLI bridge in a window',
     services: ['session', 'channel-bridge'],
-    optionalServices: ['notices'],
+    optionalServices: ['notices', 'composer'],
   }, {
     id: 'ide-bridge',
     title: '⌨ IDE bridge',
@@ -31,14 +30,14 @@ export const manifest = {
     placements: ['overlay', 'window'],
     windowLabel: 'IDE bridge in a window',
     services: ['ide-bridge'],
-    optionalServices: ['notices'],
+    optionalServices: ['notices', 'composer'],
   }],
   commands: [{
     id: 'channel-bridge',
     label: 'Channel bridge',
     category: 'Session',
     opens: 'channel-bridge',
-    requires: 'session',
+    requires: 'session', providers: ['claude'],
     renderers: ['tui'],
     tuiKey: { name: 'c', shift: true },
     tuiKeyLabel: '⇧C',
@@ -48,10 +47,28 @@ export const manifest = {
     label: 'IDE bridge',
     category: 'Session',
     opens: 'ide-bridge',
-    requires: 'session',
+    requires: 'session', providers: ['claude'],
     renderers: ['tui'],
     tuiKey: { name: 'i', shift: true },
     tuiKeyLabel: '⇧I',
     keywords: ['bridge', 'ide', 'diff', 'mention', 'claude'],
+  }, {
+    id: 'open-channel-bridge', label: 'Open channel bridge', category: 'Session',
+    opens: 'channel-bridge', requires: 'session', providers: ['claude'], scope: 'session', renderers: ['web'],
+    webComposerLabel: 'CLI bridge', webComposerGlyph: '⇄',
+    keywords: ['bridge', 'channel', 'cli', 'claude', 'live'],
+  }, {
+    id: 'open-ide-bridge', label: 'Open IDE bridge', category: 'Session',
+    opens: 'ide-bridge', requires: 'session', providers: ['claude'], scope: 'session', renderers: ['web'],
+    webComposerLabel: 'IDE bridge', webComposerGlyph: '⌨',
+    keywords: ['bridge', 'ide', 'diff', 'mention', 'claude'],
+  }, {
+    id: 'toggle-channel-bridge-route', label: 'Toggle composer route through CLI bridge', category: 'Session',
+    handler: 'toggle-channel-route', scope: 'session', requires: 'session', providers: ['claude'], renderers: ['web', 'tui'], services: ['bridge-routing'],
+    keywords: ['route', 'bridge', 'channel', 'cli', 'claude'],
+  }, {
+    id: 'toggle-ide-bridge-route', label: 'Toggle composer route through IDE bridge', category: 'Session',
+    handler: 'toggle-ide-route', scope: 'session', requires: 'session', providers: ['claude'], renderers: ['web', 'tui'], services: ['bridge-routing'],
+    keywords: ['route', 'bridge', 'ide', 'claude'],
   }],
 } as const satisfies PluginManifest

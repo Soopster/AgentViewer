@@ -1,19 +1,24 @@
+'use client'
+
+import { usePluginDashboards } from './usePluginDashboards'
+import { isPluginDashboardId } from '../../lib/plugins/dashboard'
 import type { ReactNode } from 'react'
-import { LayoutDashboard, MessageSquare, UsersRound } from 'lucide-react'
+import { LayoutDashboard, UsersRound } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { DashboardTab } from '@/components/viewer-navigation/model'
 
 export function DashboardViews({ value, onValueChange, children }: {
   value: DashboardTab; onValueChange: (value: DashboardTab) => void; children: ReactNode
 }) {
+  const dashboards = usePluginDashboards()
   return <Tabs value={value} onValueChange={next => {
-    if (next === 'sessions' || next === 'agents' || next === 'messaging') onValueChange(next)
+    if (next === 'sessions' || next === 'agents' || isPluginDashboardId(next)) onValueChange(next)
   }} className="av-dashboard-tabs">
     <nav className="av-dashboard-tabbar" aria-label="Dashboard views">
       <TabsList variant="line" className="av-dashboard-tablist">
         <TabsTrigger value="sessions" className="av-dashboard-tab"><LayoutDashboard aria-hidden="true" /> Session Runs</TabsTrigger>
         <TabsTrigger value="agents" className="av-dashboard-tab"><UsersRound aria-hidden="true" /> Agent Operations</TabsTrigger>
-        <TabsTrigger value="messaging" className="av-dashboard-tab"><MessageSquare aria-hidden="true" /> Messaging</TabsTrigger>
+        {dashboards.map(dashboard => <TabsTrigger key={dashboard.id} value={dashboard.id} className="av-dashboard-tab"><span aria-hidden="true">{dashboard.glyph}</span> {dashboard.title}</TabsTrigger>)}
       </TabsList>
     </nav>
     {children}

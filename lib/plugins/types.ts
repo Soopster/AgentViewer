@@ -51,15 +51,14 @@ export type PluginSurfaceSpec = {
 
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
 
-export type PluginCommandSpec = {
+type PluginCommandCommon = {
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
   readonly category: 'Session' | 'View' | 'Transcript' | 'Coordination'
-  /** Opening this surface as an overlay is the command's action. */
-  readonly opens: string
-  /** Where the command shows its surface: an overlay (the default) or a side-panel tab, reusing an open one. */
-  readonly placement?: 'overlay' | 'panel'
+  /** Explicit command owner for app-wide views with no selected-session target. */
+  readonly providers?: readonly import('../types').AgentProvider[]
+  readonly scope?: 'application' | 'session' | 'repository'
   /** What the command must have before it can run: a selected session, or a repository to work in. */
   readonly requires: 'session' | 'repository' | null
   readonly renderers: readonly PluginRenderer[]
@@ -67,10 +66,40 @@ export type PluginCommandSpec = {
   readonly tuiKey?: PluginKeyChord
   /** Display form of the TUI binding. */
   readonly tuiKeyLabel?: string
+  /** Navigation shortcuts leave typed characters with an active composer. */
+  readonly tuiKeyContext?: 'navigation'
   /** Web: a labelled button in the session toolbar. */
   readonly webToolbarLabel?: string
+  /** Web dashboard destination, declared by this plugin's dashboards metadata. */
+  readonly webDashboard?: string
+  /** Web reader-side contribution to open or toggle. */
+  readonly webReader?: string
+  readonly webReaderAction?: 'open' | 'toggle'
+  readonly webViewMenuLabel?: string
+  /** A composer action button which dispatches this command through the host. */
+  readonly webComposerLabel?: string
+  readonly webComposerGlyph?: string
   readonly keywords?: readonly string[]
 }
+
+export type PluginCommandServiceId = 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing'
+
+export type PluginCommandSpec = PluginCommandCommon & (
+  | {
+    readonly opens: string
+    readonly handler?: never
+    /** An overlay (default) or side-panel tab, reusing an open one. */
+    readonly placement?: 'overlay' | 'panel'
+  }
+  | {
+    /** A handler in the renderer's lazy command module; no surface is opened. */
+    readonly handler: string
+    readonly opens?: never
+    readonly placement?: never
+    readonly scope: 'application' | 'session' | 'repository'
+    readonly services: readonly PluginCommandServiceId[]
+  }
+)
 
 export type PluginManifest = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
@@ -81,6 +110,33 @@ export type PluginManifest = {
   readonly renderers: readonly PluginRenderer[]
   readonly surfaces: readonly PluginSurfaceSpec[]
   readonly commands: readonly PluginCommandSpec[]
+  /** Optional reader-side surfaces, sized by the host. */
+  readonly reader?: readonly { readonly id: string; readonly surface: string; readonly width: number; readonly order?: number }[]
+  /** Web dashboard pages and navigation entries, rendered by the generic shell. */
+  readonly dashboards?: readonly {
+    readonly id: string
+    readonly title: string
+    readonly glyph: string
+    readonly launcherLabel?: string
+    readonly command: string
+    readonly surface: string
+    readonly order?: number
+  }[]
+  /** Inline composer UI, loaded separately from surface views and commands. */
+  readonly composer?: readonly {
+    readonly id: string
+    readonly title: string
+    readonly order?: number
+    readonly maxRows: number
+    readonly services: readonly 'composer'[]
+  }[]
+  /** Headless server contributions, loaded on the shared send path, never by listing views. */
+  readonly behavior?: { readonly hooks: readonly 'beforeTurn'[]; readonly order?: number }
+  /** App-lifetime observers, independent of whether any surface is open. */
+  readonly application?: {
+    readonly events: readonly 'sessionActivity'[]
+    readonly services: readonly 'notifications'[]
+  }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number
 }
@@ -116,8 +172,13 @@ export type PluginServiceId =
   | 'live-transcript'
   /** Jump to a task's card in the reader, and stop a background task. */
   | 'task-control'
+  | 'reader-slot'
   /** Read a session's diagnostics and run its runtime controls (MCP, hooks, reloads). */
   | 'session-diagnostics'
+  /** A standalone page's location and query navigation. */
+  | 'page-location'
+  /** Discover and message other provider sessions. */
+  | 'messaging'
   /** The live CLI channel bridge: whether the composer routes to it, and the toggle. */
   | 'channel-bridge'
   /** The IDE bridge: whether the composer routes to it, the toggle, and diff comments. */

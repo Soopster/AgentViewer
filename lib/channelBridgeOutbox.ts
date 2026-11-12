@@ -12,6 +12,8 @@ export type ChannelBridgeOutboxEntry = {
   messageId: string
   baseUrl: string
   targetSessionId: string
+  /** Local provider-instance owner. Never sent as the native bridge session id. */
+  ownerKey?: string
   chatId?: string
   text: string
   createdAt: string
@@ -64,6 +66,7 @@ function isOutboxEntry(value: unknown): value is ChannelBridgeOutboxEntry {
     && Number.isSafeInteger(record.attempts)
     && record.attempts >= 0
     && (record.chatId === undefined || typeof record.chatId === 'string')
+    && (record.ownerKey === undefined || typeof record.ownerKey === 'string')
     && (record.lastAttemptAt === undefined || typeof record.lastAttemptAt === 'string')
   )
 }
@@ -92,6 +95,7 @@ export function createChannelBridgeMessageId(): string {
 export function createChannelBridgeOutboxEntry(params: {
   config: ChannelBridgeConfig
   targetSessionId: string
+  ownerKey?: string
   text: string
   chatId?: string
   messageId?: string
@@ -106,6 +110,7 @@ export function createChannelBridgeOutboxEntry(params: {
     messageId: params.messageId?.trim() || createChannelBridgeMessageId(),
     baseUrl: normalizedBaseUrl(params.config.baseUrl),
     targetSessionId,
+    ownerKey: params.ownerKey,
     chatId: params.chatId,
     text,
     createdAt: params.createdAt ?? new Date().toISOString(),
@@ -150,6 +155,8 @@ export async function flushChannelBridgeOutbox(
   config: ChannelBridgeConfig,
   targetSessionId: string,
   options: {
+    /** Exact local owner match; omitted only replays legacy unscoped rows. */
+    ownerKey?: string
     deliver?: DeliverChannelMessage
     onDelivered?: (delivery: ChannelBridgeDelivery) => void
   } = {},
@@ -162,7 +169,7 @@ export async function flushChannelBridgeOutbox(
     let error: Error | undefined
 
     for (const candidate of [...entries]) {
-      if (candidate.baseUrl !== baseUrl || candidate.targetSessionId !== targetSessionId) continue
+      if (candidate.baseUrl !== baseUrl || candidate.targetSessionId !== targetSessionId || candidate.ownerKey !== options.ownerKey) continue
       const attempted: ChannelBridgeOutboxEntry = {
         ...candidate,
         attempts: candidate.attempts + 1,
@@ -192,6 +199,7 @@ export async function sendDurableChannelMessage(
   config: ChannelBridgeConfig,
   params: {
     targetSessionId: string
+    ownerKey?: string
     text: string
     chatId?: string
     messageId?: string
@@ -204,7 +212,7 @@ export async function sendDurableChannelMessage(
 }> {
   const entry = createChannelBridgeOutboxEntry({ config, ...params })
   await enqueueChannelBridgeMessage(storage, entry)
-  const result = await flushChannelBridgeOutbox(storage, config, entry.targetSessionId)
+  const result = await flushChannelBridgeOutbox(storage, config, entry.targetSessionId, { ownerKey: entry.ownerKey })
   const delivery = result.delivered.find((candidate) => candidate.entry.messageId === entry.messageId)
   return {
     entry,

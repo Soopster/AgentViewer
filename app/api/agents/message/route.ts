@@ -8,12 +8,13 @@ export async function POST(request: NextRequest) {
   const toName = typeof body.to === 'string' ? body.to.trim() : ''
   const text = typeof body.text === 'string' ? body.text : ''
   const fromSessionId = typeof body.fromSessionId === 'string' ? body.fromSessionId : undefined
+  const fromAddress = typeof body.fromAddress === 'string' ? body.fromAddress : undefined
   const fromName = typeof body.fromName === 'string' && body.fromName.trim() ? body.fromName.trim() : 'another session'
   if (!toName) return NextResponse.json({ error: 'to is required' }, { status: 400 })
   if (!text.trim()) return NextResponse.json({ error: 'text is required' }, { status: 400 })
 
   try {
-    const result = await sendCrossSessionMessage({ fromSessionId, fromName, toName, text })
+    const result = await sendCrossSessionMessage({ fromSessionId, fromAddress, fromName, toName, text })
     const status = result.delivered
       ? 200
       : result.mode === 'not_found'

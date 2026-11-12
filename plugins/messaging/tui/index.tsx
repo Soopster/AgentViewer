@@ -6,10 +6,12 @@ import { CrossSessionMessagingPopover } from './CrossSessionMessagingPopover'
 
 const NO_NOTICES = () => {}
 
-function MessagingSurface({ services, theme, width, height, placement, registerKeys, setCapture, close, detach }: TuiPluginViewProps) {
+function MessagingSurface({ services, useState, theme, width, height, placement, registerKeys, setCapture, close, detach }: TuiPluginViewProps) {
   const docked = placement !== 'overlay'
   return (
     <CrossSessionMessagingPopover
+      messaging={services.messaging!}
+      useState={useState}
       docked={docked}
       currentSession={services.session?.session ?? null}
       theme={theme}

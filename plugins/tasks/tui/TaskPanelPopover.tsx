@@ -11,11 +11,14 @@ import {
   isStoppableTask,
   type TaskGroup,
   type TaskState,
+  type TaskRegistry,
 } from '../../../lib/taskRegistry'
 
 type TaskPanelKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
 type Props = {
+  registry?: TaskRegistry
+  controlError?: string | null
   messages: ThreadedMessage[]
   theme: TuiThemePalette
   width: number
@@ -191,6 +194,7 @@ function taskEndAnchorId(taskId: string): string {
 
 export function TaskPanelPopover({
   messages,
+  registry: providedRegistry,
   theme,
   width,
   height,
@@ -199,10 +203,11 @@ export function TaskPanelPopover({
   onKeyHandlerReady,
   onStopTask,
   onReadTaskOutput,
+  controlError,
   docked = false,
   onDetach,
 }: Props) {
-  const registry = useMemo(() => buildTaskRegistry(messages), [messages])
+  const registry = useMemo(() => providedRegistry ?? buildTaskRegistry(messages), [providedRegistry, messages])
   const completedIds = useMemo(() => {
     const set = new Set<string>()
     for (const t of registry.values()) if (t.status === 'completed') set.add(t.id)
@@ -372,8 +377,8 @@ export function TaskPanelPopover({
         borderStyle="single"
         borderColor={theme.border}
       >
-        <text fg={theme.muted}>
-          {detailTask ? 'Shell details' : `${registry.size} tasks · ${[...registry.values()].filter(task => task.taskType === 'local_bash').length} shells`}
+        <text fg={controlError ? theme.red : theme.muted}>
+          {controlError ?? (detailTask ? 'Shell details' : `${registry.size} tasks · ${[...registry.values()].filter(task => task.taskType === 'local_bash').length} shells`)}
         </text>
         {onStopTask && highlightedTask && isStoppableTask(highlightedTask) ? (
           <text fg={theme.amber}>{`  x stop #${highlightedTask.id}`}</text>

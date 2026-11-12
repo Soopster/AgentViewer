@@ -17,7 +17,14 @@ export function createLazyRegistry<Key extends string, Value>(
       const pending = loading.get(key)
       if (pending) return pending
       if (!Object.hasOwn(loaders, key)) throw new Error(`Unknown extension: ${key}`)
-      const promise = Promise.resolve().then(() => loaders[key]()).then((value) => {
+      const promise = Promise.resolve().then(() => {
+        if (loading.get(key) !== promise) {
+          const error = new Error(`Extension ${key} was deactivated before loading`)
+          error.name = 'AbortError'
+          throw error
+        }
+        return loaders[key]()
+      }).then((value) => {
         if (loading.get(key) !== promise) {
           const error = new Error(`Extension ${key} was deactivated while loading`)
           error.name = 'AbortError'

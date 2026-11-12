@@ -1,15 +1,21 @@
 /** @jsxImportSource @opentui/react */
 import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
-import { useCallback, useEffect, useState } from 'react'
-import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPluginResourceScope } from '../../../lib/plugins/lifecycle'
+import type { TuiPluginViewProps, TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import { getProviderAccent } from '../../../tui/opentui/shell/sdk'
 import type { Session } from '../../../lib/types'
-import type { AddressableSession } from '../../../lib/crossSessionMessaging'
-import { listTuiAddressableSessions, sendTuiCrossSessionMessage } from '../../../lib/tui/service'
+import { addressableSessionKey, type AddressableSession } from '../../../lib/crossSessionMessagingTypes'
+import { sessionIdentityKey } from '../../../lib/sessionIdentity'
+import type { PluginMessagingService } from '../../../lib/plugins/messaging'
 
 type MessagingKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
+function useLocalState<T>(_name: string, initial: T) { return useState(initial) }
+
 type Props = {
+  messaging: PluginMessagingService
+  useState?: TuiPluginViewProps['useState']
   currentSession: Session | null
   theme: TuiThemePalette
   width: number
@@ -27,6 +33,8 @@ type Props = {
 
 export function CrossSessionMessagingPopover({
   currentSession,
+  messaging,
+  useState: useScopedState = useLocalState,
   theme,
   width,
   height,
@@ -38,56 +46,91 @@ export function CrossSessionMessagingPopover({
   onCaptureChange,
 }: Props) {
   const [sessions, setSessions] = useState<AddressableSession[]>([])
-  const [index, setIndex] = useState(0)
-  const [draft, setDraft] = useState('')
-  const [focus, setFocus] = useState<'sessions' | 'composer'>('sessions')
+  const [recipient, setRecipientState] = useScopedState('recipient', '')
+  const [draft, setDraft] = useScopedState('draft', '')
+  const [focus, setFocus] = useScopedState<'sessions' | 'composer'>('focus', 'sessions')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
-  const selectedIndex = sessions.length === 0 ? 0 : Math.min(index, sessions.length - 1)
+  const selectedIndex = Math.max(0, sessions.findIndex(session => addressableSessionKey(session) === recipient))
   const selected = sessions[selectedIndex] ?? null
 
+  const owner = currentSession ? sessionIdentityKey(currentSession) : null
+  const lifetime = useRef<AbortSignal | null>(null)
+  const reads = useRef(0)
+  const sendPending = useRef(false)
+  const draftVersion = useRef(0)
+  const latest = useRef(recipient)
+  const setRecipient = useCallback((value: string) => { latest.current = value; setRecipientState(value) }, [setRecipientState])
+  useLayoutEffect(() => { latest.current = recipient }, [recipient])
+  useLayoutEffect(() => {
+    const scope = createPluginResourceScope('messaging')
+    lifetime.current = scope.signal
+    sendPending.current = false
+    setSending(false)
+    return () => scope.dispose()
+  }, [owner])
+
   const reload = useCallback(async () => {
+    const signal = lifetime.current
+    if (!signal || signal.aborted) return
+    const request = ++reads.current
     setLoading(true)
     try {
-      const next = await listTuiAddressableSessions(currentSession?.sessionId)
+      const next = await messaging.list(owner ?? undefined, signal)
+      if (signal.aborted || request !== reads.current) return
       setSessions(next)
-      setIndex((value) => Math.min(value, Math.max(next.length - 1, 0)))
+      setRecipient(next.some(session => addressableSessionKey(session) === latest.current) ? latest.current : next[0] ? addressableSessionKey(next[0]) : '')
     } catch (error) {
-      onNotice('error', error instanceof Error ? error.message : 'Failed to list sessions')
+      if (!signal.aborted && request === reads.current) onNotice('error', error instanceof Error ? error.message : 'Failed to list sessions')
     } finally {
-      setLoading(false)
+      if (!signal.aborted && request === reads.current) {
+        // eslint-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- inside finally; only the current read can finish loading
+        setLoading(false)
+      }
     }
-  }, [currentSession?.sessionId, onNotice])
+  }, [owner, onNotice, setRecipient, messaging])
 
   useEffect(() => { void reload() }, [reload])
 
   const submit = useCallback(async () => {
     const text = draft.trim()
-    if (!selected || !text || sending) return
+    const signal = lifetime.current
+    if (!selected || !text || !signal || signal.aborted || sendPending.current) return
+    const target = addressableSessionKey(selected)
+    const submittedVersion = draftVersion.current
+    sendPending.current = true
     setSending(true)
     try {
       const fromName = currentSession?.customTitle?.trim()
         || currentSession?.summary?.trim()
         || (currentSession ? `session-${currentSession.sessionId.slice(0, 6)}` : 'Agent Viewer TUI')
-      const result = await sendTuiCrossSessionMessage({
+      const result = await messaging.send({
         fromSessionId: currentSession?.sessionId,
+        fromAddress: currentSession ? sessionIdentityKey(currentSession) : undefined,
         fromName,
-        toName: selected.name,
+        toName: addressableSessionKey(selected),
         text,
-      })
+      }, signal)
       if (!result.delivered) throw new Error(result.error || 'Message was not delivered')
-      setDraft('')
-      setFocus('sessions')
-      onNotice('info', result.mode === 'steered'
-        ? `Delivered to ${result.targetName ?? selected.name}`
-        : `Started a turn for ${result.targetName ?? selected.name}`)
+      if (signal.aborted) return
+      if (latest.current === target && draftVersion.current === submittedVersion) {
+        setDraft('')
+        setFocus('sessions')
+        onNotice('info', result.mode === 'steered'
+          ? `Delivered to ${result.targetName ?? selected.name}`
+          : `Started a turn for ${result.targetName ?? selected.name}`)
+      }
       void reload()
     } catch (error) {
-      onNotice('error', error instanceof Error ? error.message : 'Cross-session messaging failed')
+      if (!signal.aborted) onNotice('error', error instanceof Error ? error.message : 'Cross-session messaging failed')
     } finally {
-      setSending(false)
+      if (!signal.aborted) {
+        sendPending.current = false
+        // eslint-disable-next-line react-doctor/no-loading-flag-reset-outside-finally -- inside finally; an aborted lifetime cannot finish a newer send
+        setSending(false)
+      }
     }
-  }, [currentSession, draft, onNotice, reload, selected, sending])
+  }, [currentSession, draft, onNotice, reload, selected, setDraft, setFocus, messaging])
 
   const handleKey = useCallback((key: MessagingKeyEvent): boolean => {
     if (focus === 'composer') {
@@ -110,11 +153,13 @@ export function CrossSessionMessagingPopover({
       return true
     }
     if (key.name === 'j' || key.name === 'down') {
-      setIndex((value) => Math.min(value + 1, Math.max(sessions.length - 1, 0)))
+      const next = sessions[Math.min(selectedIndex + 1, Math.max(sessions.length - 1, 0))]
+      if (next) setRecipient(addressableSessionKey(next))
       return true
     }
     if (key.name === 'k' || key.name === 'up') {
-      setIndex((value) => Math.max(value - 1, 0))
+      const next = sessions[Math.max(selectedIndex - 1, 0)]
+      if (next) setRecipient(addressableSessionKey(next))
       return true
     }
     if (key.name === 'r') {
@@ -126,7 +171,7 @@ export function CrossSessionMessagingPopover({
       return true
     }
     return true
-  }, [focus, onClose, reload, selected, sessions.length, submit])
+  }, [focus, onClose, reload, selected, selectedIndex, sessions, submit, setFocus, setRecipient])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
   useEffect(() => { onCaptureChange?.(focus === 'composer') }, [focus, onCaptureChange])
@@ -175,7 +220,7 @@ export function CrossSessionMessagingPopover({
           ) : sessions.map((session, sessionIndex) => {
             const active = sessionIndex === selectedIndex
             return (
-              <box key={`${session.provider}:${session.sessionId}`} height={2} paddingX={1} flexDirection="column" backgroundColor={active ? theme.surface3 : theme.surface}>
+              <box key={addressableSessionKey(session)} height={2} paddingX={1} flexDirection="column" backgroundColor={active ? theme.surface3 : theme.surface}>
                 <box flexDirection="row">
                   <text fg={active ? theme.cyan : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
                   <text fg={active ? theme.text : theme.muted} wrapMode="none">
@@ -185,7 +230,7 @@ export function CrossSessionMessagingPopover({
                   <text fg={getProviderAccent(session.provider)} wrapMode="none">{session.provider.toUpperCase()}</text>
                   <text fg={session.running ? theme.green : theme.dim} wrapMode="none">{session.running ? '  ● RUNNING' : '  RECENT'}</text>
                 </box>
-                <text fg={active ? theme.violet : theme.dim} wrapMode="none">{`    ${session.name}`.slice(0, innerW)}</text>
+                <text fg={active ? theme.violet : theme.dim} wrapMode="none">{`    ${session.name}${session.providerInstanceId && session.providerInstanceId !== session.provider ? ` · ${session.providerInstanceId}` : ''}`.slice(0, innerW)}</text>
               </box>
             )
           })}
@@ -205,7 +250,7 @@ export function CrossSessionMessagingPopover({
               value={draft}
               maxLength={20_000}
               placeholder="Type a direct handoff…"
-              onInput={(value: string) => setDraft(value)}
+              onInput={(value: string) => { draftVersion.current++; setDraft(value) }}
               onSubmit={() => { void submit() }}
             />
           </box>

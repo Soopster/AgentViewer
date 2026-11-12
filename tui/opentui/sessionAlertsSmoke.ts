@@ -1,6 +1,6 @@
 // Alerts fire on transitions, never on what the first observation already held.
 import assert from 'node:assert/strict'
-import { createSessionAlertTracker, sessionAlertDelivery, MIN_RUN_FOR_FINISHED_MS, type SessionActivity } from './sessionAlerts'
+import { createSessionAlertTracker, sessionAlertDelivery, MIN_RUN_FOR_FINISHED_MS, type SessionActivity } from '../../plugins/session-alerts/domain/alerts'
 
 const at = (entries: Array<[string, SessionActivity]>) => new Map(entries)
 const t0 = 1_000_000

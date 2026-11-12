@@ -14,7 +14,7 @@ export type Props = {
   session: Session | null
   targetMessageId?: string | null
   targetMessageRequestId?: number
-  projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all'} 
+  projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all'}
   onFork?: (newSessionId: string, sourceSession?: Session) => void
   onDelete?: SessionDeleteCallback
   openTabs?: Session[]
@@ -23,18 +23,10 @@ export type Props = {
   onCloseTab?: (sessionKey: string) => void
   /** Opens a session that isn't necessarily in the current sidebar/tab list — e.g. an OpenCode subagent's own real child session, deep-linked from an inline AgentCard's "Open session" action. */
   onOpenSession?: (session: Session) => void
-  taskPanelOpenRequest?: number
-  promptLibraryOpenRequest?: number
-  channelBridgeOpenRequest?: number
-  channelBridgeRouteToggleRequest?: number
-  onChannelBridgeRoutingChange?: (routing: boolean) => void
-  ideBridgeOpenRequest?: number
-  ideBridgeRouteToggleRequest?: number
-  onIdeBridgeRoutingChange?: (routing: boolean) => void
   composerInsertRequest?: { requestId: number; text: string}  | null
   onComposerInsertConsumed?: (requestId: number) => void
   openCodeTodos?: OpenCodeTodo[]
-  codexPlan?: { plan: CodexPlanStep[]; explanation: string | null} 
+  codexPlan?: { plan: CodexPlanStep[]; explanation: string | null}
   // Another Codex client currently owns this session's rollout writer lock —
   // the transcript is a stale cached snapshot until that client's turn ends.
   codexExternalWriter?: boolean
@@ -93,7 +85,7 @@ export type ComposerDraft = {
   attachments: SendAttachment[]
 }
 export type MentionResult = { kind: 'file'; path: string; basename: string}  |
-{ kind: 'agent'; name: string; description?: string; mode?: string} 
+{ kind: 'agent'; name: string; description?: string; mode?: string}
 export type TimelineRow = {
   key: string
   message: ThreadedMessage

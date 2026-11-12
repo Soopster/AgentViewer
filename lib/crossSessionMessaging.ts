@@ -8,16 +8,17 @@
  * steering primitive, and idle delivery starts a detached turn that is drained
  * in this process. The same path therefore works on Windows, macOS, and Linux.
  */
+import { sessionIdentityKey } from './sessionIdentity'
 import { randomUUID } from 'node:crypto'
-import type { AgentProvider, Session } from './types'
+import type { Session } from './types'
 import { getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, steerRunningSessionIdempotent } from './sessionRuntime'
 
-import type { AddressableSession, SendCrossSessionMessageResult } from './crossSessionMessagingTypes'
+import { resolveAddressableSession, type AddressableSession, type SendCrossSessionMessageResult } from './crossSessionMessagingTypes'
 export type { AddressableSession, SendCrossSessionMessageResult } from './crossSessionMessagingTypes'
+export { resolveAddressableSession } from './crossSessionMessagingTypes'
 
-const PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const RECENT_WINDOW_MS = 6 * 60 * 60 * 1000
-const MAX_PER_PROVIDER = 30
+const MAX_PER_INSTANCE = 30
 const MAX_LISTED = 30
 const MAX_MESSAGE_CHARS = 20_000
 const RATE_WINDOW_MS = 60_000
@@ -61,25 +62,31 @@ async function listRecentSessions(): Promise<Session[]> {
   // while sessionBackend itself is still wiring claudePool. A static import
   // here would create a provider-startup cycle.
   const { listViewSessions } = await import('./sessionBackend')
-  const results = await Promise.allSettled(PROVIDERS.map((provider) => (
-    listViewSessions({ provider, limit: MAX_PER_PROVIDER, offset: 0 })
+  const { listProviderInstances } = await import('./providerInstances')
+  // The built-in ACP transports mirror native sessions; match the unified catalog's discovery policy.
+  const instances = (await listProviderInstances()).filter(instance => instance.provider !== 'claude-acp' && instance.provider !== 'codex-acp')
+  const results = await Promise.allSettled(instances.map(instance => (
+    listViewSessions({ provider: instance.provider, providerInstanceId: instance.id, limit: MAX_PER_INSTANCE, offset: 0 })
   )))
-  return results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
+  return results.flatMap((result, index) => result.status === 'fulfilled' ? result.value.map(session => ({ ...session, provider: instances[index].provider, providerInstanceId: instances[index].id })) : [])
 }
 
 /** Running turns first, followed by sessions active in the last six hours. */
 export async function listAddressableSessions(excludeSessionId?: string): Promise<AddressableSession[]> {
-  const runningProviders = new Map(listRunningSessionRefs().map((ref) => [ref.sessionId, ref.provider]))
+  const runningByAddress = new Map(listRunningSessionRefs().map(ref => [sessionIdentityKey(ref), ref]))
   const recent = await listRecentSessions()
-  const byId = new Map<string, AddressableSession>()
+  const byAddress = new Map<string, AddressableSession>()
   const cutoff = Date.now() - RECENT_WINDOW_MS
 
   for (const session of recent) {
-    if (!session.sessionId || session.sessionId === excludeSessionId || !session.provider) continue
-    const running = runningProviders.has(session.sessionId)
+    if (!session.sessionId || !session.provider) continue
+    const address = sessionIdentityKey(session)
+    if (address === excludeSessionId || session.sessionId === excludeSessionId) continue
+    const running = runningByAddress.has(address)
     const modified = typeof session.lastModified === 'number' ? session.lastModified : undefined
     if (!running && (!modified || modified < cutoff)) continue
-    byId.set(session.sessionId, {
+    byAddress.set(address, {
+      address, providerInstanceId: session.providerInstanceId,
       sessionId: session.sessionId,
       provider: session.provider,
       name: addressableSessionName(session),
@@ -91,17 +98,18 @@ export async function listAddressableSessions(excludeSessionId?: string): Promis
 
   // A just-created running session may not have reached durable provider
   // history yet. It is still messageable by a stable session-id-based name.
-  for (const [sessionId, provider] of runningProviders) {
-    if (sessionId === excludeSessionId || byId.has(sessionId)) continue
-    byId.set(sessionId, {
-      sessionId,
+  for (const [address, ref] of runningByAddress) {
+    const { sessionId, provider, providerInstanceId } = ref
+    if (address === excludeSessionId || sessionId === excludeSessionId || byAddress.has(address)) continue
+    byAddress.set(address, {
+      address, sessionId, providerInstanceId,
       provider,
       name: addressableSessionName({ sessionId, provider }),
       running: true,
     })
   }
 
-  return [...byId.values()]
+  return [...byAddress.values()]
     .sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name))
     .slice(0, MAX_LISTED)
 }
@@ -109,23 +117,9 @@ export async function listAddressableSessions(excludeSessionId?: string): Promis
 /** Best-effort display name for an MCP tool that only knows its own id. */
 export async function describeSelf(sessionId: string): Promise<string> {
   const sessions = await listRecentSessions()
-  const match = sessions.find((session) => session.sessionId === sessionId)
+  const matches = sessions.filter(session => session.sessionId === sessionId)
+  const match = matches.length === 1 ? matches[0] : undefined
   return match ? addressableSessionName(match) : `session-${shortId(sessionId)}`
-}
-
-function uniqueMatch(sessions: AddressableSession[], predicate: (session: AddressableSession) => boolean): AddressableSession | undefined {
-  const matches = sessions.filter(predicate)
-  return matches.length === 1 ? matches[0] : undefined
-}
-
-/** Exact names/ids always win; fuzzy input is accepted only when unambiguous. */
-export function resolveAddressableSession(sessions: AddressableSession[], query: string): AddressableSession | undefined {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return undefined
-  return sessions.find((session) => session.sessionId === query)
-    ?? uniqueMatch(sessions, (session) => session.name.toLowerCase() === normalized)
-    ?? uniqueMatch(sessions, (session) => session.name.toLowerCase().startsWith(normalized))
-    ?? uniqueMatch(sessions, (session) => session.title?.toLowerCase().includes(normalized) === true)
 }
 
 function isThrottled(senderKey: string, toName: string, text: string): boolean {
@@ -214,24 +208,19 @@ export function beginDetachedTurnDrain(response: Response): { accepted: Promise<
   return { accepted, completion }
 }
 
-export async function sendCrossSessionMessage(params: {
-  fromSessionId?: string
-  fromName: string
-  toName: string
-  text: string
-}): Promise<SendCrossSessionMessageResult> {
+export async function sendCrossSessionMessage(params: import('./crossSessionMessagingTypes').SendCrossSessionMessageParams): Promise<SendCrossSessionMessageResult> {
   const text = params.text.trim()
   if (!text) return { delivered: false, mode: 'error', error: 'Message text is required' }
   if (text.length > MAX_MESSAGE_CHARS) {
     return { delivered: false, mode: 'error', error: `Message exceeds ${MAX_MESSAGE_CHARS.toLocaleString()} characters` }
   }
 
-  const senderKey = params.fromSessionId || `ui:${params.fromName}`
+  const senderKey = params.fromAddress || params.fromSessionId || `ui:${params.fromName}`
   if (isThrottled(senderKey, params.toName, text)) {
     return { delivered: false, mode: 'throttled', error: 'Too many messages sent recently; the message was dropped to break a possible loop' }
   }
 
-  const sessions = await listAddressableSessions(params.fromSessionId)
+  const sessions = await listAddressableSessions(params.fromAddress ?? params.fromSessionId)
   const target = resolveAddressableSession(sessions, params.toName)
   if (!target) return { delivered: false, mode: 'not_found', error: 'No unique addressable session matched that name' }
 
@@ -247,6 +236,7 @@ export async function sendCrossSessionMessage(params: {
           mode: 'steered',
           targetSessionId: target.sessionId,
           targetProvider: target.provider,
+          targetProviderInstanceId: target.providerInstanceId,
           targetName: target.name,
         }
       }
@@ -262,19 +252,21 @@ export async function sendCrossSessionMessage(params: {
 
   try {
     const { streamViewSessionTurn } = await import('./sessionBackend')
+    const { withProviderInstance } = await import('./providerInstances')
     const turnRequestId = randomUUID()
-    const response = await streamViewSessionTurn({
+    const response = await withProviderInstance(target.providerInstanceId, target.provider, () => streamViewSessionTurn({
       sessionId: target.sessionId,
       signal: new AbortController().signal,
       provider: target.provider,
       body: {
         message: wrapped,
         provider: target.provider,
+        providerInstanceId: target.providerInstanceId,
         cwd: target.cwd,
         detachOnClientAbort: true,
         turnRequestId,
       },
-    })
+    }))
     if (!response.ok) {
       return { delivered: false, mode: 'error', error: `Failed to start turn: HTTP ${response.status}` }
     }
@@ -300,6 +292,7 @@ export async function sendCrossSessionMessage(params: {
       mode: 'queued',
       targetSessionId: target.sessionId,
       targetProvider: target.provider,
+      targetProviderInstanceId: target.providerInstanceId,
       targetName: target.name,
     }
   } catch (error) {

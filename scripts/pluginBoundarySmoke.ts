@@ -54,7 +54,7 @@ for (const file of walk(pluginsDir)) {
 
 // Roots and everything else outside the plugin and its loader lists must not
 // import a plugin's view module: that is what keeps every plugin lazy.
-const loaderLists = new Set(['tui/opentui/shell/pluginViews.ts', 'components/shell/pluginViews.ts'])
+const loaderLists = new Set(['tui/opentui/shell/pluginViews.ts', 'components/shell/pluginViews.ts', 'lib/plugins/serverBehaviors.ts', 'components/shell/applicationPlugins.ts', 'tui/opentui/shell/applicationPlugins.ts', 'components/shell/pluginCommands.ts', 'tui/opentui/shell/pluginCommands.ts', 'components/shell/composerPlugins.ts', 'tui/opentui/shell/composerPlugins.ts'])
 for (const dir of ['app', 'components', 'tui', 'lib', 'bin']) {
   for (const file of walk(path.join(root, dir))) {
     // Test harnesses (smokes, perf runs, `_` scratch harnesses) may load a view directly.

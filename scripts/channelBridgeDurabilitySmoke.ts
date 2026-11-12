@@ -5,6 +5,7 @@ import {
   enqueueChannelBridgeMessage,
   flushChannelBridgeOutbox,
   sanitizeChannelBridgeOutbox,
+  sendDurableChannelMessage,
   type ChannelBridgeOutboxEntry,
   type ChannelBridgeOutboxStorage,
 } from '../lib/channelBridgeOutbox'
@@ -94,4 +95,72 @@ assert.deepEqual(
   'accepted and duplicate acknowledgements must both retire their durable rows',
 )
 
-console.log('channel bridge durability smoke passed')
+const nativeSessionId = 'shared-native-session'
+const personalOwner = 'claude@personal:shared-native-session'
+const workOwner = 'claude@work:shared-native-session'
+const scopedEntry = (messageId: string, ownerKey?: string) => createChannelBridgeOutboxEntry({
+  config, targetSessionId: nativeSessionId, ownerKey, messageId, text: messageId,
+  createdAt: '2026-11-13T00:00:00.000Z',
+})
+const legacy = scopedEntry('legacy-message')
+const personal = scopedEntry('personal-message', personalOwner)
+const work = scopedEntry('work-message', workOwner)
+assert.deepEqual(
+  sanitizeChannelBridgeOutbox([personal, { ...personal, messageId: 'invalid-owner', ownerKey: 1 }]).map(entry => [entry.messageId, entry.ownerKey]),
+  [['personal-message', personalOwner]],
+  'stored owners survive parsing and malformed owner fields are rejected',
+)
+const ownedStorage = memoryStorage([legacy, personal, work])
+const failedPersonal = await flushChannelBridgeOutbox(ownedStorage, config, nativeSessionId, {
+  ownerKey: personalOwner,
+  deliver: async () => { throw new Error('personal bridge offline') },
+})
+assert.equal(failedPersonal.delivered.length, 0)
+assert.deepEqual(ownedStorage.snapshot().map(entry => [entry.messageId, entry.attempts]), [
+  ['legacy-message', 0], ['personal-message', 1], ['work-message', 0],
+])
+
+const deliverOwned = (ownerKey?: string) => async (_config: typeof config, entry: ChannelBridgeOutboxEntry) => {
+  assert.equal(entry.ownerKey, ownerKey)
+  assert.equal(entry.targetSessionId, nativeSessionId, 'local ownership cannot replace the native RPC target')
+  return { message_id: entry.messageId, chat_id: 'assigned-chat', status: 'accepted' as const, target_session_id: entry.targetSessionId }
+}
+const workReplay = await flushChannelBridgeOutbox(ownedStorage, config, nativeSessionId, {
+  ownerKey: workOwner, deliver: deliverOwned(workOwner),
+})
+assert.deepEqual(workReplay.delivered.map(delivery => delivery.entry.messageId), ['work-message'])
+assert.deepEqual(ownedStorage.snapshot().map(entry => entry.messageId), ['legacy-message', 'personal-message'],
+  'a scoped replay cannot consume legacy rows or another account sharing the native id')
+const legacyReplay = await flushChannelBridgeOutbox(ownedStorage, config, nativeSessionId, { deliver: deliverOwned() })
+assert.deepEqual(legacyReplay.delivered.map(delivery => delivery.entry.messageId), ['legacy-message'])
+assert.deepEqual(ownedStorage.snapshot().map(entry => entry.messageId), ['personal-message'],
+  'legacy callers continue replaying unscoped rows but cannot consume scoped rows')
+const personalReplay = await flushChannelBridgeOutbox(ownedStorage, config, nativeSessionId, {
+  ownerKey: personalOwner, deliver: deliverOwned(personalOwner),
+})
+assert.equal(personalReplay.delivered[0].entry.attempts, 2)
+assert.equal(ownedStorage.snapshot().length, 0)
+
+// The send helper must apply the same owner fence during its immediate flush.
+const immediateStorage = memoryStorage([legacy, work])
+const sentBodies: Record<string, unknown>[] = []
+const originalFetch = globalThis.fetch
+globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+  sentBodies.push(body)
+  return new Response(JSON.stringify({ message_id: body.message_id, chat_id: 'assigned-chat', status: 'accepted', target_session_id: body.target_session_id }))
+}) as typeof fetch
+try {
+  const sent = await sendDurableChannelMessage(immediateStorage, config, {
+    targetSessionId: nativeSessionId, ownerKey: personalOwner, text: 'new personal prompt', messageId: 'personal-immediate',
+  })
+  assert.equal(sent.queued, false)
+  assert.equal(sent.entry.ownerKey, personalOwner)
+  assert.deepEqual(sentBodies.map(body => [body.message_id, body.target_session_id]), [['personal-immediate', nativeSessionId]])
+  assert.equal('ownerKey' in sentBodies[0], false, 'owner keys are local replay fences, not native bridge payloads')
+  assert.deepEqual(immediateStorage.snapshot().map(entry => [entry.messageId, entry.attempts]), [['legacy-message', 0], ['work-message', 0]])
+} finally {
+  globalThis.fetch = originalFetch
+}
+
+console.log('channel bridge durability smoke passed (FIFO, retry, scoped replay, legacy compatibility and native RPC identity)')

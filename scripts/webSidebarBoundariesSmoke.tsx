@@ -20,10 +20,10 @@ const props: React.ComponentProps<typeof SessionList> = {
   onSelect: noop, onSelectProject: noop, onOpenDashboard: noop, onRename: noop, onTag: noop,
   onChangeProvider: noop, scopeMode: 'all', scopeProjectName: null, canScopeToProject: true,
   includeWorktrees: true, onChangeScope: noop, onToggleWorktrees: noop, onOpenCommandPalette: noop,
-  onOpenCoordinator: noop, onOpenCrossSessionMessaging: noop, canOpenGit: true, onOpenGit: noop,
+  onOpenCoordinator: noop, canOpenGit: true, onOpenGit: noop,
   onNewSession: noop,
 }
-// Render before and after extraction, including provider-instance identities,
+// Guard the sidebar structure, including the metadata-driven Messaging launcher,
 // teammate attention, loading/error/empty states, and both sidebar sizes.
 const html = [true, false].flatMap(defaultOpen => [
   {}, { loading: true }, { error: 'Fixture error' }, { sessions: [] },
@@ -34,7 +34,9 @@ assert.ok(html[0]!.includes('codex-work:shared'))
 assert.ok(html[0]!.includes('Review sidebar'))
 assert.ok(html[4]!.includes('Expand sidebar'))
 const digest = createHash('sha256').update(JSON.stringify(html)).digest('hex')
-assert.equal(digest, 'a20e02541676bf8275faf71ea96dcffb004990570931d15d7fdf75ae78fe6e66')
+assert.ok(html[0]!.includes('aria-label="Open cross-session messaging"'))
+assert.ok(html[0]!.includes('✉'))
+assert.equal(digest, 'a23237de371bad6c33ff7d69e433b7dc37fca6b9c737c3484161f502a08693cd')
 assert.equal(sessionTabKey(sessions[1]!), 'codex-work:shared')
 assert.notEqual(sessionTabKey(sessions[0]!), sessionTabKey(sessions[1]!))
 assert.ok(bestScore(['alpha'], 'alpha') > bestScore(['alpha task'], 'alpha'))

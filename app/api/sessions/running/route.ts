@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { readViewRuntimeActivity } from '@/lib/sessionBackend'
+import { readViewRuntimeActivity } from '@/lib/sessionActivity'
 import { isAgentProvider } from '@/lib/provider'
 import { dismissViewerAttention, postViewerAttention } from '@/lib/viewerAttention'
 

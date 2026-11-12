@@ -22,7 +22,7 @@ import { TUI_KEYED_PLUGIN_COMMANDS } from '../pluginCommands'
 
 /** Returns true when one of these branches handled the key. */
 export function handleGlobalChordKeys({
-  commandChordPending, windowControlsBlocked, handled, setCommandChordPending, key, isCtrl,
+  commandChordPending, windowControlsBlocked, composerActive, handled, setCommandChordPending, key, isCtrl,
   showNotice, sequence, executeCommandPalette, setChordHelp, setSplitChordPending, isShifted,
   toggleFullscreenMode, focusedWindowSurface, popoverTabFocused, focusReaderFromSplit,
   windowSurfaceKeysRef, focusedWindowItem, composeToSplitPaneSession, openComposerWindow,
@@ -36,12 +36,13 @@ export function handleGlobalChordKeys({
   requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane,
   tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand,
   setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry,
-  setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen, openPromptLibrary,
+  setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen,
   taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel,
   setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession,
   setRenameSessionKey, setRenameDraft,
 }: {
   commandChordPending: boolean
+  composerActive: boolean
   windowControlsBlocked: boolean
   handled: (action: () => void) => void
   setCommandChordPending: React.Dispatch<React.SetStateAction<boolean>>
@@ -113,7 +114,6 @@ export function handleGlobalChordKeys({
   openHandoffBrief: () => void
   setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
   setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
-  openPromptLibrary: () => void
   taskPanelOpen: boolean
   setTaskPanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   setTaskPanelTab: React.Dispatch<React.SetStateAction<'agents' | 'tasks'>>
@@ -310,9 +310,13 @@ export function handleGlobalChordKeys({
     // Plugin commands' own bindings (a manifest's `tuiKey`), at global precedence.
     // A shifted letter is matched as the host's own ⇧ bindings are (isShiftedKey), so
     // terminals that report `M` rather than shift+`m` still reach it.
-    const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(({ tuiKey }) => tuiKey.ctrl
-      ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))
-      : !key.ctrl && !key.meta && (tuiKey.shift ? isShifted(tuiKey.name) : key.name === tuiKey.name && !key.shift))
+    const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(command => {
+      if (command.tuiKeyContext === 'navigation' && composerActive) return false
+      const { tuiKey } = command
+      return tuiKey.ctrl
+        ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))
+        : !key.ctrl && !key.meta && (tuiKey.shift ? isShifted(tuiKey.name) : key.name === tuiKey.name && !key.shift)
+    })
     if (pluginChord) {
       handled(() => runPluginCommand(pluginChord))
       return true
@@ -372,12 +376,6 @@ export function handleGlobalChordKeys({
         setWorktreeDraft('')
         setWorktreeModalOpen(true)
       })
-      return true
-    }
-
-    // Global prompt library — saved prompts usable across providers
-    if (isShifted('P')) {
-      handled(openPromptLibrary)
       return true
     }
 

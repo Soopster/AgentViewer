@@ -21,7 +21,6 @@ import type {
   SessionInfo,
   SessionModelInfo,
   SessionComposerOptions,
-  SessionDiagnosticSection,
   SendAttachment,
   ReasoningEffortLevel,
 } from '@/lib/types'
@@ -58,19 +57,25 @@ import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { getPluginCommand, getPluginSurface, isPluginSurfaceId, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
+import { usePluginCommands } from '@/lib/plugins/usePluginCommands'
+import { useReaderPlugins } from '@/lib/plugins/useReaderPlugins'
+import { ReaderPluginHost } from './shell/ReaderPluginHost'
+import { ReaderPluginMenu } from './shell/ReaderPluginMenu'
+import { createWebTaskControls } from './shell/taskControls'
+import type { WebPluginServices } from './shell/pluginTypes'
+import { useComposerAccessories } from '@/lib/plugins/useComposerAccessories'
+import { webPluginCommands } from './shell/pluginCommands'
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import { sameUserMessage } from '@/lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '@/lib/composerSessions'
 import { sessionIdentityKey } from '@/lib/sessionIdentity'
-import type { WebPluginServices } from './shell/pluginTypes'
-import { ArrowUp, BookOpen, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
+import { ArrowUp, ChartNetwork, ChevronDown, CircleAlert, CircleCheck, Clock3, FileCode2, Filter, Fullscreen, GitBranch, LoaderCircle, Maximize2, Minimize2, MonitorUp, PanelRight, Paperclip, Plug, Radio, RotateCcw, Search, Square, Terminal, TriangleAlert, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { DEFAULT_DIFF_OPTIONS, QuestionAnswerComposerContext, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
-import { TaskRail } from './TaskRail'
 import ProviderIcon from './ProviderIcon'
 import BranchSwitcher from './BranchSwitcher'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos } from '@/lib/taskRegistry'
@@ -123,7 +128,7 @@ import { PlanApprovalCard } from './message-view/PlanApprovalCard'
 import { AskUserQuestionPicker } from './message-view/AskUserQuestionPicker'
 import { normalizeSelectValue, gitSummariesMatch, detectMentionAtCursor, LiveSpinner, ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopoverHintStyle, composerPopoverItemStyle, ComposerContextUsageRing } from './message-view/composerUi'
 import { getWebComposerQueueStore, composerDraftStorageKey, readComposerDraft, writeComposerDraft, permissionDenialReason, attachmentImagePreviewSrc, attachmentDisplayName } from './message-view/composerStorage'
-import { claudeDiagnosticActionNotice, WEB_TOOLBAR_PLUGIN_COMMANDS, DiffReviewMode, CLAUDE_DIAGNOSTIC_ACTIONS, compactNativeSelectClassName, PierrePatchDiffView, PromptLibrary, ChannelBridgePanel, IdeBridgePanel, PluginSurfaceHost } from './message-view/lazyPanels'
+import { WEB_TOOLBAR_PLUGIN_COMMANDS, DiffReviewMode, compactNativeSelectClassName, PierrePatchDiffView, PluginSurfaceHost } from './message-view/lazyPanels'
 import { ComposerShell } from './message-view/ComposerShell'
 import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
@@ -131,8 +136,8 @@ import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
 import { runRespondToPermission, runRespondToQuestion } from './message-view/actions/permissions'
-import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runRunSessionAction, runRunClaudeSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
-import { runSearchClaudeHookEvents, runApplyClaudeMcpPermissionMode, runBackgroundClaudeTasks, runAddClaudeMcpServer, runToggleDiagnostics } from './message-view/actions/claude'
+import { runHandleExport, runHandleRewind, runHandleRollbackPreview, runHandleApplyRewind, runHandleApplyRollback, runHandleForkFromMessage, runRunSessionAction, runToggleBookmark, runHandleJumpToMessage, runHandleVisualizerSelectMessage } from './message-view/actions/sessionActions'
+import { runBackgroundClaudeTasks } from './message-view/actions/claude'
 import { runBridgePersistEffect, runBridgeLoadEffect, runBridgePermissionsEffect, runBridgeEntriesEffect } from './message-view/effects/bridge'
 import { runMentionSearchEffect, runSlashCommandsEffect, runQueuedSendsEffect, runDraftFlushEffect, runComposerOptionsEffect, runQueueHydrateEffect } from './message-view/effects/composer'
 import { runReattachRunningEffect, runOptimisticTextTimeoutEffect, runOptimisticTextEffect, runSessionResetEffect, runGitSummaryEffect, runPanelPreferencesEffect } from './message-view/effects/session'
@@ -175,14 +180,6 @@ function MessageViewInner({
   onSelectTab,
   onCloseTab,
   onOpenSession,
-  taskPanelOpenRequest = 0,
-  promptLibraryOpenRequest = 0,
-  channelBridgeOpenRequest = 0,
-  channelBridgeRouteToggleRequest = 0,
-  onChannelBridgeRoutingChange,
-  ideBridgeOpenRequest = 0,
-  ideBridgeRouteToggleRequest = 0,
-  onIdeBridgeRoutingChange,
   composerInsertRequest,
   onComposerInsertConsumed,
   openCodeTodos,
@@ -202,6 +199,9 @@ function MessageViewInner({
     session,
   })
   useLayoutEffect(() => { activeWebComposerOwnerRef.current = composerOwnerKey }, [composerOwnerKey])
+  const composerAccessories = useComposerAccessories('web', composerOwnerKey)
+  const readerOwner = projectView ? `project:${projectView.key}` : session ? sessionIdentityKey(session) : null
+  const readerPlugins = useReaderPlugins(readerOwner, !!session && !projectView)
   const {
     inputText, setInputText, sendState, setSendState, sendError, setSendError,
     livePromptSuggestion, setLivePromptSuggestion, liveStatus, setLiveStatus, taskBudgetTokens,
@@ -244,7 +244,7 @@ function MessageViewInner({
     forkingMessageId, setForkingMessageId,
   } = useSessionHistoryActions()
   const {
-    showDiagnostics, setShowDiagnostics, preferencesHydrated, setPreferencesHydrated, showVisualizer,
+    preferencesHydrated, setPreferencesHydrated, showVisualizer,
     setShowVisualizer,
   } = useMessageViewPanels()
   useEffect(() => {
@@ -346,7 +346,6 @@ function MessageViewInner({
   }, [composerCollapsed, preferencesHydrated])
   const {
     pluginOverlay, setPluginOverlay, disabledPlugins, teammatesTab, teammatesServices,
-    diagnosticsLoading, setDiagnosticsLoading, diagnosticSections, setDiagnosticSections,
     exporting, setExporting, deleting, setDeleting, cliPopoverOpen, setCliPopoverOpen,
     cliPopoverRef, viewDropdownOpen, setViewDropdownOpen, viewDropdownRef, actionsDropdownOpen,
     setActionsDropdownOpen, actionsDropdownRef, sessionActionLoading, setSessionActionLoading,
@@ -393,20 +392,17 @@ function MessageViewInner({
   const {
     historyIndex, setHistoryIndex, draftBeforeHistoryRef, mentionQuery, setMentionQuery,
     mentionResults, setMentionResults, mentionActiveIndex, setMentionActiveIndex, mentionAbortRef,
-    mentionItemRefs, promptLibraryOpen, setPromptLibraryOpen, channelBridgeOpen,
-    setChannelBridgeOpen, canUseChannelBridge, channelBridge, handledChannelBridgeOpenRequestRef,
-    handledChannelBridgeRouteRequestRef, channelBridgeRef,
+    mentionItemRefs, canUseChannelBridge, channelBridge, channelBridgeRef, acquireChannelBridgeView,
   } = useHistoryIndexGroup({
-    projectView, session, channelBridgeOpenRequest, channelBridgeRouteToggleRequest,
+    projectView, session,
   })
   useLayoutEffect(() => {
     channelBridgeRef.current = channelBridge
   }, [channelBridge])
   const {
-    ideBridgeOpen, setIdeBridgeOpen, canUseIdeBridge, ideBridge, handledIdeBridgeOpenRequestRef,
-    handledIdeBridgeRouteRequestRef, ideBridgeRef,
+    canUseIdeBridge, ideBridge, ideBridgeRef, acquireIdeBridgeView,
   } = useIdeBridgeOpenGroup({
-    projectView, session, ideBridgeOpenRequest, ideBridgeRouteToggleRequest,
+    projectView, session,
   })
   useLayoutEffect(() => {
     ideBridgeRef.current = ideBridge
@@ -698,7 +694,7 @@ function MessageViewInner({
   useEffect(() => runSessionResetEffect({
     liveTurnSessionHandoffRef, session, sendInFlightRef, awaitingPersistedTurnRef, setContextUsage,
     setSessionActionError, setSessionActionNotice, setResumeFromMessageId, setRewindPreview,
-    setRollbackPreview, setShowDiagnostics, setDiagnosticSections, setAttachments,
+    setRollbackPreview, setAttachments,
     setAttachmentPath, setSelectedEffort, setSelectedAgent, setSelectedCopilotMode,
     setComposerOptions, setPendingPermissions, setOptimisticUserText, setSteeredUserTexts,
     clearLiveAssistantText, setLiveToolActivities, setLiveThreadedMessages, clearLiveSubagentText,
@@ -886,7 +882,7 @@ function MessageViewInner({
       observer.disconnect()
       node.removeEventListener('wheel', handleWheel)
     }
-  }, [commitTimelineScrollTop, markTimelineUserScrolling, showDiagnostics, showVisualizer, session?.sessionId])
+  }, [commitTimelineScrollTop, markTimelineUserScrolling, showVisualizer, session?.sessionId])
 
   useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
@@ -955,28 +951,6 @@ function MessageViewInner({
     session, backgroundingTasks, setBackgroundingTasks, setSessionActionError,
     setSessionActionNotice, textareaRef,
   }), [backgroundingTasks, session, textareaRef])
-
-  // Cancel a running Claude SDK background task via query.stopTask(). Routes at
-  // the live warm pool entry server-side, so it only works while the session is
-  // warm (the backend reports stopped:false otherwise).
-  const stopClaudeTask = useCallback(async (taskId: string) => {
-    if (!session || session.provider !== 'claude' || session.isPending) return
-    setSessionActionError(null)
-    setSessionActionNotice(null)
-    try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'claude', action: 'stopTask', taskId }),
-      })
-      const data = await readOptionalJsonResponse(res, {})
-      if (data.error) throw new Error(data.error)
-      const stopped = data.result?.stopped === true
-      setSessionActionNotice(stopped ? `Stopped task #${taskId}.` : 'No running task to stop (session not warm).')
-    } catch (err) {
-      setSessionActionError(err instanceof Error ? err.message : 'Failed to stop task')
-    }
-  }, [session])
 
   const sendMessage = useCallback(async (retryOverride?: {
     text: string
@@ -1155,46 +1129,27 @@ function MessageViewInner({
     handleDeleteSession, runSessionAction, respondToPermission, respondToQuestion, respondToPlan,
     handleFork, handleForkFromMessage, toggleResumeFromMessage, handleReusePrompt,
     handleQuoteMessage, handleQuestionAnswerToComposer, handleDiffCommentToComposer,
-    handleEditFromMessage, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeHookSearching,
-    claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode,
-    addClaudeMcpServer, searchClaudeHookEvents, toggleDiagnostics, threadedFull, threaded,
-    turnDurations, threadedWithBridge, taskActiveForms, taskRegistry, taskRailOpen,
-    setTaskRailOpen, isProject, dirName,
+    handleEditFromMessage, threadedFull, threaded,
+    turnDurations, threadedWithBridge, taskActiveForms, isProject, dirName,
   } = useIngestFileAttachmentsGroup({
     activeComposerDraftKeyRef, attachmentReadsRef, setSendError, insertContextAttachments,
     inputTextRef, setInputText, setAttachments, failedSend, sendInFlightRef,
     awaitingPersistedTurnRef, setFailedSend, resizeComposer, textareaRef, session, deleting,
     sessionCapabilities, setDeleting, setSessionActionError, setSessionActionNotice, onDelete,
-    sessionActionLoading, setSessionActionLoading, setDiagnosticSections, setPendingPermissions,
+    sessionActionLoading, setSessionActionLoading, setPendingPermissions,
     commitClaudePermissionSelection, forking, setForking, onFork, forkingMessageId,
     setForkingMessageId, setResumeFromMessageId, setComposerCollapsed, setHistoryIndex,
-    draftBeforeHistoryRef, setDiagnosticsLoading, selectedModelValue, setSelectedModel,
-    showDiagnostics, setShowDiagnostics, diagnosticSections, diagnosticsLoading, prevThreadingRef,
+    draftBeforeHistoryRef,
+    prevThreadingRef,
     messages, threadedCacheRef, showTools, bridgeTranscriptEntries, taskActiveFormsRef,
-    openCodeTodos, codexPlan, projectView,
+    projectView,
   })
 
-  useEffect(() => {
-    if (taskPanelOpenRequest <= 0) return
-    setTaskRailOpen(true)
-  }, [taskPanelOpenRequest])
 
-  useEffect(() => {
-    if (promptLibraryOpenRequest <= 0) return
-    setPromptLibraryOpen(true)
-    window.requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [promptLibraryOpenRequest])
 
-  useEffect(() => {
-    if (channelBridgeOpenRequest <= handledChannelBridgeOpenRequestRef.current) return
-    handledChannelBridgeOpenRequestRef.current = channelBridgeOpenRequest
-    if (!canUseChannelBridge) return
-    setChannelBridgeOpen(true)
-  }, [canUseChannelBridge, channelBridgeOpenRequest])
 
   useEffect(() => {
     if (canUseChannelBridge) return
-    setChannelBridgeOpen(false)
     setBridgeTranscriptEntries([])
     setPendingPermissions((prev) => prev.filter((permission) => permission.sessionId || permission.provider))
     persistedBridgeCountRef.current = 0
@@ -1210,55 +1165,15 @@ function MessageViewInner({
     channelBridge, setPendingPermissions,
   }), [channelBridge.entries.length])
 
-  // The command palette toggles composer routing via a request counter (it lives
-  // outside this component); flip the persisted binding when it bumps.
-  useEffect(() => {
-    if (channelBridgeRouteToggleRequest <= handledChannelBridgeRouteRequestRef.current) return
-    handledChannelBridgeRouteRequestRef.current = channelBridgeRouteToggleRequest
-    if (!canUseChannelBridge) return
-    const bridge = channelBridgeRef.current
-    bridge.setRouteComposer(!bridge.routeComposer)
-  }, [canUseChannelBridge, channelBridgeRouteToggleRequest])
-
-  // Mirror the current routing state up so the palette label can reflect it.
-  useEffect(() => {
-    onChannelBridgeRoutingChange?.(channelBridge.routeComposer)
-  }, [channelBridge.routeComposer, onChannelBridgeRoutingChange])
-
-  // IDE bridge: same open/route/mirror plumbing as the channel bridge above.
-  useEffect(() => {
-    if (ideBridgeOpenRequest <= handledIdeBridgeOpenRequestRef.current) return
-    handledIdeBridgeOpenRequestRef.current = ideBridgeOpenRequest
-    if (!canUseIdeBridge) return
-    setIdeBridgeOpen(true)
-  }, [canUseIdeBridge, ideBridgeOpenRequest])
-
-  useEffect(() => {
-    if (canUseIdeBridge) return
-    setIdeBridgeOpen(false)
-  }, [canUseIdeBridge])
-
-  useEffect(() => {
-    if (ideBridgeRouteToggleRequest <= handledIdeBridgeRouteRequestRef.current) return
-    handledIdeBridgeRouteRequestRef.current = ideBridgeRouteToggleRequest
-    if (!canUseIdeBridge) return
-    const bridge = ideBridgeRef.current
-    bridge.setRouteComposer(!bridge.routeComposer)
-  }, [canUseIdeBridge, ideBridgeRouteToggleRequest])
-
-  useEffect(() => {
-    onIdeBridgeRoutingChange?.(ideBridge.routeComposer)
-  }, [ideBridge.routeComposer, onIdeBridgeRoutingChange])
-
   // Load persisted bridge messages when session changes
   useEffect(() => runBridgeLoadEffect({
     canUseChannelBridge, session, setBridgeTranscriptEntries, persistedBridgeCountRef,
-  }), [canUseChannelBridge, session?.provider, session?.sessionId])
+  }), [canUseChannelBridge, session?.provider, session?.providerInstanceId, session?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
   useEffect(() => runBridgePersistEffect({
     canUseChannelBridge, session, bridgeTranscriptEntries, persistedBridgeCountRef,
-  }), [canUseChannelBridge, session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
+  }), [canUseChannelBridge, session?.provider, session?.providerInstanceId, session?.sessionId, bridgeTranscriptEntries.length])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
@@ -1276,16 +1191,45 @@ function MessageViewInner({
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
   }, [isProject, session])
+  const executePluginAction = usePluginCommands('web', webPluginCommands, session ? sessionIdentityKey(session) : null)
   // Plugin commands from the palette, the toolbar or a shortcut target the
   // session this view shows; a project feed has no session to give them.
   useEffect(() => subscribePluginCommands((commandId) => {
     const command = getPluginCommand(commandId)
-    if (!command || !command.renderers.includes('web') || !isPluginSurfaceId(command.opens)) return false
-    if (getPluginSurface(command.opens).pin !== 'session' || !isPluginEnabled(command.pluginId)) return false
+    if (!command || !command.renderers.includes('web') || !isPluginEnabled(command.pluginId)) return false
+    if (command.webDashboard || command.webReader) return false
+    if (command.providers && !command.providers.includes(session?.provider ?? 'claude')) { setSessionActionNotice('This command requires a supported provider session.'); return true }
+    if (command.handler) {
+      if (command.scope !== 'session' || isProject || !session) return false
+      void executePluginAction(command.id, { session, cwd: session.cwd ?? null }, {
+        ...(canUseChannelBridge || canUseIdeBridge ? { 'bridge-routing': {
+          ...(canUseChannelBridge ? { channel: { toggle: () => { const bridge = channelBridgeRef.current; bridge.setRouteComposer(!bridge.routeComposer) } } } : {}),
+          ...(canUseIdeBridge ? { ide: { toggle: () => { const bridge = ideBridgeRef.current; bridge.setRouteComposer(!bridge.routeComposer) } } } : {}),
+        } } : {}),
+        'composer-accessories': { open: id => {
+          if (!composerAccessories.controller.open(id)) throw new Error(`Composer accessory unavailable: ${id}`)
+          setComposerCollapsed(false)
+        } },
+        transcript: { read: async () => threadedFull },
+        composer: {
+          insertText: insertPromptText,
+          replaceText: text => {
+            setInputText(text); inputTextRef.current = text; setAttachments([])
+            setComposerCollapsed(false); resizeComposer(); textareaRef.current?.focus()
+          },
+        },
+        notices: { show: (_kind, text) => setSessionActionNotice(text) },
+      }).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setSessionActionError(error instanceof Error ? error.message : 'Plugin command failed') })
+      return true
+    }
+    if (!isPluginSurfaceId(command.opens)) return false
+    const surface = getPluginSurface(command.opens)
+    const ownsSession = command.scope === 'session' || command.requires === 'session'
+    if ((surface.pin !== 'session' && !ownsSession) || !isPluginEnabled(command.pluginId)) return false
     if (command.requires === 'session' && (isProject || !session)) return false
     setPluginOverlay(command.opens)
     return true
-  }), [isProject, session])
+  }), [isProject, session, canUseChannelBridge, canUseIdeBridge, channelBridgeRef, ideBridgeRef, executePluginAction, composerAccessories.controller, threadedFull, insertPromptText, setInputText, inputTextRef, setAttachments, resizeComposer, textareaRef, setSessionActionNotice, setSessionActionError])
   const {
     activeToolCount, modelsPending, sendBusy, canSubmitMessage, composerConfig,
     composerPlaceholder, composerRuntime, composerStatus, composerStatusDetail,
@@ -1791,6 +1735,18 @@ function MessageViewInner({
     commitTimelineScrollTop, scrollMountedTimelineRowIntoView,
   }, messageId), [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
+  const sessionPluginServices = useMemo<WebPluginServices>(() => ({
+    session: { session },
+    composer: { insertText: insertPromptText, attachContext: attachment => insertContextAttachments([attachment]) },
+    ...(canUseChannelBridge ? { 'channel-bridge': { ...channelBridge, acquireView: acquireChannelBridgeView, accent: { cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label } } } : {}),
+    ...(canUseIdeBridge ? { 'ide-bridge': { ...ideBridge, acquireView: acquireIdeBridgeView, accent: { cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label } } } : {}),
+    'session-transcript': { info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages },
+    'live-transcript': { messages: liveThreadedMessages, todos: openCodeTodos, plan: codexPlan?.plan },
+    'task-control': session && !session.isPending
+      ? createWebTaskControls(session, readerPlugins.isCurrent, handleJumpToMessage)
+      : { jumpTo: handleJumpToMessage },
+  }), [session, sessionInfo, threadedFull, messages, liveThreadedMessages, openCodeTodos, codexPlan, readerPlugins.isCurrent, handleJumpToMessage, insertPromptText, insertContextAttachments, canUseChannelBridge, canUseIdeBridge, channelBridge, ideBridge, acquireChannelBridgeView, acquireIdeBridgeView, composerConfig])
+
   const handleReviewJumpToMessage = useCallback((messageId: string) => {
     setShowReviewMode(false)
     setShowVisualizer(false)
@@ -2153,9 +2109,7 @@ function MessageViewInner({
         setShowReviewMode={setShowReviewMode}
         showVisualizer={showVisualizer}
         showReviewMode={showReviewMode}
-        taskRegistry={taskRegistry}
-        setTaskRailOpen={setTaskRailOpen}
-        taskRailOpen={taskRailOpen}
+        readerMenu={!isProject && session ? <ReaderPluginMenu binding={readerPlugins} onRun={() => setViewDropdownOpen(false)} /> : null}
         setViewMode={setViewMode}
         viewMode={viewMode}
         setDensity={setDensity}
@@ -2182,8 +2136,6 @@ function MessageViewInner({
         cliPopoverOpen={cliPopoverOpen}
         handleExport={handleExport}
         exporting={exporting}
-        toggleDiagnostics={toggleDiagnostics}
-        showDiagnostics={showDiagnostics}
         activeProvider={activeProvider}
         sessionCapabilities={sessionCapabilities}
         runSessionAction={runSessionAction}
@@ -2246,18 +2198,6 @@ function MessageViewInner({
         stickyHeaderIndex={stickyHeaderIndex}
         timelineRowsRef={timelineRowsRef}
         handleTimelineScroll={handleTimelineScroll}
-        showDiagnostics={showDiagnostics}
-        runClaudeSessionAction={runClaudeSessionAction}
-        claudeMcpBusy={claudeMcpBusy}
-        diagnosticsLoading={diagnosticsLoading}
-        diagnosticSections={diagnosticSections}
-        addClaudeMcpServer={addClaudeMcpServer}
-        claudeHookQuery={claudeHookQuery}
-        setClaudeHookQuery={setClaudeHookQuery}
-        searchClaudeHookEvents={searchClaudeHookEvents}
-        claudeHookSearching={claudeHookSearching}
-        claudeMcpPermissionModes={claudeMcpPermissionModes}
-        applyClaudeMcpPermissionMode={applyClaudeMcpPermissionMode}
         composerConfig={composerConfig}
         colorTreatment={colorTreatment}
         handleReusePrompt={handleReusePrompt}
@@ -2275,10 +2215,7 @@ function MessageViewInner({
         autoFollow={autoFollow}
         setAutoFollow={setAutoFollow}
         scrollTimelineToBottom={scrollTimelineToBottom}
-        taskRailOpen={taskRailOpen}
-        taskRegistry={taskRegistry}
-        setTaskRailOpen={setTaskRailOpen}
-        stopClaudeTask={stopClaudeTask}
+        readerAccessories={<ReaderPluginHost key={readerOwner} binding={readerPlugins} sessionKey={readerOwner} services={sessionPluginServices} visible={!maximized} />}
       />
 
       {/* ── Message input (single session only) ──────── */}
@@ -2288,6 +2225,8 @@ function MessageViewInner({
         setComposerCollapsed={setComposerCollapsed}
       />
       <ComposerShell
+        pluginServices={sessionPluginServices}
+        composerAccessories={composerAccessories}
         isProject={isProject}
         composerCollapsed={composerCollapsed}
         handleComposerDragEnter={handleComposerDragEnter}
@@ -2408,16 +2347,8 @@ function MessageViewInner({
         channelBridge={channelBridge}
         composerQueueTargetKey={composerQueueTargetKey}
         setAttachmentPanelOpen={setAttachmentPanelOpen}
-        setPromptLibraryOpen={setPromptLibraryOpen}
-        promptLibraryOpen={promptLibraryOpen}
-        insertPromptText={insertPromptText}
-        setChannelBridgeOpen={setChannelBridgeOpen}
-        channelBridgeOpen={channelBridgeOpen}
         canUseIdeBridge={canUseIdeBridge}
-        setIdeBridgeOpen={setIdeBridgeOpen}
         ideBridge={ideBridge}
-        ideBridgeOpen={ideBridgeOpen}
-        handleDiffCommentToComposer={handleDiffCommentToComposer}
         contextUsage={contextUsage}
         reattachedRunning={reattachedRunning}
         sendMessage={sendMessage}
@@ -2455,7 +2386,7 @@ function MessageViewInner({
           surfaceId={pluginOverlay}
           placement="overlay"
           sessionKey={sessionIdentityKey(session)}
-          services={{ 'session-transcript': { info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages } }}
+          services={sessionPluginServices}
           onClose={() => setPluginOverlay(null)}
         />
       ) : null}

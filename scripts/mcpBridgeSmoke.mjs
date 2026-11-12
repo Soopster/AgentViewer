@@ -330,6 +330,8 @@ try {
     'skill://coordinate-agents/SKILL.md',
     'skill://coordinate-agents/references/protocol-and-hosts.md',
     'skill://coordinate-agents/references/playbooks-and-memory.md',
+    'skill://agent-viewer-plugins/SKILL.md',
+    'skill://agent-viewer-plugins/references/authoring.md',
     'a2a://agent-viewer/coordinator/agent-card.json',
     'ui://agent-viewer/coordinator-dashboard.html',
   ]) {
@@ -340,15 +342,24 @@ try {
   assert.equal(catalog.supported, true)
   assert.equal(catalog.directoryRead, true)
   const listedSkills = await catalog.list()
-  assert.equal(listedSkills.skills.length, 1, 'Only bundled Coordinator guidance is published')
+  assert.equal(listedSkills.skills.length, 2, 'Only the two bundled skills are published')
   assert.equal(listedSkills.cacheScope, 'public')
-  const entry = listedSkills.skills[0]
+  const entry = listedSkills.skills.find(entry => entry.uri === 'skill://coordinate-agents/SKILL.md')
+  assert.ok(entry)
   assert.equal(entry.uri, 'skill://coordinate-agents/SKILL.md')
   assert.equal(entry.resources.length, 3)
   assert.deepEqual((await catalog.get(entry.uri)).skill, entry)
   const manifest = await catalog.read(entry)
   assert.equal(manifest.verified, true)
   assert.equal(manifest.text, skill.contents[0].text, 'Native catalog and legacy resource must serve identical bytes')
+  const pluginEntry = listedSkills.skills.find(entry => entry.uri === 'skill://agent-viewer-plugins/SKILL.md')
+  assert.ok(pluginEntry)
+  const pluginSkill = await catalog.read(pluginEntry)
+  assert.equal(pluginSkill.verified, true)
+  assert.equal(pluginSkill.text, (await client.readResource({ uri: pluginEntry.uri })).contents[0].text)
+  const pluginReference = await catalog.read(pluginEntry, 'references/authoring.md')
+  assert.equal(pluginReference.verified, true)
+  assert.equal(pluginReference.text, (await client.readResource({ uri: 'skill://agent-viewer-plugins/references/authoring.md' })).contents[0].text)
   const reference = await catalog.read(entry, 'references/protocol-and-hosts.md')
   assert.equal(reference.verified, true)
   assert.match(reference.text, /MCP discovery and host features/)
@@ -817,6 +828,8 @@ try {
     if (legacyClient.getProtocolEra() !== 'legacy') throw new Error('Bridge did not preserve legacy MCP clients')
     const legacyIndex = await legacyClient.readResource({ uri: 'skill://index.json' })
     assert.equal(JSON.parse(legacyIndex.contents[0].text)[0].url, 'skill://coordinate-agents/SKILL.md')
+    assert.ok(JSON.parse(legacyIndex.contents[0].text).some(entry => entry.url === 'skill://agent-viewer-plugins/SKILL.md'))
+    assert.equal((await legacyClient.readResource({ uri: 'skill://agent-viewer-plugins/SKILL.md' })).contents[0].text, pluginSkill.text)
     const legacySkill = await legacyClient.readResource({ uri: 'skill://coordinate-agents/SKILL.md' })
     assert.equal(legacySkill.contents[0].text, manifest.text, 'Clients without native skill methods keep the resource fallback')
     const legacyTools = await legacyClient.listTools()

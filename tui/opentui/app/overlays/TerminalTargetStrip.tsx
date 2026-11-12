@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react'
 import type { TuiThemePalette } from '../../../theme'
 import { shellTerminal } from '../../shell/sdkTerminal'
-import { readVisibleScreenText, type ScreenSource } from '../../../../plugins/terminal/tui/shellScreen'
+import { readVisibleScreenText, type ScreenSource } from '../../shellScreen'
 import { readTerminalAgentState } from '../../terminalPrompt'
 
 export const TERMINAL_STRIP_ROWS = 4

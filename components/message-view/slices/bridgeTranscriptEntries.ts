@@ -1,4 +1,4 @@
-import type { ComposerSessions } from '../../../lib/composerSessions'
+import { useComposerSessionState, type ComposerSessions } from '../../../lib/composerSessions'
 import { type ContextComposerHandle } from '../../ContextComposer'
 import { useState, useRef } from 'react'
 import { type SendAttachment } from '@/lib/types'
@@ -16,10 +16,10 @@ export function useBridgeTranscriptEntriesGroup(ctx: UseBridgeTranscriptEntriesG
   } = ctx
 
   // Track bridge entries (sent + replies) with timestamps for inline transcript display
-  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
+  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useComposerSessionState<
     Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
-  >([])
-  const persistedBridgeCountRef = useRef(0)
+  >(composerSessions, composerOwnerKey, 'bridgeTranscriptEntries', () => [])
+  const persistedBridgeCountRef = composerSessions.ref(composerOwnerKey, 'persistedBridgeCount', 0)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])

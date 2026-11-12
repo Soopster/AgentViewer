@@ -3,11 +3,11 @@
 // Shared controller for the local agentViewer channel bridge. A single instance
 // owns the connection, the persisted config, the live event log, and the global
 // "route composer through bridge" binding so that BOTH the dedicated panel
-// (components/ChannelBridgePanel.tsx) and the main composer's send path
+// (plugins/bridges/web/ChannelBridgePanel.tsx) and the main composer's send path
 // (components/MessageView.tsx) speak to one connection instead of each opening
 // their own. See lib/channelBridge.ts and channels/agentviewer-channel.ts.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   advanceChannelDeliveryState,
   DEFAULT_CHANNEL_BRIDGE_URL,
@@ -96,10 +96,12 @@ export function useChannelBridge({
   open,
   available,
   sessionId,
+  ownerKey = sessionId,
 }: {
   open: boolean
   available: boolean
   sessionId?: string
+  ownerKey?: string
 }): ChannelBridge {
   const [stored] = useState(loadStoredConfig)
   const [baseUrl, setBaseUrl] = useState(stored.baseUrl)
@@ -111,9 +113,24 @@ export function useChannelBridge({
   const [sendError, setSendError] = useState<string | null>(null)
   const [unread, setUnread] = useState(0)
 
-  const lastChatIdRef = useRef<string | undefined>(undefined)
-  const openRef = useRef(open)
   const deliveryStatusRef = useRef(new Map<string, ChannelDeliveryState>())
+  const lastChatIdRef = useRef<string | undefined>(undefined)
+  // Pending results belong to the captured account, even if native IDs match.
+  const lifetime = useMemo(() => ({ active: true }), [ownerKey, available])
+  const [entriesOwner, setEntriesOwner] = useState(ownerKey)
+  useLayoutEffect(() => {
+    lifetime.active = true
+    setEntriesOwner(ownerKey)
+    setEntries([])
+    setSending(false)
+    setSendError(null)
+    setUnread(0)
+    lastChatIdRef.current = undefined
+    deliveryStatusRef.current.clear()
+    return () => { lifetime.active = false }
+  }, [lifetime, ownerKey])
+
+  const openRef = useRef(open)
 
   useEffect(() => {
     openRef.current = open
@@ -147,14 +164,6 @@ export function useChannelBridge({
     setStatus('idle')
   }, [available, routeComposerState, setRouteComposer])
 
-  useEffect(() => {
-    lastChatIdRef.current = undefined
-    deliveryStatusRef.current.clear()
-    setEntries([])
-    setUnread(0)
-    setSendError(null)
-  }, [sessionId])
-
   // Clear the unread badge whenever the panel is opened.
   useEffect(() => {
     if (open) setUnread(0)
@@ -165,9 +174,12 @@ export function useChannelBridge({
       setStatus('idle')
       return
     }
+    let subscribed = true
+    const current = () => subscribed && lifetime.active
     const unsubscribe = subscribeToChannelEvents(
       config,
       (event: ChannelEvent) => {
+        if (!current()) return
         if (event.type === 'reply') {
           lastChatIdRef.current = event.chat_id
           setEntries((prev) => [
@@ -189,6 +201,7 @@ export function useChannelBridge({
         if (event.type !== 'delivery_ack' && !openRef.current) setUnread((n) => n + 1)
       },
       (next) => {
+        if (!current()) return
         setStatus(next)
         if (next !== 'connected' || !sessionId) return
         void flushChannelBridgeOutbox(
@@ -196,7 +209,9 @@ export function useChannelBridge({
           config,
           sessionId,
           {
+            ownerKey,
             onDelivered: ({ entry, response }) => {
+              if (!current()) return
               const delivery = response.status === 'processed' ? 'processed' : 'accepted'
               const advanced = advanceChannelDeliveryState(deliveryStatusRef.current.get(entry.messageId), delivery)
               deliveryStatusRef.current.set(entry.messageId, advanced)
@@ -208,16 +223,18 @@ export function useChannelBridge({
             },
           },
         ).then((result) => {
+          if (!current()) return
           if (result.error) setSendError(`Channel message remains queued: ${result.error.message}`)
           else setSendError(null)
         })
       },
     )
-    return unsubscribe
-  }, [config, enabled, sessionId])
+    return () => { subscribed = false; unsubscribe() }
+  }, [config, enabled, sessionId, ownerKey, lifetime])
 
   const send = useCallback(
     async (text: string) => {
+      if (!lifetime.active) throw new Error('Bridge target is no longer active')
       if (!available) throw new Error('The channel bridge is only available for Claude sessions')
       if (!sessionId) throw new Error('Select a Claude session before using the channel bridge')
       const trimmed = text.trim()
@@ -229,9 +246,11 @@ export function useChannelBridge({
         lastChatIdRef.current = chatId
         const result = await sendDurableChannelMessage(browserChannelBridgeOutboxStorage, config, {
           targetSessionId: sessionId,
+          ownerKey,
           text: trimmed,
           chatId,
         })
+        if (!lifetime.active) return { chat_id: result.response?.chat_id ?? chatId, message_id: result.entry.messageId, queued: result.queued }
         const response = result.response
         const delivery = response?.status === 'processed'
           ? 'processed'
@@ -254,17 +273,18 @@ export function useChannelBridge({
         return { chat_id: resolvedChatId, message_id: result.entry.messageId, queued: result.queued }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to reach the channel bridge'
-        setSendError(message)
+        if (lifetime.active) setSendError(message)
         throw err instanceof Error ? err : new Error(message)
       } finally {
-        setSending(false)
+        setSending(current => lifetime.active ? false : current)
       }
     },
-    [available, config, sessionId],
+    [available, config, sessionId, ownerKey, lifetime],
   )
 
   const respond = useCallback(
     async (entry: Extract<ChannelLogEntry, { kind: 'permission' }>, behavior: 'allow' | 'deny') => {
+      if (!lifetime.active) return
       if (!available) {
         setSendError('The channel bridge is only available for Claude sessions')
         return
@@ -273,11 +293,12 @@ export function useChannelBridge({
       try {
         await respondToChannelPermission(config, entry.request.request_id, behavior)
       } catch (err) {
+        if (!lifetime.active) return
         setEntries((prev) => prev.map((item) => (item.id === entry.id ? { ...item, resolved: undefined } : item)))
         setSendError(err instanceof Error ? err.message : 'Failed to send the verdict')
       }
     },
-    [available, config],
+    [available, config, lifetime],
   )
 
   return {
@@ -286,9 +307,9 @@ export function useChannelBridge({
     setBaseUrl,
     setToken,
     status,
-    entries,
-    sending,
-    sendError,
+    entries: entriesOwner === ownerKey ? entries : [],
+    sending: entriesOwner === ownerKey && sending,
+    sendError: entriesOwner === ownerKey ? sendError : null,
     setSendError,
     routeComposer,
     setRouteComposer,

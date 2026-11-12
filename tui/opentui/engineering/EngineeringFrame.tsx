@@ -68,7 +68,7 @@ type Props = {
   coordination?: ProtocolRunSnapshot | null
   onOpenCoordinator?: (runId?: string) => void
   onOpenCoordinatorAgent?: (agent: ProtocolAgent) => void
-  goalObjective?: string
+  composerContext?: string
   onOpenSession?: (key: string) => boolean
   cards: TuiTranscriptCard[]
   messages: ThreadedMessage[]
@@ -375,7 +375,7 @@ export function EngineeringFrame(props: Props) {
       {preferences.inspector === 'work' ? <EngineeringWork root={root} width={panelWidth - 2} height={Math.max(3, panelHeight - 5 - (inspectorTabRows(panelWidth) - 1) + (window ? 2 : 0))} theme={theme}
         focused={focused === 'inspector'} ready={Boolean(repository || error)} brief={brief} setBrief={setBrief} section={workSection} onSection={setWorkSection}
         checkpoint={checkpoint} current={currentSnapshot} delta={delta} onAcknowledge={() => { if (currentSnapshot) setCheckpoint(acknowledgeWorkSnapshot(checkpoint, currentSnapshot)) }}
-        currentSession={currentWorkSession} selectedMessage={selectedMessage} selectedMessageFiles={selectedMessageFiles} coordination={props.coordination} onOpenCoordinator={props.onOpenCoordinator} onOpenCoordinatorAgent={props.onOpenCoordinatorAgent} goalObjective={props.goalObjective}
+        currentSession={currentWorkSession} selectedMessage={selectedMessage} selectedMessageFiles={selectedMessageFiles} coordination={props.coordination} onOpenCoordinator={props.onOpenCoordinator} onOpenCoordinatorAgent={props.onOpenCoordinatorAgent} composerContext={props.composerContext}
         selectedFile={evidencePath ?? selectedPath} sources={sourceIndex} checks={checkRows} attention={observedAttention}
         onRunCheck={(command, criterionId, paths) => { void runCheck(command, criterionId, paths) }} onOpenFile={openEvidenceFile} onChooseFile={setEvidencePath}
         onOpenSession={key => { props.onOpenSession?.(key) }} onJump={jumpToWorkSource} onCopy={props.onCopy} onAppend={props.onAppend}
@@ -418,7 +418,7 @@ export function EngineeringFrame(props: Props) {
       props.inspectorWindowOpen, props.inspectorWindowFocused, props.inspectorWindowExpanded,
       props.onReview, props.onDiagnostics, props.onAppend, props.onJump, props.onCopy,
       props.onAttention, props.onAcknowledge, props.onOpenFile, repositoryState, focused, cursor,
-      fileSelection, patchState, checks, acknowledgedChecks, processes, commentEditing, notice, armedRevert, brief, checkpoint, currentSnapshot, delta, workSection, evidencePath, pendingSource, props.sessions, props.sessionsLoading, props.transcriptLoading, props.selectedMessageKey, props.getSelectedMessageKey, selectedMessageKey, props.goalObjective, props.onOpenSession, props.coordination, props.onOpenCoordinator, props.onOpenCoordinatorAgent])
+      fileSelection, patchState, checks, acknowledgedChecks, processes, commentEditing, notice, armedRevert, brief, checkpoint, currentSnapshot, delta, workSection, evidencePath, pendingSource, props.sessions, props.sessionsLoading, props.transcriptLoading, props.selectedMessageKey, props.getSelectedMessageKey, selectedMessageKey, props.composerContext, props.onOpenSession, props.coordination, props.onOpenCoordinator, props.onOpenCoordinatorAgent])
   return <EngineeringInspectorContext.Provider value={renderInspectorWindow}><box width={props.terminalWidth} height={props.terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
     {active ? <EngineeringHeader width={props.terminalWidth} rows={headerRows} theme={theme} focusMode={engineeringFocusMode(preferences)} workLabel={delta.count ? `Work +${delta.count}` : 'Work'} onWork={() => selectInspector('work')}
       title={` ENGINEERING · ${cwd.split('/').pop()}${brief.title ? ` · ${brief.title}` : ''} · ${repository?.branch ?? (error ? 'no repository' : 'loading…')}${files.length ? ` · ${files.length} change${files.length === 1 ? '' : 's'}` : ''}${props.running.length ? ` · ${props.running.length} running` : ''}${props.recent.size ? ` · ${props.recent.size} recent` : ''}${props.attention.length ? ` · ${props.attention.length} attention` : ''}`}

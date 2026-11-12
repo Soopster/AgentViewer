@@ -14,7 +14,7 @@ export function createPluginViewRegistry<View>(
   hostServices: readonly PluginServiceId[],
   manifests: readonly PluginManifest[] = PLUGIN_MANIFESTS,
 ) {
-  const supported = manifests.filter(manifest => manifest.renderers.includes(renderer))
+  const supported = manifests.filter(manifest => manifest.renderers.includes(renderer) && manifest.surfaces.length > 0)
   for (const manifest of supported) {
     if (!loaders[manifest.id as PluginId]) throw new Error(`Plugin ${manifest.id} declares the ${renderer} renderer but has no ${renderer} loader`)
   }

@@ -4,9 +4,15 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
+  'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
+  'prompt-library': async () => (await import('@/plugins/prompt-library/web')).module,
+  bridges: async () => (await import('@/plugins/bridges/web')).module,
+  tasks: async () => (await import('@/plugins/tasks/web')).module,
+  messaging: async () => (await import('@/plugins/messaging/web')).module,
+  diagnostics: async () => (await import('@/plugins/diagnostics/web')).module,
   analytics: async () => (await import('@/plugins/analytics/web')).module,
   git: async () => (await import('@/plugins/git/web')).module,
   files: async () => (await import('@/plugins/files/web')).module,

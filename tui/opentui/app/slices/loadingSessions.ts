@@ -39,8 +39,6 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
   const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
-  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
-  const promptLibraryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
   // The bridge panels are the bridges plugin's; the bridges and routing are the composer's.
   const channelBridgeOpen = pluginOverlay === 'channel-bridge'
   // Global Channel Bridge binding: when on, the main composer's send routes to
@@ -70,8 +68,8 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
     setFolderPickerForNewSession, newSessionKeyHandlerRef, pluginOverlay, setPluginOverlay,
     pluginOpenRequests, setPluginOpenRequests, pluginManagerOpen, setPluginManagerOpen,
     pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef, handoffBriefOpen,
-    setHandoffBriefOpen, handoffBriefKeyHandlerRef, promptLibraryOpen, setPromptLibraryOpen,
-    promptLibraryKeyHandlerRef, channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
+    setHandoffBriefOpen, handoffBriefKeyHandlerRef,
+    channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
     routeComposerToBridgeRef, routeComposerToIde, setRouteComposerToIde, routeComposerToIdeRef,
   }
 }

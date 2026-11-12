@@ -1,18 +1,18 @@
+import { sessionIdentityKey } from '@/lib/sessionIdentity'
 import type { Session } from '../../../lib/types'
 import { useState, useRef } from 'react'
+import { usePresentationInterest } from '../../../lib/plugins/usePresentationInterest'
 import { useChannelBridge } from '../../useChannelBridge'
 import { type MentionResult } from '../types'
 
 export type UseHistoryIndexGroupContext = {
   projectView: { key: string; sessionCount: number; providerMode: 'current' | 'all'; } | undefined
   session: Session | null
-  channelBridgeOpenRequest: number
-  channelBridgeRouteToggleRequest: number
 }
 
 export function useHistoryIndexGroup(ctx: UseHistoryIndexGroupContext) {
   const {
-    projectView, session, channelBridgeOpenRequest, channelBridgeRouteToggleRequest,
+    projectView, session,
   } = ctx
 
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -22,16 +22,14 @@ export function useHistoryIndexGroup(ctx: UseHistoryIndexGroupContext) {
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
   const mentionAbortRef = useRef<AbortController | null>(null)
   const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
-  const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
+  const channelPresentation = usePresentationInterest()
   const canUseChannelBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
   const channelBridge = useChannelBridge({
-    open: channelBridgeOpen,
+    open: channelPresentation.count > 0,
     available: canUseChannelBridge,
     sessionId: session?.sessionId,
+    ownerKey: session ? sessionIdentityKey(session) : undefined,
   })
-  const handledChannelBridgeOpenRequestRef = useRef(channelBridgeOpenRequest)
-  const handledChannelBridgeRouteRequestRef = useRef(channelBridgeRouteToggleRequest)
   // Read the latest bridge controller from inside sendMessage without widening
   // its (already large) dependency array.
   const channelBridgeRef = useRef(channelBridge)
@@ -39,8 +37,7 @@ export function useHistoryIndexGroup(ctx: UseHistoryIndexGroupContext) {
   return {
     historyIndex, setHistoryIndex, draftBeforeHistoryRef, mentionQuery, setMentionQuery,
     mentionResults, setMentionResults, mentionActiveIndex, setMentionActiveIndex, mentionAbortRef,
-    mentionItemRefs, promptLibraryOpen, setPromptLibraryOpen, channelBridgeOpen,
-    setChannelBridgeOpen, canUseChannelBridge, channelBridge, handledChannelBridgeOpenRequestRef,
-    handledChannelBridgeRouteRequestRef, channelBridgeRef,
+    mentionItemRefs, canUseChannelBridge, channelBridge, channelBridgeRef,
+    acquireChannelBridgeView: channelPresentation.acquire,
   }
 }

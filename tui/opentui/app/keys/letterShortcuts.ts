@@ -13,7 +13,7 @@ import { cycleDensityValue } from '../viewHelpers'
 /** Returns true when one of these branches handled the key. */
 export function handleLetterShortcutKeys({
   sequence, composerActive, handled, setComposerHidden, setComposerActive, normalizedSearchQuery,
-  openNewSessionModal, reuseLastPrompt, setThinkingMode, showToggleOutcome, setShowToolCalls,
+  openNewSessionModal, setThinkingMode, showToggleOutcome, setShowToolCalls,
   setError, toggleVelocityScroll, setCommandPaletteIndex, setCommandPaletteQuery,
   setCommandPaletteOpen, key, openProviderMenu, openThemeMenu, stickyHeaders, setStickyHeaders,
   tabsEnabled, setTabsEnabled, railVisible, setRailVisible, focusedPane, setFocusedPane, focusMode,
@@ -28,7 +28,6 @@ export function handleLetterShortcutKeys({
   setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
   normalizedSearchQuery: string
   openNewSessionModal: () => void
-  reuseLastPrompt: () => void
   setThinkingMode: React.Dispatch<React.SetStateAction<boolean>>
   showToggleOutcome: (label: string, outcome: string | boolean) => void
   setShowToolCalls: React.Dispatch<React.SetStateAction<boolean>>
@@ -71,11 +70,6 @@ export function handleLetterShortcutKeys({
 
     if (sequence === 'N' && !composerActive && normalizedSearchQuery.length === 0) {
       handled(() => openNewSessionModal())
-      return true
-    }
-
-    if (sequence === 'R' && !composerActive) {
-      handled(reuseLastPrompt)
       return true
     }
 

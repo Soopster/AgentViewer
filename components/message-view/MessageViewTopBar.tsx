@@ -3,7 +3,6 @@ import type { SessionMessage } from '../../lib/types'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
-import type { TaskRegistry } from '../../lib/taskRegistry'
 import type { SessionCapabilities } from '../../lib/types'
 import Link from 'next/link'
 import { type ContextUsage, type SessionInfo } from '@/lib/types'
@@ -46,9 +45,7 @@ type MessageViewTopBarProps = {
   setShowReviewMode: Dispatch<SetStateAction<boolean>>
   showVisualizer: boolean
   showReviewMode: boolean
-  taskRegistry: TaskRegistry
-  setTaskRailOpen: Dispatch<SetStateAction<boolean>>
-  taskRailOpen: boolean
+  readerMenu: import('react').ReactNode
   setViewMode: Dispatch<SetStateAction<WebViewMode>>
   viewMode: WebViewMode
   setDensity: Dispatch<SetStateAction<MessageDensity>>
@@ -75,8 +72,6 @@ type MessageViewTopBarProps = {
   cliPopoverOpen: boolean
   handleExport: () => Promise<void>
   exporting: boolean
-  toggleDiagnostics: () => Promise<void>
-  showDiagnostics: boolean
   activeProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
   sessionCapabilities: SessionCapabilities | undefined
   runSessionAction: (action: string) => Promise<void>
@@ -116,12 +111,11 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
     maximized, colorTreatment, isProject, dirName, projectView, session, sessionInfo, contextUsage,
     disabledPlugins, loading, threaded, messages, viewDropdownRef, setViewDropdownOpen,
     setActionsDropdownOpen, viewDropdownOpen, setShowVisualizer, setShowReviewMode, showVisualizer,
-    showReviewMode, taskRegistry, setTaskRailOpen, taskRailOpen, setViewMode, viewMode, setDensity,
+    showReviewMode, readerMenu, setViewMode, viewMode, setDensity,
     density, setTimelineWidth, timelineWidth, setStickyHeaders, stickyHeaders, setDiffStyle,
     diffStyle, setDiffOptions, diffOptions, onToggleMaximized, onToggleRightPanel, rightPanelOpen,
     onEnterFullscreen, actionsDropdownRef, actionsDropdownOpen, handleFork, forking, cliCommand,
-    cliPopoverRef, setCliPopoverOpen, cliPopoverOpen, handleExport, exporting, toggleDiagnostics,
-    showDiagnostics, activeProvider, sessionCapabilities, runSessionAction, sessionActionLoading,
+    cliPopoverRef, setCliPopoverOpen, cliPopoverOpen, handleExport, exporting, activeProvider, sessionCapabilities, runSessionAction, sessionActionLoading,
     handleDeleteSession, deleting, toggleLiveFollow, autoFollow,
   } = props
   return (
@@ -371,13 +365,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                   {showReviewMode ? 'Transcript' : 'Review changes'}
                 </button>
               )}
-              {/* Tasks toggle */}
-              {!isProject && taskRegistry.size > 0 && (
-                <button type="button" className="av-hover-control" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
-                  ☐ Tasks · {taskRegistry.size}
-                </button>
-              )}
+              {readerMenu}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Views shared with the terminal */}
               <button type="button" className="av-hover-control" data-testid="open-view-studio" onClick={() => { setViewStudioOpen(true); setViewDropdownOpen(false) }}
@@ -626,10 +614,6 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                 <button type="button" className="av-hover-control" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
                   style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontSize: 12, textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
                   {exporting ? 'Exporting…' : 'Export'}
-                </button>
-                <button type="button" className="av-hover-control" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
-                  style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontSize: 12, textAlign: 'left' }}>
-                  Diagnostics
                 </button>
                 {activeProvider === 'opencode' && (
                   <>

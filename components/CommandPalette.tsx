@@ -7,7 +7,7 @@ import { MESSAGE_SEARCH_RESULT_LIMIT, sessionTabKey, getSessionTitle, getSession
 import { providerStyle, providerIconLabel, messageTypeLabel, formatMessageMatchTime } from './command-palette/presentation'
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, MessageSquare, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -68,12 +68,6 @@ export default function CommandPalette({
   messageViewFullscreen,
   canMaximizeMessageView,
   canOpenGit,
-  canOpenTasks,
-  canOpenPromptLibrary,
-  canOpenChannelBridge,
-  channelBridgeRouting,
-  canOpenIdeBridge,
-  ideBridgeRouting,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -86,13 +80,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenCrossSessionMessaging,
-  onOpenTasks,
-  onOpenPromptLibrary,
-  onOpenChannelBridge,
-  onToggleChannelBridgeRoute,
-  onOpenIdeBridge,
-  onToggleIdeBridgeRoute,
   onOpenBookmarks,
   onOpenProvenance,
   onOpenRemoteAccess,
@@ -155,6 +142,7 @@ export default function CommandPalette({
       ...listPluginCommands('web')
         .filter((command) => !disabledPlugins.has(command.pluginId))
         .filter((command) => command.requires !== 'session' || (selectedSession && !selectedProject))
+        .filter(command => !command.providers || (selectedSession && command.providers.includes(selectedSession.provider ?? 'claude')))
         .map((command): PaletteItem => ({
           id: `plugin:${command.id}`,
           label: command.label,
@@ -267,103 +255,6 @@ export default function CommandPalette({
         },
       },
       {
-        id: 'open-task-panel',
-        label: 'Open task panel',
-        description: canOpenTasks ? 'Show the active Claude session task registry and lineage' : 'Select a Claude session with tasks first',
-        icon: <ListTodo size={16} />,
-        shortcut: 'Tasks',
-        group: 'actions',
-        keywords: ['task', 'tasks', 'todo', 'todos', 'task panel', 'task rail', 'lineage', 'registry', 'claude'],
-        score: 0,
-        run: () => {
-          if (canOpenTasks) onOpenTasks()
-        },
-      },
-      {
-        id: 'open-prompt-library',
-        label: 'Open prompt library',
-        description: canOpenPromptLibrary ? 'Browse, edit, and insert saved prompt templates into the composer' : 'Select a session first',
-        icon: <BookOpen size={16} />,
-        shortcut: 'Prompts',
-        group: 'actions',
-        keywords: ['prompt', 'prompts', 'library', 'template', 'templates', 'snippet', 'snippets', 'saved', 'reuse', 'composer'],
-        score: 0,
-        run: () => {
-          if (canOpenPromptLibrary) onOpenPromptLibrary()
-        },
-      },
-      {
-        id: 'open-channel-bridge',
-        label: 'Open channel bridge',
-        description: canOpenChannelBridge ? 'Push composer messages into a side-by-side `claude` CLI session' : 'Select a Claude session first',
-        icon: <Radio size={16} />,
-        shortcut: 'Bridge',
-        group: 'actions',
-        keywords: ['channel', 'bridge', 'cli', 'claude', 'live', 'relay', 'session', 'composer'],
-        score: 0,
-        run: () => {
-          if (canOpenChannelBridge) onOpenChannelBridge()
-        },
-      },
-      {
-        id: 'toggle-channel-bridge-route',
-        label: channelBridgeRouting ? 'Stop routing composer to channel bridge' : 'Route composer to channel bridge',
-        description: canOpenChannelBridge
-          ? (channelBridgeRouting
-            ? 'Composer sends go to the live `claude` CLI session — switch back to the active provider'
-            : 'Send composer messages to the live `claude` CLI session instead of the active provider')
-          : 'Select a Claude session first',
-        icon: <Radio size={16} />,
-        shortcut: channelBridgeRouting ? 'Bridge on' : 'Bridge',
-        group: 'actions',
-        keywords: ['channel', 'bridge', 'route', 'routing', 'cli', 'claude', 'live', 'composer', 'send', 'toggle'],
-        score: 0,
-        run: () => {
-          if (canOpenChannelBridge) onToggleChannelBridgeRoute()
-        },
-      },
-      {
-        id: 'open-ide-bridge',
-        label: 'Open IDE bridge',
-        description: canOpenIdeBridge ? 'Host a Claude Code IDE endpoint a `claude` CLI session connects to' : 'Select a Claude session first',
-        icon: <Plug size={16} />,
-        shortcut: 'IDE',
-        group: 'actions',
-        keywords: ['ide', 'bridge', 'mcp', 'websocket', 'claude', 'editor', 'diff', 'mention', 'vscode', 'neovim', 'lock', 'composer'],
-        score: 0,
-        run: () => {
-          if (canOpenIdeBridge) onOpenIdeBridge()
-        },
-      },
-      {
-        id: 'toggle-ide-bridge-route',
-        label: ideBridgeRouting ? 'Stop routing composer to IDE bridge' : 'Route composer to IDE bridge',
-        description: canOpenIdeBridge
-          ? (ideBridgeRouting
-            ? 'Composer lines push as @mentions to the connected `claude` session — switch back to the active provider'
-            : 'Push composer lines as @file mentions into the connected `claude` session instead of the active provider')
-          : 'Select a Claude session first',
-        icon: <Plug size={16} />,
-        shortcut: ideBridgeRouting ? 'IDE on' : 'IDE',
-        group: 'actions',
-        keywords: ['ide', 'bridge', 'route', 'routing', 'mcp', 'claude', 'mention', 'composer', 'send', 'toggle'],
-        score: 0,
-        run: () => {
-          if (canOpenIdeBridge) onToggleIdeBridgeRoute()
-        },
-      },
-      {
-        id: 'open-cross-session-messaging',
-        label: 'Cross-session messaging',
-        description: 'Discover running agents and send a direct message',
-        icon: <MessageSquare size={16} />,
-        shortcut: 'Agents',
-        group: 'actions',
-        keywords: ['message', 'send', 'cross-session', 'agents', 'sessions'],
-        score: 0,
-        run: onOpenCrossSessionMessaging,
-      },
-      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -442,22 +333,6 @@ export default function CommandPalette({
       },
     ]
 
-    if (!canOpenChannelBridge) {
-      for (let index = items.length - 1; index >= 0; index -= 1) {
-        if (items[index]?.id === 'open-channel-bridge' || items[index]?.id === 'toggle-channel-bridge-route') {
-          items.splice(index, 1)
-        }
-      }
-    }
-
-    if (!canOpenIdeBridge) {
-      for (let index = items.length - 1; index >= 0; index -= 1) {
-        if (items[index]?.id === 'open-ide-bridge' || items[index]?.id === 'toggle-ide-bridge-route') {
-          items.splice(index, 1)
-        }
-      }
-    }
-
     for (const item of [
       ...providerInstances.map((instance) => ({
         provider: instance.provider as ProviderSelection,
@@ -488,7 +363,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenCrossSessionMessaging, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

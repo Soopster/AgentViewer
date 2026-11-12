@@ -38,20 +38,28 @@ const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
 const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
 const COORDINATOR_PROTOCOL_REFERENCE_URI = 'skill://coordinate-agents/references/protocol-and-hosts.md'
 const COORDINATOR_PLAYBOOK_REFERENCE_URI = 'skill://coordinate-agents/references/playbooks-and-memory.md'
+const PLUGIN_SKILL_URI = 'skill://agent-viewer-plugins/SKILL.md'
+const PLUGIN_REFERENCE_URI = 'skill://agent-viewer-plugins/references/authoring.md'
 const COORDINATOR_A2A_CARD_URI = 'a2a://agent-viewer/coordinator/agent-card.json'
 const COORDINATOR_CURRENT_RUN_URI = 'coord://agent-viewer/current-run'
 const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-app.html', import.meta.url), 'utf8')
 const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
 const coordinatorProtocolReferenceMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/references/protocol-and-hosts.md', import.meta.url), 'utf8')
 const coordinatorPlaybookReferenceMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/references/playbooks-and-memory.md', import.meta.url), 'utf8')
+const pluginSkillMarkdown = await readFile(new URL('../.agents/skills/agent-viewer-plugins/SKILL.md', import.meta.url), 'utf8')
+const pluginReferenceMarkdown = await readFile(new URL('../.agents/skills/agent-viewer-plugins/references/authoring.md', import.meta.url), 'utf8')
+const pluginSkillDescription = pluginSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
+  ?? 'Extend Agent Viewer through its shared plugin system.'
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
   ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
-// Publish only the bundled Coordinator guidance, never arbitrary workspace/user skills.
+// Publish only explicitly bundled guidance, never arbitrary workspace/user skills.
 // Snapshot the exact bytes also served by the legacy resource URLs.
 const coordinatorSkillCatalog = await SkillsExtension.load(memorySkillFiles({
   'coordinate-agents/SKILL.md': coordinatorSkillMarkdown,
   'coordinate-agents/references/protocol-and-hosts.md': coordinatorProtocolReferenceMarkdown,
   'coordinate-agents/references/playbooks-and-memory.md': coordinatorPlaybookReferenceMarkdown,
+  'agent-viewer-plugins/SKILL.md': pluginSkillMarkdown,
+  'agent-viewer-plugins/references/authoring.md': pluginReferenceMarkdown,
 }), { strict: true, cacheHint: { ttlMs: 60_000, cacheScope: 'public' } })
 const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_MCP_TASK_POLL_INTERVAL_MS = 2_000
@@ -806,7 +814,7 @@ server.registerResource('Current Coordinator run', COORDINATOR_CURRENT_RUN_URI, 
 })
 
 server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKILL_INDEX_URI, {
-  title: 'Agent Viewer Coordinator skills',
+  title: 'Agent Viewer skills',
   description: 'SEP-2640-compatible index of Agent Viewer skills available over MCP Resources.',
   mimeType: 'application/json',
   cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
@@ -819,9 +827,27 @@ server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKIL
       description: coordinatorSkillDescription,
       type: 'skill-md',
       url: COORDINATOR_SKILL_URI,
+    }, {
+      name: 'agent-viewer-plugins',
+      description: pluginSkillDescription,
+      type: 'skill-md',
+      url: PLUGIN_SKILL_URI,
     }]),
   }],
 }))
+
+for (const [name, uri, text] of [
+  ['Agent Viewer plugin authoring skill', PLUGIN_SKILL_URI, pluginSkillMarkdown],
+  ['Agent Viewer plugin authoring reference', PLUGIN_REFERENCE_URI, pluginReferenceMarkdown],
+]) {
+  server.registerResource(name, uri, {
+    title: name,
+    mimeType: 'text/markdown',
+    cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+  }, async (resourceUri) => ({
+    contents: [{ uri: resourceUri.href, mimeType: 'text/markdown', text }],
+  }))
+}
 
 server.registerResource('Coordinate agents protocol and hosts reference', COORDINATOR_PROTOCOL_REFERENCE_URI, {
   title: 'Coordinate agents protocol and hosts reference',

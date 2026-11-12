@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url'
 import type { Session } from '../../lib/types'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiPluginViewProps } from './shell/pluginTypes'
+import type { AddressableSession, SendCrossSessionMessageResult } from '../../lib/crossSessionMessagingTypes'
+import type { SessionGoal } from '../../lib/sessionGoals'
+import type { ThreadedMessage } from '../../lib/threading'
 
 const CWD = mkdtempSync(path.join(tmpdir(), 'agent-viewer-plugin-host-'))
 process.env.SHELL = '/bin/sh'
@@ -37,7 +40,7 @@ const cardsFor = (session: Session): TuiTranscriptCard[] => [{
 }]
 const detailFor = (session: Session) => ({
   info: { sessionId: session.sessionId, provider: 'claude' as const, cwd: CWD },
-  rawMessages: [], threadedMessages: [], transcriptCards: cardsFor(session),
+  rawMessages: [], threadedMessages: [{ role: 'user', uuid: `${session.sessionId}-prompt`, blocks: [{ type: 'text', text: `REUSE ${session.sessionId}` }] }] satisfies ThreadedMessage[], transcriptCards: cardsFor(session),
   transcriptCardsDensity: 'balanced' as const, transcriptCardsShowToolCalls: true, contextUsage: null,
 })
 const detailClient = await import('./sessionDetailWorkerClient')
@@ -47,11 +50,23 @@ mock.module('./threadingWorkerClient', () => ({ ...threadingClient, getTranscrip
 const metadataClient = await import('./metadataWorkerClient')
 mock.module('./metadataWorkerClient', () => ({ ...metadataClient, readTuiSessionMetadataAsync: async () => ({ currentModel: null, contextUsage: null }) }))
 const service = await import('../../lib/tui/service')
+let observedRuntime: Awaited<ReturnType<typeof service.readTuiRuntimeActivity>> = { running: [], waiting: [], attention: [] }
 // Anything that would stop a run or change a team: closing or turning off a
 // coordination view must call none of it.
 const coordinationMutations: string[] = []
+let fixtureGoal: SessionGoal | null = null
+const goalMutations: string[] = []
+const messageTargets: AddressableSession[] = [{ sessionId: 'same', provider: 'codex', providerInstanceId: 'work', address: 'codex@work:same', name: 'PLUGIN-WORK-RECIPIENT', running: true }]
+const sentMessages: Array<{ toName: string; text: string; fromAddress?: string }> = []
+let releaseMessage: ((result: SendCrossSessionMessageResult) => void) | null = null
+const diagnosticsActions: Array<{ sessionId: string; action: string }> = []
+let holdDiagnosticsRead = false
+let releaseDiagnosticsRead: ((value: Awaited<ReturnType<typeof service.readTuiSessionDiagnostics>>) => void) | null = null
 mock.module('../../lib/tui/service', () => ({
   ...service,
+  readTuiSessionGoal: async () => fixtureGoal,
+  patchTuiSessionGoal: async (_session: Session, patch: Partial<SessionGoal>) => { goalMutations.push('patch'); fixtureGoal = fixtureGoal ? { ...fixtureGoal, ...patch } : null; return fixtureGoal },
+  clearTuiSessionGoal: async () => { goalMutations.push('clear'); fixtureGoal = null },
   readTuiSessionCoordinator: async () => null,
   sendTuiSessionCoordination: async (...args: unknown[]) => { coordinationMutations.push(`send ${JSON.stringify(args[2])}`); throw new Error('not in this smoke') },
   stopTuiProtocolRun: async (runId: string) => { coordinationMutations.push(`stop ${runId}`); return null },
@@ -60,12 +75,15 @@ mock.module('../../lib/tui/service', () => ({
   readTuiSessions: async () => SESSIONS.map((session) => ({ ...session })),
   readTuiSessionDetail: async (session: Session) => detailFor(session),
   readTuiSessionMetadata: async () => ({ models: [], currentModel: null, contextUsage: null }),
-  readTuiRuntimeActivity: async () => ({ running: [], waiting: [], attention: [] }),
+  readTuiRuntimeActivity: async () => observedRuntime,
   listTuiRunningSessions: async () => [],
   prewarmTuiSession: async () => {},
-  listTuiAddressableSessions: async () => [],
+  listTuiAddressableSessions: async () => messageTargets,
+  sendTuiCrossSessionMessage: async (params: { toName: string; text: string; fromAddress?: string }) => { sentMessages.push(params); return new Promise<SendCrossSessionMessageResult>(resolve => { releaseMessage = resolve }) },
+  runTuiSessionAction: async (session: Session, input: { action: string }) => { diagnosticsActions.push({ sessionId: session.sessionId, action: input.action }); return {} },
   readTuiSessionDiagnostics: async () => {
     diagnosticsReads += 1
+    if (holdDiagnosticsRead) return new Promise<Awaited<ReturnType<typeof service.readTuiSessionDiagnostics>>>(resolve => { releaseDiagnosticsRead = resolve })
     return { sections: [{ id: 'commands', title: 'COMMANDS', items: ['PLUGIN-DIAG-MARKER'] }] }
   },
 }))
@@ -155,6 +173,44 @@ await key('j')
 await key('k')
 await settle(300)
 check(moduleEvaluations === 0 && !tuiPluginViews.isLoaded('analytics'), `browsing loaded the analytics plugin (${moduleEvaluations} evaluations)`)
+
+// Executable plugin actions run through the same key/palette dispatch without a view.
+await key('r', { shift: true })
+await waitFor('reuse action copied the last prompt', () => screen().includes('REUSE plug-alpha'))
+await act(async () => { await setup.mockInput.typeText('R') })
+await waitFor('navigation shortcut yields to composer typing', () => screen().includes('REUSE plug-alphaR'))
+await key('escape')
+const actionSettings = await import('../../lib/plugins/enablement')
+actionSettings.applyPluginSettings(actionSettings.withPluginEnabled(actionSettings.DEFAULT_PLUGIN_SETTINGS, 'composer-tools', false))
+await key('r', { shift: true })
+check(screen().includes('REUSE plug-alphaR'), 'disabled reuse action changed the composer')
+actionSettings.applyPluginSettings(actionSettings.DEFAULT_PLUGIN_SETTINGS)
+console.log('Reuse last prompt is a plugin action; its navigation shortcut yields to composer input and respects disablement.')
+
+// Composer accessories own their modal and native input without root goal cases.
+fixtureGoal = { provider: 'claude', providerInstanceId: 'default', sessionId: 'plug-alpha', objective: 'PLUGIN-GOAL-OBJECTIVE', status: 'active', tokenBudget: null, tokensUsed: 0, continuations: 0, maxContinuations: 25, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastNote: null, lastDecision: null, lastEvaluatedAt: null, error: null }
+const openGoal = async () => {
+  await key('?')
+  await act(async () => { await setup.mockInput.typeText('Session goal') })
+  await settle(200)
+  await key('return')
+  await waitFor('goal accessory modal', () => screen().includes('What does done look like?'))
+}
+await openGoal()
+await key('p', { ctrl: true })
+await waitFor('goal paused', () => fixtureGoal?.status === 'paused' && screen().includes('^P resume'))
+await key('p', { ctrl: true })
+await waitFor('goal resumed', () => fixtureGoal?.status === 'active' && screen().includes('^P pause'))
+const goalMutationCount = goalMutations.length
+await act(async () => { actionSettings.applyPluginSettings(actionSettings.withPluginEnabled(actionSettings.DEFAULT_PLUGIN_SETTINGS, 'goals', false)) })
+await waitFor('disabled goal modal closes', () => !screen().includes('What does done look like?'))
+check(goalMutations.length === goalMutationCount && fixtureGoal?.status === 'active', 'disabling the goal UI changed the runtime goal')
+await act(async () => { actionSettings.applyPluginSettings(actionSettings.DEFAULT_PLUGIN_SETTINGS) })
+await waitFor('restored goal strip', () => screen().includes('PLUGIN-GOAL-OBJECTIVE'))
+await openGoal()
+await key('d', { ctrl: true })
+await waitFor('explicit goal deletion', () => fixtureGoal === null && !screen().includes('What does done look like?'))
+console.log('Goals use the composer plugin host: palette opening, native modal keys, pause/resume, disable/re-enable and explicit deletion preserve runtime ownership.')
 
 // ⌃A opens it: one load, and a render failure stays local.
 await key('a', { ctrl: true })
@@ -299,8 +355,32 @@ await key('b', { ctrl: true }); await key('1')
 await key('m', { shift: true })
 await waitFor('the messaging overlay', () => screen().includes('Cross-session messaging') && screen().includes('reachable'))
 check(tuiPluginViews.isLoaded('messaging') && !tuiPluginViews.isLoaded('tasks'), 'opening messaging loaded the wrong plugins')
+await key('return')
+await act(async () => { await setup.mockInput.typeText('PLUGIN-MESSAGE-DRAFT') })
+await waitFor('the plugin message draft', () => screen().includes('PLUGIN-MESSAGE-DRAFT'))
+await key('w', { ctrl: true, shift: true })
+await waitFor('messaging placement choice or window', () => screen().includes('beside') || !!setup.renderer.root.findDescendantById('surface-frame:messaging'))
+if (!setup.renderer.root.findDescendantById('surface-frame:messaging')) await key('return')
+await waitFor('messaging draft retained in its window', () => !!setup.renderer.root.findDescendantById('surface-frame:messaging') && screen().includes('PLUGIN-MESSAGE-DRAFT'))
+await key('return')
+await waitFor('qualified messaging delivery', () => sentMessages.length === 1 && releaseMessage !== null)
+check(sentMessages[0].toName === 'codex@work:same', 'messaging used a native id or ambiguous display name')
+check(sentMessages[0].fromAddress?.startsWith('claude:plug-') === true, 'messaging omitted the source provider identity')
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'messaging', false))
+await waitFor('messaging disabled during delivery', () => screen().includes('Messaging is turned off'))
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await waitFor('messaging restored', () => screen().includes('PLUGIN-WORK-RECIPIENT') && !screen().includes('Messaging is turned off'))
+await act(async () => { releaseMessage!({ delivered: true, mode: 'queued', targetName: 'STALE-MESSAGE-RECIPIENT' }) })
+await settle(200)
+check(!screen().includes('STALE-MESSAGE-RECIPIENT'), 'a disabled presentation delivered a late notice into its replacement')
+check(sentMessages.length === 1, 'restoring messaging replayed a delivery')
+await key('w', { ctrl: true, shift: true })
+await waitFor('messaging back as an overlay', () => !setup.renderer.root.findDescendantById('surface-frame:messaging') && screen().includes('reachable'))
+console.log('Messaging preserves its draft across placement changes, sends qualified addresses and rejects a late disabled delivery.')
 await key('escape')
+if (screen().includes('reachable')) await key('escape')
 await waitFor('messaging closed', () => !screen().includes('reachable'))
+await key('b', { ctrl: true }); await key('1')
 await key('l', { shift: true })
 await waitFor('the task list overlay', () => screen().includes(' Tasks '))
 check(tuiPluginViews.isLoaded('tasks'), 'the task list opened without its plugin module')
@@ -317,14 +397,26 @@ await waitFor('placement choice or window', () => screen().includes('beside') ||
 if (!setup.renderer.root.findDescendantById('surface-frame:diagnostics')) await key('return')
 await waitFor('diagnostics in a window', () => !!setup.renderer.root.findDescendantById('surface-frame:diagnostics') && screen().includes('PLUGIN-DIAG-MARKER'))
 check(diagnosticsReads === 1, `moving diagnostics into a window read it again (${diagnosticsReads} reads)`)
+await key('s')
+await waitFor('diagnostics runtime action through its declared service', () => diagnosticsActions.some(action => action.sessionId === 'plug-alpha' && action.action === 'reloadSkills') && diagnosticsReads === 2)
 applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'diagnostics', false))
 await waitFor('the window saying diagnostics is off', () => screen().includes('Diagnostics is turned off'))
 await key('b', { ctrl: true }); await key('1')
 await key('d', { shift: true })
 await waitFor('the refusal', () => screen().includes('Session diagnostics is off'))
-check(diagnosticsReads === 1, 'a disabled diagnostics plugin still read the session')
+check(diagnosticsReads === 2, 'a disabled diagnostics plugin still read the session')
+holdDiagnosticsRead = true
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await waitFor('a restored diagnostics read in flight', () => releaseDiagnosticsRead !== null)
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'diagnostics', false))
+await waitFor('diagnostics disabled with a read pending', () => screen().includes('Diagnostics is turned off'))
+holdDiagnosticsRead = false
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+await waitFor('fresh diagnostics after re-enable', () => screen().includes('PLUGIN-DIAG-MARKER'))
+await act(async () => { releaseDiagnosticsRead!({ currentModel: null, sections: [{ id: 'stale', title: 'STALE', items: ['STALE-DIAG-RESPONSE'] }] }) })
 await settle(200)
+check(!screen().includes('STALE-DIAG-RESPONSE'), 'a deactivated diagnostics read overwrote the new view')
+console.log('Diagnostics ignores a late read from a disabled lifetime after the plugin is re-enabled.')
 
 // The CLI bridge panel flips the composer's routing; turning the panel's
 // plugin off closes the panel but not the bridge the composer routes through.
@@ -537,6 +629,42 @@ await settle(300)
 check(!screen().includes('AGENT VIEWER ▸ DESK') && screen().includes('Bloomberg-style desk is off'), 'a disabled desk still opened, or said nothing')
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 console.log('The desk opens as a lazy plugin from ⌃K b and refuses with a notice when turned off.')
+
+// Prompt library owns its UI, draft state and key capture in the same plugin
+// host as other features; saved storage remains the host service.
+await service.saveTuiPrompt({ title: 'Plugin prompt', body: 'Review {{file}} carefully.' })
+check(!tuiPluginViews.isLoaded('prompt-library'), 'prompt library loaded before opening')
+await key('p', { shift: true })
+await waitFor('prompt library plugin', () => screen().includes('Plugin prompt'))
+check(tuiPluginViews.isLoaded('prompt-library'), 'prompt library bypassed the plugin loader')
+await key('n')
+await act(async () => { await setup.mockInput.typeText('Draft survives placement') })
+await waitFor('prompt draft', () => screen().includes('Draft survives placement'))
+await checkWindowRoundTrip('prompt-library', 'Draft survives placement')
+await key('escape')
+await waitFor('prompt browse', () => screen().includes('Plugin prompt'))
+await key('return')
+await waitFor('prompt fill', () => screen().includes('file'))
+await act(async () => { await setup.mockInput.typeText('README.md') })
+await key('return', { ctrl: true })
+await waitFor('prompt inserted into composer', () => screen().includes('Review README.md carefully.'))
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'prompt-library', false))
+await settle(100)
+await key('p', { shift: true })
+check(!tuiPluginViews.isLoaded('prompt-library'), 'disabled prompt library was activated')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+console.log('Prompt library is lazy, preserves an unsaved draft across window moves, fills and inserts templates, and respects disablement.')
+
+// An enabled application observer runs with no alert surface mounted.
+check(!tuiPluginViews.isLoaded('session-alerts'), 'background alerts eagerly loaded their view')
+observedRuntime = { running: [], waiting: [], attention: SESSIONS.map(session => ({
+  id: `observer-${session.sessionId}`, sessionId: session.sessionId, provider: session.provider!,
+  title: 'Answer needed', createdAt: Date.now(),
+})) }
+await waitFor('application observer notification', () => screen().includes('needs you'))
+check(!tuiPluginViews.isLoaded('session-alerts'), 'notification delivery loaded its settings surface')
+observedRuntime = { running: [], waiting: [], attention: [] }
+console.log('Session alerts deliver through the application observer in the real TUI without loading their view.')
 
 // A module that fails to load is evicted and loads on the next attempt.
 const { PluginSurfaceHost, pluginInstanceId } = await import('./shell/PluginSurfaceHost')
