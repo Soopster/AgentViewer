@@ -94,8 +94,11 @@ function handlePosition(edge: PaneResizeEdge, inset: number, leading: number, tr
   }
 }
 
-export function PaneResizeHandle({ id, kind, extent, edge, direction, limits, inset = 0, leading = 0, trailing = 0 }: {
+export function PaneResizeHandle({ id, kind, extent, edge, direction, limits, inset = 0, leading = 0, trailing = 0, color }: {
   id?: string
+  /** The frame's own border colour. The handle redraws the border cells it covers, so without this a focused
+   *  frame's lit border went back to the resting colour along that edge. */
+  color?: string
   kind: PaneResizeKind; extent: number; edge: PaneResizeEdge; limits?: Limits
   direction?: PaneResizeEdge
   /** Bordered boxes position children inside the border; -1 covers its actual cells. */
@@ -115,7 +118,7 @@ export function PaneResizeHandle({ id, kind, extent, edge, direction, limits, in
     onMouseOver={() => { setHovered(true); renderer.setMousePointer(vertical ? 'ew-resize' : 'ns-resize') }}
     onMouseOut={() => { setHovered(false); renderer.setMousePointer('default') }}
     onMouseDown={event => context.start(kind, extent, direction ?? edge, event, limits)}>
-    <text fg={!bordersVisible ? context.theme.bg : hovered ? context.theme.cyan : context.theme.border} selectable={false} wrapMode="none">
+    <text fg={!bordersVisible ? context.theme.bg : hovered ? context.theme.cyan : color ?? context.theme.border} selectable={false} wrapMode="none">
       {vertical ? Array(length).fill(bordersVisible ? '│' : ' ').join('\n') : (bordersVisible ? '─' : ' ').repeat(length)}
     </text>
   </box>

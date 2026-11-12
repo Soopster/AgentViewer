@@ -111,6 +111,7 @@ import { startTuiMetricsLogger, noteRenderFrame, noteTuiComposerLatency, noteTui
 
 import type { SelectedLineRange } from '@pierre/diffs'
 import { LayoutEvents, RGBA, TextAttributes } from '@opentui/core'
+import { rectsAround, sameRect, type Rect } from './app/backdropHole'
 import type { BoxRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable } from '@opentui/core'
 
 
@@ -3309,6 +3310,22 @@ function OpenTuiWorkspace() {
     else if (action === 'path') showNotice('info', composerWorkingDirectory ?? 'No working directory', 10_000)
     else runPluginCommandId('git', composerTargetSession)
   })
+
+  // The composer window's backdrop leaves the spaces rail uncovered (see backdropHole.ts). The rail's rect
+  // is read on every layout pass while the window is open — a rail that just mounted or grew has no
+  // geometry until layout runs — and the listener is gone while the window is closed.
+  const [composerBackdropHole, setComposerBackdropHole] = useState<Rect | null>(null)
+  useLayoutEffect(() => {
+    if (!composerWindowOpen) return
+    const measure = () => {
+      const rail = renderer.root.findDescendantById('spaces-rail')
+      const next = rail && rail.visible !== false && rail.width > 0 ? { x: rail.x, y: rail.y, width: rail.width, height: rail.height } : null
+      setComposerBackdropHole(current => sameRect(current, next) ? current : next)
+    }
+    measure()
+    renderer.root.on(LayoutEvents.LAYOUT_CHANGED, measure)
+    return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
+  }, [composerWindowOpen, renderer])
 
   const openNewSessionModal = useStableEvent(() => {
     const defaultProvider: AgentProvider = provider === 'all'
@@ -7369,17 +7386,19 @@ function OpenTuiWorkspace() {
       ) : null}
 
 
-      {composerWindowOpen && !presentationHidesComposer ? (
+      {composerWindowOpen && !presentationHidesComposer ? rectsAround(width, height, composerBackdropHole).map((rect, index) => (
         <box
+          key={`composer-backdrop:${index}`}
+          id={`composer-backdrop:${index}`}
           position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
+          top={rect.y}
+          left={rect.x}
+          width={rect.width}
+          height={rect.height}
           backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
           zIndex={59}
         />
-      ) : null}
+      )) : null}
 
       <ComposerWindow
         composerWindowOpen={composerWindowOpen}

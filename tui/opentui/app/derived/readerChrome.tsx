@@ -236,7 +236,7 @@ return !composerWindowOpen && !composerHidden && !presentationHidesComposer && e
         borderStyle="single"
         borderColor={chatComposerFocused ? theme.border2 : theme.surface2}
       >
-        <PaneResizeHandle kind="composer" extent={composerDockHeight} edge="top" inset={-1} />
+        <PaneResizeHandle kind="composer" extent={composerDockHeight} edge="top" inset={-1} color={chatComposerFocused ? theme.border2 : theme.surface2} />
         <box
           flexGrow={1}
           overflow="hidden"

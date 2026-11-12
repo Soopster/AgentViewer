@@ -155,8 +155,17 @@ await waitFor('previous space layout', () => !!setup.renderer.root.findDescendan
   check(!row(other.id).includes('▸'), 'a space you are not in is marked current')
 }
 // + opens the manager on "New space"; ⋯ opens it on the list.
-// (The composer window's backdrop covers the rail while it is open, so close it first.)
-await act(async () => { setup.mockInput.pressKey('o', { ctrl: true }) }); await settle(150)
+// With the composer window open its backdrop dims everything but the spaces rail, which stays clickable.
+check(setup.renderer.root.findDescendantById('composer-backdrop:0'), 'the composer window is not open for this check')
+{
+  const rail = setup.renderer.root.findDescendantById('spaces-rail')!
+  const add = setup.renderer.root.findDescendantById('spaces-add')!
+  const num = (setup.renderer as any).hitTest(add.x + 1, add.y)
+  check(num === add.num || [...(add.getChildren?.() ?? [])].some((child: any) => child.num === num), 'the composer backdrop covers the spaces rail')
+  const outside = (setup.renderer as any).hitTest(rail.x + rail.width + 2, rail.y)
+  const walk = (node: any): any => { if (node.num === outside) return node; for (const child of node.getChildren?.() ?? []) { const found = walk(child); if (found) return found } return null }
+  check(String(walk(setup.renderer.root)?.id ?? '').startsWith('composer-backdrop:'), 'the backdrop no longer covers the rest of the screen')
+}
 await click('spaces-add')
 await waitFor('new space prompt', () => setup.captureCharFrame().includes('New space · project directory'))
 // Tab browses for the folder in the Files picker, as a new session's Folder does; Esc there returns to the prompt.

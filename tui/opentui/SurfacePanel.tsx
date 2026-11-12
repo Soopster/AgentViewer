@@ -210,7 +210,7 @@ export function SurfacePanel({
       titleColor={focused ? theme.cyan : theme.dim}
       titleAlignment="left"
     >
-      {sharedResize ? <PaneResizeHandle id="surface-panel-resize-handle" kind={placement === 'bottom' ? 'surface-rows' : 'surface-width'} extent={placement === 'bottom' ? height : width} edge={placement === 'bottom' ? 'top' : 'left'} inset={-1} leading={placement === 'bottom' ? handleLeft : 0} /> : onResizeStart ? (
+      {sharedResize ? <PaneResizeHandle id="surface-panel-resize-handle" color={focused ? theme.cyan : theme.border} kind={placement === 'bottom' ? 'surface-rows' : 'surface-width'} extent={placement === 'bottom' ? height : width} edge={placement === 'bottom' ? 'top' : 'left'} inset={-1} leading={placement === 'bottom' ? handleLeft : 0} /> : onResizeStart ? (
         // Laid over the inner border, so dragging it resizes the panel.
         <box
           id="surface-panel-resize-handle"

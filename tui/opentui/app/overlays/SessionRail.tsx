@@ -81,7 +81,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             title={sidebarView === 'coordinator' ? coordinatorSidebarHeader : undefined}
             titleColor={theme.cyan}
           >
-            <PaneResizeHandle kind="sidebar" extent={sidebarWidth} edge="right" inset={-1} />
+            <PaneResizeHandle kind="sidebar" extent={sidebarWidth} edge="right" inset={-1} color={effectiveFocus === 'sessions' ? theme.border2 : theme.border} />
             <box id="sidebar-tabs" height={1} flexShrink={0} paddingRight={1} flexDirection="row" overflow="hidden">
               {SIDEBAR_VIEWS.map(view => <box key={view} id={`sidebar-tab:${view}`} height={1} flexShrink={0}
                 backgroundColor={sidebarView === view ? theme.surface3 : theme.surface}

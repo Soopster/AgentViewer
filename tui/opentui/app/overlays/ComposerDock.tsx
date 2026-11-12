@@ -116,7 +116,7 @@ export function ComposerDock(props: ComposerDockProps) {
             composerTextareaRef.current?.focus()
           }}
         >
-          <PaneResizeHandle kind="composer" extent={composerDockHeight} edge="top" inset={-1} leading={Math.min(composerDockTitleWidth + 4, Math.floor(composerAreaWidth / 2))} />
+          <PaneResizeHandle kind="composer" extent={composerDockHeight} edge="top" inset={-1} color={composerDockEmphasized ? composerAccentColor : theme.border} leading={Math.min(composerDockTitleWidth + 4, Math.floor(composerAreaWidth / 2))} />
           {onComposerTargetClick && composerTargetMessage && !fullscreenMode && !composerTurnStatusInBorder ? (
             <box id="composer-target-label" position="absolute" top={-1} left={2} height={1} width={Math.max(8, composerDockTitleWidth - 4) + 4} flexDirection="row" zIndex={3}
               onMouseUp={(event) => { if (event.button !== 0) return; event.stopPropagation(); onComposerTargetClick({ x: event.x, y: event.y }) }}>
