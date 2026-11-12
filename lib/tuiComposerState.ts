@@ -178,53 +178,93 @@ export function flushComposerStashWrites(): boolean {
   return stashStore.flushWrites()
 }
 
-// --- Sent history (global, text-only, persisted across restarts) ---
+// --- Sent history (text-only, persisted across restarts) ---
+//
+// Every entry records the session it was sent to, so the history panel can
+// show either this session's prompts or every prompt. Entries written before
+// that (plain strings) have no session and appear only under "all sessions".
 
 const SENT_HISTORY_FILE = path.join(DATA_DIR, 'sent-history.json')
 const SENT_HISTORY_MAX = 200
 
-type SentHistoryStore = { entries: string[] }
+export type ComposerSentHistoryEntry = { text: string; session: string | null }
+export type ComposerHistoryScope = 'session' | 'all'
 
-function readSentHistorySync(): string[] {
+type SentHistoryStore = {
+  entries: Array<string | { text?: unknown; session?: unknown }>
+  scope?: unknown
+}
+
+function readSentHistoryStoreSync(): { entries: ComposerSentHistoryEntry[]; scope: ComposerHistoryScope } {
   try {
-    if (!existsSync(SENT_HISTORY_FILE)) return []
-    const raw = readFileSync(SENT_HISTORY_FILE, 'utf-8')
-    const parsed = JSON.parse(raw) as SentHistoryStore
-    return Array.isArray(parsed.entries) ? parsed.entries.filter((e) => typeof e === 'string') : []
+    if (!existsSync(SENT_HISTORY_FILE)) return { entries: [], scope: 'all' }
+    const parsed = JSON.parse(readFileSync(SENT_HISTORY_FILE, 'utf-8')) as SentHistoryStore
+    const entries: ComposerSentHistoryEntry[] = []
+    for (const entry of Array.isArray(parsed.entries) ? parsed.entries : []) {
+      if (typeof entry === 'string') entries.push({ text: entry, session: null })
+      else if (entry && typeof entry.text === 'string') {
+        entries.push({ text: entry.text, session: typeof entry.session === 'string' ? entry.session : null })
+      }
+    }
+    return { entries, scope: parsed.scope === 'session' ? 'session' : 'all' }
   } catch {
-    return []
+    return { entries: [], scope: 'all' }
   }
 }
 
-let sentHistoryCache: string[] | null = null
+let sentHistoryCache: { entries: ComposerSentHistoryEntry[]; scope: ComposerHistoryScope } | null = null
 let sentHistoryWriteTimer: ReturnType<typeof setTimeout> | null = null
+
+function sentHistoryState() {
+  if (!sentHistoryCache) sentHistoryCache = readSentHistoryStoreSync()
+  return sentHistoryCache
+}
 
 function flushSentHistory(): void {
   sentHistoryWriteTimer = null
   if (!sentHistoryCache) return
   try {
     ensureDir()
-    writeFileSync(SENT_HISTORY_FILE, JSON.stringify({ entries: sentHistoryCache }), 'utf-8')
+    writeFileSync(SENT_HISTORY_FILE, JSON.stringify(sentHistoryCache), 'utf-8')
   } catch {
     // best-effort; history is non-critical
   }
 }
 
-/** Returns persisted sent messages, oldest first. */
-export function readComposerSentHistory(): string[] {
-  if (!sentHistoryCache) sentHistoryCache = readSentHistorySync()
-  return [...sentHistoryCache]
+function scheduleSentHistoryWrite(): void {
+  if (!sentHistoryWriteTimer) sentHistoryWriteTimer = setTimeout(flushSentHistory, 300)
 }
 
-/** Appends a sent message (text-only), de-duping consecutive repeats, capped. */
-export function appendComposerSentHistory(text: string): void {
+/** Returns persisted sent messages, oldest first. */
+export function readComposerSentHistory(): ComposerSentHistoryEntry[] {
+  return sentHistoryState().entries.map((entry) => ({ ...entry }))
+}
+
+/**
+ * Appends a sent message (text-only) for the session it was sent to,
+ * de-duping consecutive repeats to the same session, capped.
+ */
+export function appendComposerSentHistory(text: string, session: string | null): void {
   const trimmed = text.trim()
   if (!trimmed) return
-  if (!sentHistoryCache) sentHistoryCache = readSentHistorySync()
-  if (sentHistoryCache[sentHistoryCache.length - 1] === trimmed) return
-  sentHistoryCache.push(trimmed)
-  if (sentHistoryCache.length > SENT_HISTORY_MAX) {
-    sentHistoryCache = sentHistoryCache.slice(sentHistoryCache.length - SENT_HISTORY_MAX)
+  const state = sentHistoryState()
+  const last = state.entries[state.entries.length - 1]
+  if (last && last.text === trimmed && last.session === session) return
+  state.entries.push({ text: trimmed, session })
+  if (state.entries.length > SENT_HISTORY_MAX) {
+    state.entries = state.entries.slice(state.entries.length - SENT_HISTORY_MAX)
   }
-  if (!sentHistoryWriteTimer) sentHistoryWriteTimer = setTimeout(flushSentHistory, 300)
+  scheduleSentHistoryWrite()
+}
+
+/** Whether the history panel lists this session's prompts or every prompt. */
+export function readComposerHistoryScope(): ComposerHistoryScope {
+  return sentHistoryState().scope
+}
+
+export function writeComposerHistoryScope(scope: ComposerHistoryScope): void {
+  const state = sentHistoryState()
+  if (state.scope === scope) return
+  state.scope = scope
+  scheduleSentHistoryWrite()
 }

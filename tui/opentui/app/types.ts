@@ -53,6 +53,8 @@ export type ComposerDraftSnapshot = {
   attachments: SendAttachment[]
   promptParts: ComposerPromptPart[]
   cursorOffset?: number
+  /** Sent-history entries only: the session the prompt was sent to. */
+  sessionKey?: string | null
 }
 export type ComposerPromptPartRange = ComposerPromptPart & { start: number; end: number} 
 export type QueuedComposerSend = {

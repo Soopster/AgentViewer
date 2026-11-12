@@ -32,7 +32,7 @@ export function useModelState() {
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
   const [modelPickerError, setModelPickerError] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>(() =>
-    readComposerSentHistory().map((text) => ({ text, attachments: [], promptParts: [] })),
+    readComposerSentHistory().map(({ text, session }) => ({ text, attachments: [], promptParts: [], sessionKey: session })),
   )
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftBeforeHistory, setDraftBeforeHistory] = useState<ComposerDraftSnapshot>({

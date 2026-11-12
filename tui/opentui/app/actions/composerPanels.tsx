@@ -81,6 +81,8 @@ export type RenderComposerHistoryPanelContext = {
   composerHistoryVisibleCount: number
   composerMention: { start: number; query: string; } | null
   sentHistory: ComposerDraftSnapshot[]
+  /** Which prompts are listed, and what ⌃S switches to. */
+  composerHistoryScopeLabel: string
   composerHistoryIndex: number
   theme: TuiThemePalette
   composerAccentColor: string
@@ -89,7 +91,7 @@ export type RenderComposerHistoryPanelContext = {
 export function runRenderComposerHistoryPanel(ctx: RenderComposerHistoryPanelContext, panelWidth: number, rowWidth: number) {
   const {
     composerActive, composerHistoryOpen, composerHistoryVisibleCount, composerMention, sentHistory,
-    composerHistoryIndex, theme, composerAccentColor,
+    composerHistoryScopeLabel, composerHistoryIndex, theme, composerAccentColor,
   } = ctx
   if (!composerActive || !composerHistoryOpen || composerHistoryVisibleCount <= 0 || composerMention) return null
   const total = sentHistory.length
@@ -111,7 +113,7 @@ export function runRenderComposerHistoryPanel(ctx: RenderComposerHistoryPanelCon
       flexDirection="column"
     >
       <text fg={composerAccentColor} wrapMode="none">
-        {fitText(`history · ⌃P older · ⌃N newer · tab/enter use · esc cancel  (${composerHistoryIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+        {fitText(`history: ${composerHistoryScopeLabel} · ⌃P older · ⌃N newer · tab/enter use · esc cancel  (${composerHistoryIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
       </text>
       {sentHistory.slice().reverse().slice(start, end).map((entry, offset) => {
         const index = start + offset

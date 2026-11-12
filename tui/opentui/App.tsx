@@ -105,7 +105,10 @@ import {
   readComposerQueue,
   readComposerSentHistory,
   readComposerStash,
+  readComposerHistoryScope,
   scheduleWriteComposerStash,
+  writeComposerHistoryScope,
+  type ComposerHistoryScope,
 } from '../../lib/tuiComposerState'
 import { frecencyKey, frecencyPrefix, readFrecencyScores, recordFrecencyUse } from '../../lib/tuiFrecency'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
@@ -798,7 +801,7 @@ function OpenTuiWorkspace() {
     modelPickerQuery, setModelPickerQuery, modelPickerIndex, setModelPickerIndex,
     modelPickerEffortIndex, setModelPickerEffortIndex, modelPickerPermissionIndex,
     setModelPickerPermissionIndex, modelPickerLoading, setModelPickerLoading, modelPickerError,
-    setModelPickerError, sentHistory, setSentHistory, historyIndex, setHistoryIndex,
+    setModelPickerError, sentHistory: allSentHistory, setSentHistory, historyIndex, setHistoryIndex,
     draftBeforeHistory, setDraftBeforeHistory, thinkingMode, setThinkingMode, openTabSessions,
     setOpenTabSessions, sidebarScrollRef, measuredWindowAreaHeight, setMeasuredWindowAreaHeight,
     scrollbackSyncedCursorKeyRef, tabReaderPositionsRef, velocityScrollStateRef, tabSelectRef,
@@ -1043,6 +1046,35 @@ function OpenTuiWorkspace() {
     composerPreferredTargetKey, sessions, queuedComposerSends,
   })
   useLayoutEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
+  // The history panel lists either the prompts sent to the composer's target
+  // session or every prompt (⌃S in the panel flips it, and it is remembered).
+  // A session with nothing sent yet falls back to every prompt, so history is
+  // never empty just because this chat is new.
+  const [composerHistoryScope, setComposerHistoryScope] = useState<ComposerHistoryScope>(readComposerHistoryScope)
+  // This session's prompts come from its own transcript as well as from what
+  // this TUI recorded: prompts sent before history recorded sessions, or from
+  // another client, are in the transcript and nowhere else. Only a transcript
+  // that is the target's own counts.
+  const composerTargetTranscriptPrompts = useMemo(() => {
+    if (composerHistoryScope !== 'session' || !composerTargetSession) return null
+    const raw = sessionDetail?.rawMessages
+    if (!raw?.length || raw[0]?.session_id !== composerTargetSession.id) return null
+    return rewindCandidates(raw).reverse().map(candidate => candidate.text)
+  }, [composerHistoryScope, composerTargetSession, sessionDetail?.rawMessages])
+  const scopedComposerHistory = useMemo(
+    () => scopeComposerHistory(allSentHistory, composerHistoryScope, composerTargetSessionIdentity, composerTargetTranscriptPrompts),
+    [allSentHistory, composerHistoryScope, composerTargetSessionIdentity, composerTargetTranscriptPrompts],
+  )
+  const sentHistory = scopedComposerHistory.entries
+  const composerHistoryScopeLabel = scopedComposerHistory.label
+  // historyIndex points into the scoped list, so a different target session
+  // (another list) must not keep it.
+  useEffect(() => {
+    if (composerHistoryScope !== 'session') return
+    setHistoryIndex(-1)
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+  }, [composerTargetSessionIdentity])
   useSessionRecapSuggestion({
     session: composerTargetSession ?? selectedSession,
     draft: composerDraft,
@@ -1894,6 +1926,23 @@ function OpenTuiWorkspace() {
     }, (err) => {
       showNotice('error', `Could not hand the terminal to the editor: ${err instanceof Error ? err.message : String(err)}`)
     })
+  })
+
+  const toggleComposerHistoryScope = useStableEvent(() => {
+    const nextScope: ComposerHistoryScope = composerHistoryScope === 'session' ? 'all' : 'session'
+    setComposerHistoryScope(nextScope)
+    writeComposerHistoryScope(nextScope)
+    const raw = sessionDetail?.rawMessages
+    const transcriptPrompts = nextScope === 'session' && composerTargetSession && raw
+      && raw[0]?.session_id === composerTargetSession.id
+      ? rewindCandidates(raw).reverse().map(candidate => candidate.text)
+      : null
+    const nextEntries = scopeComposerHistory(allSentHistory, nextScope, composerTargetSessionIdentity, transcriptPrompts).entries
+    const newest = nextEntries[nextEntries.length - 1]
+    if (!newest) return
+    setComposerHistoryIndex(0)
+    setHistoryIndex(nextEntries.length - 1)
+    applyComposerSnapshot(newest)
   })
 
   const commitComposerHistory = useCallback(() => {
@@ -6418,7 +6467,7 @@ function OpenTuiWorkspace() {
       toggleComposerBridgeRoute, searchComposerHistory, editComposerInExternalEditor,
       pluginOverlay, closePluginOverlay, runPluginCommandId, composerTargetSession,
       setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory, moveComposerHistory,
-      selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen,
+      selectComposerHistoryEntry, sentHistory, toggleComposerHistoryScope, sequence, setComposerHistoryOpen,
       setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt,
       setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry,
       composerStashIndex, composerStash, composerMentionIndex, insertMentionAtCursor,
@@ -6564,7 +6613,7 @@ function OpenTuiWorkspace() {
     composerMentionResults, composerMentionIndex, composerAccentColor, composerConfig,
     composerProvider, composerSlashOpen, composerSlashVisibleCount, composerSlashCommands,
     composerSlashIndex, composerHistoryOpen, composerHistoryVisibleCount, sentHistory,
-    composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
+    composerHistoryScopeLabel, composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
     composerStashOpen, composerStashVisibleCount, composerStash, composerStashIndex,
     activeQueuedComposerSends, composerQueueDurable, composerWindowOpen, composerHidden,
     presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused,
@@ -7717,4 +7766,28 @@ function OpenTuiWorkspace() {
     </PaneResizeProvider>
     </BordersContext.Provider>
   )
+}
+
+function scopeComposerHistory(
+  all: ComposerDraftSnapshot[],
+  scope: ComposerHistoryScope,
+  targetKey: string | null,
+  transcriptPrompts: string[] | null,
+): { entries: ComposerDraftSnapshot[]; label: string } {
+  if (scope === 'all') return { entries: all, label: 'all sessions · ⌃S this session' }
+  const toAll = '⌃S all sessions'
+  if (!targetKey) return { entries: all, label: `no session selected, showing all · ${toAll}` }
+  // The transcript's prompts, oldest first, then anything recorded for this
+  // session that the transcript does not show yet (a turn still persisting).
+  // A recorded entry keeps its attachments, so it wins over the transcript's
+  // copy of the same text.
+  const recorded = all.filter((entry) => entry.sessionKey === targetKey)
+  const recordedByText = new Map(recorded.map((entry) => [entry.text, entry]))
+  const fromTranscript = (transcriptPrompts ?? []).map((text) => (
+    recordedByText.get(text) ?? { text, attachments: [], promptParts: [], sessionKey: targetKey }
+  ))
+  const shown = new Set(transcriptPrompts ?? [])
+  const entries = [...fromTranscript, ...recorded.filter((entry) => !shown.has(entry.text))]
+  if (entries.length === 0) return { entries: all, label: `no prompts in this session yet, showing all · ${toAll}` }
+  return { entries, label: `this session · ${toAll}` }
 }

@@ -1253,8 +1253,9 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
       text: submission.visibleText.trim(),
       attachments: sendAttachments,
       promptParts: submission.promptParts,
+      sessionKey: targetKey,
     }])
-    appendComposerSentHistory(submission.visibleText)
+    appendComposerSentHistory(submission.visibleText, targetKey)
     setHistoryIndex(-1)
     setDraftBeforeHistory({ text: '', attachments: [], promptParts: [] })
     setComposerHistoryOpen(false)

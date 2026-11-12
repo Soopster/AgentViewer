@@ -28,7 +28,7 @@ export function handleComposerKeys({
   canUseChannelBridge, routeComposerToBridge, toggleComposerBridgeRoute, searchComposerHistory,
   editComposerInExternalEditor, pluginOverlay, closePluginOverlay, runPluginCommandId,
   composerTargetSession, setComposerEnableWorkflow, showToggleOutcome, commitComposerHistory,
-  moveComposerHistory, selectComposerHistoryEntry, sentHistory, sequence, setComposerHistoryOpen,
+  moveComposerHistory, selectComposerHistoryEntry, sentHistory, toggleComposerHistoryScope, sequence, setComposerHistoryOpen,
   setComposerHistoryIndex, setHistoryIndex, composerRewindIndex, rewindToPrompt,
   setComposerRewindIndex, commitComposerStashEntry, selectComposerStashEntry, composerStashIndex,
   composerStash, composerMentionIndex, insertMentionAtCursor, setComposerMentionIndex,
@@ -83,6 +83,7 @@ export function handleComposerKeys({
   setComposerEnableWorkflow: React.Dispatch<React.SetStateAction<boolean>>
   showToggleOutcome: (label: string, outcome: string | boolean) => void
   commitComposerHistory: () => void
+  toggleComposerHistoryScope: () => void
   moveComposerHistory: (delta: number) => void
   selectComposerHistoryEntry: (displayIndex: number) => void
   sentHistory: ComposerDraftSnapshot[]
@@ -241,6 +242,10 @@ export function handleComposerKeys({
       if (composerHistoryOpen) {
         if (key.name === 'tab' || key.name === 'return') {
           handled(commitComposerHistory)
+          return true
+        }
+        if (isCtrl('s')) {
+          handled(toggleComposerHistoryScope)
           return true
         }
         if (key.name === 'n' && key.ctrl) {

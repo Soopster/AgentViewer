@@ -50,6 +50,7 @@ export type UseSubmitComposerFromDockGroupContext = {
   composerHistoryOpen: boolean
   composerHistoryVisibleCount: number
   sentHistory: ComposerDraftSnapshot[]
+  composerHistoryScopeLabel: string
   composerHistoryIndex: number
   composerRewindItems: RewindCandidate[] | null
   composerRewindVisibleCount: number
@@ -128,7 +129,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
     composerMentionResults, composerMentionIndex, composerAccentColor, composerConfig,
     composerProvider, composerSlashOpen, composerSlashVisibleCount, composerSlashCommands,
     composerSlashIndex, composerHistoryOpen, composerHistoryVisibleCount, sentHistory,
-    composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
+    composerHistoryScopeLabel, composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
     composerStashOpen, composerStashVisibleCount, composerStash, composerStashIndex,
     activeQueuedComposerSends, composerQueueDurable, composerWindowOpen, composerHidden,
     presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused,
@@ -175,7 +176,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
   }, panelWidth, rowWidth)
   const renderComposerHistoryPanel = (panelWidth: number, rowWidth: number) => runRenderComposerHistoryPanel({
     composerActive, composerHistoryOpen, composerHistoryVisibleCount, composerMention, sentHistory,
-    composerHistoryIndex, theme, composerAccentColor,
+    composerHistoryScopeLabel, composerHistoryIndex, theme, composerAccentColor,
   }, panelWidth, rowWidth)
   const renderComposerRewindPanel = (panelWidth: number, rowWidth: number) => runRenderComposerRewindPanel({
     composerActive, composerRewindItems, composerRewindVisibleCount, composerRewindIndex, theme,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -15,6 +15,10 @@ const {
   scheduleWriteComposerDraftParts,
   scheduleWriteComposerQueue,
   scheduleWriteComposerStash,
+  appendComposerSentHistory,
+  readComposerSentHistory,
+  readComposerHistoryScope,
+  writeComposerHistoryScope,
 } = await import('../../lib/tuiComposerState')
 
 scheduleWriteComposerDraft('claude:reader-a', 'reader draft')
@@ -93,5 +97,26 @@ assert.equal(capped[capped.length - 1]?.text, `entry-${COMPOSER_STASH_MAX + 4}`,
 // The stash and the follow-up queue are separate files: restoring a shelved
 // draft must not disturb work already queued to send.
 assert.deepEqual(JSON.parse(readFileSync(queueFile, 'utf8')), { version: 1, entries: [] })
+
+// ── sent history ───────────────────────────────────────────────────────────
+// Each prompt records the session it went to, so the history panel can list
+// one session's prompts or all of them. A file written before that holds bare
+// strings: they must still read, as prompts with no session.
+const historyFile = path.join(process.cwd(), '.agent-viewer-data', 'composer-drafts', 'sent-history.json')
+writeFileSync(historyFile, JSON.stringify({ entries: ['legacy prompt'] }))
+assert.deepEqual(readComposerSentHistory(), [{ text: 'legacy prompt', session: null }], 'legacy entries read with no session')
+assert.equal(readComposerHistoryScope(), 'all', 'history lists every prompt until asked otherwise')
+appendComposerSentHistory('  Commit and push ', 'claude:a')
+appendComposerSentHistory('Commit and push', 'claude:a')
+appendComposerSentHistory('Commit and push', 'codex:b')
+assert.deepEqual(readComposerSentHistory().slice(1), [
+  { text: 'Commit and push', session: 'claude:a' },
+  { text: 'Commit and push', session: 'codex:b' },
+], 'a repeat is dropped only when it went to the same session')
+writeComposerHistoryScope('session')
+await new Promise((resolve) => setTimeout(resolve, 400))
+const historyStored = JSON.parse(readFileSync(historyFile, 'utf8'))
+assert.equal(historyStored.scope, 'session', 'the chosen scope reaches the file')
+assert.deepEqual(historyStored.entries.at(-1), { text: 'Commit and push', session: 'codex:b' }, 'entries reach the file with their session')
 
 console.log('Composer drafts remain isolated, and queue and stash commits flush atomically to separate files')
