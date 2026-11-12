@@ -18,6 +18,12 @@ import CodeThemeToggle from '../CodeThemeToggle'
 import RenderFontToggle from '../RenderFontToggle'
 import { applyColorTreatment, type ColorTreatment } from '@/lib/colorTreatment'
 import { WEB_TOOLBAR_PLUGIN_COMMANDS } from './lazyPanels'
+import { useState } from 'react'
+import { useOptionalSidebar } from '@/components/ui/sidebar'
+import { webSettingsFromSpec, type ViewSpec } from '@/tui/viewSpec'
+import { useWebViews } from './useWebViews'
+import { WebViewStudio } from './WebViewStudio'
+import type { ActiveTranscriptFilter } from './types'
 
 type MessageViewTopBarProps = {
   maximized: boolean
@@ -79,9 +85,33 @@ type MessageViewTopBarProps = {
   deleting: boolean
   toggleLiveFollow: () => void
   autoFollow: boolean
+  /** Lets a view's "prompts only" filter reach the transcript filter chips. */
+  setTranscriptFilters?: Dispatch<SetStateAction<ActiveTranscriptFilter[]>>
 }
 
 export function MessageViewTopBar(props: MessageViewTopBarProps) {
+  // Transcript views shared with the TUI: choosing or previewing one sets the
+  // display settings below, which stay individually toggleable.
+  const viewLibrary = useWebViews()
+  const [viewStudioOpen, setViewStudioOpen] = useState(false)
+  const sidebar = useOptionalSidebar()
+  const applyView = (spec: ViewSpec) => {
+    const web = webSettingsFromSpec(spec)
+    props.setViewMode(web.viewMode)
+    if (web.density) props.setDensity(web.density)
+    if (web.timelineWidth) props.setTimelineWidth(web.timelineWidth)
+    if (web.stickyHeaders !== null) props.setStickyHeaders(web.stickyHeaders)
+    if (web.diffStyle) props.setDiffStyle(web.diffStyle)
+    if (web.filters && props.setTranscriptFilters) props.setTranscriptFilters(web.filters)
+    if (web.sidebarOpen !== null && sidebar && sidebar.open !== web.sidebarOpen) sidebar.setOpen(web.sidebarOpen)
+    if (web.rightPanelOpen && props.rightPanelOpen === false) props.onToggleRightPanel?.()
+  }
+  const activeViewLabel = (() => {
+    const active = viewLibrary.active
+    if (!active) return null
+    if (active.kind === 'custom') return viewLibrary.views.find((view) => view.id === active.id)?.name ?? null
+    return active.view.charAt(0).toUpperCase() + active.view.slice(1)
+  })()
   const {
     maximized, colorTreatment, isProject, dirName, projectView, session, sessionInfo, contextUsage,
     disabledPlugins, loading, threaded, messages, viewDropdownRef, setViewDropdownOpen,
@@ -95,7 +125,9 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
     handleDeleteSession, deleting, toggleLiveFollow, autoFollow,
   } = props
   return (
-    !maximized && <div
+    <>
+    {viewStudioOpen ? <WebViewStudio library={viewLibrary} apply={applyView} onClose={() => setViewStudioOpen(false)} /> : null}
+    {!maximized && <div
         style={{
           padding: '0 28px',
           height: 52,
@@ -346,6 +378,12 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
                   ☐ Tasks · {taskRegistry.size}
                 </button>
               )}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Views shared with the terminal */}
+              <button type="button" className="av-hover-control" data-testid="open-view-studio" onClick={() => { setViewStudioOpen(true); setViewDropdownOpen(false) }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--cyan)', fontSize: 12, textAlign: 'left' }}>
+                ◧ Views{activeViewLabel ? ` · ${activeViewLabel}` : ''} — customise…
+              </button>
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* View mode */}
               <div style={{ padding: '4px 14px 2px', fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>Messages</div>
@@ -651,6 +689,7 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
           />
           {autoFollow ? 'Live' : 'Paused'}
         </Button>
-        </div>
+        </div>}
+    </>
   )
 }

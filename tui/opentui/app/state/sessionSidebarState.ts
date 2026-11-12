@@ -26,10 +26,10 @@ export function useSessionSidebarState() {
     return migrateSessionSidebarPreferences(legacy, activity)
   })
   const pinnedKeys = useMemo(() => new Set(preferences.pinned), [preferences.pinned])
-  const togglePin = useStableEvent((session: Session) => {
-    const key = sessionKey(session)
-    setPreferences(previous => ({ ...previous, pinned: previous.pinned.includes(key) ? previous.pinned.filter(value => value !== key) : [...previous.pinned, key] }))
+  // Pins now live in the session inbox; the workspace list is only read, and emptied as its pins are dropped.
+  const dropLegacyPin = useStableEvent((key: string) => {
+    setPreferences(previous => previous.pinned.includes(key) ? { ...previous, pinned: previous.pinned.filter(value => value !== key) } : previous)
   })
   const setActivity = useStableEvent((activity: SidebarActivity) => setPreferences(previous => ({ ...previous, activity })))
-  return { activity: preferences.activity, pinnedKeys, togglePin, setActivity }
+  return { activity: preferences.activity, pinnedKeys, dropLegacyPin, setActivity }
 }

@@ -43,6 +43,8 @@ export type ViewSpec = {
   contextSidebar: boolean
   /** A prompt navigation bar above the transcript, tracking the turn on screen (in place of the floating sticky prompt). */
   promptNavigation: boolean
+  /** The transcript's scrollbar: with the prompt/error/result markers, plain, or none. */
+  scrollbar: 'markers' | 'plain' | 'hidden'
   /** The scrollbar's prompt markers jump to their card when clicked. */
   scrollMarkerJump: boolean
   // Content
@@ -71,6 +73,18 @@ export type ViewSpec = {
   replyTimestamps: boolean
   diffPreview: boolean
   textWidth: ViewTextWidth
+  // Composer
+  /** The live reply's text above the composer while it streams (the stream views draw it in the transcript). */
+  liveText: boolean
+  /** The dock's border title: who the draft goes to. */
+  composerTitle: boolean
+  /** The turn-status row above the composer: a ▌ rail on a raised band, or a ● dot inline with the text. */
+  composerStatus: 'rail' | 'dot'
+  composerBorder: 'rounded' | 'square' | 'heavy'
+  /** The dock's resting height: grows with the draft, or keeps a floor of rows. */
+  composerSize: 'auto' | 'compact' | 'tall'
+  /** The dock spans the terminal, or only the reader column beside the rail. */
+  composerWidth: 'full' | 'reader'
   // Tabs: how the session tab strip draws.
   tabStyle: ViewTabStyle
   tabWidth: ViewTabWidth
@@ -114,7 +128,8 @@ export type ViewCardStyle = Pick<ViewSpec, 'messageLayout' | 'promptMarker' | 'r
 
 const CARDS: ViewSpec = {
   flow: 'cards', cursor: 'card', readerHeader: true, composer: 'docked', idleTicker: true, liveReasoning: true,
-  completedTurnHint: false, appTabs: false, contextSidebar: false, promptNavigation: false, scrollMarkerJump: false,
+  completedTurnHint: false, appTabs: false, contextSidebar: false, promptNavigation: false, scrollMarkerJump: false, scrollbar: 'markers',
+  liveText: true, composerTitle: true, composerStatus: 'rail', composerBorder: 'rounded', composerSize: 'auto', composerWidth: 'full',
   cardFilter: 'all', toolGrouping: 'none', agentCards: 'none', foldDefault: 'default', dimAutoFolded: false,
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
   messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
@@ -126,6 +141,7 @@ const CARDS: ViewSpec = {
 }
 const STREAM: ViewSpec = {
   ...CARDS, flow: 'stream', cardFilter: 'no-system', toolGrouping: 'stream', agentCards: 'operational',
+  liveText: false, composerTitle: false, composerStatus: 'dot',
   readerHeader: false, idleTicker: false, liveReasoning: false, completedTurnHint: true,
 }
 const SCROLLBACK: ViewSpec = { ...STREAM, cursor: 'none', turnBoundaries: 'summary-only' }
@@ -163,8 +179,8 @@ export const VIEW_SPEC_BASES: readonly TuiTranscriptView[] = [
 
 // ── the field registry the studio renders ──────────────────────────────────
 
-export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Tabs' | 'Panels' | 'Pins'
-export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Tabs', 'Panels', 'Pins']
+export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Composer' | 'Tabs' | 'Panels' | 'Pins'
+export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Composer', 'Tabs', 'Panels', 'Pins']
 
 export type ViewSpecFieldOption = { value: ViewSpec[ViewSpecKey]; label: string }
 export type ViewSpecField = {
@@ -186,12 +202,11 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'cursor', section: 'Layout', label: 'Cursor', help: 'A card cursor, or none: j/k scroll by line and e expands everything.',
     options: [{ value: 'card', label: 'card' }, { value: 'none', label: 'none (scroll)' }] },
   { key: 'readerHeader', section: 'Layout', label: 'Reader header', help: 'The view label, title and context row above the transcript.', options: ON_OFF },
-  { key: 'composer', section: 'Layout', label: 'Composer', help: 'Docked under the windows, or inline at the end of the transcript.',
-    options: [{ value: 'docked', label: 'docked' }, { value: 'inline', label: 'inline' }] },
   { key: 'idleTicker', section: 'Layout', label: 'Idle ticker', help: 'The "on standby" line under an idle transcript.', options: ON_OFF },
-  { key: 'liveReasoning', section: 'Layout', label: 'Live reasoning', help: 'A preview of the model\'s reasoning above the composer while it thinks.', options: ON_OFF },
   { key: 'completedTurnHint', section: 'Layout', label: 'Turn-done hint', help: 'A summary line once a turn has finished.', options: ON_OFF },
   { key: 'promptNavigation', section: 'Layout', label: 'Prompt navigation', help: 'A bar above the transcript naming the turn on screen, with the prompts before and after it (in place of the sticky prompt).', options: ON_OFF },
+  { key: 'scrollbar', section: 'Layout', label: 'Scrollbar', help: 'The scrollbar with its prompt, result and error markers, a plain scrollbar, or none.',
+    options: [{ value: 'markers', label: 'with markers' }, { value: 'plain', label: 'plain' }, { value: 'hidden', label: 'hidden' }] },
   { key: 'scrollMarkerJump', section: 'Layout', label: 'Clickable markers', help: 'Click a prompt marker on the scrollbar to jump to it.', options: ON_OFF },
   { key: 'appTabs', section: 'Layout', label: 'App tabs', help: 'A Current / Sessions tab row above the transcript.', options: ON_OFF },
   { key: 'contextSidebar', section: 'Layout', label: 'Context sidebar', help: 'Reserve a column for session context beside a single window.', options: ON_OFF },
@@ -233,6 +248,20 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'diffPreview', section: 'Style', label: 'Diff previews', help: 'A few changed lines under a folded edit, or its heading alone.', options: ON_OFF },
   { key: 'textWidth', section: 'Style', label: 'Prose width', help: 'Keep prose to a readable measure, or use the full width.',
     options: [{ value: 'measure', label: 'measure' }, { value: 'full', label: 'full' }] },
+  // Composer
+  { key: 'composer', section: 'Composer', label: 'Composer', help: 'Docked under the windows, or inline at the end of the transcript.',
+    options: [{ value: 'docked', label: 'docked' }, { value: 'inline', label: 'inline' }] },
+  { key: 'liveReasoning', section: 'Composer', label: 'Live reasoning', help: 'A preview of the model\'s reasoning above the composer while it thinks.', options: ON_OFF },
+  { key: 'liveText', section: 'Composer', label: 'Live reply text', help: 'The streaming reply above the composer (stream views draw it in the transcript instead).', options: ON_OFF },
+  { key: 'composerTitle', section: 'Composer', label: 'Dock title', help: 'Who the draft goes to, on the dock\'s border.', options: ON_OFF },
+  { key: 'composerStatus', section: 'Composer', label: 'Turn status', help: 'The working row above the composer: a ▌ rail on a raised band, or a ● dot in line with the text.',
+    options: [{ value: 'rail', label: '▌ rail' }, { value: 'dot', label: '● dot' }] },
+  { key: 'composerBorder', section: 'Composer', label: 'Dock border', help: 'The dock\'s frame.',
+    options: [{ value: 'rounded', label: 'rounded' }, { value: 'square', label: 'square' }, { value: 'heavy', label: 'heavy' }] },
+  { key: 'composerSize', section: 'Composer', label: 'Dock height', help: 'Grow with the draft from the smallest dock, or keep a compact or tall floor.',
+    options: [{ value: 'auto', label: 'grow' }, { value: 'compact', label: 'compact' }, { value: 'tall', label: 'tall' }] },
+  { key: 'composerWidth', section: 'Composer', label: 'Dock width', help: 'Span the terminal, or only the reader column beside the rail.',
+    options: [{ value: 'full', label: 'full' }, { value: 'reader', label: 'reader column' }] },
   // Tabs
   { key: 'tabs', section: 'Tabs', label: 'Session tabs', help: 'Pin the session tab strip on or off.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
@@ -479,3 +508,46 @@ export function viewTabDisplay(spec: ViewSpec): TabDisplay {
   return display
 }
 export const DEFAULT_TAB_DISPLAY: TabDisplay = viewTabDisplay(BUILTIN_VIEW_SPECS.conversation)
+
+// ── the web renderer ───────────────────────────────────────────────────────
+// The web timeline draws from a smaller set of switches than the TUI. A view
+// is the same record in both; these are the fields the web honours, and what
+// a spec asks of the web's own settings when it is applied there.
+
+export const WEB_VIEW_FIELDS: ReadonlySet<ViewSpecKey> = new Set<ViewSpecKey>([
+  'flow', 'toolGrouping', 'agentCards', 'foldDefault', 'cardFilter', 'density', 'transcriptWidth', 'textWidth',
+  'diffLayout', 'stickyHeaders', 'promptNavigation', 'sessionRail', 'contextSidebar', 'composerWidth',
+])
+
+export type WebViewModeName = 'conversation' | 'full' | 'continue' | 'stream' | 'agents'
+export type WebViewSettings = {
+  viewMode: WebViewModeName
+  density: TuiDensity | null
+  timelineWidth: 'full' | 'centered' | null
+  stickyHeaders: boolean | null
+  diffStyle: 'stacked' | 'split' | null
+  /** Transcript filter chips to show only; null leaves the filters alone, [] clears them. */
+  filters: Array<'user'> | null
+  sidebarOpen: boolean | null
+  rightPanelOpen: boolean | null
+}
+
+/** What applying `spec` sets on the web: its message mode, then the settings it pins. */
+export function webSettingsFromSpec(spec: ViewSpec): WebViewSettings {
+  const viewMode: WebViewModeName = spec.toolGrouping === 'agents' || spec.agentCards === 'all' ? 'agents'
+    : spec.flow === 'stream' ? 'stream'
+    : spec.cardFilter === 'prose' ? 'continue'
+    : spec.foldDefault === 'expand-all' ? 'full'
+    : 'conversation'
+  const width = spec.transcriptWidth ?? (spec.textWidth === 'full' ? 'full' : null)
+  return {
+    viewMode,
+    density: spec.density,
+    timelineWidth: width === null ? null : width === 'full' ? 'full' : 'centered',
+    stickyHeaders: spec.promptNavigation ? true : spec.stickyHeaders,
+    diffStyle: spec.diffLayout === null ? null : spec.diffLayout === 'split' ? 'split' : 'stacked',
+    filters: spec.cardFilter === 'prompts' ? ['user'] : [],
+    sidebarOpen: spec.sessionRail,
+    rightPanelOpen: spec.contextSidebar ? true : null,
+  }
+}

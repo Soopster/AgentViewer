@@ -4,12 +4,13 @@ import { fitText } from '../../textLayout'
 import { LivePreviewCard } from '../inlineText'
 import { Spinner } from '../chrome'
 
-export function ComposerStatusMessage({ composerStatusMessage, visibleComposerSending, visibleComposerLiveText, visibleComposerError, isChatLikeView, liveAssistantTextCardVisible, composerProvider, liveAssistantPreviewLines, composerAccentColor, theme, visibleAwaitingPersistedTurn, width }: {
+export function ComposerStatusMessage({ composerStatusMessage, visibleComposerSending, visibleComposerLiveText, visibleComposerError, hideLiveText, liveAssistantTextCardVisible, composerProvider, liveAssistantPreviewLines, composerAccentColor, theme, visibleAwaitingPersistedTurn, width }: {
   composerStatusMessage: string | null
   visibleComposerSending: boolean
   visibleComposerLiveText: string
   visibleComposerError: string | null
-  isChatLikeView: boolean
+  /** The view draws the streaming reply in the transcript, not above the composer. */
+  hideLiveText: boolean
   liveAssistantTextCardVisible: boolean
   composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
   liveAssistantPreviewLines: string[]
@@ -21,7 +22,7 @@ export function ComposerStatusMessage({ composerStatusMessage, visibleComposerSe
   return (
     composerStatusMessage ? (
         visibleComposerSending && visibleComposerLiveText && !visibleComposerError ? (
-          isChatLikeView || liveAssistantTextCardVisible ? null : (
+          hideLiveText || liveAssistantTextCardVisible ? null : (
             <LivePreviewCard
               title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
               lines={liveAssistantPreviewLines}

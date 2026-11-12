@@ -120,7 +120,7 @@ export type ComposerStatusBlockHeightContext = {
   hasComposerStatusMessage: boolean
   visibleComposerLiveText: string
   visibleComposerError: string | null
-  isChatLikeView: boolean
+  hideLiveText: boolean
   liveAssistantTextCardVisible: boolean
   visibleAwaitingPersistedTurn: boolean
   liveStatus: 'requesting' | 'compacting' | 'retrying' | null
@@ -139,7 +139,7 @@ export function runComposerStatusBlockHeight(ctx: ComposerStatusBlockHeightConte
     presentationHidesComposer, visibleComposerSending, embeddedComposer,
     composerTurnStatusInBorder, composerActivityVisible, hasSubagentTail,
     visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion, composerSendState,
-    hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, isChatLikeView,
+    hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, hideLiveText,
     liveAssistantTextCardVisible, visibleAwaitingPersistedTurn, liveStatus, composerLiveReasoning,
     hideLiveReasoning, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
     questionPickerPlan, width,
@@ -158,7 +158,7 @@ return (() => {
   if (hasComposerStatusMessage) {
     const streamingResponse = visibleComposerSending && visibleComposerLiveText && !visibleComposerError
     rows += streamingResponse
-      ? isChatLikeView || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
+      ? hideLiveText || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
       : 2
   }
   if (visibleAwaitingPersistedTurn && !embeddedComposer) rows += 2

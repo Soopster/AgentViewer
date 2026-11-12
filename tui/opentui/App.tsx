@@ -142,7 +142,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, readTuiPrompts, readTuiPrompt, saveTuiPrompt, deleteTuiPrompt, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -315,6 +315,9 @@ import { handleGlobalChordKeys } from './app/keys/globalChordKeys'
 import { handleComposerKeys } from './app/keys/composerKeys'
 import { handleAskAndShortcutKeys } from './app/keys/askKeys'
 import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
+import { SIDEBAR_ACTIVITY_OPTIONS, filterSessionsByActivity, isDateBucketCollapsedByDefault, popularSessionTags } from '../../lib/sessionSidebarModel'
+import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '../../lib/sessionTags'
+const NO_WORKTREES: readonly string[] = []
 import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
 import { ViewStudioOverlay, VIEW_STUDIO_WIDTH, type ViewStudioKeyHandler } from './app/overlays/ViewStudioOverlay'
 import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
@@ -468,7 +471,7 @@ function OpenTuiWorkspace() {
     workspaceContext, workspaceId, workspaceCwd, spacesState, workspacesEnabled, toggleWorkspaces,
     workspaceLaunched, setWorkspaceLaunched, workspaceHasSession, setWorkspaceHasSession,
     spacesMenuOpen, setSpacesMenuOpen, spacesMenuSelection, spacesCloseId, spacesKeyRef,
-    openSpaces, allProjects, setAllProjects, readWorkspaceDraft, writeWorkspaceDraft,
+    openSpaces, allProjects, setAllProjects, readWorkspaceDraft, writeWorkspaceDraft, includeWorktrees, setIncludeWorktrees, sidebarTag, setSidebarTag,
     readWorkspaceDraftParts, writeWorkspaceDraftParts,
   } = useWorkspaceContextGroup()
 
@@ -476,7 +479,7 @@ function OpenTuiWorkspace() {
   const renderer = useRenderer()
   const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions()
   const engineeringLayout = useEngineeringLayout(terminalWidth, terminalHeight)
-  const { activity: sidebarActivity, setActivity: setSidebarActivity, pinnedKeys: sidebarPinnedKeys, togglePin: toggleSidebarPin } = useSessionSidebarState()
+  const { activity: sidebarActivity, setActivity: setSidebarActivity, pinnedKeys: legacySidebarPinnedKeys, dropLegacyPin } = useSessionSidebarState()
   const { width, height } = engineeringLayout
   const [composerHeightPreference, setComposerHeightPreference] = useWorkspaceState<number | undefined>('composerHeightPreference', undefined)
   const manualComposerHeight = engineeringLayout.active ? engineeringLayout.preferences.composerRows : composerHeightPreference
@@ -594,6 +597,55 @@ function OpenTuiWorkspace() {
   // A custom view may pin tool calls shown or hidden; X still toggles the global setting.
   const showToolCalls = viewSpec.showToolCalls ?? globalShowToolCalls
   const tabDisplay = viewTabDisplay(viewSpec)
+  // The rail's tag chips: the most used tags across the provider's sessions.
+  const sidebarTags = useMemo(() => popularSessionTags(sessions), [sessions])
+  // The project's worktrees, read only while the rail is scoped to the project and includes them.
+  const [worktreePaths, setWorktreePaths] = useState<readonly string[]>(NO_WORKTREES)
+  useEffect(() => {
+    if (allProjects || !includeWorktrees || !workspaceCwd) return
+    let cancelled = false
+    void readTuiWorktreePaths(workspaceCwd).then(paths => { if (!cancelled) setWorktreePaths(paths) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [allProjects, includeWorktrees, workspaceCwd])
+  // Pins are the session inbox's (`inbox.pinnedAt`), the same pins the web's ★
+  // sets, so pinning in either UI shows in both. Workspace pins kept from before
+  // still count until unpinned, which moves them out of the workspace for good.
+  const sidebarPinnedKeys = useMemo(() => {
+    const keys = new Set(legacySidebarPinnedKeys)
+    for (const session of sessions) if (session.inbox?.pinnedAt !== undefined) keys.add(sessionKey(session))
+    return keys
+  }, [legacySidebarPinnedKeys, sessions])
+  // Snooze and the linked pull request, optimistic like a pin: the row changes now, the inbox file after.
+  const changeSessionInbox = useStableEvent((session: Session, action: 'snooze' | 'unsnooze' | 'unlink-pr') => {
+    const key = sessionKey(session)
+    const before = session.inbox
+    const after = action === 'snooze' ? { ...before, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
+      : action === 'unsnooze' ? { ...before, snoozedUntil: undefined }
+      : { ...before, linkedPr: undefined }
+    const patch = (inbox: Session['inbox']) => setSessions((current) => current.map((entry) => sessionKey(entry) === key ? { ...entry, inbox } : entry))
+    patch(after)
+    showNotice('info', action === 'snooze' ? 'Snoozed for an hour' : action === 'unsnooze' ? 'Unsnoozed' : 'Pull request unlinked')
+    void updateTuiSessionInbox(session, action).catch((err) => {
+      patch(before)
+      showNotice('error', err instanceof Error ? err.message : 'Failed to update the session')
+    })
+  })
+  const toggleSidebarPin = useStableEvent((session: Session) => {
+    const key = sessionKey(session)
+    const pinned = sidebarPinnedKeys.has(key)
+    const patch = (pinnedAt: number | undefined) => setSessions((current) => current.map((entry) => {
+      if (sessionKey(entry) !== key) return entry
+      const inbox = { ...entry.inbox, pinnedAt }
+      if (pinnedAt === undefined) delete inbox.pinnedAt
+      return { ...entry, inbox }
+    }))
+    if (pinned) dropLegacyPin(key)
+    patch(pinned ? undefined : Date.now())
+    void updateTuiSessionInbox(session, pinned ? 'unpin' : 'pin').catch((err) => {
+      patch(session.inbox?.pinnedAt)
+      showNotice('error', err instanceof Error ? err.message : 'Failed to update the pin')
+    })
+  })
   const surfacePanelPlacement = viewSpec.sidePanelPlacement ?? globalSurfacePanelPlacement
   const setSelectedSessionKey = setSelectedSessionKeyState
   const [sessionDetail, setSessionDetail] = useWorkspaceState<TuiSessionDetail | null>('sessionDetail', null, false)
@@ -1353,21 +1405,32 @@ function OpenTuiWorkspace() {
     expandedCardKeys, collapsedCardKeys, searchQuery, followTail, readTranscriptCursorKey,
     transcriptIndexByKey, unreadBoundaryKey, sessionDetail, selectedSession,
     focusedSplitPaneSession, workspaceCwd, sessions, composerSendState, composerLiveText, theme,
-    renderer, sessionSearchQuery, allProjects, hideScratch: sidebarActivity === 'settled' ? false : hideScratch, selectedSessionKey,
+    renderer, sessionSearchQuery, allProjects, worktreePaths: includeWorktrees ? worktreePaths : NO_WORKTREES, sidebarTag, hideScratch: sidebarActivity === 'settled' ? false : hideScratch, selectedSessionKey,
     sidebarSessionActivity, recentlyWrittenSessions, teamAttention, showSettled: showSettled || sidebarActivity === 'settled',
   })
   useEffect(() => runProviderSubagentSummariesEffect({
     selectedSessionTarget, subagentSummariesReadRef, setProviderSubagentSummaries,
   }), [selectedSessionTarget])
 
+  // Why the rail shows fewer sessions than the scope holds (the title's n/m): what is hidden, and
+  // which filter narrows it. A click clears the tag and activity filters.
+  const hiddenNote = [
+    scratchFilter.hidden ? `${scratchFilter.hidden} scratch` : '',
+    settledFilter.hidden ? `${settledFilter.hidden} settled` : '',
+  ].filter(Boolean).join(' · ')
+  const narrowingNote = [
+    sidebarActivity ? SIDEBAR_ACTIVITY_OPTIONS.find(([value]) => value === sidebarActivity)?.[1] ?? '' : '',
+    sidebarTag ? `#${sidebarTag}` : '',
+  ].filter(Boolean)
+  // Short enough to sit at the end of the chips row on an ordinary rail: the count alone when
+  // hidden sessions are the only reason; the kinds are named once a filter makes it a longer note.
+  const hiddenCount = scratchFilter.hidden + settledFilter.hidden
+  const sidebarFilterNote = narrowingNote.length
+    ? [hiddenNote ? `${hiddenNote} hidden` : '', ...narrowingNote].filter(Boolean).join(' · ') + '  ×'
+    : hiddenCount ? `${hiddenCount} hidden` : ''
   const sidebarFilteredSessions = useMemo(() => {
-    if (!sidebarActivity) return filteredSessionsForSidebar
-    return filteredSessionsForSidebar.filter(session => {
-      const key = sessionKey(session)
-      return sidebarActivity === 'settled' ? Boolean(session.inbox?.settledAt)
-        : sidebarActivity === 'pinned' ? sidebarPinnedKeys.has(key)
-        : sidebarSessionActivity.get(key) === (sidebarActivity === 'attention' ? 'needs-input' : 'running')
-    })
+    return filterSessionsByActivity(filteredSessionsForSidebar, sidebarActivity,
+      session => sidebarSessionActivity.get(sessionKey(session)), session => sidebarPinnedKeys.has(sessionKey(session)))
   }, [filteredSessionsForSidebar, sidebarActivity, sidebarPinnedKeys, sidebarSessionActivity])
 
   const childrenByParentId = useMemo(() => {
@@ -1393,8 +1456,10 @@ function OpenTuiWorkspace() {
   }, [filteredSessionsForSidebar, providerSubagentSummaries])
 
   const sidebarFolderBySessionRef = useRef<Map<string, string>>(new Map())
-  const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(() => new Set())
-  const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroups(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next }), [])
+  // Folded groups are toggles against each group's default, kept per workspace so an opened "This month" stays open.
+  const [collapsedDateGroupKeys, setCollapsedDateGroupKeys] = useWorkspaceState<string[]>('sidebarCollapsedGroups', [])
+  const collapsedDateGroups = useMemo(() => new Set(collapsedDateGroupKeys), [collapsedDateGroupKeys])
+  const toggleDateGroup = useCallback((key: string) => setCollapsedDateGroupKeys(previous => previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key]), [setCollapsedDateGroupKeys])
   const sidebarEntries = useMemo(() => {
     const builtEntries = buildSidebarEntries(sidebarFilteredSessions, sidebarSort, childrenByParentId, collapsedSubagentSet)
     // Sessions waiting on the user lead the rail; a search shows results in place.
@@ -1499,7 +1564,7 @@ function OpenTuiWorkspace() {
     composerTargetSessionInfo, composerCurrentModel, composerModelLookupSettled,
     filteredModelPickerOptions,
   } = useComposerHeightGroup({
-    composerHeightPreference: manualComposerHeight,
+    composerHeightPreference: manualComposerHeight, composerSize: viewSpec.composerSize,
     embeddedComposer, composerDraftLines, height, fullscreenMode, composerDockChromeHeight,
     windowPresentation, composerTargetSessionIdentity, composerWindowOpen, composerHidden,
     composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
@@ -1947,7 +2012,7 @@ function OpenTuiWorkspace() {
     searchMode, sessionSearchMode, composerDockHeight, composerPopoverHeight,
     presentationHidesComposer, composerTurnStatusInBorder, composerActivityVisible,
     hasSubagentTail, visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion,
-    composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
+    composerSendState, hideLiveText: !viewSpec.liveText, liveAssistantTextCardVisible, liveStatus,
     composerLiveReasoning, hideLiveReasoning: !viewSpec.liveReasoning, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
     surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
@@ -2236,7 +2301,7 @@ function OpenTuiWorkspace() {
     composerLineCounts,
   } = useSplitPaneRunningKeysGroup({
     runningSessions, rightPaneWidth, taskPanelVisible, surfacePanelOnRight, showRail, sidebarWidth,
-    readerAreaWidth, width, fullscreenMode, height, composerDraft,
+    readerAreaWidth, width, fullscreenMode, height, composerDraft, composerInReaderColumn: viewSpec.composerWidth === 'reader',
   })
   composerDraftShapeRef.current = { ...composerLineCounts, lines: composerDraftLines, attachments: '' }
   const composerVisualLineCount = composerLineCounts.dock
@@ -3554,7 +3619,29 @@ function OpenTuiWorkspace() {
     renameDraftRef.current = renameDraft
   }, [renameDraft])
 
-  const commitRename = useStableEvent(async () => runCommitRename({
+  // The inline editor on a rail row renames a session, or (from the menu's Add tags) edits its tags.
+  const renameModeRef = useRef<'title' | 'tag'>('title')
+  // Closing the editor any way (Escape included) returns it to renaming, so ⌃R never saves tags.
+  useEffect(() => { if (!renameSessionKey) renameModeRef.current = 'title' }, [renameSessionKey])
+  const commitTags = async () => {
+    const key = renameSessionKey
+    const target = key ? sessions.find((session) => sessionKey(session) === key) : null
+    const tag = serializeSessionTags(parseSessionTagInput(renameDraftRef.current))
+    renameModeRef.current = 'title'
+    setRenameSessionKey(null)
+    setRenameDraft('')
+    renameDraftRef.current = ''
+    if (!target || (tag ?? null) === (target.tag ?? null)) return
+    setSessions((current) => current.map((session) => sessionKey(session) === key ? { ...session, tag: tag ?? undefined } : session))
+    try {
+      await patchTuiSession(target, { tag })
+      showNotice('info', tag ? `Tagged ${parseStoredSessionTags(tag).map((value) => `#${value}`).join(' ')}` : 'Tags cleared')
+    } catch (err) {
+      setSessions((current) => current.map((session) => sessionKey(session) === key ? { ...session, tag: target.tag } : session))
+      showNotice('error', err instanceof Error ? err.message : 'Failed to save the tags')
+    }
+  }
+  const commitRename = useStableEvent(async () => renameModeRef.current === 'tag' ? commitTags() : runCommitRename({
     renameSessionKey, selectedSession, renameDraftRef, setRenameSessionKey, setRenameDraft,
     setSessions, setOpenTabSessions, setSessionDetail, sessionDetailCacheRef, refreshSessions,
     provider,
@@ -3603,9 +3690,12 @@ function OpenTuiWorkspace() {
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
   // renderables don't see a fresh prop reference on every render.
+  // The rail's thumb in its frame's border colour (lit when the rail has focus): visible, but quieter than the
+  // selected row beside it. Transcript windows do the same with theirs.
+  const sidebarFocused = effectiveFocus === 'sessions'
   const sidebarScrollbarOptions = useMemo(
-    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface } }),
-    [theme.muted, theme.surface],
+    () => ({ trackOptions: { foregroundColor: sidebarFocused ? theme.border2 : theme.border, backgroundColor: theme.surface } }),
+    [sidebarFocused, theme.border2, theme.border, theme.surface],
   )
   const transcriptScrollbarOptions = useMemo(
     () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
@@ -4546,8 +4636,8 @@ function OpenTuiWorkspace() {
     return pinned
   })
 
-  const [sessionMenuRequest, setSessionMenuRequest] = useState<{ key: string; action: 'goal' | 'model'; ready?: boolean } | null>(null)
-  const openSessionMenuDialog = useStableEvent((session: Session, action: 'goal' | 'model') => {
+  const [sessionMenuRequest, setSessionMenuRequest] = useState<{ key: string; action: string; ready?: boolean } | null>(null)
+  const openSessionMenuDialog = useStableEvent((session: Session, action: string) => {
     selectTabSession(session)
     setSessionMenuRequest({ key: sessionKey(session), action })
   })
@@ -4593,8 +4683,22 @@ function OpenTuiWorkspace() {
     )
     items.push(
       { label: sidebarPinnedKeys.has(key) ? 'Unpin session' : 'Pin session', run: () => toggleSidebarPin(session) },
-      { label: 'Rename session', hint: '⌃R', run: () => { setRenameSessionKey(key); setRenameDraft(formatSessionTitle(session)); setFocusedPane('sessions') } },
+      { label: 'Rename session', hint: '⌃R', run: () => { renameModeRef.current = 'title'; setRenameSessionKey(key); setRenameDraft(formatSessionTitle(session)); setFocusedPane('sessions') } },
+      // Tags (the web row's tag field): the rail's tag filter lists them. The rename editor takes them comma separated.
+      { label: parseStoredSessionTags(session.tag).length ? 'Edit tags' : 'Add tags', run: () => {
+        renameModeRef.current = 'tag'
+        setRenameSessionKey(key)
+        setRenameDraft(parseStoredSessionTags(session.tag).join(', '))
+        setFocusedPane('sessions')
+        showNotice('info', 'Tags, comma separated · ⏎ saves · empty clears')
+      } },
       { label: session.inbox?.settledAt ? 'Reopen session' : 'Settle session', hint: 'x', run: () => runToggleSelectedSessionSettled({ selectedSession: session, setSessions, pendingInboxEditsRef, showNotice, showSettled }) },
+      // The web rail's z: out of the way for an hour, without settling it.
+      { label: session.inbox?.snoozedUntil && session.inbox.snoozedUntil > Date.now() ? 'Unsnooze session' : 'Snooze 1 hour', run: () => changeSessionInbox(session, session.inbox?.snoozedUntil && session.inbox.snoozedUntil > Date.now() ? 'unsnooze' : 'snooze') },
+      ...(session.inbox?.linkedPr ? [
+        { label: `Open pull request #${session.inbox.linkedPr.number}`, run: () => { void openExternalUrl(session.inbox!.linkedPr!.url).catch(error => showNotice('error', String(error))) } },
+        { label: 'Unlink pull request', run: () => changeSessionInbox(session, 'unlink-pr') },
+      ] : []),
       { label: 'Open composer', run: () => { selectTabSession(session); setComposerActive(true) } },
       { label: 'Session goal', hint: '⇧D', run: () => openSessionMenuDialog(session, 'goal') },
       { label: 'Change model', run: () => openSessionMenuDialog(session, 'model') },
@@ -6305,12 +6409,13 @@ function OpenTuiWorkspace() {
         const folderKey = cursorHeader?.key ?? (selectedEntryKey ? sidebarFolderBySessionRef.current.get(selectedEntryKey) : undefined)
         const folder = folderKey ? { key: folderKey } : undefined
         if (folder) { toggleDateGroup(folder.key); return }
-        setCollapsedDateGroups(() => {
+        setCollapsedDateGroupKeys(() => {
           const headers = sidebarEntries.filter((entry): entry is Extract<SidebarEntry, { type: 'project' }> => entry.type === 'project')
           const foldAll = headers.some(entry => !entry.collapsed)
-          const next = new Set<string>()
+          // Each kept key flips its group's default, so folding all keeps a key only where the default is open.
+          const next: string[] = []
           for (const entry of headers) {
-            if (entry.dateGroup ? foldAll : foldAll !== isCollapsedByDefaultProject(entry.projectName)) next.add(entry.key)
+            if (foldAll !== (entry.dateGroup ? isDateBucketCollapsedByDefault(entry.projectName) : isCollapsedByDefaultProject(entry.projectName))) next.push(entry.key)
           }
           return next
         })
@@ -6698,7 +6803,9 @@ function OpenTuiWorkspace() {
         sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={theme} query={sessionSearchQuery} searchFocused={sessionSearchMode}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onQuery={setSessionSearchQuery}
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
-          scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity} />}
+          scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
+          tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
+          note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
         onNewSession={openNewSessionModal}
         onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
@@ -6932,7 +7039,8 @@ function OpenTuiWorkspace() {
         liveReasoningPreviewLines={liveReasoningPreviewLines}
         embeddedComposer={embeddedComposer}
         composerTurnStatusInBorder={composerTurnStatusInBorder}
-        isChatLikeView={isChatLikeView}
+        dotStatus={viewSpec.composerStatus === 'dot'}
+        hideLiveText={!viewSpec.liveText}
         densityState={densityState}
         composerSendStartedAt={composerSendStartedAt}
         composerWaitingStatusSeed={composerWaitingStatusSeed}
@@ -6976,7 +7084,8 @@ function OpenTuiWorkspace() {
         composerDockBackground={composerDockBackground}
         fullscreenMode={fullscreenMode}
         composerDockRouted={composerDockRouted}
-        isChatLikeView={isChatLikeView}
+        hideDockTitle={!viewSpec.composerTitle}
+        dockBorderStyle={viewSpec.composerBorder === 'square' ? 'single' : viewSpec.composerBorder}
         composerDockEmphasized={composerDockEmphasized}
         composerAccentColor={composerAccentColor}
         theme={theme}

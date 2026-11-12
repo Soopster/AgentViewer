@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { hideSettledSessions, sessionHasTag, sessionInProjectScope } from '../../../../lib/sessionSidebarModel'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import type { TranscriptIndexLookup } from '../transcriptIndex'
@@ -43,6 +44,10 @@ export type UseToggleSidebarSortGroupContext = {
   renderer: CliRenderer
   sessionSearchQuery: string
   allProjects: boolean
+  /** The project's other worktrees, when the rail includes them (else empty). */
+  worktreePaths: readonly string[]
+  /** The rail's tag chip, or null for any tag. */
+  sidebarTag: string | null
   hideScratch: boolean
   selectedSessionKey: string | null
   sidebarSessionActivity: Map<string, 'waiting' | 'needs-input' | 'running'>
@@ -57,7 +62,7 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
     expandedCardKeys, collapsedCardKeys, searchQuery, followTail, readTranscriptCursorKey,
     transcriptIndexByKey, unreadBoundaryKey, sessionDetail, selectedSession,
     focusedSplitPaneSession, workspaceCwd, sessions, composerSendState, composerLiveText, theme,
-    renderer, sessionSearchQuery, allProjects, hideScratch, selectedSessionKey,
+    renderer, sessionSearchQuery, allProjects, worktreePaths, sidebarTag, hideScratch, selectedSessionKey,
     sidebarSessionActivity, recentlyWrittenSessions, teamAttention, showSettled,
   } = ctx
 
@@ -153,16 +158,18 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
   const spaceSessions = useMemo(() => {
-    if (allProjects) return sessions
+    const tagged = sidebarTag ? sessions.filter(session => sessionHasTag(session, sidebarTag)) : sessions
+    if (allProjects) return tagged
     const paths = new Map<string, string>()
     const project = canonicalSpacePath(workspaceCwd)
-    return sessions.filter(session => {
+    const worktrees = worktreePaths.map(canonicalSpacePath)
+    return tagged.filter(session => {
       if (!session.cwd) return false
       let cwd = paths.get(session.cwd)
       if (!cwd) { cwd = canonicalSpacePath(session.cwd); paths.set(session.cwd, cwd) }
-      return cwd === project || cwd.startsWith(project + '/')
+      return sessionInProjectScope(cwd, project, worktrees)
     })
-  }, [sessions, allProjects, workspaceCwd])
+  }, [sessions, allProjects, workspaceCwd, worktreePaths, sidebarTag])
   const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(spaceSessions), [spaceSessions])
   const searchedSessionsForSidebar = useMemo(
     () => searchSidebarSessions(normalizedSessionQuery),
@@ -186,17 +193,10 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
   const settledFilter = useMemo(() => {
     const source = scratchFilter.sessions
     if (showSettled || normalizedSessionQuery) return { sessions: source, hidden: 0 }
-    let hidden = 0
-    const shown: Session[] = []
-    for (const session of source) {
+    return hideSettledSessions(source, (session) => {
       const key = sessionKey(session)
-      if (session.inbox?.settledAt && key !== selectedSessionKey && !sidebarSessionActivity.has(key) && !recentlyWrittenSessions.keys.has(key)) {
-        hidden += 1
-        continue
-      }
-      shown.push(session)
-    }
-    return hidden === 0 ? { sessions: source, hidden: 0 } : { sessions: shown, hidden }
+      return key === selectedSessionKey || sidebarSessionActivity.has(key) || recentlyWrittenSessions.keys.has(key)
+    })
   }, [normalizedSessionQuery, recentlyWrittenSessions, scratchFilter.sessions, selectedSessionKey, showSettled, sidebarSessionActivity])
   const filteredSessionsForSidebar = settledFilter.sessions
   // Some providers expose subagents inside a parent transcript instead of as

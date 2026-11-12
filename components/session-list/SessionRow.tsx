@@ -6,7 +6,8 @@ import { useSessionRowEditing } from './useSessionRowEditing'
 import { SessionAttentionBadge } from './SessionAttentionBadge'
 import { SessionRowMetadata } from './SessionRowMetadata'
 
-import { memo, useState, useMemo } from 'react'
+import { memo, useState, useMemo, useContext, useEffect } from 'react'
+import { SidebarRowsContext } from './contexts'
 
 import type { Session } from '@/lib/types'
 
@@ -36,6 +37,13 @@ export const SessionRow = memo(function SessionRow({
   const sessionTitle = getSessionTitle(session)
   const sessionPreview = useMemo(() => getSessionPreview(session, sessionTitle), [session, sessionTitle])
   
+  const rows = useContext(SidebarRowsContext)
+  // The menu's Rename opens this row's title editor.
+  useEffect(() => {
+    if (rows.renameKey !== sessionTabKey(session)) return
+    rows.clearRename()
+    startEdit('title', sessionTitle ?? '')({ stopPropagation() {} } as never)
+  }, [rows, session, sessionTitle, startEdit])
   const activityTime = session.lastModified ?? session.createdAt
   const activityTitle = useMemo(
     () => (hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)),
@@ -49,18 +57,20 @@ export const SessionRow = memo(function SessionRow({
   return (
     <div
       onClick={() => !editing && onSelect(session)}
+      onContextMenu={(event) => { event.preventDefault(); rows.openMenu(session, { x: event.clientX, y: event.clientY }) }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={`av-session-row ${selected ? 'av-selected' : ''}`}
       data-session-key={sessionTabKey(session)}
       style={{
-        padding: '9px 16px 9px 24px',
+        // Compact rows are one line, the TUI's outside comfortable density.
+        padding: rows.compact ? '4px 16px 4px 24px' : '9px 16px 9px 24px',
         contentVisibility: 'auto',
         // `auto 96px` lets the browser remember the real measured row height
         // after the row has been painted once, instead of forcing the layout
         // back to a 96px estimate every time the row scrolls off-screen — that
         // mismatch was the main cause of perceived flicker while scrolling.
-        containIntrinsicSize: 'auto 96px',
+        containIntrinsicSize: rows.compact ? 'auto 26px' : 'auto 96px',
       }}
     >
       {/* Title + id */}
@@ -129,7 +139,7 @@ export const SessionRow = memo(function SessionRow({
           </span>
         )}
       </div>
-      {session.parentSessionId && (
+      {!rows.compact && session.parentSessionId && (
         <div
           title={`Subagent of ${session.parentSessionId}`}
           style={{
@@ -143,7 +153,7 @@ export const SessionRow = memo(function SessionRow({
         </div>
       )}
 
-      {sessionPreview && editing !== 'title' && (
+      {!rows.compact && sessionPreview && editing !== 'title' && (
         <div
           title={sessionPreview}
           style={{
@@ -159,7 +169,7 @@ export const SessionRow = memo(function SessionRow({
         </div>
       )}
 
-      {session.recap && editing !== 'title' && (
+      {!rows.compact && session.recap && editing !== 'title' && (
         <div
           title={`Recap: ${session.recap.text}`}
           style={{
@@ -177,7 +187,7 @@ export const SessionRow = memo(function SessionRow({
       )}
 
       {/* Tag + time */}
-      <SessionRowMetadata session={session} selected={selected} hovered={hovered} editor={editor} />
+      {rows.compact ? null : <SessionRowMetadata session={session} selected={selected} hovered={hovered} editor={editor} />}
     </div>
   )
 })

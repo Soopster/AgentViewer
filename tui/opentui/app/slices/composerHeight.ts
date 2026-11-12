@@ -13,6 +13,8 @@ import { filterModelPickerOptions } from '../pickers'
 
 export type UseComposerHeightGroupContext = {
   composerHeightPreference?: number
+  /** The view's dock height: grow with the draft, hold the smallest dock, or keep a tall floor. */
+  composerSize?: 'auto' | 'compact' | 'tall'
   embeddedComposer: boolean
   composerDraftLines: number
   height: number
@@ -41,19 +43,25 @@ export function useComposerHeightGroup(ctx: UseComposerHeightGroupContext) {
     tuiModelOverride, tuiReportedModelByKey, contextUsage, modelPickerOptions, modelPickerQuery,
   } = ctx
 
-  const naturalComposerHeight = embeddedComposer
+  const size = ctx.composerSize ?? 'auto'
+  const minHeight = embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : fullscreenMode ? COMPOSER_MIN_HEIGHT - 1 : COMPOSER_MIN_HEIGHT
+  // A tall dock keeps room for a paragraph before it starts to grow; never more than 40% of the screen.
+  const tallFloor = Math.min(embeddedComposer ? 8 : 10, Math.floor(height * 0.4))
+  const grown = embeddedComposer
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
         composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT,
         COMPOSER_MAX_HEIGHT,
         Math.floor(height * 0.35),
       ))
     : Math.max(
-        fullscreenMode ? COMPOSER_MIN_HEIGHT - 1 : COMPOSER_MIN_HEIGHT,
+        minHeight,
         Math.min(
           fullscreenMode ? COMPOSER_MAX_HEIGHT - 2 : COMPOSER_MAX_HEIGHT,
           composerDraftLines + composerDockChromeHeight,
         ),
       )
+  // Compact holds the smallest dock and scrolls the draft inside it.
+  const naturalComposerHeight = size === 'compact' ? minHeight : size === 'tall' ? Math.max(grown, tallFloor) : grown
   const composerHeight = ctx.composerHeightPreference === undefined ? naturalComposerHeight
     : Math.max(embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, Math.min(ctx.composerHeightPreference, Math.floor(height * .4)))
   const presentationHidesComposer = fullscreenMode && windowPresentation?.target !== composerTargetSessionIdentity

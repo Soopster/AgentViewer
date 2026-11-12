@@ -53,7 +53,7 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
   try {
     await act(async () => { await setup.flush() })
     const frame = setup.captureCharFrame()
-    assert.match(frame, /New session/)
+    assert.match(frame, width < 34 ? /Sessions\s+Coordinator\s+\+ / : /Sessions\s+Coordinator\s+\+ New/, 'New sits at the end of the tabs row')
     assert.match(frame, /This project/)
     assert.match(frame, /Today\s+25/)
     assert.ok(!frame.includes('Today /'), 'Counts have their own trailing column')
@@ -61,10 +61,11 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     assert.equal(row.height, density === 'comfortable' ? 2 : 1, `${density}: session row height`)
     const nextRow = setup.renderer.root.findDescendantById(`sidebar:${entries[3].key}`)!
     assert.equal(nextRow.y - row.y, density === 'comfortable' ? 3 : 1, `${density}: session spacing`)
-    assert.equal(setup.renderer.root.findDescendantById('sidebar-new-session')!.height, density === 'comfortable' ? 3 : 1, `${density}: button height`)
+    assert.equal(setup.renderer.root.findDescendantById('sidebar-new-session')!.height, 1, `${density}: button height`)
+    assert.equal(setup.renderer.root.findDescendantById('sidebar-new-session')!.y, setup.renderer.root.findDescendantById('sidebar-tabs')!.y, `${density}: New shares the tabs row`)
     const group = setup.renderer.root.findDescendantById('sidebar:project:viewer')!
     const date = setup.renderer.root.findDescendantById('sidebar:date:today')!
-    assert.equal(date.y - group.y, density === 'dense' ? 1 : 2, `${density}: group spacing`)
+    assert.equal(date.y - group.y, 1, `${density}: a date header sits right under its project`)
     const click = async (id: string) => {
       const node = setup.renderer.root.findDescendantById(id)!
       assert.ok(node, id)

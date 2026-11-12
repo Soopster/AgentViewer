@@ -43,7 +43,7 @@ export type UseComposerKeysTargetTurnGroupContext = {
   visibleRunningToolCount: number
   livePromptSuggestion: string | null
   composerSendState: SendState
-  isChatLikeView: boolean
+  hideLiveText: boolean
   liveAssistantTextCardVisible: boolean
   liveStatus: 'requesting' | 'compacting' | 'retrying' | null
   composerLiveReasoning: string
@@ -89,7 +89,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     searchMode, sessionSearchMode, composerDockHeight, composerPopoverHeight,
     presentationHidesComposer, composerTurnStatusInBorder, composerActivityVisible,
     hasSubagentTail, visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion,
-    composerSendState, isChatLikeView, liveAssistantTextCardVisible, liveStatus,
+    composerSendState, hideLiveText, liveAssistantTextCardVisible, liveStatus,
     composerLiveReasoning, hideLiveReasoning, composerTargetSession, sessionDetail, width,
     composerWindowOpen, composerHidden, fullscreenMode, surfacePanelOpen, surfacePanelPlacement,
     surfacePanelExpanded, surfacePanelRows, taskPanelOpen, showRail, sidebarWidthPreference,
@@ -166,7 +166,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     presentationHidesComposer, visibleComposerSending, embeddedComposer,
     composerTurnStatusInBorder, composerActivityVisible, hasSubagentTail,
     visibleLiveToolActivities, visibleRunningToolCount, livePromptSuggestion, composerSendState,
-    hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, isChatLikeView,
+    hasComposerStatusMessage, visibleComposerLiveText, visibleComposerError, hideLiveText,
     liveAssistantTextCardVisible, visibleAwaitingPersistedTurn, liveStatus, composerLiveReasoning,
     hideLiveReasoning, reattachedRunning, composerTargetSession, sessionDetail, pendingPermissions,
     questionPickerPlan, width,

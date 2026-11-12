@@ -4,13 +4,16 @@ import { useSidebarResize } from './session-list/useSidebarResize'
 
 import { providerNativeSelectClassName, collapsedPrimaryButtonStyle, sidebarHeaderPrimaryActionStyle, collapsedIconButtonStyle, sidebarHeaderIconActionStyle, segmentStyle } from './session-list/appearance'
 import { sessionTabKey, providerLabel } from './session-list/presentation'
-import { ShowProviderContext, EMPTY_TEAM_ATTENTION, TeamAttentionContext } from './session-list/contexts'
+import { ShowProviderContext, EMPTY_TEAM_ATTENTION, TeamAttentionContext, SidebarRowsContext } from './session-list/contexts'
+import { SessionContextMenu, type SessionMenuState } from './session-list/SessionContextMenu'
+import { SidebarCoordinatorRuns } from './session-list/SidebarCoordinatorRuns'
 import { type SessionListProps, type CollapsedPanel } from './session-list/types'
 import { SessionRow } from './session-list/SessionRow'
 
 import { ProjectGroup } from './session-list/ProjectGroup'
 
-import { memo, useState, useRef, useCallback, useEffect, useSyncExternalStore } from 'react'
+import { memo, useState, useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import type { Session } from '@/lib/types'
 import {
   DEFAULT_COLOR_TREATMENT,
   getCurrentColorTreatment,
@@ -25,6 +28,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
+import { SidebarSessionFilters } from './session-list/SidebarSessionFilters'
 import {
   SidebarContent,
   SidebarFooter,
@@ -126,7 +130,37 @@ function SessionListInner({
   useEffect(() => {
     setHydrated(true)
   }, [])
-  const { searchText, setSearchText, activeTag, setActiveTag, sortMode, setSortMode, filteredSessions, groups, childrenByParentId, showProviderPerRow, timeEntries, popularTags } = useSessionListModel(sessions)
+  const {
+    searchText, setSearchText, activeTag, setActiveTag, sortMode, setSortMode, filteredSessions, groups, childrenByParentId,
+    showProviderPerRow, timeEntries, popularTags, hideScratch, setHideScratch, showSettled, setShowSettled, activity, setActivity,
+    hiddenScratch, hiddenSettled, liftedGroups,
+  } = useSessionListModel(sessions, selectedId, sessionTabKey)
+  // The TUI rail's Sessions / Coordinator tabs, compact one-row entries and
+  // right-click session menu.
+  const [sidebarTab, setSidebarTabState] = useState<'sessions' | 'coordinator'>('sessions')
+  const [compactRows, setCompactRowsState] = useState(false)
+  const [sessionMenu, setSessionMenu] = useState<SessionMenuState | null>(null)
+  const [renameKey, setRenameKey] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('agentViewer:sidebarTab') === 'coordinator') setSidebarTabState('coordinator')
+      if (window.localStorage.getItem('agentViewer:sidebarCompact') === '1') setCompactRowsState(true)
+    } catch { /* ignore storage failures */ }
+  }, [])
+  const setSidebarTab = (tab: 'sessions' | 'coordinator') => {
+    setSidebarTabState(tab)
+    try { window.localStorage.setItem('agentViewer:sidebarTab', tab) } catch { /* ignore */ }
+  }
+  const setCompactRows = (value: boolean) => {
+    setCompactRowsState(value)
+    try { window.localStorage.setItem('agentViewer:sidebarCompact', value ? '1' : '0') } catch { /* ignore */ }
+  }
+  const sidebarRows = useMemo(() => ({
+    compact: compactRows,
+    openMenu: (session: Session, point: { x: number; y: number }) => setSessionMenu({ session, ...point }),
+    renameKey,
+    clearRename: () => setRenameKey(null),
+  }), [compactRows, renameKey])
 
   useEffect(() => {
     if (previousProviderRef.current === provider) return
@@ -1123,6 +1157,9 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     By time
                   </Button>
                 </div>
+                {sidebarTab === 'sessions' ? <SidebarSessionFilters activity={activity} onActivity={setActivity} hideScratch={hideScratch} onHideScratch={setHideScratch}
+                  showSettled={showSettled} onShowSettled={setShowSettled} hiddenScratch={hiddenScratch} hiddenSettled={hiddenSettled}
+                  compact={compactRows} onCompact={setCompactRows} /> : null}
                 <div role="group" aria-label="Session scope" style={{ marginTop: 6, display: 'flex' }}>
                   <Button
                     onClick={() => onChangeScope('all')}
@@ -1188,6 +1225,17 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
       </SidebarHeader>
       {!collapsed && (
         <SidebarContent>
+          <SidebarRowsContext.Provider value={sidebarRows}>
+          <div role="tablist" aria-label="Sidebar" style={{ display: 'flex', gap: 2, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
+            {(['sessions', 'coordinator'] as const).map((tab) => (
+              <button key={tab} type="button" role="tab" aria-selected={sidebarTab === tab} data-testid={`sidebar-tab-${tab}`} onClick={() => setSidebarTab(tab)}
+                style={{ flex: 1, padding: '4px 8px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: '1px solid transparent',
+                  background: sidebarTab === tab ? 'var(--surface-3)' : 'transparent', color: sidebarTab === tab ? 'var(--text)' : 'var(--text-3)' }}>
+                {tab === 'sessions' ? 'Sessions' : 'Coordinator'}
+              </button>
+            ))}
+          </div>
+          {sidebarTab === 'coordinator' ? <SidebarCoordinatorRuns onOpenRun={() => onOpenCoordinator()} /> : <>
           {error && (
             <div
               style={{
@@ -1202,6 +1250,23 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
             </div>
           )}
 
+            {!loading && !error && liftedGroups.map((group) => (
+              <ProjectGroup
+                key={`lifted:${group.key}`}
+                name={group.label}
+                projectKey={`lifted:${group.key}`}
+                sessions={group.sessions}
+                selectedId={selectedId}
+                selectedProject={selectedProject}
+                hydrated={hydrated}
+                scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
+                childrenByParentId={childrenByParentId}
+                onSelect={onSelect}
+                onRename={onRename}
+                onTag={onTag}
+                tone={group.key === 'needs-you' ? 'var(--amber)' : group.key === 'running' ? 'var(--cyan)' : 'var(--violet)'}
+              />
+            ))}
             {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
               <ProjectGroup
                 key={projectDir}
@@ -1214,9 +1279,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                 scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
                 childrenByParentId={childrenByParentId}
                 onSelect={onSelect}
-                onSelectProject={onSelectProject}
+                onSelectProject={projectDir === 'coordinator-runs' ? undefined : onSelectProject}
                 onRename={onRename}
                 onTag={onTag}
+                defaultCollapsed={projectDir === 'coordinator-runs'}
+                dateGroups
               />
             ))}
             {!loading && !error && sortMode === 'time' && timeEntries.map((entry) => {
@@ -1292,6 +1359,12 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
               No sessions match the current search/filter.
             </div>
           )}
+          </>}
+          {sessionMenu ? (
+            <SessionContextMenu menu={sessionMenu} onClose={() => setSessionMenu(null)} onOpen={onSelect}
+              onRename={(session) => setRenameKey(sessionTabKey(session))} />
+          ) : null}
+          </SidebarRowsContext.Provider>
         </SidebarContent>
       )}
       {!collapsed && (

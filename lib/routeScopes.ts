@@ -86,6 +86,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/voice/transcribe': { POST: 'write' },
   '/api/plugins': { GET: 'read', PATCH: 'write' },
   '/api/provider': { GET: 'read', PATCH: 'write' },
+  '/api/views': { GET: 'read', PUT: 'write' },
+  '/api/sidebar-preferences': { GET: 'read', PATCH: 'write' },
   '/api/provider/instances': { GET: 'read' },
 
   // --- Files and source control ------------------------------------------

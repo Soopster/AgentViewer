@@ -130,7 +130,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
-  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? Math.min(4, spacesState.spaces.length) + 2 : 0), 4)
+  const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? (spacesState.spaces.length === 1 ? 1 : Math.min(4, spacesState.spaces.length) + 1) + 1 : 0), 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   // A provider listed across several instances (ACP agents, accounts) is
   // several stores' sessions, and a row has to say whose it is.

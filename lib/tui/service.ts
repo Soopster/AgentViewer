@@ -532,7 +532,7 @@ export async function writeTuiShowSettledSessions(show: boolean): Promise<void> 
  */
 export async function updateTuiSessionInbox(
   session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>,
-  action: 'settle' | 'reopen' | 'seen',
+  action: 'settle' | 'reopen' | 'seen' | 'pin' | 'unpin' | 'snooze' | 'unsnooze' | 'unlink-pr',
 ): Promise<SessionInboxState> {
   const provider = session.provider ?? 'claude'
   if (isRemoteAttached()) {
@@ -1638,4 +1638,17 @@ export async function setTuiSessionRecapsEnabled(enabled: boolean): Promise<bool
   const next = await store.setSessionRecapsEnabled(enabled)
   if (next) (await import('../sessionRecapEngine')).ensureSessionRecapEngine()
   return next
+}
+
+/**
+ * The project's other worktrees (`git worktree list`), for the rail's "include
+ * worktrees" scope. Empty when `cwd` is not in a repository or git is missing.
+ */
+export async function readTuiWorktreePaths(cwd: string): Promise<string[]> {
+  const { execFile } = await import('node:child_process')
+  const { parseWorktreeList } = await import('../gitWorkspaceStatus')
+  const raw = await new Promise<string>((resolve) => {
+    execFile('git', ['worktree', 'list', '--porcelain'], { cwd, timeout: 5000 }, (error, stdout) => resolve(error ? '' : stdout))
+  })
+  return parseWorktreeList(raw).filter((record) => record.state !== 'prunable' && record.state !== 'bare').map((record) => record.path)
 }

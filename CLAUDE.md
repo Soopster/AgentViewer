@@ -1558,11 +1558,48 @@ presentation, and that difference is preserved as `agentCards: 'none'`).
   `toolGrouping: 'agents'`. Markers are separate `promptMarker`/`replyMarker` glyphs. A view saved with the
   old combined `markers` field is migrated when it is read. `viewSpecParitySmoke`'s CONTINUE capture can
   catch a half-expanded frame when run four at a time; re-run that view alone before trusting a difference.
+- **The composer and the scrollbar are view fields too.** Composer: placement, live reasoning, live reply
+  text, dock title, turn-status style (▌ rail or ● dot), dock border, dock height (grow, compact, tall) and
+  dock width (full, or the reader column). Scrollbar: with markers, plain, or hidden. Pass the scrollbar
+  `visible: false` only to hide it. Passing `true` forces the bar on where it would otherwise auto-hide, and
+  shifts every view by a column, which the parity smoke caught.
 - A pinned global setting is not changed by its own toggle (`d`, `X`, …) while that view is active; the
   toggle changes the global value underneath.
 - `viewSpecParitySmoke.tsx` paints all 13 built-ins cell for cell against goldens recorded on the commit
   before a change. It is a refactor tool, not a chain smoke. `viewStudioSmoke.tsx` covers the round trip
   (boot restore, live edit, save, discard confirm, two-press delete, the mouse).
+
+#### The web and the TUI share views and sidebar rules (load-bearing)
+
+- **Views:** the web reads and writes the same `customViews`/`builtinViewEdits` in tui.json through
+  `GET/PUT /api/views`, so a view composed in either surface is listed in both. Which view is shown stays
+  per surface: the TUI's is in tui.json, the web's in localStorage (`agentViewer:transcriptView`). The web
+  View Studio (`components/message-view/WebViewStudio.tsx`, from the View menu) edits the same records
+  and sections. `WEB_VIEW_FIELDS` / `webSettingsFromSpec` (tui/viewSpec.ts) say which fields the web
+  draws and how they map onto its own settings (view mode, density, width, sticky prompt, diff style,
+  filter chips, sidebar, right panel). Other fields are labelled "terminal" and still saved.
+- **Sidebar:** the filtering rules (scratch, settled, activity) live in `lib/sessionSidebarModel.ts`.
+  Sort, scratch hiding and settled visibility are one tui.json store
+  (`GET/PATCH /api/sidebar-preferences`). The web polls `/api/sessions/running` for the same
+  running/needs-input states the TUI uses. **Pins are the session inbox's** (`inbox.pinnedAt`, the web's ★).
+  The TUI's old per-workspace pins still count until unpinned and new ones are never written there.
+  Both rails call the scopes "This project / All projects".
+- **The TUI rail has the web rail's extras**: a tag filter (`popularSessionTags`), snooze and the
+  pull request's open/unlink in the session menu (`z` marks a snoozed row), and "Include worktrees" in the
+  scope menu (on by default, as on the web). The worktree paths come from `git worktree list`, read only
+  while the rail is scoped to the project (`readTuiWorktreePaths`). Date buckets are Today / Yesterday /
+  This week / Last week / This month / Older in both rails (`sidebarDateBucket`). With only three buckets, a project
+  whose recent sessions were pinned out had one "Older" bucket and drew no headers. Outside comfortable
+  density a date header has no blank row above it.
+- **The web rail has the TUI rail's shape.** Sessions / Coordinator tabs (the Coordinator tab lists runs
+  and loads a run's agents when it is opened). NEEDS YOU, RUNNING and PINNED lead the list, and `COORD-*`
+  projects fold into a COORDINATOR RUNS group that starts collapsed (`liftSidebarActivity`,
+  `isCoordinatorRunProject`). Today / Yesterday / Older sub-groups appear inside a project
+  (`splitSidebarDates`). There are compact one-row entries and a right-click session menu whose resume
+  command comes from `getContinueInCliCommand`, as the TUI's does. Inbox changes are optimistic through
+  one store (`components/session-list/useSessionInbox.ts`) shared by the ★ ✓ z buttons, the menu and the
+  lifted groups. An override is dropped only when the list delivers a newer inbox, so a row that remounts
+  into PINNED keeps it.
 
 #### SCROLLBACK view: scrolled text, no card cursor (load-bearing)
 

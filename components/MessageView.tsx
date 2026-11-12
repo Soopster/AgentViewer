@@ -2133,6 +2133,7 @@ function MessageViewInner({
       {/* ── Top bar ──────────────────────────────────── */}
       <MessageViewTopBar
         maximized={maximized}
+        setTranscriptFilters={setTranscriptFilters}
         colorTreatment={colorTreatment}
         isProject={isProject}
         dirName={dirName}

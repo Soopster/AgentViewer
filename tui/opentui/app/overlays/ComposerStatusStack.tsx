@@ -24,7 +24,9 @@ type ComposerStatusStackProps = {
   liveReasoningPreviewLines: string[]
   embeddedComposer: boolean
   composerTurnStatusInBorder: boolean
-  isChatLikeView: boolean
+  /** The turn-status row as a ● dot in line with the text (else a ▌ rail on a raised band). */
+  dotStatus: boolean
+  hideLiveText: boolean
   densityState: { cardGap: number; bodyIndent: number; bodyLines: number; headerRows: number; bodyPad: number; streamGap: number; streamUserGap: number; }
   composerSendStartedAt: number | null
   composerWaitingStatusSeed: string
@@ -52,7 +54,7 @@ export function ComposerStatusStack(props: ComposerStatusStackProps) {
   const {
     presentationHidesComposer, liveStatus, visibleComposerSending, theme, width,
     composerLiveReasoning, hideLiveReasoning, composerProvider, tuiEffort, composerThinkingTokens, codexThinking,
-    liveReasoningPreviewLines, embeddedComposer, composerTurnStatusInBorder, isChatLikeView,
+    liveReasoningPreviewLines, embeddedComposer, composerTurnStatusInBorder, dotStatus, hideLiveText,
     densityState, composerSendStartedAt, composerWaitingStatusSeed, composerWaitingSuffix,
     composerWaitingOnUser, reattachedRunning, visibleAwaitingPersistedTurn, composerTargetSession,
     sessionDetail, visibleLiveToolActivities, visibleRunningToolCount, composerActivityVisible,
@@ -92,13 +94,13 @@ export function ComposerStatusStack(props: ComposerStatusStackProps) {
           how the native Claude CLI status line behaves. */}
       {visibleComposerSending && !embeddedComposer && !composerTurnStatusInBorder ? (
         <box
-          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
-          paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
+          backgroundColor={dotStatus ? theme.surface : theme.surface2}
+          paddingLeft={dotStatus ? densityState.bodyIndent : 1}
           height={1}
           flexShrink={0}
           flexDirection="row"
         >
-          <text fg={theme.cyan} wrapMode="none">{isChatLikeView ? '● ' : '▌ '}</text>
+          <text fg={theme.cyan} wrapMode="none">{dotStatus ? '● ' : '▌ '}</text>
           <box flexGrow={1}>
             <ComposerWaitingStatus
               startedAt={composerSendStartedAt}
@@ -132,12 +134,12 @@ export function ComposerStatusStack(props: ComposerStatusStackProps) {
 
       {visibleLiveToolActivities.length > 0 && visibleRunningToolCount > 0 ? (
         <box
-          backgroundColor={isChatLikeView ? theme.surface : theme.surface2}
-          paddingLeft={isChatLikeView ? densityState.bodyIndent : 1}
-          paddingTop={isChatLikeView ? 0 : 1}
+          backgroundColor={dotStatus ? theme.surface : theme.surface2}
+          paddingLeft={dotStatus ? densityState.bodyIndent : 1}
+          paddingTop={dotStatus ? 0 : 1}
           flexDirection="row"
         >
-          <text fg={theme.green} wrapMode="none">{isChatLikeView ? '● ' : '▌ '}</text>
+          <text fg={theme.green} wrapMode="none">{dotStatus ? '● ' : '▌ '}</text>
           <text wrapMode="none">
             {renderInlineTextSegments([
               { text: 'tools  ', fg: theme.dim },
@@ -174,7 +176,7 @@ export function ComposerStatusStack(props: ComposerStatusStackProps) {
         </box>
       ) : null}
 
-      <ComposerStatusMessage composerStatusMessage={composerStatusMessage} visibleComposerSending={visibleComposerSending} visibleComposerLiveText={visibleComposerLiveText} visibleComposerError={visibleComposerError} isChatLikeView={isChatLikeView} liveAssistantTextCardVisible={liveAssistantTextCardVisible} composerProvider={composerProvider} liveAssistantPreviewLines={liveAssistantPreviewLines} composerAccentColor={composerAccentColor} theme={theme} visibleAwaitingPersistedTurn={visibleAwaitingPersistedTurn} width={width} />
+      <ComposerStatusMessage composerStatusMessage={composerStatusMessage} visibleComposerSending={visibleComposerSending} visibleComposerLiveText={visibleComposerLiveText} visibleComposerError={visibleComposerError} hideLiveText={hideLiveText} liveAssistantTextCardVisible={liveAssistantTextCardVisible} composerProvider={composerProvider} liveAssistantPreviewLines={liveAssistantPreviewLines} composerAccentColor={composerAccentColor} theme={theme} visibleAwaitingPersistedTurn={visibleAwaitingPersistedTurn} width={width} />
 
       </> : null
   )

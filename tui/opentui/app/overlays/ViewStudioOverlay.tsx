@@ -117,7 +117,7 @@ export function ViewStudioOverlay(props: Props) {
     if (key.name === 'left' || key.sequence === 'h') { if (focused) cycle(focused, -1); return true }
     if (key.name === 'right' || key.sequence === 'l' || key.name === 'space' || key.name === 'return') { if (focused) cycle(focused, 1); return true }
     if (key.name === 'tab') { switchSection(sectionIndex + (key.shift ? -1 : 1)); return true }
-    if (/^[1-5]$/.test(key.sequence)) { switchSection(Number(key.sequence) - 1); return true }
+    if (/^[1-7]$/.test(key.sequence)) { switchSection(Number(key.sequence) - 1); return true }
     // A built-in keeps its name and is its own base.
     if (key.sequence === 'r') { if (!draft.builtin) setRenaming(true); return true }
     if (key.sequence === 'b') { if (!draft.builtin) cycleBase(1); return true }
@@ -175,9 +175,10 @@ export function ViewStudioOverlay(props: Props) {
       <Rule theme={theme} width={inner} />
       <box id="view-studio-tabs" height={1} paddingX={1} flexDirection="row">
         {VIEW_SPEC_SECTIONS.map((name, index) => (
-          <box key={name} id={`view-studio-tab:${name}`} onMouseDown={() => switchSection(index)}>
-            <text fg={index === sectionIndex ? theme.text : theme.muted} bg={index === sectionIndex ? theme.surface3 : undefined} wrapMode="none">
-              {` ${index + 1} ${name} `}
+          // Seven sections fit across the panel only by name; 1–7 still select them.
+          <box key={name} id={`view-studio-tab:${name}`} marginRight={1} onMouseDown={() => switchSection(index)}>
+            <text fg={index === sectionIndex ? theme.cyan : theme.muted} bg={index === sectionIndex ? theme.surface3 : undefined} wrapMode="none">
+              {name}
             </text>
           </box>
         ))}
@@ -316,10 +317,11 @@ function ViewSpecimen({ spec, theme, width, density, cursor }: { spec: ViewSpec;
 // would be.
 
 type MockRegion = 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
-  | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel'
+  | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel' | 'scrollbar' | 'status' | 'livetext'
 const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
-  composer: 'composer', contextSidebar: 'sidebar', cursor: 'keys', stickyHeaders: 'header',
+  composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
+  liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
   sessionRail: 'rail', sidebarView: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
   tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip', focusMode: 'header',
   borders: 'frame', fleetStrip: 'fleet', taskPanel: 'taskpanel', sidePanel: 'sidepanel', sidePanelPlacement: 'sidepanel',
@@ -359,7 +361,8 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
   const verticalTabsWidth = sideTabs ? 7 : 0
   const rightWidth = (panelBeside || taskPanel ? 12 : 0) + (spec.contextSidebar ? 12 : 0)
   // Frame border 2 and a row's marker column 1.
-  const columnWidth = Math.max(width - railWidth - verticalTabsWidth - rightWidth - 3, 16)
+  const scrollbarWidth = spec.scrollbar === 'hidden' ? 0 : 1
+  const columnWidth = Math.max(width - railWidth - verticalTabsWidth - rightWidth - 3 - scrollbarWidth, 16)
   const hint = useMemo(() => spec.completedTurnHint ? streamCompletedTurnHint(visibleCardsForTranscriptView(specimenSource(), spec)) : null, [spec])
   const sideLabel = sidePanel ? (viewSpecField('sidePanel')?.options.find((option) => option.value === sidePanel)?.label ?? sidePanel) : ''
   const composerRow = <text fg={theme.muted} wrapMode="none">{'› '}<span fg={theme.dim}>Ask about this session…</span></text>
@@ -424,6 +427,12 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
                   </MockRow>
                 : null}
             </box>
+            {scrollbarWidth ? (
+              <box flexDirection="column" width={1} backgroundColor={marked('scrollbar') ? theme.amber : theme.surface2}>
+                {(spec.scrollbar === 'markers' ? [['·', theme.cyan], ['▪', theme.green], ['', ''], ['▪', theme.red], ['·', theme.cyan], ['█', theme.muted], ['█', theme.muted]] : [['', ''], ['', ''], ['', ''], ['', ''], ['', ''], ['█', theme.muted], ['█', theme.muted]])
+                  .map(([glyph, color], index) => <text key={index} fg={color || theme.dim} wrapMode="none">{glyph || ' '}</text>)}
+              </box>
+            ) : null}
             {spec.contextSidebar ? column('CONTEXT', ['12% used', '2 files'], 'sidebar', 12) : null}
           </box>
           {sidePanel && !panelBeside ? (
@@ -438,8 +447,18 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
       {!showRail && marked('rail') ? <Placeholder theme={theme} text={focusMode ? 'focus mode hides the rail' : 'session rail hidden'} /> : null}
       {marked('sidepanel') && !sidePanel ? <Placeholder theme={theme} text={spec.sidePanel === 'closed' ? 'side panel closed on entering' : 'side panel left as is'} /> : null}
       {marked('taskpanel') && !taskPanel ? <Placeholder theme={theme} text={spec.taskPanel === 'closed' ? 'task panel closed on entering' : 'task panel left as is'} /> : null}
+      {spec.liveText
+        ? <MockRow theme={theme} marked={marked('livetext')}><text fg={theme.text} wrapMode="none">The cache is cold after… <span fg={theme.dim}>(streaming)</span></text></MockRow>
+        : marked('livetext') ? <Placeholder theme={theme} text="live reply drawn in the transcript" /> : null}
+      <MockRow theme={theme} marked={marked('status')}>
+        {spec.composerStatus === 'dot'
+          ? <text fg={theme.cyan} wrapMode="none">{'● '}<span fg={theme.muted}>Working · 12s</span></text>
+          : <text fg={theme.cyan} bg={theme.surface2} wrapMode="none">{'▌ '}<span fg={theme.muted}>Working · 12s</span></text>}
+      </MockRow>
       {spec.composer === 'docked'
-        ? <box border borderStyle="rounded" borderColor={marked('composer') ? theme.amber : theme.border2} height={3} paddingX={1}>{composerRow}</box>
+        ? <box border borderStyle={spec.composerBorder === 'square' ? 'single' : spec.composerBorder} borderColor={marked('composer') ? theme.amber : theme.border2}
+            title={spec.composerTitle ? ' To: build · CLAUDE ' : undefined} titleColor={theme.dim}
+            height={spec.composerSize === 'tall' ? 5 : 3} marginLeft={spec.composerWidth === 'reader' ? railWidth : 0} paddingX={1}>{composerRow}</box>
         : null}
       <MockRow theme={theme} marked={marked('keys')}>
         <text fg={theme.dim} wrapMode="none">

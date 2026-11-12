@@ -127,7 +127,7 @@ export function groupByProject(sessions: IndexedSession[]): { groups: ProjectGro
   return { groups, childrenByParentId }
 }
 
-function sessionActivityMs(session: Session): number {
+export function sessionActivityMs(session: Session): number {
   const value = session.lastModified ?? session.createdAt
   if (value == null) return 0
   const ms = new Date(value).getTime()

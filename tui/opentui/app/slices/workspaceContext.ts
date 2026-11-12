@@ -29,6 +29,9 @@ export function useWorkspaceContextGroup() {
     setSpacesMenuOpen(true)
   }
   const [allProjects, setAllProjects] = useWorkspaceState('allProjects', false)
+  // The web rail's "worktrees" box (on by default there too) and its tag chips.
+  const [includeWorktrees, setIncludeWorktrees] = useWorkspaceState('includeWorktrees', true)
+  const [sidebarTag, setSidebarTag] = useWorkspaceState<string | null>('sidebarTag', null)
   const draftKey = (key: string) => workspaceStorageKey(workspaceId, key)
   const readWorkspaceDraft = (key: string) => {
     const value = workspaceContext.runtime.values.get(`draft:${key}`)
@@ -54,6 +57,6 @@ export function useWorkspaceContextGroup() {
     workspaceLaunched, setWorkspaceLaunched, workspaceHasSession, setWorkspaceHasSession,
     spacesMenuOpen, setSpacesMenuOpen, spacesMenuSelection, spacesCloseId, spacesKeyRef,
     openSpaces, allProjects, setAllProjects, readWorkspaceDraft, writeWorkspaceDraft,
-    readWorkspaceDraftParts, writeWorkspaceDraftParts,
+    readWorkspaceDraftParts, writeWorkspaceDraftParts, includeWorktrees, setIncludeWorktrees, sidebarTag, setSidebarTag,
   }
 }

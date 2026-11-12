@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { sidebarQuietColor } from './app/SidebarChrome'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -24,6 +25,19 @@ export function SpacesRail({ theme, width, onManage, under = false }: { theme: T
   const state = useSyncExternalStore(context.controller.subscribe, context.controller.getSnapshot, context.controller.getSnapshot)
   useSyncExternalStore(subscribeWorkspaceResources, workspaceResourceVersion, workspaceResourceVersion)
   const spaceCount = Math.min(4, state.spaces.length)
+  // One space is the folder you are in: one row naming it, with the manage controls at its end.
+  // The "Spaces" heading and a list return once there is a second space to choose between.
+  if (state.spaces.length === 1) {
+    const space = state.spaces[0]!
+    const badge = space.workspaces.map(workspace => workspaceBadge(context.controller, workspace)).find(Boolean)
+    const label = space.name === path.basename(space.cwd) ? space.name : `${space.name} · ${path.basename(space.cwd)}`
+    return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={1} flexShrink={0} flexDirection="row" paddingX={1} backgroundColor={theme.surface3}
+      onMouseDown={event => { if (event.button === 0 || event.button === 2) { event.stopPropagation(); onManage(event.button === 2 ? space.id : undefined) } }}>
+      <text id={`space:${space.id}`} fg={theme.cyan} wrapMode="none">{fit(`${badge || '▸'} ${label}`, Math.max(width - 10, 4))}</text>
+      <box flexGrow={1} />
+      <text fg={sidebarQuietColor(theme)} wrapMode="none">+ ⋯</text>
+    </box>
+  }
   return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 1} flexShrink={0} flexDirection="column" border={[]} borderColor={theme.border}>
     <box height={1} paddingX={1} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onManage() } }}><text fg={theme.muted}>Spaces</text><box flexGrow={1} /><text fg={theme.dim}>+ · menu</text></box>
     {state.spaces.slice(Math.max(0, state.spaces.findIndex(space => space.id === state.activeSpaceId) - 3), Math.max(4, state.spaces.findIndex(space => space.id === state.activeSpaceId) + 1)).map(space => <box key={space.id} id={`space:${space.id}`} height={1} paddingX={1} backgroundColor={space.id === state.activeSpaceId ? theme.surface3 : theme.surface}

@@ -13,7 +13,7 @@ import { Spinner } from '../chrome'
 import { SectionFrame } from '../borders'
 import { PaneResizeHandle } from '../../paneResize'
 import { SidebarTitlePreview } from '../SidebarTitlePreview'
-import { SidebarHeading, SidebarNewSession } from '../SidebarChrome'
+import { SidebarHeading, SidebarNewSession, sidebarQuietColor } from '../SidebarChrome'
 
 const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
 
@@ -84,13 +84,14 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
               {SIDEBAR_VIEWS.map(view => <box key={view} id={`sidebar-tab:${view}`} height={1} flexShrink={0}
                 backgroundColor={sidebarView === view ? theme.surface3 : theme.surface}
                 onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onViewChange(view) } }}>
-                <text fg={sidebarView === view ? theme.cyan : theme.muted} wrapMode="none" selectable={false}>{view === 'sessions' ? ' Sessions ' : ' Coordinator '}</text>
+                <text fg={sidebarView === view ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{/* A narrow rail drops the tabs' trailing space so + New still fits beside them. */ `${view === 'sessions' ? ' Sessions' : ' Coordinator'}${sidebarWidth < 34 ? '' : ' '}`}</text>
               </box>)}
+              <box flexGrow={1} />
+              {sidebarView === 'sessions' ? <SidebarNewSession theme={theme} width={sidebarWidth} onPress={onNewSession} /> : null}
             </box>
             {sidebarView === 'sessions' ? <>
               <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
-              <SidebarNewSession theme={theme} width={sidebarWidth} density={density} onPress={onNewSession} />
             </> : null}
             {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
             {sidebarView === 'sessions' && controls ? controls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}

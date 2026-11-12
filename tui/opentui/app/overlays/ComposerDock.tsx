@@ -26,7 +26,9 @@ type ComposerDockProps = {
   composerDockBackground: string
   fullscreenMode: boolean
   composerDockRouted: boolean
-  isChatLikeView: boolean
+  /** The view leaves the dock's border untitled. */
+  hideDockTitle: boolean
+  dockBorderStyle: 'rounded' | 'single' | 'heavy'
   composerDockEmphasized: boolean
   composerAccentColor: string
   theme: TuiThemePalette
@@ -71,7 +73,7 @@ export function ComposerDock(props: ComposerDockProps) {
   const {
     composerWindowOpen, composerHidden, presentationHidesComposer, embeddedComposer,
     composerAreaOffset, composerAreaWidth, composerDockBackground, fullscreenMode,
-    composerDockRouted, isChatLikeView, composerDockEmphasized, composerAccentColor, theme,
+    composerDockRouted, hideDockTitle, dockBorderStyle, composerDockEmphasized, composerAccentColor, theme,
     composerTurnStatusInBorder, composerTargetMessage, composerDockTitleWidth,
     composerDockBorderTitle, composerDockHeight, surfacePanelFocused, setSurfacePanelFocused,
     composerActive, setComposerActive, composerTextareaRef, composerDockTextareaWidth,
@@ -97,12 +99,12 @@ export function ComposerDock(props: ComposerDockProps) {
           // border in fullscreen, a band that did not match the draft.
           backgroundColor={composerDockBackground}
           border={fullscreenMode ? [] : ['top', 'left', 'right', 'bottom']}
-          borderStyle="rounded"
+          borderStyle={dockBorderStyle}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
           focused={composerDockEmphasized}
           title={fullscreenMode || composerTurnStatusInBorder ? undefined : composerTargetMessage
             ? onComposerTargetClick ? undefined : fitText(composerTargetMessage, composerDockTitleWidth)
-            : isChatLikeView ? undefined : composerDockBorderTitle}
+            : hideDockTitle ? undefined : composerDockBorderTitle}
           titleColor={composerTargetMessage ? theme.cyan : composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
           height={composerDockHeight}

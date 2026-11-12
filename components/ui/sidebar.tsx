@@ -105,6 +105,11 @@ function SidebarProvider({
   )
 }
 
+/** The sidebar's controls, or null outside a SidebarProvider (e.g. a page without the session rail). */
+function useOptionalSidebar() {
+  return React.use(SidebarContext)
+}
+
 function useSidebar() {
   const context = React.use(SidebarContext)
   if (!context) {
@@ -386,6 +391,7 @@ export {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarProvider,
+  useOptionalSidebar,
   SidebarRail,
   SidebarMenu,
   SidebarMenuButton,

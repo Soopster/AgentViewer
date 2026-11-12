@@ -5,20 +5,23 @@ import type { TuiDensity, TuiThemePalette } from '../../theme'
 import { fitText } from '../textLayout'
 import { mixHexColor } from './transcriptStyle'
 
-export function sidebarActionRows(density: TuiDensity): number {
-  return density === 'comfortable' ? 5 : density === 'balanced' ? 3 : 1
+/** Shared navigation chrome for the standard and Engineering session rails. */
+/** `+ New` at the right end of the Sessions / Coordinator row: a full-width block was the loudest thing in the
+ * rail and took up to five rows for the action used least. */
+/**
+ * The rail's quiet colour, for chrome that should recede: date headers, counts, ages, chips at
+ * their default, the inactive tab. Mixed from the theme's own text and surface rather than taken
+ * from `dim`/`muted`, which some palettes (a terminal's own colours) fill with an accent — orange
+ * there made every header and age look highlighted. Accent is left to focus and filtering.
+ */
+export function sidebarQuietColor(theme: TuiThemePalette): string {
+  return mixHexColor(theme.text, theme.surface, 0.5) ?? theme.dim
 }
 
-/** Shared navigation chrome for the standard and Engineering session rails. */
-export function SidebarNewSession({ theme, width, density, onPress }: {
-  theme: TuiThemePalette; width: number; density: TuiDensity; onPress: () => void
-}) {
-  return <box height={sidebarActionRows(density)} flexShrink={0} paddingX={1} paddingY={density === 'dense' ? 0 : 1}>
-    <box id="sidebar-new-session" height={density === 'comfortable' ? 3 : 1} width={Math.min(22, width - 4)} paddingX={2} paddingY={density === 'comfortable' ? 1 : 0}
-      backgroundColor={mixHexColor(theme.cyan, theme.surface, 0.2) ?? theme.surface3}
-      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
-      <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>{fitText('+ New session', Math.min(18, width - 8))}</text>
-    </box>
+export function SidebarNewSession({ theme, width, onPress }: { theme: TuiThemePalette; width: number; onPress: () => void }) {
+  return <box id="sidebar-new-session" height={1} flexShrink={0} backgroundColor={mixHexColor(theme.cyan, theme.surface, 0.2) ?? theme.surface3}
+    onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
+    <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>{/* Narrow rails keep the tabs whole and the button to its glyph. */ width < 34 ? ' + ' : ' + New '}</text>
   </box>
 }
 
@@ -35,18 +38,24 @@ export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent,
   </box>
 }
 
-export function SidebarGroupHeading({ id, label, count, width, dateGroup, disclosure, first, selected = false, density, theme, onPress }: {
-  id: string; label: string; count: number; width: number; dateGroup?: boolean; disclosure: string; first: boolean; selected?: boolean
+export function SidebarGroupHeading({ id, label, count, width, dateGroup, disclosure, first, afterHeading = false, selected = false, density, theme, onPress }: {
+  id: string; label: string; count: number; width: number; dateGroup?: boolean; disclosure: string; first: boolean; afterHeading?: boolean; selected?: boolean
   density: TuiDensity; theme: TuiThemePalette; onPress?: () => void
 }) {
   const countLabel = `${count}`
   const headingWidth = Math.max(width - (dateGroup ? 3 : 2), 1)
-  return <box id={id} paddingX={1} paddingLeft={dateGroup ? 2 : 1} marginTop={density === 'dense' || first ? 0 : 1}
+  // A date sub-group sits right under its project (no blank row) outside comfortable density:
+  // a blank row above every Today / This week header spent a third of a short rail on air.
+  // Spacing steps up with density's opposite: dense leaves a blank row before a project only; balanced also
+  // before a date header that follows sessions (not one directly under its project); comfortable rows already
+  // end in a blank row, so a header there adds none.
+  const gap = density === 'comfortable' || first ? 0 : !dateGroup ? 1 : density === 'balanced' && !afterHeading ? 1 : 0
+  return <box id={id} paddingX={1} paddingLeft={dateGroup ? 2 : 1} marginTop={gap}
     flexDirection="row" height={1} flexShrink={0} backgroundColor={selected ? theme.surface3 : theme.surface}
     onMouseDown={event => { if (event.button === 0 && onPress) { event.stopPropagation(); onPress() } }}>
-    <text fg={selected ? theme.text : dateGroup ? theme.dim : theme.muted} attributes={dateGroup ? undefined : TextAttributes.BOLD} wrapMode="none" selectable={false}>
+    <text fg={selected || !dateGroup ? theme.text : sidebarQuietColor(theme)} attributes={dateGroup ? undefined : TextAttributes.BOLD} wrapMode="none" selectable={false}>
       {fitText(`${disclosure}${label}`, Math.max(headingWidth - countLabel.length - 1, 1))}
     </text>
-    <text fg={theme.dim} wrapMode="none" selectable={false}>{` ${countLabel}`}</text>
+    <text fg={sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{` ${countLabel}`}</text>
   </box>
 }

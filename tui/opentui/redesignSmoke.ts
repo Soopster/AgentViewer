@@ -7,9 +7,9 @@ import type { TuiTranscriptCard } from '../format'
 const now = new Date(2026, 10, 1, 12)
 const entries: SidebarEntry[] = [{ type: 'project', key: 'project:test', projectName: 'test', count: 3 }, ...[0, 1, 5].map(days => ({ type: 'session' as const, key: `s${days}`, absoluteIndex: days, session: { sessionId: `s${days}`, provider: 'codex' as const, cwd: '/tmp', lastModified: new Date(2026, 10, 1 - days, 10).getTime() } }))]
 const grouped = groupSidebarDates(entries, new Set(), now)
-assert.deepEqual(grouped.filter(e => e.type === 'project').map(e => e.projectName), ['test', 'Today', 'Yesterday', 'Older'])
+assert.deepEqual(grouped.filter(e => e.type === 'project').map(e => e.projectName), ['test', 'Today', 'Yesterday', 'This week'])
 assert.equal(grouped.filter(e => e.type === 'session').length, 3)
-const folded = groupSidebarDates(entries, new Set(['project:test:date:Older']), now)
+const folded = groupSidebarDates(entries, new Set(['project:test:date:This week']), now)
 assert.equal(folded.filter(e => e.type === 'session').length, 2)
 assert.equal(entries.length, 4)
 const sess = (id: string): SidebarEntry => ({ type: 'session', key: id, absoluteIndex: 0, session: { sessionId: id, provider: 'codex' as const, cwd: '/tmp', lastModified: 1 } })
@@ -52,3 +52,22 @@ assert.deepEqual(foldedTurn.map(card => card.key), ['prompt', 'activity-summary:
 assert(foldedTurn[1].compactSummary.includes('2 tool calls'))
 assert.deepEqual(foldTurnActivity(turn, new Set(['prompt']), true), turn)
 console.log('Turn folding passed: answers and failures retained, active turns never folded.')
+{
+  // The date buckets both rails use: a month of sessions no longer lands in one 30-row group.
+  const { sidebarDateBucket } = await import('../../lib/sessionSidebarModel')
+  const at = (days: number) => new Date(2026, 10, 20 - days, 10).getTime()
+  const today = new Date(2026, 10, 20, 12)
+  assert.deepEqual([0, 1, 4, 6, 7, 13, 14, 29, 30].map((days) => sidebarDateBucket(at(days), today)),
+    ['Today', 'Yesterday', 'This week', 'This week', 'Last week', 'Last week', 'This month', 'This month', 'Older'])
+}
+{
+  // This month and Older start folded; a toggle opens them (the key flips the default).
+  const now = new Date(2026, 10, 30, 12)
+  const old: SidebarEntry[] = [{ type: 'project', key: 'project:p', projectName: 'p', count: 2 }, ...[1, 20].map(days => ({ type: 'session' as const, key: `o${days}`, absoluteIndex: days, session: { sessionId: `o${days}`, provider: 'codex' as const, cwd: '/tmp', lastModified: new Date(2026, 10, 30 - days, 10).getTime() } }))]
+  const folded = groupSidebarDates(old, new Set(), now)
+  assert.ok(folded.some(e => e.type === 'project' && e.projectName === 'This month' && e.collapsed), 'This month starts folded')
+  assert.ok(!folded.some(e => e.type === 'session' && e.key === 'o20'), 'a folded bucket hides its sessions')
+  assert.ok(folded.some(e => e.type === 'session' && e.key === 'o1'), 'Yesterday stays open')
+  const opened = groupSidebarDates(old, new Set(['project:p:date:This month']), now)
+  assert.ok(opened.some(e => e.type === 'session' && e.key === 'o20'), 'a toggle opens This month')
+}

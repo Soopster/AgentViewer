@@ -13,6 +13,8 @@ export type UseSplitPaneRunningKeysGroupContext = {
   showRail: boolean
   sidebarWidth: number
   readerAreaWidth: number
+  /** The view keeps the dock to the reader column (beside the rail) rather than the terminal's width. */
+  composerInReaderColumn?: boolean
   width: number
   fullscreenMode: boolean
   height: number
@@ -22,7 +24,7 @@ export type UseSplitPaneRunningKeysGroupContext = {
 export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupContext) {
   const {
     runningSessions, rightPaneWidth, taskPanelVisible, surfacePanelOnRight, showRail, sidebarWidth,
-    readerAreaWidth, width, fullscreenMode, height, composerDraft,
+    readerAreaWidth, width, fullscreenMode, height, composerDraft, composerInReaderColumn = false,
   } = ctx
 
   // Which pane sessions have a turn in flight — drives the ◐ running glyph and
@@ -41,8 +43,9 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
   // The right-hand panels span the full column, composer rows included, so a
   // full-width dock would be drawn over their bottom rows (the surface panel's
   // hint row, the task panel's footer). With one open the dock sits beside it.
-  const composerAreaOffset = rightSidePanelVisible && showRail ? sidebarWidth : 0
-  const composerAreaWidth = rightSidePanelVisible ? Math.max(30, readerAreaWidth) : width
+  const readerColumn = rightSidePanelVisible || (composerInReaderColumn && !fullscreenMode)
+  const composerAreaOffset = readerColumn && showRail ? sidebarWidth : 0
+  const composerAreaWidth = readerColumn ? Math.max(30, readerAreaWidth) : width
   const composerDockTextareaWidth = Math.max(composerAreaWidth - (fullscreenMode ? 2 : 4), 20)
   const composerWindowWidth = Math.max(
     20,

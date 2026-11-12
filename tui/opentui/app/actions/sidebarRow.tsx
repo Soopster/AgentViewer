@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { sidebarQuietColor } from '../SidebarChrome'
+import { parseStoredSessionTags } from '../../../../lib/sessionTags'
 import { retitleCoordinatorSession } from '../../../../lib/coordinatorSessionTitle'
 import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import type { TuiThemePalette } from '../../../theme'
@@ -63,7 +65,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   if (entry.type === 'project') {
     return <SidebarGroupHeading key={entry.key} id={`sidebar:${entry.key}`} label={entry.projectName} count={entry.count}
       width={sidebarInnerWidth} dateGroup={entry.dateGroup} disclosure={entry.dateGroup || entry.collapsible ? entry.collapsed ? '▸ ' : '▾ ' : '◆ '}
-      first={entry.key === firstSidebarEntryKey} selected={selected} density={density} theme={theme}
+      first={entry.key === firstSidebarEntryKey} afterHeading={sidebarEntries[sidebarEntries.indexOf(entry) - 1]?.type === 'project'} selected={selected} density={density} theme={theme}
       onPress={entry.dateGroup || entry.collapsible ? () => ctx.toggleDateGroup(entry.key) : undefined} />
   }
 
@@ -158,6 +160,12 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   const selectedRowBg = mixHexColor(sessionAccent, theme.surface, 0.22) ?? theme.surface3
   const rowBg = selected ? selectedRowBg : theme.surface
 
+  const title = formatSessionTitle(entry.session)
+  const prompt = (entry.session.firstPrompt ?? '').replace(/\s+/g, ' ').trim()
+  const tagText = parseStoredSessionTags(entry.session.tag).map((tag) => `#${tag}`).join(' ')
+  // Comfortable's second line: tags first (what the tag filter lists), then the opening prompt.
+  const prompted = prompt && !title.startsWith(prompt.slice(0, 24)) ? prompt : ''
+  const preview = density === 'comfortable' ? [tagText, prompted].filter(Boolean).join(' · ') : ''
   const metaLine = joinMeta([
     activity === 'needs-input' ? 'Needs input'
       : activity === 'running' || activity === 'active' ? 'Working'
@@ -179,7 +187,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   // "Recently touched" is the age itself on this row; only a turn's state
   // earns a glyph. Marks sit before the age so the ages stay one flush column.
   const settled = Boolean(entry.session.inbox?.settledAt)
-  const rowGlyph = activity ? activityGlyph : settled ? '✓' : null
+  // Snoozed (the web's z): set aside for now, without being done.
+  const snoozed = !settled && (entry.session.inbox?.snoozedUntil ?? 0) > Date.now()
+  const rowGlyph = activity ? activityGlyph : settled ? '✓' : snoozed ? 'z' : null
   const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
   const pinned = ctx.pinnedSessionKeys?.has(sessionKey(entry.session)) ?? false
   const showPin = Boolean(ctx.toggleSessionPin && (selected || pinned))
@@ -190,6 +200,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
     4,
   )
 
+  const metaWidth = innerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length
   return (
     <SidebarSessionRow preview={{ key: entry.key, title: retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), width: singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth }} selected={selected}
       key={entry.key}
@@ -242,15 +253,15 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
             {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth)}
           </text>
-          {showPin ? <text id={`sidebar-pin:${sessionKey(entry.session)}`} width={3} fg={pinned ? sessionAccent : theme.dim} wrapMode="none" selectable={false}
+          {showPin ? <text id={`sidebar-pin:${sessionKey(entry.session)}`} width={3} fg={pinned ? sessionAccent : sidebarQuietColor(theme)} wrapMode="none" selectable={false}
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); ctx.toggleSessionPin?.(entry.session) } }}
-            onMouseUp={event => event.stopPropagation()}>{pinned ? ' − ' : ' + '}</text> : null}
+            onMouseUp={event => event.stopPropagation()}>{pinned ? ' ★ ' : ' ☆ '}</text> : null}
           {singleRow ? (
             <>
               {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
               {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}
-              {rowGlyph ? <text fg={activity ? activityColor : theme.green} wrapMode="none" selectable={false}>{` ${rowGlyph}`}</text> : null}
-              {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{` ${rowMeta}`}</text> : null}
+              {rowGlyph ? <text fg={activity ? activityColor : snoozed ? theme.dim : theme.green} wrapMode="none" selectable={false}>{` ${rowGlyph}`}</text> : null}
+              {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{` ${rowMeta}`}</text> : null}
             </>
           ) : null}
         </box>
@@ -258,8 +269,13 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
       {singleRow ? null : (
       <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
         <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
-        <text fg={activity === 'needs-input' ? theme.amber : theme.dim} wrapMode="none" selectable={false}>
-          {fitText(metaLine, innerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length)}
+        <text fg={activity === 'needs-input' ? theme.amber : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>
+          {/* The opening prompt, as the web row previews it, when it says more than the title.
+              fitText pads to its width, so the age is fitted only when nothing follows it. */}
+          {preview && metaLine.length + 6 < metaWidth ? metaLine : fitText(metaLine, metaWidth)}
+          {preview && metaLine.length + 6 < metaWidth
+            ? <span fg={theme.muted}>{fitText(` · ${preview}`, metaWidth - metaLine.length)}</span>
+            : null}
         </text>
         {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
         {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}

@@ -17,7 +17,7 @@ const ids = (entries: SidebarEntry[]) => entries.flatMap(entry => { const sessio
 const built = mergeCoordinatorGroups(buildSidebarEntries(sessions, 'project', children))
 const grouped = groupSidebarDates(built, new Set())
 assert.deepEqual(grouped.flatMap(entry => entry.type === 'project' && !entry.dateGroup ? [entry.projectName] : []), ['ALPHA', 'BETA'])
-assert.deepEqual(grouped.flatMap(entry => entry.type === 'project' && entry.dateGroup ? [entry.projectName] : []), ['Today', 'Yesterday', 'Older'])
+assert.deepEqual(grouped.flatMap(entry => entry.type === 'project' && entry.dateGroup ? [entry.projectName] : []), ['Today', 'Yesterday', 'This week'])
 assert.equal(ids(grouped).length, sessions.length, 'Real children and separate provider instances remain addressable')
 assert.deepEqual(ids(groupSidebarDates(built, new Set(['project:ALPHA']))), [sessionKey(sessions[4]!)])
 assert.ok(!ids(groupSidebarDates(built, new Set(['project:ALPHA:date:Today']))).includes(sessionKey(sessions[0]!)))

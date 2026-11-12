@@ -1,4 +1,5 @@
 import type { TuiSessionDetail } from '../../../lib/tui/service'
+import { isDateBucketCollapsedByDefault, sidebarDateBucket } from '../../../lib/sessionSidebarModel'
 import type { TuiSidebarSort } from '../../../lib/tuiState'
 import type { Session } from '../../../lib/types'
 import { formatSessionProject } from '../../format'
@@ -299,8 +300,6 @@ export function mergeCoordinatorGroups(entries: SidebarEntry[]): SidebarEntry[] 
 
 /** Calendar buckets preserve parent/child adjacency and the existing project order. */
 export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySet<string>, now = new Date(), options: { includeSingleOlder?: boolean } = {}): SidebarEntry[] {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime()
   const result: SidebarEntry[] = []
   let project = ''
   let bucketKey = ''
@@ -309,10 +308,8 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
   let header: Extract<SidebarEntry, { type: 'project' }> | undefined
   // A project whose sessions all fall in one bucket gains nothing from a bucket
   // header: it would only add a row under the project's own.
-  const bucketLabel = (entry: Extract<SidebarEntry, { type: 'session' }>) => {
-    const time = sessionActivityMs(entry.session)
-    return time >= today ? 'Today' : time >= yesterday ? 'Yesterday' : 'Older'
-  }
+  // The web rail's buckets (lib/sessionSidebarModel.ts).
+  const bucketLabel = (entry: Extract<SidebarEntry, { type: 'session' }>) => sidebarDateBucket(sessionActivityMs(entry.session), now)
   const bucketsByProject = new Map<string, Set<string>>()
   let scanning = ''
   for (const entry of entries) {
@@ -339,7 +336,8 @@ export function groupSidebarDates(entries: SidebarEntry[], collapsed: ReadonlySe
       const key = `${project}:date:${label}`
       if (key !== bucketKey) {
         bucketKey = key
-        hidden = collapsed.has(key)
+        // This month and Older start folded; a toggle flips the default, as for coordinator runs.
+        hidden = collapsed.has(key) !== isDateBucketCollapsedByDefault(label)
         header = { type: 'project', key, projectName: label, count: 0, dateGroup: true, collapsed: hidden }
         result.push(header)
       }

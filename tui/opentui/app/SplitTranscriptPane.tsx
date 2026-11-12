@@ -959,9 +959,13 @@ export function SplitTranscriptPaneInner({
   // scrollbox. Each pane owns its viewport, so cycling reader → pane → pane
   // returns to the exact card and offset that pane had before losing focus.
 
+  // The view may hide the scrollbar (and with it the markers drawn on its track).
+  const scrollbarVisible = viewSpec.scrollbar !== 'hidden'
   const scrollbarOptions = useMemo(
-    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
-    [theme.muted, theme.surface2],
+    // `visible` only to hide: passing true forces the bar on where it would auto-hide.
+    // The thumb takes the frame's border colour (lit when focused), as the session rail's does.
+    () => ({ ...(scrollbarVisible ? {} : { visible: false }), trackOptions: { foregroundColor: focused ? theme.cyan : theme.border, backgroundColor: theme.surface2 } }),
+    [theme.cyan, theme.border, theme.surface2, scrollbarVisible, focused],
   )
 
   const accent = transcriptAccent('assistant', session.provider ?? undefined)
@@ -979,7 +983,8 @@ export function SplitTranscriptPaneInner({
   const footer = useSyncExternalStore(visible && chromeHost ? selectedWindowFooter.subscribe : subscribeNothing, visible && chromeHost ? selectedWindowFooter.get : getNothing)
   // The Session insights plugin owns the track markers and the task strip.
   const insightsOn = !useDisabledPlugins().has('session-insights')
-  const scrollLayout = useScrollLayout(scrollRef, insightsOn && visible && allPaneCards.length > 1)
+  const markersOn = insightsOn && viewSpec.scrollbar === 'markers'
+  const scrollLayout = useScrollLayout(scrollRef, markersOn && visible && allPaneCards.length > 1)
   const taskStrip = useMemo(() => (insightsOn ? latestTaskStrip(allPaneCards) : null), [insightsOn, allPaneCards])
   const [taskStripOpen, setTaskStripOpen] = useState(false)
   const stripRows = taskStripRows(taskStrip, taskStripOpen)
@@ -1175,7 +1180,7 @@ export function SplitTranscriptPaneInner({
             </TuiErrorBoundary>
           </scrollbox>
         )}
-        {insightsOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={viewSpec.scrollMarkerJump ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
+        {markersOn && allPaneCards.length > 1 ? <ScrollMarkers cards={allPaneCards} layout={scrollLayout} rows={bodyRows} theme={theme} onJump={viewSpec.scrollMarkerJump ? cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) } : undefined} /> : null}
         {stickyCard && !viewSpec.promptNavigation ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
       </box>
       {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}

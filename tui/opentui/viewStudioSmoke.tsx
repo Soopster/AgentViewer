@@ -192,8 +192,25 @@ try {
   // ── a Panels pin: this view hides the session rail ──
   await press('v')
   await press('c')
-  // Tabs: numbered, then the underline style.
+  // Composer: a square dock border; Layout: no scrollbar.
+  const dockRow = () => frame().split('\n').find((row) => row.includes('To:')) ?? ''
+  if (!dockRow().trimStart().startsWith('╭')) fail('the dock does not start rounded')
   await press('4')
+  for (let i = 0; i < 5; i += 1) await press('j')
+  await press('l')
+  if (!/Dock border\s+‹ square ›/.test(frame())) fail('Dock border did not cycle to square')
+  if (!dockRow().trimStart().startsWith('┌')) fail('a square dock border did not reach the dock')
+  await press('1')
+  for (let i = 0; i < 6; i += 1) await press('j')
+  await press('l')
+  await press('l')
+  if (!/Scrollbar\s+‹ hidden ›/.test(frame())) fail('Scrollbar did not cycle to hidden')
+  {
+    const sb = setup.renderer.root.findDescendantById('transcript-scroll') as unknown as { verticalScrollBar: { visible: boolean } }
+    if (sb.verticalScrollBar.visible) fail('a hidden scrollbar is still shown')
+  }
+  // Tabs: numbered, then the underline style.
+  await press('5')
   for (let i = 0; i < 5; i += 1) await press('j')
   await press('l')
   if (!/Numbered tabs\s+‹ on ›/.test(frame())) fail('Numbered tabs did not cycle on')
@@ -202,7 +219,7 @@ try {
   await press('l')
   if (!/Tab style\s+‹ underline ›/.test(frame())) fail('Tab style did not cycle to underline')
   if (!frame().includes('━━━')) fail('the underline style did not rule the active tab')
-  await press('5')
+  await press('6')
   await press('l')
   await press('l')
   if (!/Session rail\s+‹ hidden ›/.test(frame())) fail('Session rail did not cycle to hidden')
@@ -232,7 +249,7 @@ try {
     await act(async () => { await setup.mockMouse.click(x, y, button as never) })
     await settle(200)
   }
-  await click('6 Pins')
+  await click('Pins')
   if (!frame().includes('Density')) fail('clicking a section tab did not switch to it')
   await click('Density')
   if (!/Density\s+‹ comfortable ›/.test(frame())) fail('clicking a field did not cycle its value')
@@ -243,5 +260,5 @@ try {
 } finally {
   await act(async () => setup.renderer.destroy())
 }
-console.log('View studio smoke passed: boot restore, unknown fields dropped, clone, live markers and cursor, rename, save, discard confirm, two-press delete, built-in edit and reset, numbered and underlined tabs, rail pin, prompts-only filter, mouse')
+console.log('View studio smoke passed: boot restore, unknown fields dropped, clone, live markers and cursor, rename, save, discard confirm, two-press delete, built-in edit and reset, square dock, hidden scrollbar, numbered and underlined tabs, rail pin, prompts-only filter, mouse')
 process.exit(0)
