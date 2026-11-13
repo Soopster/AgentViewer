@@ -12,6 +12,8 @@ export type WebPluginServices = {
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
+  bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
+  'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
   'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
   'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
   'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService

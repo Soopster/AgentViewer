@@ -24,6 +24,7 @@ import { type SessionIdentity } from '@/lib/sessionIdentity'
 import { useSessionCatalog } from '@/components/session-catalog/useSessionCatalog'
 import { useSessionCatalogQuery } from '@/components/session-catalog/useSessionCatalogQuery'
 import { ApplicationPluginHost } from '@/components/shell/ApplicationPluginHost'
+import type { PluginSessionRef } from '@/lib/plugins/bookmarks'
 
 import { panelSurfaceAvailability } from '@/lib/rightPanel'
 
@@ -47,7 +48,6 @@ import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
-const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
 const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
@@ -90,7 +90,6 @@ export default function Home() {
   const [repositoryOverlay, setRepositoryOverlay] = useState<PluginSurfaceId | null>(null)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
   const composerInsertRequestRef = useRef(0)
-  const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
@@ -262,6 +261,11 @@ export default function Home() {
     void selectSession(session, nextTargetMessageId)
   }, [scrollSessionListToSession, selectSession])
 
+  // The `session-navigation` service: plugins name a session, the page selects it.
+  const openSessionFromPlugin = useCallback((ref: PluginSessionRef, messageUuid?: string) => {
+    selectCommandPaletteSession({ sessionId: ref.sessionId, provider: ref.provider, ...(ref.providerInstanceId ? { providerInstanceId: ref.providerInstanceId } : {}) } as Session, messageUuid)
+  }, [selectCommandPaletteSession])
+
   const closeTab = useCallback((sessionKey: string) => {
     const { wasActive, adjacent } = closeNavigationTab(sessionKey)
     if (!wasActive) return
@@ -395,7 +399,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} />
+    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">
@@ -518,7 +522,6 @@ export default function Home() {
                   onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
-                  onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                   onOpenProvenance={() => setProvenanceOpen(true)}
                   onOpenRemoteAccess={() => setRemoteAccessOpen(true)}
                   onOpenPlugins={() => setPluginManagerOpen(true)}
@@ -580,15 +583,6 @@ export default function Home() {
           <RemoteAccessPopover open={remoteAccessOpen} onClose={() => setRemoteAccessOpen(false)} />
         ) : null}
         {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
-        {bookmarksPanelOpen ? (
-          <BookmarksPanel
-            open={bookmarksPanelOpen}
-            onClose={() => setBookmarksPanelOpen(false)}
-            onSelect={({ sessionId, provider: bookmarkProvider, uuid }) => {
-              selectCommandPaletteSession({ sessionId, provider: bookmarkProvider } as Session, uuid)
-            }}
-          />
-        ) : null}
         {!isMessageViewMaximized ? <PiActivityPopover /> : null}
       </div>
     </SidebarProvider>

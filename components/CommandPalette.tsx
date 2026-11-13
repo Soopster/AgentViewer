@@ -7,7 +7,7 @@ import { MESSAGE_SEARCH_RESULT_LIMIT, sessionTabKey, getSessionTitle, getSession
 import { providerStyle, providerIconLabel, messageTypeLabel, formatMessageMatchTime } from './command-palette/presentation'
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -80,7 +80,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenBookmarks,
   onOpenProvenance,
   onOpenRemoteAccess,
   onOpenPlugins,
@@ -255,17 +254,6 @@ export default function CommandPalette({
         },
       },
       {
-        id: 'open-bookmarks',
-        label: 'View all bookmarks',
-        description: 'Browse every bookmarked message across all sessions and providers',
-        icon: <Bookmark size={16} />,
-        shortcut: 'Bookmarks',
-        group: 'actions',
-        keywords: ['bookmark', 'bookmarks', 'saved', 'star', 'starred', 'favorite', 'favourites', 'pin'],
-        score: 0,
-        run: onOpenBookmarks,
-      },
-      {
         id: 'open-provenance',
         label: 'Code provenance — agent blame',
         description: 'See which sessions wrote a file, or what code traces back to the current session',
@@ -363,7 +351,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenBookmarks, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

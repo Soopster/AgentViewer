@@ -9,9 +9,6 @@ import { sessionKey } from '../sessionList'
 
 export function useBookmarkScrollState() {
   // Global bookmarks overlay (cross-session/provider browser).
-  const [bookmarksOverlayOpen, setBookmarksOverlayOpen] = useState(false)
-  const [bookmarksOverlay, setBookmarksOverlay] = useState<MessageBookmark[]>([])
-  const [bookmarksOverlayIndex, setBookmarksOverlayIndex] = useState(0)
   // When jumping to a bookmark in another session, remember where to land once
   // that session's transcript has loaded.
   const pendingBookmarkCursorRef = useRef<{ sessionKey: string; uuid: string } | null>(null)
@@ -46,8 +43,7 @@ export function useBookmarkScrollState() {
   const composerDraftState = useQuietWorkspaceState('composerDraft', '')
 
   return {
-    bookmarksOverlayOpen, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlay,
-    bookmarksOverlayIndex, setBookmarksOverlayIndex, pendingBookmarkCursorRef, followTail,
+    pendingBookmarkCursorRef, followTail,
     setFollowTail, pendingNewCount, setPendingNewCount, unreadBoundaryKey, setUnreadBoundaryKey,
     resumeMarkerKey, setResumeMarkerKey, bootstrapped, setBootstrapped, restoredReaderState,
     setRestoredReaderState, contextUsage, setContextUsage, contextUsageStatus,

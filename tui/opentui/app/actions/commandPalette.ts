@@ -129,7 +129,6 @@ export type ExecuteCommandPaletteContext = {
   replySelectedMessage: (cardOverride?: TuiTranscriptCard) => void
   toggleBookmarkForCursor: () => Promise<void>
   jumpToBookmark: (direction: 1 | -1) => void
-  openBookmarksOverlay: () => Promise<void>
   setTaskPanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   setTaskPanelTab: React.Dispatch<React.SetStateAction<'agents' | 'tasks'>>
   setTaskPanelExpanded: React.Dispatch<React.SetStateAction<boolean>>
@@ -221,7 +220,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     tabFromRail, jumpToUnreadBoundary, jumpToResumeMarker, setSearchMode, searchMatches,
     jumpToSearchMatch, jumpToMatchingCard, toggleExpansion, openSelectedAsyncQuestionsOrFold,
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, setTaskPanelOpen, setTaskPanelTab, setTaskPanelExpanded, resizeTaskPanel,
+    setTaskPanelOpen, setTaskPanelTab, setTaskPanelExpanded, resizeTaskPanel,
     setTabOrientation, setTabsEnabled, tabsEnabled, addSplitPane, rotateSplitOrientation,
     resizeSplitReader, jumpToNextWindowAttention, enterWindowControls, openWindowControlMenu,
     focusedControlKey, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen,
@@ -581,9 +580,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     case 'bookmark-jump':
       setFocusedPane('messages')
       jumpToBookmark(1)
-      break
-    case 'bookmark-all':
-      void openBookmarksOverlay()
       break
     case 'tasks':
       setTaskPanelOpen(true)

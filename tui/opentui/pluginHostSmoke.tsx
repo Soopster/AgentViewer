@@ -237,6 +237,11 @@ await settle(200)
 check(!screen().includes('j/k scroll · d/u page · c copy'), 'a disabled handoff plugin still opened')
 await act(async () => { actionSettings.applyPluginSettings(actionSettings.DEFAULT_PLUGIN_SETTINGS) })
 console.log('Handoff (⇧H) and the daily summary (⌃K s) open as plugins and respect disablement.')
+await key('b', { shift: true })
+await waitFor('⇧B opens the bookmarks plugin', () => screen().includes('★ BOOKMARKS') && tuiPluginViews.isLoaded('bookmarks'))
+await key('escape')
+await waitFor('bookmarks close', () => !screen().includes('★ BOOKMARKS'))
+console.log('⇧B opens the bookmarks plugin.')
 
 // Composer accessories own their modal and native input without root goal cases.
 fixtureGoal = { provider: 'claude', providerInstanceId: 'default', sessionId: 'plug-alpha', objective: 'PLUGIN-GOAL-OBJECTIVE', status: 'active', tokenBudget: null, tokensUsed: 0, continuations: 0, maxContinuations: 25, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastNote: null, lastDecision: null, lastEvaluatedAt: null, error: null }

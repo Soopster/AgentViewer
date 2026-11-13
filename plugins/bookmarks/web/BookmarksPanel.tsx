@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bookmark, RefreshCw, Trash2, X } from 'lucide-react'
 import type { AgentProvider } from '@/lib/types'
 import type { MessageBookmark } from '@/lib/messageBookmarks'
-import { readJsonResponse } from '@/lib/httpResponse'
+import type { PluginBookmarksService } from '@/lib/plugins/bookmarks'
 
 type Props = {
   open: boolean
+  service: PluginBookmarksService
   onClose: () => void
   onSelect: (target: { sessionId: string; provider: AgentProvider; uuid: string }) => void
 }
@@ -35,7 +36,7 @@ function timeAgo(value?: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
+export default function BookmarksPanel({ open, service, onClose, onSelect }: Props) {
   const [bookmarks, setBookmarks] = useState<MessageBookmark[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,15 +50,11 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    fetch('/api/bookmarks')
-      .then(readJsonResponse)
-      .then((data) => {
-        if (Array.isArray(data?.bookmarks)) setBookmarks(data.bookmarks as MessageBookmark[])
-        else setError(data?.error ?? 'Failed to load bookmarks')
-      })
+    service.list()
+      .then(setBookmarks)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load bookmarks'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [service])
 
   useEffect(() => {
     if (!open) return
@@ -72,12 +69,8 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
 
   const handleRemove = useCallback((bookmark: MessageBookmark) => {
     setBookmarks((prev) => prev.filter((entry) => !(entry.uuid === bookmark.uuid && entry.sessionId === bookmark.sessionId && entry.provider === bookmark.provider)))
-    void fetch(`/api/sessions/${encodeURIComponent(bookmark.sessionId)}/bookmarks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: bookmark.provider, uuid: bookmark.uuid, bookmarked: false }),
-    }).catch(() => load())
-  }, [load])
+    service.remove(bookmark).catch(() => load())
+  }, [load, service])
 
   useEffect(() => {
     if (!open) return

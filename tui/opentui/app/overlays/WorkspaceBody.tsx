@@ -39,7 +39,6 @@ import { CommandPaletteOverlay } from './CommandPaletteOverlay'
 import { ChordHelpOverlay } from './ChordHelpOverlay'
 import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
 import type { TabDisplay } from '../../../viewSpec'
-import { BookmarksOverlay } from './BookmarksOverlay'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
 import { SessionRail } from './SessionRail'
 import { TaskSidePanelFrame } from './TaskSidePanelFrame'
@@ -233,9 +232,6 @@ type WorkspaceBodyProps = {
   composerDockHeight: number
   composerStatusBlockHeight: number
   toasts: Toast[]
-  bookmarksOverlayOpen: boolean
-  bookmarksOverlay: MessageBookmark[]
-  bookmarksOverlayIndex: number
 }
 
 export function WorkspaceBody(props: WorkspaceBodyProps) {
@@ -276,8 +272,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
     commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery,
-    chordHelp, composerDockHeight, composerStatusBlockHeight, toasts, bookmarksOverlayOpen,
-    bookmarksOverlay, bookmarksOverlayIndex,
+    chordHelp, composerDockHeight, composerStatusBlockHeight, toasts,
   } = props
   // The selected tab is on the pinned row: the strip below then highlights none of its own.
   const activeInPinnedRow = pinnedRowCount > 0 && activeStripIndex >= 0 && activeStripIndex < pinnedRowCount
@@ -543,7 +538,6 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} />
 
-        <BookmarksOverlay bookmarksOverlayOpen={bookmarksOverlayOpen} width={width} bookmarksOverlay={bookmarksOverlay} focusMode={focusMode} height={height} bookmarksOverlayIndex={bookmarksOverlayIndex} theme={theme} />
 
       </box>
 )

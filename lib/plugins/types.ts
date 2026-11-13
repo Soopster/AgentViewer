@@ -154,6 +154,10 @@ export type PluginServiceId =
   | 'daily-summary'
   /** Git state and bookmarks for a session's handoff brief. */
   | 'handoff'
+  /** Every saved bookmark, and unsaving one. */
+  | 'bookmarks'
+  /** Open a session in the reader, optionally at a message. */
+  | 'session-navigation'
   /** The target session's transcript, read for the target, not the selection. */
   | 'session-transcript'
   /** The target repository: its working directory, and the session scoping its turns. */

@@ -301,6 +301,7 @@ import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
 import { tuiPlaybooks } from './shell/playbooksService'
 import { createTuiRunLaunchService } from './shell/runLaunchService'
 import { tuiHandoff } from './shell/handoffService'
+import { tuiBookmarks } from './shell/bookmarksService'
 import type { StartProtocolRunResult } from '../../lib/agentProtocol'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
@@ -311,7 +312,6 @@ import { BordersContext, SectionFrame } from './app/borders'
 import { CommandPaletteOverlay } from './app/overlays/CommandPaletteOverlay'
 import { ChordHelpOverlay } from './app/overlays/ChordHelpOverlay'
 import { TranscriptViewMenuOverlay } from './app/overlays/TranscriptViewMenuOverlay'
-import { BookmarksOverlay } from './app/overlays/BookmarksOverlay'
 import { SelectMenusOverlay } from './app/overlays/SelectMenusOverlay'
 import { SessionRail } from './app/overlays/SessionRail'
 import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
@@ -713,8 +713,7 @@ function OpenTuiWorkspace() {
     bookmarkKeysRef.current = bookmarkKeys
   }, [bookmarkKeys])
   const {
-    bookmarksOverlayOpen, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlay,
-    bookmarksOverlayIndex, setBookmarksOverlayIndex, pendingBookmarkCursorRef, followTail,
+    pendingBookmarkCursorRef, followTail,
     setFollowTail, pendingNewCount, setPendingNewCount, unreadBoundaryKey, setUnreadBoundaryKey,
     resumeMarkerKey, setResumeMarkerKey, bootstrapped, setBootstrapped, restoredReaderState,
     setRestoredReaderState, contextUsage, setContextUsage, contextUsageStatus,
@@ -831,7 +830,7 @@ function OpenTuiWorkspace() {
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
     pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen,
-    bookmarksOverlayOpen, renameSessionKey, surfacePanelFocused,
+    renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
   })
@@ -4493,15 +4492,14 @@ function OpenTuiWorkspace() {
   })
   const {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, toggleComposerBridgeRoute,
-    toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
+    toggleComposerBridgeRoute,
+    toggleComposerIdeRoute, insertComposerPromptText, openSessionAtMessage, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   } = useCopySelectedMessageGroup({
     terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
-    setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay,
+    setBookmarkKeys, readerTitle, jumpToTranscriptIndex,
     canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
@@ -5164,6 +5162,8 @@ function OpenTuiWorkspace() {
     },
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     playbooks: tuiPlaybooks,
+    bookmarks: tuiBookmarks,
+    'session-navigation': { open: openSessionAtMessage },
     'daily-summary': { read: readPluginDailySummary },
     handoff: tuiHandoff,
     'run-launch': runLaunchService,
@@ -6057,7 +6057,7 @@ function OpenTuiWorkspace() {
     tabFromRail, jumpToUnreadBoundary, jumpToResumeMarker, setSearchMode, searchMatches,
     jumpToSearchMatch, jumpToMatchingCard, toggleExpansion, openSelectedAsyncQuestionsOrFold,
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, setTaskPanelOpen, setTaskPanelTab, setTaskPanelExpanded, resizeTaskPanel,
+    setTaskPanelOpen, setTaskPanelTab, setTaskPanelExpanded, resizeTaskPanel,
     setTabOrientation, setTabsEnabled, tabsEnabled, addSplitPane, rotateSplitOrientation,
     resizeSplitReader, jumpToNextWindowAttention, enterWindowControls, openWindowControlMenu,
     focusedControlKey, setRecentWindowsOnly, setWindowSwitcherOpen, setWindowBroadcastOpen,
@@ -6188,7 +6188,7 @@ function OpenTuiWorkspace() {
     fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
-    modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
+    modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey,
     composerHistoryOpen, composerStashOpen, searchMode, sessionSearchMode,
     folderPickerForNewSession, pluginManagerOpen, transcriptDiffDraft, chordHelp,
     windowResizeGroupRef, windowResizeCheckpointRef, setWindowControlMode,
@@ -6356,9 +6356,8 @@ function OpenTuiWorkspace() {
       toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused,
       surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef,
       newSessionModalOpen, newSessionKeyHandlerRef,
-      chordHelp, setChordHelp, bookmarksOverlayOpen,
-      isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex,
-      bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef,
+      chordHelp, setChordHelp,
+      isCtrl, attentionOpen, attentionKeyHandlerRef,
       renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen,
       closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen,
       modelPickerFocus, setModelPickerFocus, setModelPickerIndex, filteredModelPickerOptions,
@@ -6424,7 +6423,7 @@ function OpenTuiWorkspace() {
       setFleetStripEnabled, jumpToFleetEntry, setFleetPage, setWorktreeDraft,
       setWorktreeModalOpen, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
       taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden,
-      openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
+      selectedSession, setRenameSessionKey, setRenameDraft,
     })) return
     if (handleSidebarKeys({
       agentGroupKeys: viewSpec.toolGrouping === 'agents',
@@ -6997,9 +6996,6 @@ function OpenTuiWorkspace() {
         composerDockHeight={composerDockHeight}
         composerStatusBlockHeight={composerStatusBlockHeight}
         toasts={toasts}
-        bookmarksOverlayOpen={bookmarksOverlayOpen}
-        bookmarksOverlay={bookmarksOverlay}
-        bookmarksOverlayIndex={bookmarksOverlayIndex}
       />
       {viewDraft ? (
         <ViewStudioOverlay theme={theme} top={focusMode ? 1 : 4} width={Math.min(VIEW_STUDIO_WIDTH, Math.max(width - 4, 30))} height={Math.max(height - (focusMode ? 1 : 4) - 1, 16)}

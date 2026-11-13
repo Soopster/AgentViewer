@@ -32,8 +32,7 @@ export function handleOverlayAndMenuKeys({
   surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement,
   isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef,
   pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef,
-  chordHelp, setChordHelp, bookmarksOverlayOpen, isCtrl, setBookmarksOverlayOpen, bookmarksOverlay,
-  setBookmarksOverlayIndex, bookmarksOverlayIndex, openBookmarkRecord, attentionOpen,
+  chordHelp, setChordHelp, isCtrl, attentionOpen,
   attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename,
   providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut,
   setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex,
@@ -77,13 +76,7 @@ export function handleOverlayAndMenuKeys({
   newSessionKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
   setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
-  bookmarksOverlayOpen: boolean
   isCtrl: (char: string) => boolean
-  setBookmarksOverlayOpen: React.Dispatch<React.SetStateAction<boolean>>
-  bookmarksOverlay: MessageBookmark[]
-  setBookmarksOverlayIndex: React.Dispatch<React.SetStateAction<number>>
-  bookmarksOverlayIndex: number
-  openBookmarkRecord: (record: MessageBookmark) => void
   attentionOpen: boolean
   attentionKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   renameSessionKey: string | null
@@ -250,29 +243,6 @@ export function handleOverlayAndMenuKeys({
     // that chord's next key would make hesitating change what the key does.
     if (chordHelp?.dismissOnKey) {
       handled(() => setChordHelp(null))
-      return true
-    }
-
-    if (bookmarksOverlayOpen) {
-      handled(() => {
-        if (key.name === 'escape' || key.name === 'q' || isShifted('B') || isCtrl('c')) {
-          setBookmarksOverlayOpen(false)
-          return
-        }
-        if (bookmarksOverlay.length === 0) return
-        if (key.name === 'j' || key.name === 'down') {
-          setBookmarksOverlayIndex((i) => Math.min(i + 1, bookmarksOverlay.length - 1))
-          return
-        }
-        if (key.name === 'k' || key.name === 'up') {
-          setBookmarksOverlayIndex((i) => Math.max(i - 1, 0))
-          return
-        }
-        if (key.name === 'return') {
-          const record = bookmarksOverlay[bookmarksOverlayIndex]
-          if (record) openBookmarkRecord(record)
-        }
-      })
       return true
     }
 

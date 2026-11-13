@@ -88,7 +88,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   themeMenuOpen: boolean
   transcriptViewMenuOpen: boolean
   renameSessionKey: string | null
-  bookmarksOverlayOpen: boolean
   composerHistoryOpen: boolean
   composerStashOpen: boolean
   searchMode: boolean
@@ -117,7 +116,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, 
     remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
-    modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
+    modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey,
     composerHistoryOpen, composerStashOpen, searchMode, sessionSearchMode,
     folderPickerForNewSession, pluginManagerOpen, transcriptDiffDraft, chordHelp,
     windowResizeGroupRef, windowResizeCheckpointRef, setWindowControlMode,
@@ -190,7 +189,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     pendingPermissions.length || blockingWindowPopover || contextMenu || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen
     || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen  || remoteCoordinatorTarget
     || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
-    || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
+    || renameSessionKey || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
     || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
   )
   const endWindowResizeGroup = () => {

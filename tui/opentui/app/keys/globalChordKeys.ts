@@ -38,7 +38,7 @@ export function handleGlobalChordKeys({
   setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry,
   setFleetPage, setWorktreeDraft, setWorktreeModalOpen,
   taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel,
-  setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession,
+  setTaskPanelExpanded, toggleComposerHidden, selectedSession,
   setRenameSessionKey, setRenameDraft,
 }: {
   commandChordPending: boolean
@@ -119,7 +119,6 @@ export function handleGlobalChordKeys({
   resizeTaskPanel: (delta: number) => void
   setTaskPanelExpanded: React.Dispatch<React.SetStateAction<boolean>>
   toggleComposerHidden: () => void
-  openBookmarksOverlay: () => Promise<void>
   selectedSession: Session | null
   setRenameSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>
@@ -396,12 +395,6 @@ export function handleGlobalChordKeys({
     // Show/hide composer
     if (isShifted('E')) {
       handled(toggleComposerHidden)
-      return true
-    }
-
-    // Global bookmarks browser (cross-session)
-    if (isShifted('B')) {
-      handled(() => { void openBookmarksOverlay() })
       return true
     }
 

@@ -72,7 +72,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'bookmark-toggle', label: 'Bookmark message', key: 'b', category: 'Transcript' },
   { id: 'bookmark-prev', label: 'Jump to previous bookmark', key: '[', category: 'Transcript' },
   { id: 'bookmark-jump', label: 'Jump to next bookmark', key: ']', category: 'Transcript' },
-  { id: 'bookmark-all', label: 'Browse all bookmarks', key: '⇧B', category: 'Transcript' },
   { id: 'tasks', label: 'Open task panel', key: '⇧T', category: 'Transcript' },
   { id: 'surface-panel', label: 'Surface panel (browser/shell/files/diff/PR/agents)', key: '⇧O', category: 'Transcript' },
   { id: 'surface-add', label: 'Add a surface tab', key: '⌃T', category: 'Transcript' },

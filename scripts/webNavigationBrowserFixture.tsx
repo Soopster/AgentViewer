@@ -52,8 +52,7 @@ function Fixture() {
       onToggleMessagePane={noop} rightPanelOpen={false} rightPanelAvailability={availability}
       onToggleRightPanel={noop} onOpenRightPanelSurface={noop} onToggleMessageViewMaximized={noop}
       onEnterMessageViewFullscreen={noop}
-      onOpenBookmarks={noop} onOpenProvenance={noop}
-      onOpenRemoteAccess={noop} onOpenPlugins={noop} />
+      onOpenProvenance={noop} onOpenRemoteAccess={noop} onOpenPlugins={noop} />
   </SidebarProvider>
 }
 

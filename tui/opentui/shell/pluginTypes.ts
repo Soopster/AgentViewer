@@ -27,6 +27,8 @@ export type TuiPluginServices = {
   playbooks?: import('../../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../../lib/plugins/dailySummary').PluginDailySummaryService
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
+  bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
+  'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {

@@ -8,18 +8,21 @@ import { getPluginCommand, isPluginSurfaceId, type PluginSurfaceId } from '../..
 import { subscribePluginCommands } from '../../lib/plugins/commandBus'
 import { isPluginEnabled } from '../../lib/plugins/enablement'
 import type { PluginApplicationServices } from '../../lib/plugins/application'
+import type { PluginSessionRef } from '../../lib/plugins/bookmarks'
 import { webApplicationPlugins } from './applicationPlugins'
 import PluginSurfaceHost from './PluginSurfaceHost'
 import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
 import { webPluginCommands } from './pluginCommands'
 
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
-export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText }: {
+export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession }: {
   sessions: readonly Session[]
   selectedSession: Session | null
   cwd?: string | null
   /** The page's composer insert, offered to app-scoped views as the `composer` service. */
   insertText?: (text: string) => void
+  /** The page's session selection, offered to app-scoped views as `session-navigation`. */
+  openSession?: (session: PluginSessionRef, messageUuid?: string) => void
 }) {
   const [notice, setNotice] = useState<{ text: string } | null>(null)
   const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null } | null>(null)
@@ -90,6 +93,6 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   const close = useCallback(() => setOverlay(null), [])
   return <>
     {notice && <div role="status" style={{ position: 'fixed', bottom: 18, right: 18, zIndex: 80, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 }}>{notice.text}</div>}
-    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} services={{ session: { session: overlay.session }, ...(insertText ? { composer: { insertText } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} services={{ session: { session: overlay.session }, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

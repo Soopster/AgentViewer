@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { PluginSessionRef } from '../../../../lib/plugins/bookmarks'
 import type { RefObject } from 'react'
 import type { CliRenderer } from '@opentui/core'
 import type { Dispatch } from 'react'
@@ -16,8 +17,7 @@ import { useWorkspaceState } from '../../workspaceContext'
 import { WindowHistory } from '../../windowHistory'
 import { type TextareaRenderable } from '@opentui/core'
 import { type TuiTranscriptCard } from '../../../format'
-import { readTuiAllBookmarks, type TuiSessionDetail } from '../../../../lib/tui/service'
-import { type MessageBookmark } from '../../../../lib/messageBookmarks'
+import type { TuiSessionDetail } from '../../../../lib/tui/service'
 import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
 import { useStableEvent } from '../../useStableEvent'
 import { type SendAttachment, type Session } from '../../../../lib/types'
@@ -46,9 +46,6 @@ export type UseCopySelectedMessageGroupContext = {
   setBookmarkKeys: React.Dispatch<React.SetStateAction<Set<string>>>
   readerTitle: string
   jumpToTranscriptIndex: (index: number) => void
-  setBookmarksOverlayOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setBookmarksOverlayIndex: React.Dispatch<React.SetStateAction<number>>
-  setBookmarksOverlay: React.Dispatch<React.SetStateAction<MessageBookmark[]>>
   canUseChannelBridge: boolean
   setRouteComposerToBridge: React.Dispatch<React.SetStateAction<boolean>>
   canUseIdeBridge: boolean
@@ -132,8 +129,7 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     terminalSelectionRef, renderer, showNotice, readCursorIndex, visibleTranscriptCards,
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
-    setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay,
+    setBookmarkKeys, readerTitle, jumpToTranscriptIndex,
     canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
@@ -186,17 +182,6 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     }
   })
 
-  const openBookmarksOverlay = useStableEvent(async () => {
-    setBookmarksOverlayOpen(true)
-    setBookmarksOverlayIndex(0)
-    try {
-      const all = await readTuiAllBookmarks()
-      setBookmarksOverlay(all)
-    } catch (err) {
-      showNotice('error', err instanceof Error ? err.message : 'Failed to load bookmarks')
-    }
-  })
-
   const toggleComposerBridgeRoute = useStableEvent(() => {
     if (!canUseChannelBridge) {
       showNotice('error', 'Select a Claude session to route the composer through the channel bridge')
@@ -233,20 +218,22 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     setComposerActive(true)
   })
 
-  // Navigate to a bookmark from the global overlay — switching session (and
-  // provider) when needed, then landing on the message once it has loaded.
-  const openBookmarkRecord = useStableEvent((record: MessageBookmark) => {
-    setBookmarksOverlayOpen(false)
-    const targetSession = { sessionId: record.sessionId, provider: record.provider } as Session
+  // Open a session in the reader — switching session (and provider) when
+  // needed — and land on a message once it has loaded. Plugins reach it as
+  // the `session-navigation` service.
+  const openSessionAtMessage = useStableEvent((ref: PluginSessionRef, uuid?: string) => {
+    const targetSession = { sessionId: ref.sessionId, provider: ref.provider, ...(ref.providerInstanceId ? { providerInstanceId: ref.providerInstanceId } : {}) } as Session
     const targetKey = sessionKey(targetSession)
     if (targetKey === selectedSessionKeyRef.current) {
-      const idx = transcriptIndexByKey.get(record.uuid)
-      if (idx !== undefined && idx >= 0) jumpToTranscriptIndex(idx)
-      else pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
+      if (uuid) {
+        const idx = transcriptIndexByKey.get(uuid)
+        if (idx !== undefined && idx >= 0) jumpToTranscriptIndex(idx)
+        else pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid }
+      }
       setFocusedPane('messages')
       return
     }
-    pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
+    if (uuid) pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid }
     selectTabSession(targetSession)
     setFocusedPane('messages')
   })
@@ -313,8 +300,8 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
 
   return {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, toggleComposerBridgeRoute,
-    toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
+    toggleComposerBridgeRoute,
+    toggleComposerIdeRoute, insertComposerPromptText, openSessionAtMessage, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   }
 }
