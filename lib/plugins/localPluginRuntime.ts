@@ -22,6 +22,7 @@ type LocalServerModule = {
   afterTurn?: PluginBehaviorModule['afterTurn']
   beforeSteer?: PluginBehaviorModule['beforeSteer']
   permission?: PluginBehaviorModule['permission']
+  toolCard?: PluginBehaviorModule['toolCard']
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
   widgets?: Record<string, (context: { signal: AbortSignal }) => unknown>
@@ -66,6 +67,7 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
       ...(module.afterTurn ? { afterTurn: module.afterTurn } : {}),
       ...(module.beforeSteer ? { beforeSteer: module.beforeSteer } : {}),
       ...(module.permission ? { permission: module.permission } : {}),
+      ...(module.toolCard ? { toolCard: module.toolCard } : {}),
       ...(module.deactivate ? { deactivate: module.deactivate } : {}),
     } satisfies PluginBehaviorModule
   }]))

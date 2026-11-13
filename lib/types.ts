@@ -20,7 +20,12 @@ export type McpInvocation = {
   appContext?: { connectorId: string; linkId: string | null; resourceUri: string | null; appName: string | null; actionName: string | null } | null
   app?: { resourceUri: string; preferredModelDisplayMode: 'inline' | 'fullscreen' }
 }
-export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; mcp?: McpInvocation }
+export type ToolUseBlock = {
+  type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; mcp?: McpInvocation
+  /** A plugin's presentation of this call (lib/plugins/toolCards.ts), drawn instead of the generic card. */
+  pluginCard?: PluginToolCard
+}
+export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error' }
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string

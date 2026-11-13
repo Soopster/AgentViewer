@@ -56,6 +56,7 @@ import {
   syncPersistedSessions,
 } from './sessionPersistence'
 import { timeAsync } from './perfLog'
+import { pluginsMayPresentToolCards } from './plugins/toolCardsGate'
 import { withTimeout } from './withTimeout'
 import { PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS } from './providerWarmup'
 
@@ -457,8 +458,20 @@ async function readMessageWindow(provider: AgentProvider, sessionId: string, par
   const instanceId = currentProviderInstanceId(provider)
   const messages = raw.map((message) => messageForProviderInstance(message, instanceId))
   await syncMessagesBestEffort(provider, sessionId, messages)
-  const window = windowForParams(messages, params)
+  const window = await withPluginToolCards(provider, instanceId, sessionId, windowForParams(messages, params))
   return externalWriter ? { ...window, externalWriter: true } : window
+}
+
+/** Plugin presentations of tool calls, when any enabled plugin offers them (lib/plugins/toolCards.ts). */
+async function withPluginToolCards(provider: AgentProvider, instanceId: string | undefined, sessionId: string, window: SessionMessageWindow): Promise<SessionMessageWindow> {
+  if (!pluginsMayPresentToolCards()) return window
+  try {
+    const { annotatePluginToolCards } = await import('./plugins/toolCards')
+    return { ...window, messages: await annotatePluginToolCards(provider, instanceId, sessionId, window.messages) }
+  } catch (error) {
+    console.error('[plugins] tool cards unavailable:', error)
+    return window
+  }
 }
 
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {

@@ -41,6 +41,12 @@ function state(): BehaviorState {
   return globalThis.__agentViewerPluginBehaviorState
 }
 
+/** The process's behavior host, for read-path consumers (tool cards). */
+export function pluginBehaviorHost() {
+  applyPluginSettings(readPluginSettingsFile())
+  return host()
+}
+
 function host() {
   const current = state()
   if (!current.host) {

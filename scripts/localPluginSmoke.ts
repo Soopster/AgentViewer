@@ -15,7 +15,7 @@ const pluginsDir = path.join(temporary, 'plugins')
 const write = (file: string, text: string) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text) }
 write(path.join(pluginsDir, 'echo-mod', 'plugin.json'), JSON.stringify({
   id: 'echo-mod', title: 'Echo mod', description: 'Fixture mod',
-  behavior: { hooks: ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission'] },
+  behavior: { hooks: ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission', 'toolCard'] },
   commands: [{ id: 'shout', label: 'Shout the last reply', scope: 'session', services: ['notices', 'composer'], tuiChord: { key: 'y', short: 'shout' } }],
 }))
 write(path.join(pluginsDir, 'echo-mod', 'server.mjs'), `
@@ -36,6 +36,9 @@ export const commands = {
   },
 }
 export function settledCount() { return settled }
+export function toolCard({ tool }) {
+  if (tool.name === 'deploy') return { title: 'Deploy to ' + tool.input.env, lines: ['version ' + tool.input.version, 'by echo-mod'], tone: 'success' }
+}
 export function beforeSteer({ message }) {
   if (message === 'stop that') return { action: 'block', reason: 'echo-mod refused the steer' }
   return { action: 'patch', message: message + ' (steered)' }
@@ -154,6 +157,27 @@ try {
     runtime.clearRunningSession('fixture', 'r2')
     await new Promise(resolve => setTimeout(resolve, 2500))
     console.log('beforeSteer: a mod rewrites and refuses mid-turn messages at the shared steering entry point.')
+  }
+
+  // toolCard: a mod presents a tool call; the read path annotates it and both renderers draw it.
+  {
+    const { annotatePluginToolCards } = await import('../lib/plugins/toolCards')
+    const { buildThreadedMessages } = await import('../lib/threading')
+    const { formatTranscriptCards } = await import('../tui/format')
+    const original = [
+      { type: 'assistant', uuid: 'm1', session_id: 'fixture', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'call-1', name: 'deploy', input: { env: 'staging', version: '1.2.3' } }] } },
+      { type: 'user', uuid: 'm2', session_id: 'fixture', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'ok' }] } },
+      { type: 'assistant', uuid: 'm3', session_id: 'fixture', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'call-2', name: 'Read', input: { file_path: '/x' } }] } },
+    ] as never[]
+    const annotated = await annotatePluginToolCards('codex', undefined, 'fixture', original)
+    const card = ((annotated[0] as { message: { content: Array<{ pluginCard?: { title: string; lines: string[] } }> } }).message.content[0])!.pluginCard
+    assert.equal(card?.title, 'Deploy to staging')
+    assert.equal(((original[0] as { message: { content: Array<{ pluginCard?: unknown }> } }).message.content[0])!.pluginCard, undefined, 'annotation mutated the shared transcript')
+    assert.equal(annotated[2], original[2], 'a call no plugin presents was copied')
+    const cards = formatTranscriptCards(buildThreadedMessages(annotated) as never, 'balanced' as never)
+    const text = JSON.stringify(cards)
+    assert(text.includes('tool Deploy to staging') && text.includes('version 1.2.3'), `the TUI did not draw the plugin card: ${text.slice(0, 400)}`)
+    console.log('toolCard: a mod presents a tool call on the read path; the transcript cache is untouched and the TUI draws the card.')
   }
 
   // A command answers with effects, which the shared command module applies through the host's services.

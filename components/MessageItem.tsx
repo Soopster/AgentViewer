@@ -3669,7 +3669,29 @@ function McpCard({ thread }: { thread: ToolThread }) {
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
+// A plugin's presentation of a tool call (lib/plugins/toolCards.ts): its title,
+// its lines, and the call's own failure, which a plugin cannot hide. The raw
+// input stays one click away.
+const PLUGIN_CARD_TONE = { info: 'var(--border-2)', success: 'var(--green, #3fb950)', warning: 'var(--amber, #d29922)', error: 'var(--red, #f85149)' } as const
+function PluginToolCard({ thread }: { thread: ToolThread }) {
+  const card = thread.toolUse.pluginCard!
+  const [showRaw, setShowRaw] = useState(false)
+  const failed = thread.result?.is_error === true
+  return (
+    <div data-plugin-tool-card={card.pluginId} style={{ border: `1px solid ${failed ? PLUGIN_CARD_TONE.error : PLUGIN_CARD_TONE[card.tone]}`, borderRadius: 8, padding: '6px 10px', fontSize: 12.5, background: 'var(--surface)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.title}</span>
+        <button type="button" onClick={() => setShowRaw(value => !value)} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'hide input' : thread.toolUse.name}</button>
+      </div>
+      {card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? PLUGIN_CARD_TONE.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
+      {failed ? <div style={{ color: PLUGIN_CARD_TONE.error }}>tool call failed</div> : null}
+      {showRaw ? <pre style={{ marginTop: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', color: 'var(--text-2)' }}>{JSON.stringify(thread.toolUse.input, null, 2)}</pre> : null}
+    </div>
+  )
+}
+
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
+  if (thread.toolUse.pluginCard) return <PluginToolCard thread={thread} />
   if (thread.toolUse.input.asyncUserInput === true && thread.toolUse.name === 'AskUserQuestion') return <AsyncQuestionCard toolUse={thread.toolUse} />
   if (thread.toolUse.mcp) return <McpToolCard thread={thread} />
   const nativeThread = normalizeToolThreadForNativeCard(thread)

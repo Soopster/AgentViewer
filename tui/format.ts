@@ -514,6 +514,7 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
         ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
         : []
     case 'tool_thread':
+      if (block.toolUse.pluginCard) return pluginToolCardLines(block, false)
       return previewTool(block, activeForms, taskRegistry)
     case 'task_notification':
       return [line(`task ${block.status}: ${truncateLine(tidyTaskSummary(block.summary || block.taskId))}`, 'thinking')]
@@ -1119,6 +1120,7 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
     }
 
     case 'tool_thread': {
+      if (block.toolUse.pluginCard) return pluginToolCardLines(block, true)
       const normalizedBlock = normalizeToolThreadForTui(block)
       const input = toolInputRecord(normalizedBlock)
       const toolName = normalizedBlock.toolUse.name
@@ -1623,4 +1625,17 @@ export function formatSessionMeta(session: Session, info: SessionInfo | null): s
     truncateLine(`model: ${model}`),
     truncateLine(`tag: ${tag}`),
   ]
+}
+
+/**
+ * A plugin's presentation of a tool call (lib/plugins/toolCards.ts): its title
+ * as the tool row, its lines under it (all of them when expanded, the first
+ * otherwise), and the call's error if it failed — a plugin cannot hide that.
+ */
+function pluginToolCardLines(block: Extract<ThreadedBlock, { type: 'tool_thread' }>, expanded: boolean): TuiTranscriptCardLine[] {
+  const card = block.toolUse.pluginCard!
+  const bodyTone: TuiTranscriptLineTone = card.tone === 'error' ? 'result_error' : card.tone === 'success' ? 'result_ok' : 'dim'
+  const body = (expanded ? card.lines : card.lines.slice(0, 1)).map(text => line(truncateLine(sanitizeLine(text)), bodyTone))
+  const failed = block.result?.is_error ? [line('tool call failed', 'result_error')] : []
+  return [line(`tool ${truncateLine(card.title)}`, 'tool'), ...body, ...failed]
 }

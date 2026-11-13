@@ -10,6 +10,7 @@ import {
   type PluginBehaviorModule,
   type PluginBeforeTurnContext,
   type PluginPermissionRequest,
+  type PluginToolCardContext,
   type PluginTurnTarget,
   PLUGIN_PERMISSION_TIMEOUT_MS,
 } from './behavior'
@@ -108,6 +109,28 @@ export function createPluginBehaviorHost(
       return message
     },
     /** Whether any enabled plugin answers approvals: bridges skip the call otherwise. */
+    presentsToolCards: () => hooked('toolCard').some(m => isPluginEnabled(m.id)),
+    /** The first plugin presentation of a tool call, or null for the built-in card. Failures and slow hooks count as none. */
+    async toolCard(context: PluginToolCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
+      if (disposed) return null
+      for (const manifest of hooked('toolCard')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(500)])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).toolCard!(context))
+          if (!result) continue
+          const text = typeof result.text === 'string' ? result.text : Array.isArray(result.lines) ? result.lines.filter(line => typeof line === 'string').join('\n') : ''
+          const lines = text ? text.split('\n').map(line => line.slice(0, 400)).slice(0, 40) : []
+          const title = typeof result.title === 'string' && result.title.trim() ? result.title.trim().slice(0, 120) : undefined
+          if (!title && !lines.length) continue
+          const tone = result.tone === 'success' || result.tone === 'warning' || result.tone === 'error' ? result.tone : 'info'
+          return { pluginId: manifest.id, ...(title ? { title } : {}), lines, tone }
+        } catch (error) {
+          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} toolCard failed:`, error)
+        }
+      }
+      return null
+    },
     observesSteering: () => hooked('beforeSteer').some(m => isPluginEnabled(m.id)),
     decidesPermissions: () => hooked('permission').some(m => isPluginEnabled(m.id)),
     /**

@@ -87,7 +87,18 @@ export type PluginPermissionResult =
 
 export const PLUGIN_PERMISSION_TIMEOUT_MS = 5_000
 
-export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission'
+export type PluginToolCardContext = {
+  readonly target: PluginTurnTarget
+  readonly tool: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
+}
+
+/** How a tool call should read in the transcript: a title, a few lines, a tone. Nothing keeps the built-in card. */
+export type PluginToolCardResult =
+  | { readonly title?: string; readonly lines?: readonly string[]; readonly text?: string; readonly tone?: 'info' | 'success' | 'warning' | 'error' }
+  | void
+  | null
+
+export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard'
 
 /** Consecutive plugin follow-ups allowed before a user turn resets the count. */
 export const PLUGIN_FOLLOW_UP_LIMIT = 25
@@ -103,6 +114,8 @@ export type PluginBehaviorModule = {
   readonly beforeSteer?: (context: PluginBeforeSteerContext) => PluginBeforeSteerResult | Promise<PluginBeforeSteerResult>
   /** Answer a tool approval before it reaches a person. */
   readonly permission?: (context: PluginPermissionContext) => PluginPermissionResult | Promise<PluginPermissionResult>
+  /** Present a tool call in the transcript (both renderers). Runs on the read path: keep it cheap and pure. */
+  readonly toolCard?: (context: PluginToolCardContext) => PluginToolCardResult | Promise<PluginToolCardResult>
   readonly deactivate?: () => void
 }
 
