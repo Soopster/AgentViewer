@@ -279,9 +279,15 @@ export async function readTuiProviderInstances(): Promise<{ selected: string | n
     getConfiguredProviderTarget(),
     (await import('../coordinatorCapabilities')).readCoordinatorStaffing(),
   ])
+  // Provider mods are agents to browse and talk to, not Coordinator staff, so
+  // they join the menu here rather than the staffing list.
+  const { listModProviderInstances } = await import('../modProvider')
   return {
     selected: target.providerInstanceId && target.providerInstanceId !== target.provider ? target.providerInstanceId : null,
-    choices: staffing.filter(choice => !choice.isDefault).map(({ provider, providerInstanceId, label }) => ({ provider, providerInstanceId, label })),
+    choices: [
+      ...staffing.filter(choice => !choice.isDefault).map(({ provider, providerInstanceId, label }) => ({ provider, providerInstanceId, label })),
+      ...listModProviderInstances().map(mod => ({ provider: 'mod' as const, providerInstanceId: mod.id, label: mod.displayName })),
+    ],
   }
 }
 

@@ -40,7 +40,10 @@ try {
   const instances = (await listProviderInstances()).filter(instance => instance.provider === 'mod')
   assert.deepEqual(instances.map(instance => instance.id).sort(), ['mod', 'mod-echo-agent', 'mod-shout-agent'])
   assert.equal(instances.find(instance => instance.id === 'mod-echo-agent')?.displayName, 'Echo agent')
-  console.log('Instances: each provider mod is an instance of `mod`, named by the mod.')
+  const { readTuiProviderInstances } = await import('../lib/tui/service')
+  const menu = (await readTuiProviderInstances()).choices.filter(choice => choice.provider === 'mod').map(choice => choice.label).sort()
+  assert.deepEqual(menu, ['Echo agent', 'Shout agent'], 'the TUI provider menu does not offer the provider mods')
+  console.log('Instances: each provider mod is an instance of `mod`, named by the mod, and offered in the TUI provider menu.')
 
   const backend = await import('../lib/sessionBackend')
   const created = await withProviderInstance('mod-echo-agent', 'mod', () => backend.createNewViewSession({ provider: 'mod', cwd: temporary, title: 'first' }))
