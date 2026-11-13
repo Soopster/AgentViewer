@@ -9,19 +9,14 @@ import { MODAL_CONTENT_Z_INDEX, PopoverDetachButton, popoverFrameCells, popoverR
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { SELECTION_ASK_INTENTS, type SelectionAskInput } from '../../../lib/selectionAsk'
-import {
-  readTuiFileHistory,
-  restoreTuiCheckpoint,
-  revertTuiFileHistoryHunk,
-  type FileHistory,
-  type FileHistoryStep,
-  type WorkingDiffHunk,
-} from '../../../lib/tui/service'
+import type { FileHistory, FileHistoryStep, PluginCheckpointsService, WorkingDiffHunk } from '../../../lib/plugins/checkpoints'
 
 type FileHistoryKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
 type Props = {
   cwd: string
+  /** The host's checkpoint operations (lib/plugins/checkpoints.ts). */
+  service: PluginCheckpointsService
   path: string
   theme: TuiThemePalette
   accentColor: string
@@ -108,6 +103,7 @@ function fit(text: string, width: number): string {
 
 export function FileHistoryPopover({
   cwd,
+  service,
   path,
   theme,
   accentColor,
@@ -137,7 +133,7 @@ export function FileHistoryPopover({
     const generation = ++generationRef.current
     setLoading(true)
     try {
-      const next = await readTuiFileHistory(cwd, path)
+      const next = await service.fileHistory(cwd, path)
       if (generation !== generationRef.current) return
       setHistory(next)
       setError(null)
@@ -196,11 +192,11 @@ export function FileHistoryPopover({
     setBusy(true)
     try {
       if (action.kind === 'revert-hunk') {
-        await revertTuiFileHistoryHunk(history.repoRoot, action.hunk.patchText)
+        await service.revertFileHunk(history.repoRoot, history.relPath, action.hunk.patchText)
         onNotice('info', `Reverted one change in ${history.relPath}`, 4000)
       } else {
         const { checkpoint } = action.step
-        await restoreTuiCheckpoint(history.repoRoot, checkpoint.sha, [history.relPath], checkpoint)
+        await service.restore(history.repoRoot, checkpoint.sha, [history.relPath], checkpoint)
         onNotice('info', `Restored ${history.relPath} to before "${fit(checkpoint.label, 40)}"`, 5000)
       }
       keepRefRef.current = step?.checkpoint.ref ?? null

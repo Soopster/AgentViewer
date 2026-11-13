@@ -21,6 +21,7 @@ import {
   revertFileHistoryHunk,
 } from '../../lib/checkpoints'
 import type { SelectionAskInput } from '../../lib/selectionAsk'
+import { tuiCheckpoints } from './shell/checkpointsService'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -97,6 +98,7 @@ try {
   const setup = await testRender(
     <FileHistoryPopover
       cwd={repo}
+      service={tuiCheckpoints}
       path="a.txt"
       theme={DARK_THEME}
       accentColor={DARK_THEME.cyan}

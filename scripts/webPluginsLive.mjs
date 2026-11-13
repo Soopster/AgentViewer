@@ -126,6 +126,29 @@ try {
     await view.getByRole('button', { name: /^Working changes/ }).click()
     await view.getByPlaceholder('Commit message').waitFor()
     assert.equal(await view.locator('[role="status"]').filter({ hasText: /error|failed|unknown/i }).count(), 0, 'the view reported an error')
+    // A changed file's history opens the file-history plugin in its place.
+    await view.getByRole('button', { name: /^Turns/ }).click()
+    // The first turn with a changed file still on disk; a silent skip would prove nothing.
+    const turns = view.locator('[data-checkpoint]')
+    const history = view.locator('[data-checkpoint-history]').first()
+    for (let index = 0; index < Math.min(await turns.count(), 15) && !(await history.count()); index++) {
+      await turns.nth(index).click()
+      await view.getByText(/Changed since|Nothing has changed/).first().waitFor()
+      await page.waitForTimeout(300)
+    }
+    assert.ok(await history.count(), 'no turn among the newest 15 has a changed file to open the history of')
+    {
+      await history.click()
+      const fileView = page.locator('[data-plugin-view="file-history"]')
+      await fileView.waitFor()
+      await fileView.locator('[data-file-history-step], :text("No turn changed this file")').first().waitFor()
+      assert.equal(await fileView.locator('[role="status"]').filter({ hasText: /outside|error|failed/i }).count(), 0, 'file history reported an error')
+      await shot('file-history')
+      await page.keyboard.press('Escape')
+      await fileView.waitFor({ state: 'detached' })
+      return
+    }
+    assert.equal(await view.locator('[role="status"]').filter({ hasText: /error|failed|unknown/i }).count(), 0, 'the view reported an error')
     await shot('checkpoints')
     await page.keyboard.press('Escape')
     await view.waitFor({ state: 'detached' })

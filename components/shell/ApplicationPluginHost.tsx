@@ -25,7 +25,7 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   openSession?: (session: PluginSessionRef, messageUuid?: string) => void
 }) {
   const [notice, setNotice] = useState<{ text: string } | null>(null)
-  const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null } | null>(null)
+  const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null; path?: string } | null>(null)
   const context = useRef({ sessions, selectedSession })
   context.current = { sessions, selectedSession }
   const services = useMemo<PluginApplicationServices>(() => ({ notifications: {
@@ -95,8 +95,13 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
     return () => window.clearTimeout(timer)
   }, [notice])
   const close = useCallback(() => setOverlay(null), [])
+  // A view opens a file's history in its place, on the same repository.
+  const openFileHistory = useCallback((path: string) => {
+    if (!isPluginSurfaceId('file-history') || !isPluginEnabled('file-history')) { setNotice({ text: 'File history is off · turn its plugin on in Plugins' }); return }
+    setOverlay(current => current ? { ...current, surface: 'file-history', path } : current)
+  }, [])
   return <>
     {notice && <div role="status" style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 }}>{notice.text}</div>}
-    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} services={{ session: { session: overlay.session }, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

@@ -31,6 +31,7 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
   const cwd = services.repository!.cwd
   const checkpoints = services.checkpoints!
   const session = services.session?.session ?? null
+  const fileHistory = services['file-history']
   const docked = placement !== 'overlay'
   const [tab, setTab] = useState<'turns' | 'review'>('turns')
   const [list, setList] = useState<TurnCheckpoint[] | null>(null)
@@ -116,6 +117,7 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
                 <span style={{ width: 14, color: STATUS_COLOR[change.status], fontFamily: 'var(--font-mono, monospace)' }}>{change.status}</span>
                 <button type="button" onClick={() => setFile(file === change.path ? null : change.path)}
                   style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', color: file === change.path ? 'var(--text)' : 'var(--text-2)', cursor: 'pointer', fontWeight: file === change.path ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis' }}>{change.path}</button>
+                {fileHistory && change.status !== 'D' ? <button type="button" data-checkpoint-history={change.path} onClick={() => fileHistory.open(change.path)} style={{ fontSize: 12 }}>History</button> : null}
                 {button(`restore:${change.path}`, 'Restore', async () => { await checkpoints.restore(cwd, checkpoint.sha, [change.path], context); return `Restored ${change.path}` })}
               </div>
             ))}

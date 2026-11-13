@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import {
   changesSinceCheckpoint, commitAllChanges, createReviewPullRequest, deleteUntrackedFile, diffSinceCheckpoint,
-  listTurnCheckpoints, listWorkingDiffHunks, rejectWorkingHunk,
+  listTurnCheckpoints, listWorkingDiffHunks, readFileCheckpointHistory, rejectWorkingHunk, revertFileHistoryHunk,
 } from '@/lib/checkpoints'
 import { restoreCheckpointForSession } from '@/lib/checkpointRestore'
 
@@ -26,6 +26,11 @@ export async function GET(request: NextRequest) {
   try {
     if (action === 'list') return NextResponse.json({ checkpoints: await listTurnCheckpoints(cwd) })
     if (action === 'working') return NextResponse.json(await listWorkingDiffHunks(cwd))
+    if (action === 'file-history') {
+      const file = params.get('path')
+      if (!file) return fail('path is required', 400)
+      return NextResponse.json({ history: await readFileCheckpointHistory(cwd, file) })
+    }
     const sha = await knownCheckpoint(cwd, params.get('sha'))
     if (!sha) return fail('unknown checkpoint', 404)
     if (action === 'changes') return NextResponse.json({ changes: await changesSinceCheckpoint(cwd, sha) })
@@ -61,6 +66,14 @@ export async function POST(request: NextRequest) {
         const { hunks } = await listWorkingDiffHunks(cwd)
         if (typeof body.patchText !== 'string' || !hunks.some(hunk => hunk.patchText === body.patchText)) return fail('that hunk is no longer in the working diff', 409)
         await rejectWorkingHunk(cwd, body.patchText)
+        return NextResponse.json({ ok: true })
+      }
+      case 'revert-file-hunk': {
+        // The history is re-derived here, and the patch must be one of its hunks.
+        if (typeof body.path !== 'string' || typeof body.patchText !== 'string') return fail('path and patchText are required', 400)
+        const history = await readFileCheckpointHistory(cwd, body.path)
+        if (!history.steps.some(step => step.hunks.some(hunk => hunk.patchText === body.patchText))) return fail('that change is not in this file\'s history', 409)
+        await revertFileHistoryHunk(history.repoRoot, body.patchText)
         return NextResponse.json({ ok: true })
       }
       case 'delete-untracked': {

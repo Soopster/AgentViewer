@@ -29,6 +29,8 @@ type Props = {
   sessionKey: string | null
   /** The repository a `pin: 'cwd'` surface was opened on. */
   cwd?: string | null
+  /** The file a `pin: 'path'` surface was opened on. */
+  path?: string | null
   services: WebPluginServices
   onClose: () => void
   registry?: Pick<typeof webPluginViews, 'load' | 'peek'>
@@ -57,9 +59,9 @@ export default function PluginSurfaceHost(props: Props) {
   return <ActivePluginSurface key={props.surfaceId} {...props} ownerId={props.ownerId ?? localOwner} />
 }
 
-function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, services: offered, onClose, registry = webPluginViews, store = pluginState }: Props) {
+function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, path, services: offered, onClose, registry = webPluginViews, store = pluginState }: Props) {
   const surface = getPluginSurface(surfaceId)
-  const targetId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surface.pin === 'cwd' && cwd ? `${surfaceId}:${cwd}` : surfaceId
+  const targetId = surface.pin === 'session' && sessionKey ? `${surfaceId}:${sessionKey}` : surface.pin === 'cwd' && cwd ? `${surfaceId}:${cwd}` : surface.pin === 'path' && path ? `${surfaceId}:${path}` : surfaceId
   const instanceId = `${ownerId}:${targetId}`
   const [attempt, setAttempt] = useState(0)
   const [loadFailure, setFailure] = useState<Error | null>(null)
@@ -78,7 +80,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, s
   }, [View, attempt, registry, surface.pluginId, surfaceId, resolved.error])
   useEffect(() => store.hold(surface.pluginId, instanceId), [store, surface.pluginId, instanceId])
 
-  const target = useMemo(() => ({ sessionKey, cwd: cwd ?? null }), [sessionKey, cwd])
+  const target = useMemo(() => ({ sessionKey, cwd: cwd ?? null, path: path ?? null }), [sessionKey, cwd, path])
   const useState_ = useCallback(<T,>(name: string, initial: T) => (
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useScopedPluginState(store, surface.pluginId, instanceId, name, initial)

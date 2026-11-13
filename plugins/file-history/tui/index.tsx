@@ -8,6 +8,7 @@ const IGNORE_NOTICE = () => {}
 
 function FileHistorySurface({ services, target, theme, accent, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
   const repository = services.repository!
+  const checkpoints = services.checkpoints!
   const composer = services.composer
   const overlay = placement === 'overlay'
   if (!target.path) return <text fg={theme.dim}>  No file to show.</text>
@@ -15,6 +16,7 @@ function FileHistorySurface({ services, target, theme, accent, width, height, pl
     <FileHistoryPopover
       docked={!overlay}
       cwd={repository.cwd}
+      service={checkpoints}
       path={target.path}
       theme={theme}
       accentColor={accent}

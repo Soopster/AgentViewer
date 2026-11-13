@@ -50,4 +50,18 @@ assert.equal(readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'one\ntwo\nthree\n'
 assert.equal((await post({ action: 'delete-untracked', path: 'new.txt' })).status, 200)
 assert(!existsSync(path.join(repo, 'new.txt')))
 console.log('Mutations: arbitrary patches, tracked or outside paths are refused; a current hunk rejects, a file restores, an untracked file deletes.')
+// File history: one file through the turns that changed it; a hunk undoes only
+// if it is one of that history's own.
+await createTurnCheckpoint(repo, { sessionId: 's1', provider: 'claude', message: 'second turn' })
+writeFileSync(path.join(repo, 'a.txt'), 'one\ntwo\nTHREE\n')
+const history = await get({ action: 'file-history', path: 'a.txt' })
+assert.equal(history.status, 200, JSON.stringify(history.body))
+assert.equal(history.body.history.relPath, 'a.txt')
+const last = history.body.history.steps.at(-1)
+assert.equal(last.until, null, 'the newest step runs to the working tree')
+assert.match(last.diff, /\+THREE/)
+assert.equal((await post({ action: 'revert-file-hunk', path: 'a.txt', patchText: working.body.hunks[0].patchText.replace('TWO', 'XYZ') })).status, 409, 'a patch outside the history is refused')
+assert.equal((await post({ action: 'revert-file-hunk', path: 'a.txt', patchText: last.hunks[0].patchText })).status, 200)
+assert.equal(readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'one\ntwo\nthree\n', 'undoing the step\'s hunk reverts it')
+console.log('File history: a file\'s steps across turns; only a hunk of that history undoes.')
 console.log('Checkpoints route smoke: PASS')

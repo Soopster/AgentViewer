@@ -24,6 +24,8 @@ export function createWebCheckpointsService(fetcher: typeof fetch = (...args) =>
     deleteUntracked: async (cwd, path) => { await write(cwd, 'delete-untracked', { path }) },
     commit: async (cwd, message) => (await write<{ sha: string }>(cwd, 'commit', { message })).sha,
     pullRequest: async (cwd, title) => (await write<{ url: string }>(cwd, 'pull-request', { title })).url,
+    fileHistory: async (cwd, path, signal) => (await read<{ history: Awaited<ReturnType<PluginCheckpointsService['fileHistory']>> }>(cwd, 'file-history', { path }, signal)).history,
+    revertFileHunk: async (cwd, path, patchText) => { await write(cwd, 'revert-file-hunk', { path, patchText }) },
   }
 }
 

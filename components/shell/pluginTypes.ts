@@ -13,6 +13,8 @@ export type WebPluginServices = {
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
   checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
+  /** Open a file's history across agent turns (the file-history plugin). */
+  'file-history'?: { readonly open: (path: string) => void }
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
   /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */

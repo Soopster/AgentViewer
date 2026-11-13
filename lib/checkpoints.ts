@@ -401,7 +401,11 @@ const FILE_HISTORY_DIFF_CONCURRENCY = 4
 export async function readFileCheckpointHistory(cwd: string, filePath: string): Promise<FileHistory> {
   const repoRoot = await findRepoRoot(cwd)
   if (!repoRoot) throw new Error('Not a git repository')
-  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath)
+  // findRepoRoot answers with the real path, so resolve against the real path
+  // too: through a symlink (macOS's /var → /private/var) the file would
+  // otherwise read as outside its own repository.
+  const real = (target: string) => fs.realpath(target).catch(() => target)
+  const absolute = path.isAbsolute(filePath) ? await real(filePath) : path.resolve(await real(cwd), filePath)
   const relPath = path.relative(repoRoot, absolute).split(path.sep).join('/')
   if (!relPath || relPath.startsWith('..')) throw new Error(`${filePath} is outside the repository`)
 

@@ -9,7 +9,7 @@ export const manifest = {
   id: 'file-history',
   title: 'File history',
   description: 'Scrub one file through the turn checkpoints, undo a hunk, or restore it to before a turn.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'file-history',
@@ -19,8 +19,8 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window'],
     windowLabel: 'File history in a window',
-    services: ['repository'],
-    optionalServices: ['notices', 'composer'],
+    services: ['repository', 'checkpoints'],
+    optionalServices: ['notices', 'composer', 'session'],
   }],
   commands: [],
 } as const satisfies PluginManifest
