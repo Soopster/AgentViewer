@@ -519,3 +519,30 @@ export const commands = {
   with the reasons. Mods contribute no surfaces (interactive views) yet: those
   need a bundled plugin.
 - `scripts/localPluginSmoke.ts` is the worked example end to end.
+
+## Provider mods
+
+A mod can be an agent backend. Add `"provider": { "displayName": "Echo agent" }`
+to `plugin.json` and export `provider` from the server module:
+
+```js
+export const provider = {
+  listSessions: async () => [{ id, title, cwd, updatedAt }],
+  readMessages: async (id) => [{ id, role: 'user' | 'assistant', text, at }],
+  createSession: async ({ cwd, title }) => ({ id }),
+  async *sendTurn({ sessionId, message, history, signal }) { yield 'reply text…' },
+}
+```
+
+The mod owns and persists its sessions (both sides of each turn); `history` is
+a copy of the conversation before this turn; `sendTurn` may also return a
+string. Each provider mod is an instance of the bundled `mod` provider
+(`mod-<id>`), so it appears in the provider menu, its sessions list and open
+like any agent's, the composer streams its replies, and every call is routed
+by the instance — two provider mods never see each other's sessions. Plugin
+hooks (`beforeTurn`, `afterTurn`, …) apply to its turns too. Turning the mod off
+removes the instance. `scripts/modProviderSmoke.ts` is the worked example.
+
+An SDK-backed provider that needs native capabilities (fork, rewind,
+permissions, tool streaming) is still a bundled extension:
+`npm run providers:scaffold -- <id> "<Name>"`.

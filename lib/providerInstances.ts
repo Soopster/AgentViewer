@@ -1,3 +1,4 @@
+import { listModProviderInstances } from './modProvider'
 import { PROVIDER_IDS, getProviderManifest } from './extensions/providers/catalog'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { statSync } from 'node:fs'
@@ -210,7 +211,11 @@ export async function listProviderInstances(): Promise<ProviderInstance[]> {
   const defaults = DEFAULT_PROVIDER_ORDER.map((provider) => configuredById.get(provider) ?? defaultInstance(provider))
   const extras = configured.filter((instance) => instance.id !== instance.provider)
   const off = disabledPluginIds()
-  return [...defaults, ...extras].filter((instance) => instance.enabled && !off.has(providerPluginId(instance.provider)))
+  // Each provider mod in the user's plugin directory is an instance of `mod`.
+  const mods = listModProviderInstances().filter(mod => !configuredById.has(mod.id)).map((mod): ProviderInstance => ({
+    id: mod.id, provider: 'mod', displayName: mod.displayName, enabled: true, environment: {}, executable: mod.pluginId, isDefault: false,
+  }))
+  return [...defaults, ...extras, ...mods].filter((instance) => instance.enabled && !off.has(providerPluginId(instance.provider)))
 }
 
 export async function listProviderInstanceSummaries(): Promise<ProviderInstanceSummary[]> {

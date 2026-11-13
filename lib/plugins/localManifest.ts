@@ -22,6 +22,8 @@ export type LocalPluginManifest = PluginManifest & {
   readonly source: 'local'
   /** A mod's widgets are content from its server module, drawn by the shell. */
   readonly localWidgets?: readonly { readonly id: string; readonly slot: 'corner'; readonly refreshMs: number }[]
+  /** A mod that is an agent backend: its sessions appear under the `mod` provider (lib/modProvider.ts). */
+  readonly localProvider?: { readonly displayName: string }
 }
 
 export const LOCAL_WIDGET_REFRESH_MS = 5_000
@@ -123,12 +125,18 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     const refresh = typeof widget.refreshMs === 'number' && Number.isFinite(widget.refreshMs) ? widget.refreshMs : LOCAL_WIDGET_REFRESH_MS
     widgets.push({ id: widget.id, slot: 'corner', refreshMs: Math.max(LOCAL_WIDGET_MIN_REFRESH_MS, Math.min(refresh, 600_000)) })
   }
-  if (!behavior && commands.length === 0 && widgets.length === 0) problems.push('declares no behavior hooks, commands or widgets')
+  let localProvider: { displayName: string } | undefined
+  if (value.provider !== undefined) {
+    const spec = value.provider as { displayName?: unknown } | null
+    if (!spec || typeof spec !== 'object') problems.push('provider must be an object')
+    else localProvider = { displayName: typeof spec.displayName === 'string' && spec.displayName.trim() ? spec.displayName.trim().slice(0, 40) : title }
+  }
+  if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider) problems.push('declares no behavior hooks, commands, widgets or provider')
   if (problems.length) return { manifest: null, problems }
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), source: 'local',
+      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), source: 'local',
     },
     problems,
   }

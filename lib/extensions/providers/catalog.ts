@@ -1,3 +1,4 @@
+import { manifest as provider_mod } from './mod/manifest'
 // Browser-safe metadata only. Never import runtime entries or SDKs here.
 import { manifest as claude } from './claude/manifest'
 import { manifest as codex } from './codex/manifest'
@@ -10,6 +11,7 @@ import { manifest as codex_acp } from './codex-acp/manifest'
 import { manifest as custom_acp } from './acp/manifest'
 
 export const PROVIDER_EXTENSIONS = {
+  'mod': provider_mod,
   'claude': claude,
   'codex': codex,
   'opencode': opencode,

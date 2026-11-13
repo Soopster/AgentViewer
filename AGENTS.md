@@ -76,7 +76,9 @@ Settled-turn behavior uses the `afterTurn` hook. ⌃K chords come from a command
 `tuiChord`; only window commands stay in `tui/opentui/shortcutKeys.ts`.
 Every Web dashboard tab (including the default run dashboard) is a plugin
 dashboard. Users' own mods load from `~/.config/agent-viewer/plugins`
-(`lib/plugins/localPlugins.ts`), never from a project directory.
+(`lib/plugins/localPlugins.ts`), never from a project directory. A mod with a
+`provider` export is an agent backend: an instance of the `mod` provider
+(`lib/modProvider.ts`).
 
 ### Multi-provider session backend
 

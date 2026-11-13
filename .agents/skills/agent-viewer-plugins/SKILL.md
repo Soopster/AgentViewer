@@ -50,7 +50,9 @@ bundled plugin in the checkout.
   and settings remain platform adapters.
 - A plugin can provide surfaces, server behavior and application observers
   together, or be headless.
-- Provider SDK integrations use `lib/extensions/providers/`, a separate
+- To add an agent backend without touching the checkout, write a provider
+  mod (a mod with a `provider` export). Full SDK integrations use
+  `lib/extensions/providers/` (`npm run providers:scaffold`), a separate
   contract. Do not import provider runtimes into feature plugins.
 
 Read [references/authoring.md](references/authoring.md) for source locations,

@@ -12,6 +12,7 @@ import { providerPluginId } from '../../plugins/providerPlugins'
 
 // Static import specifiers let both Next and Bun discover bundled extensions.
 const loaders = {
+  'mod': async () => (await import('./mod/server')).extension,
   'claude': async () => (await import('./claude/server')).extension,
   'codex': async () => (await import('./codex/server')).extension,
   'opencode': async () => (await import('./opencode/server')).extension,

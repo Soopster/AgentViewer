@@ -109,7 +109,7 @@ export function extractStreamingAssistantText(payload: unknown): string | null {
       : null
   }
 
-  if (record.type === 'lmstudio_delta') {
+  if (record.type === 'lmstudio_delta' || record.type === 'mod_delta') {
     return typeof record.delta === 'string' ? record.delta : null
   }
 

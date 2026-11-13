@@ -56,6 +56,13 @@ function loadServerModule(plugin: LocalPlugin): Promise<LocalServerModule> {
   return pending
 }
 
+/** A discovered, enabled mod's server module, loaded once (the `mod` provider reads its `provider` export). */
+export async function loadLocalPluginModule(pluginId: string): Promise<Record<string, unknown>> {
+  const plugin = localPluginDiscovery().plugins.find(entry => entry.manifest.id === pluginId)
+  if (!plugin) throw new Error(`No local plugin "${pluginId}"`)
+  return await loadServerModule(plugin) as Record<string, unknown>
+}
+
 /** Behavior loaders for the server's behavior host, keyed by plugin id. */
 export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehaviorModule>> {
   return Object.fromEntries(localPluginDiscovery().plugins.filter(plugin => plugin.manifest.behavior).map(plugin => [plugin.manifest.id, async () => {

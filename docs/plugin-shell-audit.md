@@ -124,7 +124,8 @@ Behavior hooks now cover the turn end to end, for bundled plugins and mods:
 `beforeTurn`, `beforeSteer` (mid-turn input), `permission` (every provider's
 approval bridge: Claude, the ACP pool, Codex, Copilot, OpenCode), `afterTurn`,
 and `toolCard` (transcript presentation on the read path, drawn by both
-renderers). Mods also contribute widgets as server-computed content. What a mod
+renderers). Mods also contribute widgets as server-computed content. Mods can also be agent backends (provider mods: instances of the bundled
+`mod` provider). What a mod
 still cannot add is an interactive view (a surface): the Web would need to load
 its code, which needs a build. `npm run plugins:web:live` drives the real Web
 app through the migrated plugins and a fixture mod.
