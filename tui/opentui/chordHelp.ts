@@ -140,5 +140,6 @@ export function chordHelpKeyWidth(map: ChordMap): number {
  */
 export const CHORD_HELP_REVEAL_MS = 900
 
-// Leave enough time to read the revealed command table.
-export const CHORD_PENDING_TIMEOUT_MS = 8_000
+// Leave enough time to read — and scroll — the revealed command table. A
+// chord left pending this long is abandoned rather than reading the next key.
+export const CHORD_PENDING_TIMEOUT_MS = 30_000

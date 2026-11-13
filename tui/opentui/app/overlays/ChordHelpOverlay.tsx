@@ -5,6 +5,30 @@ import { toastExtraRows, toastStackTop } from '../../ToastOverlay'
 import { fitText } from '../../textLayout'
 import { chordHelpKeyWidth, chordHelpRows, SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
 import { RUNNING_INSIDE_TMUX } from '../commands'
+import type { ScrollBoxRenderable } from '@opentui/core'
+
+/**
+ * The panel's scrollbox, for the key handler: a panel opened with `?` scrolls
+ * on ↑↓/j/k/PgUp/PgDn/Home/End. A self-revealed panel scrolls on the wheel
+ * only, since its keys belong to the pending chord.
+ */
+export const chordHelpScroll: { current: ScrollBoxRenderable | null; page: number } = { current: null, page: 6 }
+
+/** Scroll the open panel for a key; false for a key that is not a scroll key. */
+export function scrollChordHelpForKey(key: { name: string; sequence?: string; shift?: boolean }): boolean {
+  const box = chordHelpScroll.current
+  if (!box) return false
+  const step = key.name === 'down' || key.sequence === 'j' ? 1
+    : key.name === 'up' || key.sequence === 'k' ? -1
+    : key.name === 'pagedown' || key.name === 'space' ? chordHelpScroll.page
+    : key.name === 'pageup' ? -chordHelpScroll.page
+    : key.name === 'home' ? -Number.MAX_SAFE_INTEGER
+    : key.name === 'end' ? Number.MAX_SAFE_INTEGER
+    : 0
+  if (!step) return false
+  box.scrollTop = Math.max(0, Math.min(box.scrollTop + step, Math.max(box.scrollHeight - box.viewport.height, 0)))
+  return true
+}
 
 export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight, composerStatusBlockHeight, toasts, theme }: {
   chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
@@ -21,12 +45,10 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
           const keysW = chordHelpKeyWidth(map)
           const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
           const labelW = overlayW - keysW - 6
-          // The panel is a reference card, so it is sized to the content and
-          // clipped rather than scrolled — but it must not be clipped by the
-          // composer dock, which draws over it. The old `height - 8` budget
-          // ignored the dock and swallowed the footer, which is where the panel
-          // says how to dismiss it; an overflow note the reader never sees is
-          // worse than showing fewer rows.
+          // Sized to the content, and scrolled once that outgrows the space
+          // above the composer dock (which draws over it): the old `height - 8`
+          // budget ignored the dock and swallowed the footer, which is where
+          // the panel says how to dismiss it.
           const overlayTop = 2
           const overlayChromeRows = 4 // two borders, the header, the footer
           const rows = chordHelpRows(map)
@@ -38,8 +60,9 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
             toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) : height,
           )
           const maxRows = Math.max(panelBottom - overlayTop - overlayChromeRows, 6)
-          const visible = rows.slice(0, maxRows)
-          const hidden = rows.length - visible.length
+          const bodyRows = Math.min(rows.length, maxRows)
+          const hidden = rows.length - bodyRows
+          chordHelpScroll.page = Math.max(bodyRows - 1, 1)
           return (
             <box
               position="absolute"
@@ -63,27 +86,36 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
                     : `prefix ${map.prefix}`}
                 </text>
               </box>
-              {visible.map((row) => (row.keys === null ? (
-                <box key={row.id} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-                  <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
-                  <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
-                </box>
-              ) : (
-                <box key={row.id} paddingX={1} flexDirection="row">
-                  <box width={keysW}>
-                    <text fg={theme.amber} wrapMode="none">{fitText(row.keys, keysW)}</text>
+              <scrollbox
+                ref={(box: ScrollBoxRenderable | null) => { chordHelpScroll.current = box }}
+                id="chord-help-scroll"
+                height={bodyRows}
+                scrollY
+                backgroundColor={theme.surface}
+                scrollbarOptions={{ visible: hidden > 0, trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+              >
+                {rows.map((row) => (row.keys === null ? (
+                  <box key={row.id} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                    <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
+                    <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
                   </box>
-                  <box flexGrow={1} paddingLeft={2}>
-                    <text fg={theme.muted} wrapMode="none">{fitText(row.label, labelW)}</text>
+                ) : (
+                  <box key={row.id} paddingX={1} flexDirection="row">
+                    <box width={keysW}>
+                      <text fg={theme.amber} wrapMode="none">{fitText(row.keys, keysW)}</text>
+                    </box>
+                    <box flexGrow={1} paddingLeft={2}>
+                      <text fg={theme.muted} wrapMode="none">{fitText(row.label, labelW)}</text>
+                    </box>
                   </box>
-                </box>
-              )))}
+                )))}
+              </scrollbox>
               <box paddingX={1} backgroundColor={theme.surface2}>
                 <text fg={theme.dim} wrapMode="none">
                   {fitText(
                     chordHelp.dismissOnKey
-                      ? (hidden > 0 ? `${hidden} more — widen the terminal · any key closes` : 'any key closes')
-                      : (hidden > 0 ? `${hidden} more — widen the terminal · press a key` : 'press a key'),
+                      ? (hidden > 0 ? 'any other key closes · ↑↓ PgUp/PgDn wheel scroll' : 'any key closes')
+                      : (hidden > 0 ? 'press a key · wheel scrolls' : 'press a key'),
                     overlayW - 4,
                   )}
                 </text>

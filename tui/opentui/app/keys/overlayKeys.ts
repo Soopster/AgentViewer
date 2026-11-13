@@ -16,6 +16,7 @@ import { type MessageBookmark } from '../../../../lib/messageBookmarks'
 import { type Session } from '../../../../lib/types'
 import { type PendingPermission } from '../../../../lib/permissions'
 import { type ChordMap } from '../../chordHelp'
+import { scrollChordHelpForKey } from '../overlays/ChordHelpOverlay'
 import { type ModelPickerOption, type TuiCopilotContextTier, type ModelPickerFocus } from '../types'
 import { SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_MIN_WIDTH, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH } from '../layoutConstants'
 import { clamp } from '../util'
@@ -242,7 +243,8 @@ export function handleOverlayAndMenuKeys({
     // purpose — a self-revealed panel sits above a pending chord, and eating
     // that chord's next key would make hesitating change what the key does.
     if (chordHelp?.dismissOnKey) {
-      handled(() => setChordHelp(null))
+      // Scroll keys move a long panel (⌃B has more entries than fit); any other key closes it.
+      handled(() => { if (!scrollChordHelpForKey(key)) setChordHelp(null) })
       return true
     }
 

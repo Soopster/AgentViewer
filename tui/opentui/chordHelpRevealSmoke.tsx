@@ -58,9 +58,22 @@ await settle(50)
 await act(async () => { mockInput.pressKey('?') })
 await settle(200)
 assert.ok(captureCharFrame().includes('split pane keybinds'), '⌃B ? opens the panel')
-assert.ok(captureCharFrame().includes('any key closes'),
+assert.ok(/any (other )?key closes/.test(captureCharFrame()),
   'An explicitly opened panel must say it closes on any key — and that line lives in the footer, '
   + 'which the composer dock used to draw over')
+
+// ⌃B has more entries than fit at 40 rows: scroll keys move the panel instead of closing it.
+{
+  const { chordHelpScroll } = await import('./app/overlays/ChordHelpOverlay')
+  const box = chordHelpScroll.current!
+  assert.ok(box && box.scrollHeight > box.viewport.height, 'the ⌃B table should overflow 40 rows (or this check proves nothing)')
+  await act(async () => { mockInput.pressKey('j') })
+  await settle(100)
+  await act(async () => { mockInput.pressArrow('down') })
+  await settle(100)
+  assert.equal(box.scrollTop, 2, 'j and ↓ scroll the panel')
+  assert.ok(captureCharFrame().includes('split pane keybinds'), 'a scroll key closed the panel')
+}
 
 // A different unbound key from the one used above: the earlier notice is still
 // on screen, so the assertion has to be about *this* key rather than about any
