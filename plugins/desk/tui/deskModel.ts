@@ -14,6 +14,7 @@ import { sessionIdentityKey } from '../../../lib/sessionIdentity'
 
 import type { AgentProvider, ContextUsage, Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../../tui/format'
+import type { SessionMessage } from '../../../lib/types'
 import { truncateLine } from '../../../tui/format/text'
 
 /** A session's name on the desk (tui/format's formatSessionTitle, without loading the card formatters). */
@@ -282,12 +283,42 @@ export type DeskTableInput = {
   now: number
   alerts: DeskAlert[]
   loaded: Session | null
-  loadedCards: TuiTranscriptCard[] | null
+  /** The loaded session's transcript as stories: the TUI's cards, or the Web's messages through `deskCardsFromMessages`. */
+  loadedCards: DeskCard[] | null
   loadedContext: ContextUsage | null
   loadedModel: string | null
   loadedMessageCount: number | null
   chartWidth: number
   chartHeight: number
+}
+
+/** What the desk reads of a transcript entry: a TUI card has all of it, and the Web derives it. */
+export type DeskCard = Pick<TuiTranscriptCard, 'key' | 'role' | 'category' | 'label' | 'compactSummary' | 'timestampMs'>
+
+/**
+ * A raw transcript as desk stories: a prompt or reply is conversation, a tool
+ * call technical (an edit a diff), a tool result is not a story of its own.
+ */
+export function deskCardsFromMessages(messages: readonly SessionMessage[]): DeskCard[] {
+  const cards: DeskCard[] = []
+  for (const message of messages) {
+    if (message.type !== 'user' && message.type !== 'assistant') continue
+    const content = (message.message as { content?: unknown } | undefined)?.content
+    const blocks = (Array.isArray(content) ? content : typeof content === 'string' ? [{ type: 'text', text: content }] : []) as Array<{ type?: string; text?: string; name?: string; input?: Record<string, unknown> }>
+    const timestampMs = message.timestamp ? Date.parse(message.timestamp) || undefined : undefined
+    blocks.forEach((block, index) => {
+      const key = `${message.uuid}:${index}`
+      if (block.type === 'text' && block.text?.trim()) {
+        cards.push({ key, role: message.type as 'user' | 'assistant', category: 'conversation', label: message.type === 'user' ? 'you' : 'agent', compactSummary: block.text.replace(/\s+/g, ' ').trim().slice(0, 200), timestampMs })
+      } else if (block.type === 'tool_use') {
+        const input = block.input ?? {}
+        const subject = ['command', 'file_path', 'path', 'pattern', 'url', 'description'].map(name => input[name]).find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? ''
+        const edit = /^(Edit|MultiEdit|Write|apply_patch|edit|write)$/.test(block.name ?? '')
+        cards.push({ key, role: 'assistant', category: edit ? 'diff' : 'technical', label: block.name ?? 'tool', compactSummary: `${block.name ?? 'tool'} ${subject}`.trim().slice(0, 200), timestampMs })
+      }
+    })
+  }
+  return cards
 }
 
 export type DeskAlert = {
@@ -518,7 +549,7 @@ export function buildDeskChart(times: number[], width: number, height: number, u
   }
 }
 
-export function loadedSessionTimes(cards: TuiTranscriptCard[] | null): number[] {
+export function loadedSessionTimes(cards: readonly DeskCard[] | null): number[] {
   return (cards ?? []).map((card) => card.timestampMs ?? 0).filter((time) => time > 0)
 }
 

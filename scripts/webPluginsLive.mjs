@@ -246,8 +246,26 @@ try {
       await page.keyboard.press('ControlOrMeta+s')
       await view.getByText('This file changed on disk after you opened it.').waitFor()
       assert.equal(readFileSync(fixture, 'utf8'), 'changed elsewhere\r\n', 'a conflicting save wrote nothing')
+      // A source file is highlighted, and ⌘F finds in it.
+      await view.getByRole('button', { name: /Open file/ }).click()
+      await view.getByLabel('Open file').fill('lib/plugins/sessionTabs.ts')
+      await view.locator('[data-editor-result="lib/plugins/sessionTabs.ts"]').click()
+      await view.locator('[data-editor-buffer="lib/plugins/sessionTabs.ts"]').waitFor()
+      await view.locator('[data-editor-highlight="on"]').waitFor()
+      // Distinct painted colours, not just styled spans: an undefined CSS variable paints the default.
+      const painted = await view.locator('[data-editor-highlight="on"] span').evaluateAll(spans => new Set(spans.map(span => getComputedStyle(span).color)).size)
+      assert.ok(painted >= 3, `the source is highlighted in ${painted} distinct colours`)
+      await page.keyboard.press('ControlOrMeta+f')
+      await view.getByLabel('Find in file').fill('session')
+      await view.locator('[data-editor-find-count]').getByText(/^1 of \d+$/).waitFor()
+      await view.getByLabel('Find in file').press('Enter')
+      await view.locator('[data-editor-find-count]').getByText(/^2 of \d+$/).waitFor()
+      await view.getByLabel('Find in file').press('Shift+Enter')
+      await view.locator('[data-editor-find-count]').getByText(/^1 of \d+$/).waitFor()
+      const selected = await view.locator('[data-editor-buffer="lib/plugins/sessionTabs.ts"]').evaluate(element => element.value.slice(element.selectionStart, element.selectionEnd))
+      assert.equal(selected.toLowerCase(), 'session', 'the match is selected in the buffer')
       await shot('editor')
-      // The buffer is unsaved: closing asks, and accepting discards it.
+      // The CRLF buffer is unsaved: closing asks, and accepting discards it.
       let asked = ''
       page.once('dialog', dialog => { asked = dialog.message(); void dialog.accept() })
       await view.getByRole('button', { name: 'Close', exact: true }).click()

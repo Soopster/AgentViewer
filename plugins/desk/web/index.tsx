@@ -11,7 +11,7 @@ import type { WebPluginView, WebPluginViewProps } from '@/components/shell/plugi
 import type { Session } from '@/lib/types'
 import { liveStatesFromRegistry } from '@/lib/sessionSidebarModel'
 import {
-  buildDeskChart, buildDeskTable, DEFAULT_PANEL_FUNCTIONS, deskFunction, DESK_FUNCTIONS, deskPanelCount, deskSessionKey, deskSessionTime,
+  buildDeskChart, buildDeskTable, DEFAULT_PANEL_FUNCTIONS, deskCardsFromMessages, deskFunction, DESK_FUNCTIONS, deskPanelCount, deskSessionKey, deskSessionTime,
   parseDeskCommand, type DeskActivity, type DeskFunctionId, type DeskLayoutId, type DeskTable, type DeskTone,
 } from '../tui/deskModel'
 
@@ -70,11 +70,13 @@ function Desk({ services, placement, close, useState: useScopedState }: WebPlugi
   }, [docked, close])
 
   const loaded = fleet.selected
+  // The loaded session's transcript as the desk's stories (CN) and counts (DES).
+  const loadedCards = useMemo(() => (loaded ? deskCardsFromMessages(fleet.selectedMessages) : null), [loaded, fleet.selectedMessages])
   const tableInput = useMemo(() => ({
     sessions: fleet.sessions, activity, upticks: new Set<string>(), now, alerts: [],
-    loaded, loadedCards: null, loadedContext: null, loadedModel: null, loadedMessageCount: loaded ? fleet.selectedMessages.length : null,
+    loaded, loadedCards, loadedContext: null, loadedModel: null, loadedMessageCount: loaded ? fleet.selectedMessages.length : null,
     chartWidth: 60, chartHeight: 8,
-  }), [fleet.sessions, activity, now, loaded, fleet.selectedMessages.length])
+  }), [fleet.sessions, activity, now, loaded, loadedCards, fleet.selectedMessages.length])
   const panels = functions.slice(0, deskPanelCount(layout))
   const tables = panels.map(fn => buildDeskTable(fn, tableInput))
   const times = useMemo(() => fleet.selectedMessages.map(message => message.timestamp ? Date.parse(message.timestamp) : 0).filter(time => time > 0), [fleet.selectedMessages])
