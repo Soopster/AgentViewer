@@ -32,4 +32,5 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'daily-summary': async () => (await import('../../../plugins/daily-summary/tui')).module,
   handoff: async () => (await import('../../../plugins/handoff/tui')).module,
   bookmarks: async () => (await import('../../../plugins/bookmarks/tui')).module,
+  'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,
 }, TUI_PLUGIN_SERVICES)

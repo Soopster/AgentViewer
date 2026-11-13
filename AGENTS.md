@@ -78,7 +78,8 @@ Every Web dashboard tab (including the default run dashboard) is a plugin
 dashboard. Users' own mods load from `~/.config/agent-viewer/plugins`
 (`lib/plugins/localPlugins.ts`), never from a project directory. A mod with a
 `provider` export is an agent backend: an instance of the `mod` provider
-(`lib/modProvider.ts`).
+(`lib/modProvider.ts`). Mod views are data drawn by the bundled `mod-views`
+plugin (`lib/plugins/modViews.ts`).
 
 ### Multi-provider session backend
 

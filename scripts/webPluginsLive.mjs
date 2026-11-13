@@ -11,6 +11,11 @@ import { chromium } from 'playwright-core'
 const base = process.env.E2E_URL ?? 'http://localhost:3917'
 const shots = process.env.E2E_SHOTS
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+// Switching provider writes the checkout's shared provider.json; put it back.
+import { readFileSync, writeFileSync, rmSync } from 'node:fs'
+const providerFile = '.agent-viewer-data/provider.json'
+const savedProvider = existsSync(providerFile) ? readFileSync(providerFile, 'utf8') : null
+process.on('exit', () => { if (savedProvider === null) rmSync(providerFile, { force: true }); else writeFileSync(providerFile, savedProvider) })
 const browser = await chromium.launch({ headless: true, executablePath: existsSync(chrome) ? chrome : undefined })
 const results = []
 try {
@@ -97,6 +102,31 @@ try {
     await card.waitFor({ timeout: 8000 })
     await card.scrollIntoViewIfNeeded()
     await shot('tool-card')
+  })
+  await check('mod view: draw and run an action', async () => {
+    await palette('Mod views')
+    await page.locator('[data-plugin-view="mod-views"]').waitFor()
+    await page.getByText('Fruit tally').waitFor()
+    const before = Number(/count (\d+)/.exec(await page.locator('[data-mod-view-item="apples"]').innerText())[1])
+    await page.locator('[data-mod-view-item="apples"]').click()
+    await page.getByText(`count ${before + 1}`).waitFor()
+    await page.getByText('bumped apples').waitFor()
+    await shot('mod-views')
+    await page.keyboard.press('Escape')
+  })
+  await check('provider mod: pick it, start a session, stream a reply', async () => {
+    await page.getByLabel('Provider').first().selectOption('mod-e2e-mod')
+    await page.waitForTimeout(1500)
+    await page.getByRole('button', { name: 'Start a new agent session' }).first().click()
+    const composer = page.locator('.av-web-composer-textarea').first()
+    await composer.waitFor({ timeout: 30000 })
+    await composer.click()
+    await page.keyboard.type('hi mod')
+    await page.keyboard.press('Enter')
+    await page.getByText('ECHO AGENT SAYS: HI MOD').first().waitFor({ timeout: 30000 })
+    // The sidebar lists the mod's session on its next poll.
+    await page.getByText('Echo chat').first().waitFor({ timeout: 20000 })
+    await shot('provider-mod')
   })
   results.push(errors.length ? `PAGE ERRORS: ${errors.slice(0, 3).join(' | ')}` : 'no page errors')
 } finally {

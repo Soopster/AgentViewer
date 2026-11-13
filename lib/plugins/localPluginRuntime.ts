@@ -26,6 +26,8 @@ type LocalServerModule = {
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
   widgets?: Record<string, (context: { signal: AbortSignal }) => unknown>
+  views?: Record<string, (context: { signal: AbortSignal }) => unknown>
+  actions?: Record<string, (context: { signal: AbortSignal; view: string; item?: string }) => unknown>
 }
 
 export type LocalCommandContext = {
@@ -152,4 +154,34 @@ export async function readLocalPluginWidgets(signal: AbortSignal = new AbortCont
     }
   })))
   return results.filter((entry): entry is LocalWidgetContent => entry !== null)
+}
+
+/** Every enabled mod's declared views. */
+export function listLocalPluginViews(): Array<{ pluginId: string; viewId: string; title: string }> {
+  return localPluginDiscovery().plugins.filter(plugin => isPluginEnabled(plugin.manifest.id))
+    .flatMap(plugin => (plugin.manifest.localViews ?? []).map(view => ({ pluginId: plugin.manifest.id, viewId: view.id, title: view.title })))
+}
+
+function enabledViewPlugin(pluginId: string, viewId: string) {
+  const plugin = localPluginDiscovery().plugins.find(entry => entry.manifest.id === pluginId)
+  if (!plugin || !isPluginEnabled(pluginId) || !plugin.manifest.localViews?.some(view => view.id === viewId)) throw new Error(`No view "${viewId}" in an enabled mod "${pluginId}"`)
+  return plugin
+}
+
+/** One mod view, as data (decoded by lib/plugins/modViews.ts). */
+export async function renderLocalPluginView(pluginId: string, viewId: string, signal: AbortSignal = new AbortController().signal): Promise<unknown> {
+  const plugin = enabledViewPlugin(pluginId, viewId)
+  const module = await loadServerModule(plugin)
+  const render = module.views?.[viewId]
+  if (typeof render !== 'function') throw new Error(`${plugin.manifest.title}'s server module has no views.${viewId}`)
+  return await render({ signal })
+}
+
+/** Run a view's action where the mod lives; answers with effects as data. */
+export async function runLocalPluginViewAction(pluginId: string, viewId: string, action: string, item: string | undefined, signal: AbortSignal = new AbortController().signal): Promise<LocalCommandEffects> {
+  const plugin = enabledViewPlugin(pluginId, viewId)
+  const module = await loadServerModule(plugin)
+  const run = module.actions?.[action]
+  if (typeof run !== 'function') throw new Error(`${plugin.manifest.title} has no action "${action}"`)
+  return decodeLocalCommandEffects(await run({ signal, view: viewId, ...(item ? { item } : {}) }))
 }

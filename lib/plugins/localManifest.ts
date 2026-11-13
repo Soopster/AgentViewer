@@ -24,6 +24,8 @@ export type LocalPluginManifest = PluginManifest & {
   readonly localWidgets?: readonly { readonly id: string; readonly slot: 'corner'; readonly refreshMs: number }[]
   /** A mod that is an agent backend: its sessions appear under the `mod` provider (lib/modProvider.ts). */
   readonly localProvider?: { readonly displayName: string }
+  /** Interactive views the mod returns as data (lib/plugins/modViews.ts). */
+  readonly localViews?: readonly { readonly id: string; readonly title: string }[]
 }
 
 export const LOCAL_WIDGET_REFRESH_MS = 5_000
@@ -131,12 +133,19 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (!spec || typeof spec !== 'object') problems.push('provider must be an object')
     else localProvider = { displayName: typeof spec.displayName === 'string' && spec.displayName.trim() ? spec.displayName.trim().slice(0, 40) : title }
   }
-  if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider) problems.push('declares no behavior hooks, commands, widgets or provider')
+  const views: { id: string; title: string }[] = []
+  if (value.views !== undefined && !Array.isArray(value.views)) problems.push('views must be a list')
+  for (const [index, entry] of (Array.isArray(value.views) ? value.views : []).entries()) {
+    const view = entry as Record<string, unknown>
+    if (typeof view?.id !== 'string' || !LOCAL_PLUGIN_ID.test(view.id)) { problems.push(`views[${index}].id is invalid`); continue }
+    views.push({ id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id })
+  }
+  if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
   if (problems.length) return { manifest: null, problems }
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), source: 'local',
+      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local',
     },
     problems,
   }

@@ -4,7 +4,9 @@
 // and run their commands there (their code is the daemon's, never the page's).
 import { registerLocalPluginManifests } from '@/lib/plugins/catalog'
 import { decodeLocalCommandEffects, decodeLocalWidgetContent, parseLocalPluginManifest, setLocalCommandRunner, setLocalWidgetReader, type LocalPluginManifest, type LocalWidgetContent } from '@/lib/plugins/localManifest'
-import { PLUGIN_MANIFESTS } from '@/lib/plugins/catalog'
+import { PLUGIN_MANIFESTS, listLocalPluginManifests } from '@/lib/plugins/catalog'
+import { decodeModView, setModViewService } from '@/lib/plugins/modViews'
+import { isPluginEnabled } from '@/lib/plugins/enablement'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
 let report: WebLocalPluginReport | null = null
@@ -30,6 +32,26 @@ setLocalWidgetReader(async (signal) => {
   })
 })
 
+setModViewService({
+  list: () => listLocalPluginManifests().filter(manifest => isPluginEnabled(manifest.id))
+    .flatMap(manifest => (manifest.localViews ?? []).map(view => ({ pluginId: manifest.id, viewId: view.id, title: view.title }))),
+  render: async (view, signal) => {
+    const response = await fetch(`/api/plugins/local/views?plugin=${encodeURIComponent(view.pluginId)}&view=${encodeURIComponent(view.viewId)}`, { signal })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok || body?.error) throw new Error(body?.error || `View failed (${response.status})`)
+    return decodeModView(body.view, view.title)
+  },
+  act: async (view, action, item, signal) => {
+    const response = await fetch('/api/plugins/local/views', {
+      method: 'POST', signal, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ plugin: view.pluginId, view: view.viewId, action, ...(item ? { item } : {}) }),
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok || body?.error) throw new Error(body?.error || `Action failed (${response.status})`)
+    return decodeLocalCommandEffects(body)
+  },
+})
+
 /** Apply the daemon's `local` section of GET /api/plugins. Manifests are re-validated, never trusted. */
 export function applyWebLocalPlugins(value: unknown): void {
   const local = (value as { local?: { dir?: unknown; plugins?: unknown; refused?: unknown } } | null)?.local
@@ -41,7 +63,7 @@ export function applyWebLocalPlugins(value: unknown): void {
     const entry = raw as LocalPluginManifest
     if (entry?.source !== 'local' || typeof entry.id !== 'string' || reserved.has(entry.id)) continue
     const reparsed = parseLocalPluginManifest({
-      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets,
+      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews, provider: entry.localProvider,
       commands: (entry.commands ?? []).map(command => ({ ...command, id: command.handler })),
     }, reserved)
     if (reparsed.manifest) manifests.push(reparsed.manifest)

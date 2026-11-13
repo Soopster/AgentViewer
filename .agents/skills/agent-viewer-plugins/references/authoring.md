@@ -516,8 +516,17 @@ export const commands = {
   `toolCard`) are available to mods by listing them in `behavior.hooks`.
 - Discovery runs once per process; restart after adding a mod. Both plugin
   managers list mods (they can be turned off like any plugin) and any refused,
-  with the reasons. Mods contribute no surfaces (interactive views) yet: those
-  need a bundled plugin.
+  with the reasons.
+- Views: declare `"views": [{ "id": "tally", "title": "Tally" }]` and export
+  `views: { tally: ({ signal }) => ({ title, blocks }) }` plus
+  `actions: { bump: ({ view, item }) => ({ notice }) }`. Blocks are
+  `heading`, `text` (with a tone), `item` (label, detail, optional `action`
+  and `id`) and `button` (label, `action`). The bundled Mod views plugin
+  (⌃K x, palette "Mod views") draws them in both renderers: rows and buttons
+  are clickable, and in the TUI ↑↓/j/k select and Enter runs. An action runs
+  where the mod lives, its notice is shown, and the view re-renders. A view is
+  data, not code, so it needs no build; a bespoke component still needs a
+  bundled plugin.
 - `scripts/localPluginSmoke.ts` is the worked example end to end.
 
 ## Provider mods

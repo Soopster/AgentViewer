@@ -27,5 +27,6 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   bookmarks: async () => (await import('@/plugins/bookmarks/web')).module,
   provenance: async () => (await import('@/plugins/provenance/web')).module,
   'run-dashboard': async () => (await import('@/plugins/run-dashboard/web')).module,
+  'mod-views': async () => (await import('@/plugins/mod-views/web')).module,
   'remote-access': async () => (await import('@/plugins/remote-access/web')).module,
 }, WEB_PLUGIN_SERVICES)
