@@ -19,7 +19,7 @@ export function handleModalDialogKeys({
   remoteCoordinatorTarget,
   remoteCoordinatorKeyHandlerRef, teammatesModalOpen, teammatesKeyHandlerRef, searchMode,
   setSearchMode, sessionSearchMode, setSessionSearchMode, setSessionSearchQuery, fileHistoryPath,
-  fileHistoryKeyHandlerRef, dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu,
+  fileHistoryKeyHandlerRef, contextMenu,
   contextMenuKeyHandlerRef, windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen,
   windowBroadcastKeyRef, windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay,
   pluginOverlayKeyHandlerRef, folderPickerForNewSession, folderPickerKeyHandlerRef,
@@ -48,8 +48,6 @@ export function handleModalDialogKeys({
   setSessionSearchQuery: React.Dispatch<React.SetStateAction<string>>
   fileHistoryPath: string | null
   fileHistoryKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => boolean | void) | null>
-  dailySummaryOpen: boolean
-  dailySummaryKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   contextMenu: { x: number; y: number; title: string; items: ContextMenuItem[]; } | null
   contextMenuKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   windowSwitcherOpen: boolean
@@ -140,11 +138,6 @@ export function handleModalDialogKeys({
 
     if (fileHistoryPath) {
       handled(() => { fileHistoryKeyHandlerRef.current?.(key) })
-      return true
-    }
-
-    if (dailySummaryOpen) {
-      handled(() => { dailySummaryKeyHandlerRef.current?.(key) })
       return true
     }
 

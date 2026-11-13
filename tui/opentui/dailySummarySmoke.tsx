@@ -99,7 +99,7 @@ try {
   process.chdir(workspace)
   const { syncPersistedSessions, syncPersistedSessionMessages } = await import('../../lib/sessionPersistence')
   const { readDailySummary } = await import('../../lib/dailySummaryReader')
-  const { DailySummaryPopover } = await import('./DailySummaryPopover')
+  const { DailySummaryPopover } = await import('../../plugins/daily-summary/tui/DailySummaryPopover')
   const now = Date.now()
   const at = (offsetMs: number) => new Date(now - offsetMs).toISOString()
   const message = (uuid: string, type: 'user' | 'assistant', content: unknown, offsetMs: number): SessionMessage => ({
@@ -138,12 +138,11 @@ try {
       accentColor={DARK_THEME.cyan}
       width={110}
       height={36}
-      waiting={[]}
-      skipPullRequests
+      read={(range) => readDailySummary({ range, skipPullRequests: true })}
       onClose={() => {}}
       onNotice={() => {}}
-      onKeyHandlerReady={(handler) => { handleKey = handler }}
-      onCopy={(text) => { copies.push(text) }}
+      onKeyHandlerReady={(handler: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) => { handleKey = handler }}
+      onCopy={(text: string) => { copies.push(text) }}
     />,
     { width: 110, height: 36 },
   )

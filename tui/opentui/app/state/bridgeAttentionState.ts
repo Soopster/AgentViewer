@@ -65,8 +65,6 @@ export function useBridgeAttentionState() {
   // plugin overlay: it sits above whichever surface opened it (the editor, the
   // checkpoints overlay), which stay mounted beneath and get the keys back.
   const [fileHistoryPath, setFileHistoryPath] = useState<string | null>(null)
-  const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
-  const dailySummaryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const fileHistoryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useEngineeringLocalState('taskPanelOpen', false)
   const [taskPanelTab, setTaskPanelTab] = useEngineeringLocalState<'tasks' | 'agents'>('taskPanelTab', 'tasks')
@@ -82,8 +80,7 @@ export function useBridgeAttentionState() {
     setWorktreeConfirm, worktreeSubmitInFlightRef, coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordinationActionBusy, setCoordinationActionBusy, coordBoardRunId,
     setCoordBoardRunId, fleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
-    fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
-    dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
+    fileHistoryPath, setFileHistoryPath, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
     taskPanelTab, setTaskPanelTab, composerSessions,
   }
 }

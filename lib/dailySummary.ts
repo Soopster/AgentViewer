@@ -340,3 +340,15 @@ export function formatDailySummaryMarkdown(summary: DailySummary): string {
   if (notes.length > 0) lines.push('', ...notes.map((note) => `_${note}_`))
   return `${lines.join('\n')}\n`
 }
+
+/** A markdown line's role, which is all the colouring needs. */
+export function dailySummaryLineTone(line: string): 'title' | 'repo' | 'heading' | 'waiting' | 'prompt' | 'item' | 'note' | 'plain' {
+  if (line.startsWith('# ')) return 'title'
+  if (line.startsWith('## ')) return 'repo'
+  if (line === '**Waiting on you**' || /^\*\*\d+ waiting on you\*\*$/.test(line)) return 'waiting'
+  if (line.startsWith('**')) return 'heading'
+  if (line.startsWith('  - ')) return 'prompt'
+  if (line.startsWith('- ')) return 'item'
+  if (line.startsWith('_') && line.endsWith('_')) return 'note'
+  return 'plain'
+}

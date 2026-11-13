@@ -50,6 +50,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // The bug this table exists for: a POST that only reads.
   '/api/sessions/project/messages': { POST: 'read' },
   '/api/sessions/running': { GET: 'read', POST: 'write', DELETE: 'write' },
+  '/api/daily-summary': { GET: 'read' },
   '/api/sessions/reports': { GET: 'read', POST: 'write', DELETE: 'write' },
   '/api/sessions/new': { POST: 'write' },
   '/api/sessions/[sessionId]/actions': { POST: 'write' },

@@ -23,6 +23,7 @@ export const manifest = {
     windowLabel: 'Agent control center in a window',
     services: ['coordination', 'playbooks', 'run-launch'],
     optionalServices: ['composer', 'notices'],
+    scrim: true,
   }, {
     // The interactive coordinator's store holds one conversation's team.
     id: 'teammates',

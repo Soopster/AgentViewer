@@ -119,7 +119,6 @@ export const COMMANDS: PaletteCommand[] = [
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),
   { id: 'plugins', label: 'Plugins: turn features on or off', key: '', category: 'View' },
-  { id: 'daily-summary', label: 'Daily summary of agent work', key: '⌃K s', category: 'Session' },
   { id: 'attention', label: 'Attention inbox', key: '!', category: 'Session' },
   { id: 'worktree-new', label: 'New worktree task', key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge', label: 'Merge worktree task into main', key: '', category: 'Worktree' },

@@ -25,6 +25,7 @@ export type TuiPluginCapture = boolean | 'input' | 'terminal'
 export type TuiPluginServices = {
   'run-launch'?: import('../../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../../lib/plugins/playbooks').PluginPlaybookService
+  'daily-summary'?: import('../../../lib/plugins/dailySummary').PluginDailySummaryService
   messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {

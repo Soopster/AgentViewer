@@ -31,8 +31,7 @@ export function useLastBridgeChatIdRefGroup(ctx: UseLastBridgeChatIdRefGroupCont
     setWorktreeConfirm, worktreeSubmitInFlightRef, coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordinationActionBusy, setCoordinationActionBusy, coordBoardRunId,
     setCoordBoardRunId, fleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
-    fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
-    dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
+    fileHistoryPath, setFileHistoryPath, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
     taskPanelTab, setTaskPanelTab, composerSessions,
   } = useBridgeAttentionState()
   const composerOwnerKey = composerPaneTargetKey ?? selectedSessionKey ?? (sessions[0] ? sessionKey(sessions[0]) : 'unselected')
@@ -72,8 +71,7 @@ export function useLastBridgeChatIdRefGroup(ctx: UseLastBridgeChatIdRefGroupCont
     setWorktreeConfirm, worktreeSubmitInFlightRef, coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordinationActionBusy, setCoordinationActionBusy, coordBoardRunId,
     setCoordBoardRunId, fleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
-    fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
-    dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
+    fileHistoryPath, setFileHistoryPath, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
     taskPanelTab, setTaskPanelTab, composerSessions, composerOwnerKey, ownsComposerStream,
     awaitingPersistedTurn, setAwaitingPersistedTurn, searchMode, setSearchMode, searchQuery,
     setSearchQuery, searchMatchIndex, setSearchMatchIndex, sessionSearchMode, setSessionSearchMode,

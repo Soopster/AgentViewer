@@ -26,7 +26,6 @@ import { writeClipboard } from '../clipboard'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, PinnedSessionDetail } from '../SplitTranscriptPane'
 import { pluginSurfaceWants } from '../pluginCommands'
-import { DailySummaryPopover } from '../lazyOverlays'
 import { type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { type TuiTranscriptView } from '../../../theme'
 import { type MouseEvent } from '@opentui/core'
@@ -207,22 +206,6 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
               onKeyHandlerReady={keysReady({ current: null })} />
           )}
         </PinnedSessionDetail>
-      )
-    case 'daily-summary':
-      return (
-        <DailySummaryPopover
-          docked
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={box.width}
-          height={box.height}
-          waiting={attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title }))}
-          onClose={leave}
-          onNotice={showNotice}
-          onKeyHandlerReady={keysReady({ current: null })}
-          onCopy={(text) => { void writeClipboard(text, renderer) }}
-          onSendToComposer={(text) => appendDiffCommentPromptToComposer(text)}
-        />
       )
   }
 }

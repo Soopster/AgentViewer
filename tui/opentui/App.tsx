@@ -151,7 +151,8 @@ import {
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
 import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
-import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
+import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory, readTuiDailySummary } from '../../lib/tui/service'
+import type { DailySummaryRange } from '../../lib/dailySummary'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
@@ -317,7 +318,7 @@ import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
 import { cycleDensityValue, currentProjectName } from './app/viewHelpers'
 import { TUI_HANDOFF_COMMAND, CODEX_LIVE_ASSISTANT_UUID, CLAUDE_LIVE_ASSISTANT_UUID_PREFIX, TUI_SLASH_HINTS } from './app/composerConstants'
 import { pluginSurfaceWants, TUI_KEYED_PLUGIN_COMMANDS } from './app/pluginCommands'
-import { PluginManagerPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover } from './app/lazyOverlays'
+import { PluginManagerPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, RemoteCoordinatorPopover } from './app/lazyOverlays'
 import { handleLetterShortcutKeys } from './app/keys/letterShortcuts'
 import { handleReaderKeys } from './app/keys/readerKeys'
 import { handleWindowAndTabKeys } from './app/keys/windowTabKeys'
@@ -698,8 +699,7 @@ function OpenTuiWorkspace() {
     setWorktreeConfirm, worktreeSubmitInFlightRef, coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordinationActionBusy, setCoordinationActionBusy, coordBoardRunId,
     setCoordBoardRunId, fleetStripEnabled: globalFleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
-    fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
-    dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
+    fileHistoryPath, setFileHistoryPath, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
     taskPanelTab, setTaskPanelTab, composerSessions, composerOwnerKey, ownsComposerStream,
     awaitingPersistedTurn, setAwaitingPersistedTurn, searchMode, setSearchMode, searchQuery,
     setSearchQuery, searchMatchIndex, setSearchMatchIndex, sessionSearchMode, setSessionSearchMode,
@@ -4867,7 +4867,6 @@ function OpenTuiWorkspace() {
     else if (kind === 'file-history') setFileHistoryPath(open ? pin?.path ?? null : null)
     // Teammates stay open while windowed (below); every other plugin surface is the overlay.
     else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
-    else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'attention') setAttentionOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
@@ -4877,7 +4876,7 @@ function OpenTuiWorkspace() {
   // key-routing order, so ⌃⇧W takes the one that is taking the keys.
   const openPopoverKind = (): PopoverWindowKind | null => (
     fileHistoryPath && gitRepoCwd ? 'file-history'
-    : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary'
+    : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay
     : attentionOpen ? 'attention'
     : handoffBriefOpen ? 'handoff'
     : teammatesModalOpen ? 'teammates' : null)
@@ -5114,6 +5113,11 @@ function OpenTuiWorkspace() {
     })
   }, [provider, providerInstanceId, selectedSession, selectedSessionKey, tuiModelOverride, tuiEffort, composerDraft, registerAcceptedRun])
   const choosePluginTheme = useStableEvent((mode: TuiThemeMode) => chooseTheme(mode))
+  // The inbox changes while a summary is open; each read files what it holds at the ask.
+  const readPluginDailySummary = useStableEvent((range: DailySummaryRange, signal?: AbortSignal) => {
+    signal?.throwIfAborted()
+    return readTuiDailySummary({ range, waiting: attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title })) })
+  })
   const jumpToTaskCard = useStableEvent((uuid: string) => {
     const idx = visibleTranscriptCards.findIndex((card) => card.key === uuid)
     if (idx >= 0) jumpToTranscriptIndex(idx)
@@ -5163,6 +5167,7 @@ function OpenTuiWorkspace() {
     },
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     playbooks: tuiPlaybooks,
+    'daily-summary': { read: readPluginDailySummary },
     'run-launch': runLaunchService,
     'task-control': {
       jumpTo: jumpToTaskCard,
@@ -5837,7 +5842,7 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [pluginOverlay, dailySummaryOpen, attentionOpen,
+  }, [pluginOverlay, attentionOpen,
     handoffBriefOpen, fileHistoryPath])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
@@ -6039,7 +6044,7 @@ function OpenTuiWorkspace() {
     runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
-    setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
+    toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
     stopActiveCoordinatedRun, fleetStripEnabled, setFleetStripEnabled, showToggleOutcome,
@@ -6181,7 +6186,7 @@ function OpenTuiWorkspace() {
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, attentionOpen,
+    pluginOverlay, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
@@ -6339,7 +6344,7 @@ function OpenTuiWorkspace() {
       remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef,
       teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode,
       setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef,
-      dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu, contextMenuKeyHandlerRef,
+      contextMenu, contextMenuKeyHandlerRef,
       windowSwitcherOpen, windowSwitcherKeyRef, windowBroadcastOpen, windowBroadcastKeyRef,
       windowPickerOpen, windowPickerKeyHandlerRef, pluginOverlay, pluginOverlayKeyHandlerRef,
       folderPickerForNewSession, folderPickerKeyHandlerRef,
@@ -7267,24 +7272,6 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {dailySummaryOpen ? (
-        <DailySummaryPopover
-          theme={theme}
-          accentColor={composerAccentColor}
-          width={width}
-          height={height}
-          waiting={attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title }))}
-          onClose={() => setDailySummaryOpen(false)}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { dailySummaryKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('daily-summary')}
-          onCopy={(text) => { void writeClipboard(text, renderer) }}
-          onSendToComposer={(text) => {
-            appendDiffCommentPromptToComposer(text)
-            setDailySummaryOpen(false)
-          }}
-        />
-      ) : null}
 
       {handoffBriefOpen ? (
         <box
@@ -7579,7 +7566,7 @@ function OpenTuiWorkspace() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm  || pluginOverlay === 'coordination' || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
+      {worktreeModalOpen || worktreeConfirm  || (pluginOverlay && getPluginSurface(pluginOverlay).scrim) || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || windowPickerOpen || pluginManagerOpen ? (
         <box
           position="absolute"
           top={0}

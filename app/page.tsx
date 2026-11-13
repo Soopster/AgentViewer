@@ -395,7 +395,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} />
+    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">

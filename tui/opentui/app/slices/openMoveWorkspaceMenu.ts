@@ -66,7 +66,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   treeDividerActivePathRef: React.RefObject<string | null>
   treeDividerCheckpointedRef: React.RefObject<boolean>
   pluginOverlay: PluginSurfaceId | null
-  dailySummaryOpen: boolean
   attentionOpen: boolean
   handoffBriefOpen: boolean
   fileHistoryPath: string | null
@@ -114,7 +113,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, attentionOpen,
+    pluginOverlay, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, 
@@ -183,7 +182,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
   // Window controls are transient keyboard owners, never persisted workspace state.
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
-    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen,
+    ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 
     attention: attentionOpen,
     handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),

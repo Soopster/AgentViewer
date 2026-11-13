@@ -3,19 +3,16 @@
 // repository — the prompts, files, commits and pull requests, and what is still
 // waiting on the user. It renders the same markdown it copies, so what is on
 // screen is exactly what lands in a standup or a chat.
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { MODAL_CONTENT_Z_INDEX, PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import type { TuiThemePalette } from '../theme'
 import {
   DAILY_SUMMARY_RANGES,
+  dailySummaryLineTone,
   formatDailySummaryMarkdown,
   type DailySummary,
   type DailySummaryRange,
-  type DailySummaryWaitingInput,
-} from '../../lib/dailySummary'
-import { readTuiDailySummary } from '../../lib/tui/service'
-import { MODAL_CONTENT_Z_INDEX } from './layers'
+} from '../../../lib/dailySummary'
 
 type DailySummaryKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -24,8 +21,8 @@ type Props = {
   accentColor: string
   width: number
   height: number
-  /** What the attention inbox holds now; the summary files each under its session's repository. */
-  waiting: DailySummaryWaitingInput[]
+  /** The host's read; it files its attention inbox under each session's repository. */
+  read: (range: DailySummaryRange, signal?: AbortSignal) => Promise<DailySummary>
   initialRange?: DailySummaryRange
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
@@ -34,10 +31,8 @@ type Props = {
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
   onDetach?: () => void
-  onCopy: (text: string) => void
+  onCopy?: (text: string) => void
   onSendToComposer?: (text: string) => void
-  /** Test seam: skip `gh`. */
-  skipPullRequests?: boolean
 }
 
 const RANGE_KEYS: Record<string, DailySummaryRange> = { t: 'today', y: 'yesterday', w: 'week' }
@@ -48,31 +43,20 @@ function fit(text: string, width: number): string {
   return text.length <= width ? text : `${text.slice(0, Math.max(width - 1, 0))}…`
 }
 
-/** A markdown line's role, which is all the colouring needs. */
-export function dailySummaryLineTone(line: string): 'title' | 'repo' | 'heading' | 'waiting' | 'prompt' | 'item' | 'note' | 'plain' {
-  if (line.startsWith('# ')) return 'title'
-  if (line.startsWith('## ')) return 'repo'
-  if (line === '**Waiting on you**' || /^\*\*\d+ waiting on you\*\*$/.test(line)) return 'waiting'
-  if (line.startsWith('**')) return 'heading'
-  if (line.startsWith('  - ')) return 'prompt'
-  if (line.startsWith('- ')) return 'item'
-  if (line.startsWith('_') && line.endsWith('_')) return 'note'
-  return 'plain'
-}
+export { dailySummaryLineTone }
 
 export function DailySummaryPopover({
   theme,
   accentColor,
   width,
   height,
-  waiting,
+  read,
   initialRange = 'today',
   onClose,
   onNotice,
   onKeyHandlerReady,
   onCopy,
   onSendToComposer,
-  skipPullRequests,
   docked = false,
   onDetach,
 }: Props) {
@@ -82,15 +66,15 @@ export function DailySummaryPopover({
   const [error, setError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
-  // The inbox changes while the summary is open; the read uses what it held at the ask.
-  const waitingRef = useRef(waiting)
-  waitingRef.current = waiting
+  const readRef = useRef(read)
+  readRef.current = read
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
-    readTuiDailySummary({ range, waiting: waitingRef.current, skipPullRequests })
+    readRef.current(range, controller.signal)
       .then((next) => {
         if (cancelled) return
         setSummary(next)
@@ -98,8 +82,8 @@ export function DailySummaryPopover({
       })
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Could not read the summary') })
       .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [range, reloadToken, skipPullRequests])
+    return () => { cancelled = true; controller.abort() }
+  }, [range, reloadToken])
 
   const markdown = useMemo(() => (summary ? formatDailySummaryMarkdown(summary) : ''), [summary])
   const lines = useMemo(() => markdown.replace(/\n$/, '').split('\n'), [markdown])
@@ -137,7 +121,7 @@ export function DailySummaryPopover({
     if (key.sequence === 'G' || key.name === 'end') { scrollBody(Number.MAX_SAFE_INTEGER); return }
     if (key.sequence === 'r') { setReloadToken((token) => token + 1); return }
     if (!summary) return
-    if (key.sequence === 'c') {
+    if (key.sequence === 'c' && onCopy) {
       onCopy(markdown)
       onNotice('info', `Copied the summary for ${RANGE_LABELS[range]}`, 3000)
       return
@@ -163,7 +147,7 @@ export function DailySummaryPopover({
     }
   }
 
-  const footer = `t/y/w or Tab range · j/k scroll · c copy markdown${onSendToComposer ? ' · a draft a status update' : ''} · r refresh · Esc close`
+  const footer = `t/y/w or Tab range · j/k scroll${onCopy ? ' · c copy markdown' : ''}${onSendToComposer ? ' · a draft a status update' : ''} · r refresh · Esc close`
 
   return (
     <box

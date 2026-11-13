@@ -47,6 +47,8 @@ export type PluginSurfaceSpec = {
   readonly optionalServices?: readonly PluginServiceId[]
   /** As an overlay it draws from the top row, so the host's navigation bars drop beneath it. */
   readonly fullScreen?: boolean
+  /** As an overlay it is modal: the host dims everything painted beneath it. */
+  readonly scrim?: boolean
 }
 
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
@@ -148,6 +150,8 @@ export type PluginManifest = {
 export type PluginServiceId =
   | 'run-launch'
   | 'playbooks'
+  /** Read what every agent did over a day or week, with the host's attention inbox filed in. */
+  | 'daily-summary'
   /** The target session's transcript, read for the target, not the selection. */
   | 'session-transcript'
   /** The target repository: its working directory, and the session scoping its turns. */
