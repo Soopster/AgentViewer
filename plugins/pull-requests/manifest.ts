@@ -31,6 +31,7 @@ export const manifest = {
     opens: 'pull-request',
     requires: null,
     renderers: ['web', 'tui'],
+    tuiChord: { key: 'g', short: 'PRs', label: 'Pull requests' },
     tuiKey: { name: 'g', ctrl: true, shift: true },
     tuiKeyLabel: '⌃K g / ⌃⇧G',
     keywords: ['github', 'pull request', 'pr', 'review', 'comment', 'approve', 'gh'],

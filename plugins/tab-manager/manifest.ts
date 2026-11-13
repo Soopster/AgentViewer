@@ -28,6 +28,7 @@ export const manifest = {
     opens: 'tab-manager',
     requires: null,
     renderers: ['tui'],
+    tuiChord: { key: 'm', short: 'tabs', label: 'Manage tabs (pin, reorder)', hint: false },
     tuiKeyLabel: '⌃K m',
     keywords: ['tabs', 'pin', 'reorder', 'move', 'close'],
   }],

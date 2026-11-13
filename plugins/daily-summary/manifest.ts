@@ -32,6 +32,7 @@ export const manifest = {
     requires: null,
     scope: 'application',
     renderers: ['web', 'tui'],
+    tuiChord: { key: 's', short: 'sum', label: 'Daily summary of agent work' },
     tuiKeyLabel: '⌃K s',
     keywords: ['standup', 'summary', 'today', 'yesterday', 'week', 'report', 'status'],
   }],

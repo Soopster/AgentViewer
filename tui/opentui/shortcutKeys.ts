@@ -1,5 +1,6 @@
 import type { KeyEvent } from '@opentui/core'
 import { activeChordBindings } from './userKeys'
+import { listPluginCommands } from '../../lib/plugins/catalog'
 
 export type ShortcutKeyEvent = Pick<
   KeyEvent,
@@ -40,35 +41,46 @@ export function isAltKey(key: ShortcutKeyEvent, char: string): boolean {
 // same entry so the dispatcher, the status-bar hint, the unknown-key notice and
 // the ⌃K ? overlay are all one table — four hand-written copies of this set is
 // how three of them end up describing keys the fourth no longer has.
-export const PORTABLE_COMMAND_CHORDS = {
-  a: { command: 'coord-board', label: 'Agent Operations', short: 'ops' },
-  b: { command: 'desk', label: 'Bloomberg-style desk', short: 'desk' },
-  f: { command: 'changed-files', label: 'Files touched by this session', short: 'files' },
-  g: { command: 'pull-requests', label: 'Pull requests', short: 'PRs' },
-  h: { command: 'index-search', label: 'Search the session index', short: 'find' },
-  l: { command: 'processes', label: 'Processes and logs', short: 'logs' },
-  m: { command: 'tab-manager', label: 'Manage tabs (pin, reorder)', short: 'tabs', hint: false },
-  n: { command: 'coord-start', label: 'New coordinated run', short: 'run' },
-  p: { command: 'tool-timing', label: 'Tool timing by turn', short: 'time', hint: false },
-  s: { command: 'daily-summary', label: 'Daily summary of agent work', short: 'sum' },
-  t: { command: 'coord-teammates', label: 'Teammates for this conversation', short: 'team' },
+//
+// Plugin commands bring their own chord (`tuiChord` in the manifest); only the
+// shell's window commands are listed here. Adding a plugin chord touches the
+// plugin alone.
+export type CommandChordEntry = { readonly command: string; readonly label: string; readonly short: string; readonly hint?: false }
+
+const HOST_COMMAND_CHORDS: Record<string, CommandChordEntry> = {
   o: { command: 'window-switcher', label: 'Workspace overview', short: 'tree' },
   q: { command: 'window-identify', label: 'Identify windows', short: 'id' },
   w: { command: 'window-manage', label: 'Manage windows', short: 'win' },
   v: { command: 'transcript-pager', label: 'Open transcript in $VISUAL / $EDITOR / pager', short: 'page' },
-} as const
+}
 
-export type PortableCommandChord = keyof typeof PORTABLE_COMMAND_CHORDS
+function buildCommandChords(): Record<string, CommandChordEntry> {
+  const table: Record<string, CommandChordEntry> = {}
+  const plugin = listPluginCommands('tui').filter(command => command.tuiChord)
+    .sort((a, b) => a.tuiChord!.key.localeCompare(b.tuiChord!.key))
+  for (const command of plugin) {
+    const chord = command.tuiChord!
+    const key = chord.key.toLowerCase()
+    if (!/^[a-z0-9]$/.test(key)) throw new Error(`Plugin command ${command.id} has an invalid ⌃K chord: ${chord.key}`)
+    if (table[key] || HOST_COMMAND_CHORDS[key]) throw new Error(`⌃K ${key} is claimed twice (${command.id} and ${(table[key] ?? HOST_COMMAND_CHORDS[key])!.command})`)
+    table[key] = { command: command.id, label: chord.label ?? command.label, short: chord.short, ...(chord.hint === false ? { hint: false as const } : {}) }
+  }
+  return { ...table, ...HOST_COMMAND_CHORDS }
+}
+
+export const PORTABLE_COMMAND_CHORDS: Readonly<Record<string, CommandChordEntry>> = buildCommandChords()
+
+export type PortableCommandChord = string
 
 /** The command id a ⌃K key runs — the built-in table, or the user's keys.json over it. */
 export function portableCommandChord(sequence: string): string | null {
   const normalized = sequence.toLowerCase()
   const bindings = activeChordBindings()
   if (bindings) return bindings.has(normalized) ? normalized : null
-  return normalized in PORTABLE_COMMAND_CHORDS ? normalized : null
+  return Object.hasOwn(PORTABLE_COMMAND_CHORDS, normalized) ? normalized : null
 }
 
 export function portableChordCommand(chord: string): string {
   return activeChordBindings()?.get(chord)?.command
-    ?? PORTABLE_COMMAND_CHORDS[chord as PortableCommandChord].command
+    ?? PORTABLE_COMMAND_CHORDS[chord]!.command
 }

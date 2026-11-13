@@ -74,6 +74,13 @@ type PluginCommandCommon = {
   readonly tuiKey?: PluginKeyChord
   /** Display form of the TUI binding. */
   readonly tuiKeyLabel?: string
+  /**
+   * TUI: a ⌃K chord letter for this command, joined to the host's chord table
+   * (dispatcher, status hint, overlay). `short` is the hint's word; `hint:
+   * false` lists it only in the overlay. Two contributions of one key fail at
+   * load, and the user's keys.json still rebinds it.
+   */
+  readonly tuiChord?: { readonly key: string; readonly short: string; readonly label?: string; readonly hint?: false }
   /** Navigation shortcuts leave typed characters with an active composer. */
   readonly tuiKeyContext?: 'navigation'
   /** Web: a labelled button in the session toolbar. */

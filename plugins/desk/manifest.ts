@@ -29,6 +29,7 @@ export const manifest = {
     opens: 'desk',
     requires: null,
     renderers: ['tui'],
+    tuiChord: { key: 'b', short: 'desk', label: 'Bloomberg-style desk' },
     tuiKeyLabel: '⌃K b',
     keywords: ['bloomberg', 'terminal', 'monitor', 'fleet', 'dashboard'],
   }],

@@ -32,6 +32,7 @@ export const manifest = {
     placement: 'panel',
     requires: null,
     renderers: ['tui'],
+    tuiChord: { key: 'l', short: 'logs', label: 'Processes and logs' },
     // Bound through the ⌃K chord table (shortcutKeys.ts), which dispatches this id.
     tuiKeyLabel: '⌃K l',
     keywords: ['terminal', 'shell', 'process', 'logs', 'dev server', 'watch'],

@@ -52,6 +52,7 @@ export const manifest = {
     opens: 'changed-files',
     requires: 'session',
     renderers: ['tui'],
+    tuiChord: { key: 'f', short: 'files', label: 'Files touched by this session' },
     tuiKeyLabel: '⌃K f',
     keywords: ['files', 'changed', 'edited', 'diff', 'touched', 'turn', 'provenance'],
   }, {
@@ -61,6 +62,7 @@ export const manifest = {
     opens: 'tool-timing',
     requires: 'session',
     renderers: ['tui'],
+    tuiChord: { key: 'p', short: 'time', label: 'Tool timing by turn', hint: false },
     tuiKeyLabel: '⌃K p',
     keywords: ['slow', 'duration', 'waterfall', 'profile', 'timing', 'bash'],
   }, {
@@ -70,6 +72,7 @@ export const manifest = {
     opens: 'index-search',
     requires: null,
     renderers: ['tui'],
+    tuiChord: { key: 'h', short: 'find', label: 'Search the session index' },
     tuiKeyLabel: '⌃K h',
     keywords: ['search', 'find', 'history', 'index', 'facet', 'error', 'file'],
   }],

@@ -48,6 +48,7 @@ export const manifest = {
   commands: [{
     id: 'coord-start', label: 'Start coordinated run', category: 'Coordination',
     opens: 'new-workflow', requires: 'repository', scope: 'repository', renderers: ['web', 'tui'],
+    tuiChord: { key: 'n', short: 'run', label: 'New coordinated run' },
     tuiKey: { name: 'n', ctrl: true, shift: true }, tuiKeyLabel: '⌃K n / ⌃⇧N',
     keywords: ['workflow', 'coordinated', 'run', 'new', 'playbook', 'team'],
   }, {
@@ -62,6 +63,7 @@ export const manifest = {
     requires: null,
     scope: 'application',
     renderers: ['web', 'tui'],
+    tuiChord: { key: 'a', short: 'ops', label: 'Agent Operations' },
     // On the Web the control center is a dashboard tab.
     webDashboard: 'agents',
     // ⌃K a is the portable path where Ctrl+Shift cannot be told from Ctrl.
@@ -76,6 +78,7 @@ export const manifest = {
     requires: 'session',
     // On the web the panel is the conversation's Teammates tab.
     renderers: ['tui'],
+    tuiChord: { key: 't', short: 'team', label: 'Teammates for this conversation' },
     tuiKeyLabel: '⌃K t',
     keywords: ['team', 'teammates', 'lead', 'delegate', 'coordinator'],
   }],
