@@ -179,6 +179,10 @@ export type PluginServiceId =
   | 'bookmarks'
   /** Open a session in the reader, optionally at a message. */
   | 'session-navigation'
+  /** What a session wrote, and which sessions wrote a file's current lines. */
+  | 'provenance'
+  /** The daemon's remote-access pairing state and actions. */
+  | 'remote-access'
   /** The target session's transcript, read for the target, not the selection. */
   | 'session-transcript'
   /** The target repository: its working directory, and the session scoping its turns. */

@@ -29,6 +29,8 @@ export type TuiPluginServices = {
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
+  provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
+  'remote-access'?: import('../../../lib/plugins/remoteAccess').PluginRemoteAccessService
   messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {

@@ -305,6 +305,8 @@ import { tuiPlaybooks } from './shell/playbooksService'
 import { createTuiRunLaunchService } from './shell/runLaunchService'
 import { tuiHandoff } from './shell/handoffService'
 import { tuiBookmarks } from './shell/bookmarksService'
+import { tuiProvenance } from './shell/provenanceService'
+import { tuiRemoteAccess } from './shell/remoteAccessService'
 import type { StartProtocolRunResult } from '../../lib/agentProtocol'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
@@ -5167,6 +5169,8 @@ function OpenTuiWorkspace() {
     playbooks: tuiPlaybooks,
     bookmarks: tuiBookmarks,
     'session-navigation': { open: openSessionAtMessage },
+    provenance: tuiProvenance,
+    'remote-access': tuiRemoteAccess,
     'daily-summary': { read: readPluginDailySummary },
     handoff: tuiHandoff,
     'run-launch': runLaunchService,

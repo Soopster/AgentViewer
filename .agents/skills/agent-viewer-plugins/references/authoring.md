@@ -469,6 +469,9 @@ contributions of one key fail at load; `keys.json` still rebinds any of them.
 `session-navigation` (`open(session, messageUuid?)`) shows a session in the
 reader and lands on a message once it loads, switching provider or instance
 when needed — both renderers offer it to application views and dashboards.
+`provenance` (`sessionFiles(session)`, `blame(file, cwd)`) reads the edit index, and
+`remote-access` (`read`, `act`) drives pairing on the process that serves the
+phone; both renderers offer both, so a view written against them runs in either.
 
 ## Local plugins (mods)
 
