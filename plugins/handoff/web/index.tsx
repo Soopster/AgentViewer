@@ -9,6 +9,20 @@ import type { WebPluginView, WebPluginViewProps } from '@/components/shell/plugi
 import type { GitData } from '@/lib/gitProvider'
 import { buildHandoffBriefMarkdown } from '@/lib/handoffBrief'
 
+// The brief is a document: headings, lists and inline code need their own
+// spacing, which the page's reset strips from bare elements.
+const MARKDOWN = {
+  h1: (props: React.ComponentProps<'h1'>) => <h1 {...props} style={{ fontSize: 17, fontWeight: 700, margin: '4px 0 10px', color: 'var(--text)' }} />,
+  h2: (props: React.ComponentProps<'h2'>) => <h2 {...props} style={{ fontSize: 14, fontWeight: 700, margin: '16px 0 6px', color: 'var(--text)' }} />,
+  h3: (props: React.ComponentProps<'h3'>) => <h3 {...props} style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 4px', color: 'var(--text)' }} />,
+  p: (props: React.ComponentProps<'p'>) => <p {...props} style={{ margin: '4px 0', color: 'var(--text-2)' }} />,
+  ul: (props: React.ComponentProps<'ul'>) => <ul {...props} style={{ margin: '4px 0', paddingLeft: 20, listStyle: 'disc', color: 'var(--text-2)' }} />,
+  ol: (props: React.ComponentProps<'ol'>) => <ol {...props} style={{ margin: '4px 0', paddingLeft: 20, listStyle: 'decimal', color: 'var(--text-2)' }} />,
+  li: (props: React.ComponentProps<'li'>) => <li {...props} style={{ margin: '2px 0', wordBreak: 'break-word' }} />,
+  code: (props: React.ComponentProps<'code'>) => <code {...props} style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12, background: 'var(--surface-2)', borderRadius: 4, padding: '0 4px' }} />,
+  strong: (props: React.ComponentProps<'strong'>) => <strong {...props} style={{ color: 'var(--text)' }} />,
+}
+
 function HandoffView({ services, placement, close }: WebPluginViewProps) {
   const session = services.session?.session ?? null
   const transcript = services['session-transcript'] ?? null
@@ -55,7 +69,7 @@ function HandoffView({ services, placement, close }: WebPluginViewProps) {
         {!docked ? <button type="button" aria-label="Close" onClick={close} style={{ fontSize: 12 }}>✕</button> : null}
       </div>
       <div className="prose-sm" style={{ flex: 1, overflow: 'auto', padding: '10px 18px', fontSize: 13, lineHeight: 1.55 }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{markdown}</ReactMarkdown>
       </div>
     </div>
   )

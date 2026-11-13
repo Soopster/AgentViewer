@@ -71,7 +71,7 @@ export function DailySummaryView({ service, docked, onClose, onDraft }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
         {DAILY_SUMMARY_RANGES.map(entry => (
           <button key={entry} type="button" onClick={() => setRange(entry)} aria-pressed={entry === range}
-            style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid var(--border)', background: entry === range ? 'var(--accent)' : 'transparent', color: entry === range ? 'var(--bg)' : 'var(--text-2)' }}>
+            style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: '1px solid var(--border)', background: entry === range ? 'var(--surface-3)' : 'transparent', color: entry === range ? 'var(--text)' : 'var(--text-2)', fontWeight: entry === range ? 600 : 400, borderColor: entry === range ? 'var(--border-2)' : 'var(--border)' }}>
             {RANGE_LABELS[entry]}
           </button>
         ))}

@@ -426,6 +426,24 @@ Run `pluginRunLaunchServiceSmoke.ts`, `coordRunLaunchIdentitySmoke.ts`, the Web
 run-launch browser check and native `newWorkflowPluginSmoke.tsx`. These use
 mocked SDK/provider boundaries and local fixtures, not live agent execution.
 
+### beforeSteer, permission and toolCard
+
+- `beforeSteer({ target, message })` — a message sent into a running turn.
+  Return `{ action: 'patch', message }` or `{ action: 'block', reason }`; a
+  block is an error the sender sees.
+- `permission({ target, request })` — a tool approval from any provider, in one
+  shape: `kind` (`tool`/`command`/`file`/`network`/`other`), `toolName`,
+  `command`, `paths`, `input`, `title`. Return `{ decision: 'allow' | 'deny',
+  reason? }` to answer the agent, or nothing to ask the person. The first plugin
+  to decide wins; a hook that throws or takes longer than 5s counts as
+  undecided, so a broken policy only ever falls back to asking. Questions and
+  plan approvals are never offered to this hook. Every bridge calls
+  `lib/plugins/permissionBridge.ts`; a new provider's bridge should too.
+- `toolCard({ target, tool })` — how a tool call reads in the transcript:
+  `{ title?, lines? | text?, tone? }`. It runs on the read path (500ms budget,
+  cached per call), annotates `ToolUseBlock.pluginCard`, and both renderers
+  draw a generic card that still shows the call's own failure.
+
 ## Widgets
 
 A widget is UI a plugin keeps on screen while enabled, with no opening command
@@ -490,8 +508,14 @@ export const commands = {
   `sendTurn(message)` sends a turn to the target session through the send path.
 - `scope` is `application` (default), `session` or `repository`; `services` is a
   subset of `notices`, `composer`, `transcript` (default `notices`), all required.
+- Widgets: declare `"widgets": [{ "id": "status", "refreshMs": 5000 }]` and
+  export `widgets: { status: () => ({ title, text | lines, tone }) }`. The shell
+  draws them in the corner slot of both renderers; one that throws, returns
+  nothing or takes over 2s is skipped that round.
+- All five hooks (`beforeTurn`, `afterTurn`, `beforeSteer`, `permission`,
+  `toolCard`) are available to mods by listing them in `behavior.hooks`.
 - Discovery runs once per process; restart after adding a mod. Both plugin
   managers list mods (they can be turned off like any plugin) and any refused,
-  with the reasons. Mods contribute no surfaces or widgets yet: those need a
-  bundled plugin.
+  with the reasons. Mods contribute no surfaces (interactive views) yet: those
+  need a bundled plugin.
 - `scripts/localPluginSmoke.ts` is the worked example end to end.

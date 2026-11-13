@@ -120,10 +120,14 @@ slots, **widgets** (`corner` slot), and server behavior (**`beforeTurn`** and
 behavior hooks and commands without a build (see the authoring reference): a
 user changes how the app behaves on their machine without touching the checkout.
 
-Not yet extensible, by design of this pass: mid-turn steering, per-provider tool
-permission decisions (each provider has its own bridge; a shared `permission`
-hook would have to be threaded through all of them), transcript card renderers,
-and surfaces or widgets from mods (Web views need a build).
+Behavior hooks now cover the turn end to end, for bundled plugins and mods:
+`beforeTurn`, `beforeSteer` (mid-turn input), `permission` (every provider's
+approval bridge: Claude, the ACP pool, Codex, Copilot, OpenCode), `afterTurn`,
+and `toolCard` (transcript presentation on the read path, drawn by both
+renderers). Mods also contribute widgets as server-computed content. What a mod
+still cannot add is an interactive view (a surface): the Web would need to load
+its code, which needs a build. `npm run plugins:web:live` drives the real Web
+app through the migrated plugins and a fixture mod.
 
 ## Composer accessory contributions
 
