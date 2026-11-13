@@ -35,4 +35,6 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,
   provenance: async () => (await import('../../../plugins/provenance/tui')).module,
   'remote-access': async () => (await import('../../../plugins/remote-access/tui')).module,
-}, TUI_PLUGIN_SERVICES)
+}, TUI_PLUGIN_SERVICES, undefined,
+// A mod's views are its surfaces, drawn by the Mod views renderer pinned to each.
+async (manifest) => (await import('../../../plugins/mod-views/tui')).modViewSurfaces(manifest))

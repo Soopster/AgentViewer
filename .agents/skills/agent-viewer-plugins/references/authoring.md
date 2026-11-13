@@ -529,6 +529,11 @@ export const commands = {
   are clickable, and in the TUI ↑↓/j/k select and Enter runs. An action runs
   where the mod lives, its notice is shown, and the view re-renders. A view is
   data, not code, so it needs no build.
+- Every view is also a surface of the mod's own (`<plugin>.<view>`), opened by
+  its own palette command (`<plugin>:view-<view>`, labelled with the view's
+  title). It goes through the same catalog, view registry and surface host as a
+  built-in: overlay, window, tab, saved layout, ⌃⇧W, enablement and
+  `keys.json` rebinding all apply, with nothing mod-specific in the shell.
 - Components: a view declared `"component": true` is the mod's own React
   component. Ship `web.mjs` and/or `tui.mjs` beside `plugin.json` — plain ES
   modules that import nothing — exporting a factory that receives the app's

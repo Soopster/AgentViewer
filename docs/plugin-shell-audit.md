@@ -129,7 +129,7 @@ renderers). Mods also contribute widgets as server-computed content. Mods can al
 interactive views as data (headings, text, selectable rows and buttons whose
 actions run in the mod), and their own React components (`web.mjs` /
 `tui.mjs`: plain ES modules that import nothing and are handed the app's
-React), both shown by the bundled Mod views plugin in each renderer. No build
+React), both shown by the bundled Mod views plugin in each renderer — and each view is also a catalog surface of the mod's own, opened by its own palette command and placed (overlay, window, tab) by the same host as a built-in's. No build
 step is involved in either. `npm run plugins:web:live` drives the real Web
 app through the migrated plugins and a fixture mod.
 

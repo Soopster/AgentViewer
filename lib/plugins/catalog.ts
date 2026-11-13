@@ -91,7 +91,7 @@ export function getPluginSurface(id: PluginSurfaceId): ResolvedPluginSurface {
 }
 
 export function listPluginSurfaces(renderer: PluginRenderer): ResolvedPluginSurface[] {
-  return [...surfaces.values()].filter(surface => PLUGIN_MANIFESTS.find(m => m.id === surface.pluginId)!.renderers.includes(renderer as never))
+  return [...surfaces.values()].filter(surface => allPluginManifests().find(m => m.id === surface.pluginId)?.renderers.includes(renderer as never))
 }
 
 export function getPluginCommand(id: string): ResolvedPluginCommand | undefined {
@@ -104,22 +104,30 @@ export function listPluginCommands(renderer: PluginRenderer): ResolvedPluginComm
 
 // ── Local plugins ─────────────────────────────────────────────────────────
 // Mods from the user's config directory join the catalog at runtime: the TUI
-// registers them before its root loads, the Web after asking its daemon. They
-// contribute commands and behavior only (no surfaces), so the typed bundled
-// unions above are unaffected.
+// registers them before its root loads, the Web after asking its daemon. A mod
+// contributes commands, behavior and surfaces (its views, each opened by its
+// own command), resolved by the same lookups as a built-in's. The typed
+// bundled unions above stay bundled-only; a local id is a plain string.
 let localManifests: readonly LocalPluginManifest[] = []
 let localVersion = 0
 const localListeners = new Set<() => void>()
 
-/** Replace the registered local plugins. A manifest naming a bundled id or a taken command id is skipped. */
+/** Replace the registered local plugins. A manifest naming a bundled id, a taken command or surface id, or a command that opens another plugin's surface is skipped. */
 export function registerLocalPluginManifests(manifests: readonly LocalPluginManifest[]): void {
-  for (const manifest of localManifests) for (const command of manifest.commands) commands.delete(command.id)
+  for (const manifest of localManifests) {
+    for (const command of manifest.commands) commands.delete(command.id)
+    for (const surface of manifest.surfaces) surfaces.delete(surface.id)
+  }
   const accepted: LocalPluginManifest[] = []
   const ids = new Set(PLUGIN_MANIFESTS.map(manifest => manifest.id as string))
   for (const manifest of manifests) {
-    if (ids.has(manifest.id) || manifest.surfaces.length > 0 || manifest.commands.some(command => commands.has(command.id) || !command.handler)) continue
+    const own = new Set(manifest.surfaces.map(surface => surface.id))
+    if (ids.has(manifest.id)
+      || manifest.surfaces.some(surface => surfaces.has(surface.id))
+      || manifest.commands.some(command => commands.has(command.id) || (command.handler ? command.opens !== undefined : !own.has(command.opens as string)))) continue
     ids.add(manifest.id)
     accepted.push(manifest)
+    for (const surface of manifest.surfaces) surfaces.set(surface.id, { ...surface, pluginId: manifest.id as PluginId, stateVersion: manifest.stateVersion } as ResolvedPluginSurface)
     for (const command of manifest.commands) commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
   }
   localManifests = accepted

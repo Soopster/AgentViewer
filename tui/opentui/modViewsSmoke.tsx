@@ -92,6 +92,23 @@ try {
   console.log('Components: a mod\'s own component renders with the app\'s React, keeps state, handles keys and calls its server actions.')
   await act(async () => { setup.mockInput.pressEscape() })
   await waitFor('Esc closes it', () => !screen().includes('GAUGE') && !screen().includes('Fruit tally'))
+  // Each view is also a surface of its own, opened from the palette by its own
+  // command and placed in a window — the same host as a built-in's.
+  await settle(300)
+  for (let attempt = 0; attempt < 5 && !screen().includes('type to filter'); attempt++) {
+    await act(async () => { setup.mockInput.pressKey('?') })
+    await settle(400)
+  }
+  await act(async () => { await setup.mockInput.typeText('Gauge') })
+  await settle(300)
+  assert(screen().includes('Gauge'), `the palette lists the mod's view:\n${screen()}`)
+  await act(async () => { setup.mockInput.pressEnter() })
+  await waitFor('the view\'s own command opens it', () => screen().includes('GAUGE ### level 3') && setup.renderer.root.findDescendantById('mod-view:counter:gauge') !== null)
+  assert(!screen().includes('○ Tally'), 'a pinned view shows no tabs for the mod\'s other views')
+  await act(async () => { setup.mockInput.pressKey('w', { ctrl: true, shift: true }) })
+  await settle(600)
+  await waitFor('⌃⇧W moves the view into a window', () => screen().includes('GAUGE') && setup.renderer.root.findDescendantById('surface-frame:counter.gauge') !== null)
+  console.log('Surfaces: a mod view opens from its own palette command and moves into a window like a built-in.')
   console.log('Mod views smoke passed')
 } finally {
   act(() => setup.renderer.destroy())

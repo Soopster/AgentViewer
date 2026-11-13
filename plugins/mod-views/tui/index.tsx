@@ -14,8 +14,12 @@ class ComponentBoundary extends React.Component<{ name: string; color: string; c
   render() { return this.state.failed ? <text fg={this.props.color}>{`${this.props.name} failed: ${this.state.failed.message}`}</text> : this.props.children }
 }
 
-function ModViews({ theme, accent, width, height, placement, registerKeys, close, services, useState: useScopedState }: TuiPluginViewProps) {
-  const [selectedKey, setSelectedKey] = useScopedState<string | null>('view', null)
+function ModViews(props: TuiPluginViewProps) { return <ModViewPanel {...props} fixedKey={null} /> }
+
+function ModViewPanel({ theme, accent, width, height, placement, registerKeys, close, services, useState: useScopedState, fixedKey }: TuiPluginViewProps & { fixedKey: string | null }) {
+  const [chosenKey, setChosenKey] = useScopedState<string | null>('view', null)
+  const selectedKey = fixedKey ?? chosenKey
+  const setSelectedKey = (key: string) => { if (!fixedKey) setChosenKey(key) }
   const view = useModView(selectedKey)
   const [cursor, setCursor] = useState(0)
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null)
@@ -39,7 +43,7 @@ function ModViews({ theme, accent, width, height, placement, registerKeys, close
       // A mod component sees keys first; returning true keeps one.
       if (view.selected?.component && componentKeys.current?.(key) === true) return true
       if (key.name === 'escape' || key.sequence === 'q') { close(); return true }
-      if (key.name === 'tab' || key.name === 'right' || key.name === 'left') { switchView(key.name === 'left' || key.shift ? -1 : 1); return true }
+      if (!fixedKey && (key.name === 'tab' || key.name === 'right' || key.name === 'left')) { switchView(key.name === 'left' || key.shift ? -1 : 1); return true }
       if (key.name === 'down' || key.sequence === 'j') { setCursor(value => Math.min(value + 1, Math.max(actionables.length - 1, 0))); return true }
       if (key.name === 'up' || key.sequence === 'k') { setCursor(value => Math.max(value - 1, 0)); return true }
       if (key.sequence === 'r') { view.refresh(); return true }
@@ -58,18 +62,18 @@ function ModViews({ theme, accent, width, height, placement, registerKeys, close
   const popH = docked ? height : Math.min(height - 2, 36)
   const innerW = popW - frame - 2
   const selectedIndex = actionables[cursor]?.index
-  const tabs = view.views.map(entry => {
+  const tabs = (fixedKey ? view.views.filter(entry => `${entry.pluginId}:${entry.viewId}` === fixedKey) : view.views).map(entry => {
     const active = `${entry.pluginId}:${entry.viewId}` === view.key
     return { key: `${entry.pluginId}:${entry.viewId}`, label: active ? `● ${entry.title}` : `○ ${entry.title}`, active }
   })
   return (
     <box
-      id="mod-views"
+      id={fixedKey ? `mod-view:${fixedKey}` : 'mod-views'}
       {...popoverRootProps(docked, { top: Math.max(Math.floor((height - popH) / 2), 0), left: Math.max(Math.floor((width - popW) / 2), 0), width: popW, height: popH }, MODAL_CONTENT_Z_INDEX)}
       {...(docked ? {} : { border: true, borderStyle: 'single' as const, borderColor: theme.border2 })}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={docked ? undefined : ' Mod views '}
+      title={docked ? undefined : fixedKey ? ` ${view.selected?.title ?? 'Mod view'} ` : ' Mod views '}
       titleColor={accent}
     >
       <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
@@ -116,10 +120,22 @@ function ModViews({ theme, accent, width, height, placement, registerKeys, close
         </box>
       </scrollbox>
       <box paddingX={1} backgroundColor={theme.surface2}>
-        <text fg={notice?.kind === 'error' ? theme.red : theme.dim} wrapMode="none">{fitText(notice?.text ?? (view.busy ? 'running…' : '←→ view · j/k select · ⏎ run · r refresh · esc'), innerW)}</text>
+        <text fg={notice?.kind === 'error' ? theme.red : theme.dim} wrapMode="none">{fitText(notice?.text ?? (view.busy ? 'running…' : fixedKey ? 'j/k select · ⏎ run · r refresh · esc' : '←→ view · j/k select · ⏎ run · r refresh · esc'), innerW)}</text>
       </box>
     </box>
   )
+}
+
+/** A mod's own surfaces, each pinned to one of its views. The host loads this for a mod like a built-in's module. */
+export function modViewSurfaces(manifest: { readonly id: string; readonly surfaces: readonly { readonly id: string }[] }): PluginViewModule<TuiPluginView> {
+  const views: Record<string, TuiPluginView> = {}
+  for (const surface of manifest.surfaces) {
+    const fixedKey = surface.id.replace('.', ':')
+    const View = (props: TuiPluginViewProps) => <ModViewPanel {...props} fixedKey={fixedKey} />
+    View.displayName = `ModView(${surface.id})`
+    views[surface.id] = View
+  }
+  return { apiVersion: PLUGIN_API_VERSION, pluginId: manifest.id, views }
 }
 
 export const module: PluginViewModule<TuiPluginView> = {

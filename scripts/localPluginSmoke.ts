@@ -90,6 +90,25 @@ try {
   assert.equal(catalog.getPluginCommand('echo-mod:shout')?.pluginId, 'echo-mod')
   assert(catalog.allPluginManifests().some(manifest => manifest.id === 'echo-mod'))
 
+  // A mod's views are surfaces of its own, opened by their own commands — and
+  // they survive the Web's round trip (the daemon's JSON is re-parsed there).
+  const { parseLocalPluginManifest } = await import('../lib/plugins/localManifest')
+  const reserved = new Set(catalog.PLUGIN_MANIFESTS.map(manifest => manifest.id as string))
+  const viewMod = parseLocalPluginManifest({ id: 'view-mod', title: 'View mod', views: [{ id: 'board', title: 'Board' }], commands: [{ id: 'ping', label: 'Ping' }] }, reserved).manifest!
+  assert.deepEqual(viewMod.surfaces.map(surface => surface.id), ['view-mod.board'])
+  const { applyWebLocalPlugins } = await import('../components/shell/localPlugins')
+  applyWebLocalPlugins({ local: { dir: '', plugins: JSON.parse(JSON.stringify([viewMod])), refused: [] } })
+  assert(catalog.isPluginSurfaceId('view-mod.board'), 'the Web registers a mod view as a catalog surface')
+  assert.equal(catalog.getPluginCommand('view-mod:view-board')?.opens, 'view-mod.board', 'the view has its own command')
+  assert.equal(catalog.getPluginCommand('view-mod:ping')?.handler, 'ping', 'the mod\'s own commands survive the round trip')
+  assert(catalog.listPluginSurfaces('web').some(surface => surface.id === 'view-mod.board'))
+  const hijack = { ...viewMod, id: 'hijack', surfaces: [], commands: [{ ...viewMod.commands[1]!, id: 'hijack:x' }] }
+  catalog.registerLocalPluginManifests([hijack as never])
+  assert(!catalog.allPluginManifests().some(manifest => manifest.id === 'hijack'), 'a command opening another plugin\'s surface is refused')
+  catalog.registerLocalPluginManifests(discovery.plugins.map(plugin => plugin.manifest))
+  assert(!catalog.isPluginSurfaceId('view-mod.board'), 're-registering drops the old mods\' surfaces')
+  console.log('Views: each mod view is a catalog surface with its own command, on the Web round trip too; a command into another plugin is refused.')
+
   const { streamViewSessionTurn } = await import('../lib/sessionBackend')
   const send = (message: string) => streamViewSessionTurn({ provider: 'codex', sessionId: 'fixture', body: { message }, signal: new AbortController().signal })
   assert.equal((await send('hello')).status, 200)

@@ -5,7 +5,8 @@
 import { disposePluginResources } from './lifecycle'
 import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { createLazyRegistry } from '../extensions/lazyRegistry'
-import { PLUGIN_MANIFESTS, type PluginId } from './catalog'
+import { PLUGIN_MANIFESTS, listLocalPluginManifests, subscribeLocalPlugins, type PluginId } from './catalog'
+import type { LocalPluginManifest } from './localManifest'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginRenderer, type PluginServiceId, type PluginViewModule } from './types'
 
 export function createPluginViewRegistry<View>(
@@ -13,6 +14,8 @@ export function createPluginViewRegistry<View>(
   loaders: Readonly<Partial<Record<PluginId, () => Promise<PluginViewModule<View>>>>>,
   hostServices: readonly PluginServiceId[],
   manifests: readonly PluginManifest[] = PLUGIN_MANIFESTS,
+  /** Builds a mod's views, which have no static loader. Same validation, enablement and eviction as a built-in's. */
+  localModule?: (manifest: LocalPluginManifest) => Promise<PluginViewModule<View>>,
 ) {
   const supported = manifests.filter(manifest => manifest.renderers.includes(renderer) && manifest.surfaces.length > 0)
   for (const manifest of supported) {
@@ -28,23 +31,62 @@ export function createPluginViewRegistry<View>(
     disposePluginResources(id)
     try { loaded?.deactivate?.() } catch (error) { console.error(`Plugin ${id} deactivation failed:`, error) }
   }
+  // Mods: one in-flight or resolved module per id, evicted when the mod is
+  // turned off or the mods are re-registered (a changed plugin.json).
+  const localResolved = new Map<string, PluginViewModule<View>>()
+  const localLoading = new Map<string, Promise<PluginViewModule<View>>>()
+  const deactivateLocal = (id: string) => {
+    const loaded = localResolved.get(id)
+    localResolved.delete(id); localLoading.delete(id)
+    disposePluginResources(id)
+    try { loaded?.deactivate?.() } catch (error) { console.error(`Plugin ${id} deactivation failed:`, error) }
+  }
+  const loadLocal = (manifest: LocalPluginManifest) => {
+    const resolved = localResolved.get(manifest.id)
+    if (resolved) return Promise.resolve(resolved)
+    const pending = localLoading.get(manifest.id)
+    if (pending) return pending
+    const promise = localModule!(manifest).then(module => {
+      if (localLoading.get(manifest.id) !== promise) {
+        const error = new Error(`Plugin ${manifest.id} was deactivated while loading`)
+        error.name = 'AbortError'
+        throw error
+      }
+      validatePluginViewModule(renderer, manifest, module, hostServices)
+      localResolved.set(manifest.id, module)
+      return module
+    }).finally(() => { if (localLoading.get(manifest.id) === promise) localLoading.delete(manifest.id) })
+    localLoading.set(manifest.id, promise)
+    return promise
+  }
   let disposed = false
   const unsubscribe = subscribePluginEnablement(() => {
     for (const manifest of supported) if (!isPluginEnabled(manifest.id)) deactivate(manifest.id)
+    for (const id of [...localResolved.keys(), ...localLoading.keys()]) if (!isPluginEnabled(id)) deactivateLocal(id)
   })
+  const unsubscribeLocal = subscribeLocalPlugins(() => { for (const id of new Set([...localResolved.keys(), ...localLoading.keys()])) deactivateLocal(id) })
   return {
-    dispose() { if (disposed) return; disposed = true; unsubscribe(); for (const manifest of supported) deactivate(manifest.id) },
+    dispose() {
+      if (disposed) return
+      disposed = true; unsubscribe(); unsubscribeLocal()
+      for (const manifest of supported) deactivate(manifest.id)
+      for (const id of new Set([...localResolved.keys(), ...localLoading.keys()])) deactivateLocal(id)
+    },
     load(id: string) {
       if (disposed || !isPluginEnabled(id)) {
         const error = new Error(`Plugin ${id} is disabled or its registry was disposed`)
         error.name = 'AbortError'
         return Promise.reject(error)
       }
+      if (!Object.hasOwn(loaders, id)) {
+        const local = localModule && listLocalPluginManifests().find(manifest => manifest.id === id && manifest.renderers.includes(renderer))
+        if (local) return loadLocal(local)
+      }
       return registry.get(id)
     },
-    peek: registry.peek,
+    peek: (id: string) => registry.peek(id) ?? localResolved.get(id),
     /** True once a plugin's views are in memory: a smoke's proof of laziness. */
-    isLoaded: (id: string) => registry.peek(id) !== undefined,
+    isLoaded: (id: string) => registry.peek(id) !== undefined || localResolved.has(id),
   }
 }
 

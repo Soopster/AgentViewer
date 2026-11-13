@@ -29,4 +29,6 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'run-dashboard': async () => (await import('@/plugins/run-dashboard/web')).module,
   'mod-views': async () => (await import('@/plugins/mod-views/web')).module,
   'remote-access': async () => (await import('@/plugins/remote-access/web')).module,
-}, WEB_PLUGIN_SERVICES)
+}, WEB_PLUGIN_SERVICES, undefined,
+// A mod's views are its surfaces, drawn by the Mod views renderer pinned to each.
+async (manifest) => (await import('@/plugins/mod-views/web')).modViewSurfaces(manifest))

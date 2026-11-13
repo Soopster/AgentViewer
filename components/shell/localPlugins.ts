@@ -80,7 +80,8 @@ export function applyWebLocalPlugins(value: unknown): void {
     if (entry?.source !== 'local' || typeof entry.id !== 'string' || reserved.has(entry.id)) continue
     const reparsed = parseLocalPluginManifest({
       id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews, provider: entry.localProvider,
-      commands: (entry.commands ?? []).map(command => ({ ...command, id: command.handler })),
+      // Only the mod's own commands: a view's command is derived from the view by the parse.
+      commands: (entry.commands ?? []).filter(command => command.handler).map(command => ({ ...command, id: command.handler })),
     }, reserved)
     if (reparsed.manifest) manifests.push(reparsed.manifest)
   }

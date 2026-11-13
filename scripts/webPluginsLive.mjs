@@ -37,7 +37,11 @@ try {
     await page.keyboard.press('Enter')
   }
   const check = async (name, run) => {
-    try { await run(); results.push(`PASS ${name}`) } catch (error) { results.push(`FAIL ${name}: ${error.message.split('\n')[0]}`); await shot(`fail-${name.replace(/\W+/g, '-')}`) }
+    // Each check is capped, so one stuck step reports itself instead of hanging the run.
+    let timer
+    const cap = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out after 90s')), 90_000) })
+    try { await Promise.race([run(), cap]); results.push(`PASS ${name}`) } catch (error) { results.push(`FAIL ${name}: ${error.message.split('\n')[0]}`); await shot(`fail-${name.replace(/\W+/g, '-')}`).catch(() => {}) } finally { clearTimeout(timer) }
+    console.log(results.at(-1))
   }
 
   await check('mod widget in the corner slot', async () => {
@@ -127,6 +131,14 @@ try {
     await page.waitForTimeout(800)
     assert.ok(await page.getByText('GAUGE level 4').isVisible(), 'running a server action remounted the component and lost its state')
     await shot('mod-component')
+    await page.keyboard.press('Escape')
+  })
+  await check('mod view as its own surface: opened by its own palette command', async () => {
+    await palette('Gauge')
+    await page.locator('[data-plugin-view="mod-view:e2e-mod:gauge"]').waitFor()
+    await page.getByText('GAUGE level').first().waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Tally', exact: true }).count(), 0, 'a pinned view shows no tabs for the mod\'s other views')
+    await shot('mod-view-surface')
     await page.keyboard.press('Escape')
   })
   await check('provider mod: pick it, start a session, stream a reply', async () => {

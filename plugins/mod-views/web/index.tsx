@@ -14,8 +14,12 @@ class ComponentBoundary extends React.Component<{ name: string; children: React.
   render() { return this.state.failed ? <div role="alert" style={{ color: TONE.error }}>{this.props.name} failed: {this.state.failed.message}</div> : this.props.children }
 }
 
-function ModViews({ placement, close, useState: useScopedState }: WebPluginViewProps) {
-  const [selectedKey, setSelectedKey] = useScopedState<string | null>('view', null)
+function ModViews(props: WebPluginViewProps) { return <ModViewPanel {...props} fixedKey={null} /> }
+
+function ModViewPanel({ placement, close, useState: useScopedState, fixedKey }: WebPluginViewProps & { fixedKey: string | null }) {
+  const [chosenKey, setChosenKey] = useScopedState<string | null>('view', null)
+  const selectedKey = fixedKey ?? chosenKey
+  const setSelectedKey = (key: string) => { if (!fixedKey) setChosenKey(key) }
   const view = useModView(selectedKey)
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null)
   const docked = placement !== 'overlay'
@@ -28,10 +32,10 @@ function ModViews({ placement, close, useState: useScopedState }: WebPluginViewP
   const act = async (action: string, item?: string) => setNotice(await view.run(action, item))
 
   const body = (
-    <div data-plugin-view="mod-views" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--surface)', color: 'var(--text)' }}>
+    <div data-plugin-view={fixedKey ? `mod-view:${fixedKey}` : 'mod-views'} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 600, marginRight: 6 }}>Mod views</span>
-        {view.views.map(entry => {
+        <span style={{ fontWeight: 600, marginRight: 6 }}>{fixedKey ? view.selected?.title ?? 'Mod view' : 'Mod views'}</span>
+        {fixedKey ? null : view.views.map(entry => {
           const key = `${entry.pluginId}:${entry.viewId}`
           const active = key === view.key
           return <button key={key} type="button" aria-pressed={active} onClick={() => setSelectedKey(key)}
@@ -73,12 +77,24 @@ function ModViews({ placement, close, useState: useScopedState }: WebPluginViewP
   )
   if (docked) return body
   return (
-    <div role="dialog" aria-label="Mod views" onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }}>
+    <div role="dialog" aria-label={fixedKey ? view.selected?.title ?? 'Mod view' : 'Mod views'} onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }}>
       <div onClick={event => event.stopPropagation()} style={{ width: 'min(760px, calc(100vw - 32px))', height: 'min(640px, calc(100vh - 48px))', border: '1px solid var(--border-2)', borderRadius: 12, overflow: 'hidden', boxShadow: '0 16px 48px var(--shadow, rgba(0,0,0,0.3))' }}>
         {body}
       </div>
     </div>
   )
+}
+
+/** A mod's own surfaces, each pinned to one of its views. The host loads this for a mod like a built-in's module. */
+export function modViewSurfaces(manifest: { readonly id: string; readonly surfaces: readonly { readonly id: string }[] }): PluginViewModule<WebPluginView> {
+  const views: Record<string, WebPluginView> = {}
+  for (const surface of manifest.surfaces) {
+    const fixedKey = surface.id.replace('.', ':')
+    const View = (props: WebPluginViewProps) => <ModViewPanel {...props} fixedKey={fixedKey} />
+    View.displayName = `ModView(${surface.id})`
+    views[surface.id] = View
+  }
+  return { apiVersion: PLUGIN_API_VERSION, pluginId: manifest.id, views }
 }
 
 export const module: PluginViewModule<WebPluginView> = {

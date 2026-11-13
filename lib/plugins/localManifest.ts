@@ -28,6 +28,14 @@ export type LocalPluginManifest = PluginManifest & {
   readonly localViews?: readonly { readonly id: string; readonly title: string; readonly component?: boolean }[]
 }
 
+/** A mod view's surface id. A dot never appears in a plugin id, so it cannot name a built-in. */
+export function localViewSurfaceId(pluginId: string, viewId: string): string { return `${pluginId}.${viewId}` }
+/** The mod view a local surface draws, or null for any other surface. */
+export function parseLocalViewSurfaceId(surfaceId: string): { pluginId: string; viewId: string } | null {
+  const dot = surfaceId.indexOf('.')
+  return dot > 0 ? { pluginId: surfaceId.slice(0, dot), viewId: surfaceId.slice(dot + 1) } : null
+}
+
 export const LOCAL_WIDGET_REFRESH_MS = 5_000
 export const LOCAL_WIDGET_MIN_REFRESH_MS = 1_000
 
@@ -142,10 +150,20 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   }
   if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
   if (problems.length) return { manifest: null, problems }
+  // Each view is a surface like any built-in's, opened by its own command: it
+  // takes the palette, a window, a tab and a saved layout through the same host.
+  const surfaces = views.map(view => ({
+    id: localViewSurfaceId(id, view.id), title: view.title, pin: null, single: true, keys: 'window' as const,
+    placements: ['overlay', 'window'] as const, windowLabel: `${view.title} in a window`, services: [], optionalServices: ['notices'] as const,
+  }))
+  const viewCommands = views.map(view => ({
+    id: `${id}:view-${view.id}`, label: view.title, category: 'View' as const, opens: localViewSurfaceId(id, view.id),
+    requires: null, scope: 'application' as const, renderers: ['web', 'tui'] as const, keywords: ['mod', title.toLowerCase()],
+  }))
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local',
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local',
     },
     problems,
   }
