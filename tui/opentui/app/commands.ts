@@ -1,3 +1,4 @@
+import { listPluginSurfaces } from '../../../lib/plugins/catalog'
 import { listPluginCommands } from '../../../lib/plugins/catalog'
 import type { AgentProvider } from '../../../lib/types'
 import type { TuiTranscriptView } from '../../theme'
@@ -39,6 +40,8 @@ export const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
 export const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
 export const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
 export const FLEET_PAGE_SIZE = 9
+const HAND_LISTED_PANEL_WINDOWS = new Set(['terminal', 'diff', 'files', 'browser', 'pull-request'])
+
 export const COMMANDS: PaletteCommand[] = [
   { id: 'engineering-view', label: 'Engineering view', key: '', category: 'View' },
   { id: 'view-studio-new', label: 'View: New custom view…', key: 'v n', category: 'View' },
@@ -91,6 +94,10 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'window-pull-request', label: 'Pull request in a window', key: '', category: 'View' },
   { id: 'window-agents', label: 'Agents in a window', key: '', category: 'View' },
   ...Object.entries(POPOVER_WINDOWS).map(([kind, spec]) => ({ id: `popwin:${kind}`, label: spec.palette, key: '', category: 'View' as const })),
+  // A plugin surface that is also a side-panel kind opens as a window from its
+  // own metadata; only the host's older kinds above have hand-written entries.
+  ...listPluginSurfaces('tui').filter(surface => surface.placements.includes('panel') && surface.placements.includes('window') && !HAND_LISTED_PANEL_WINDOWS.has(surface.id))
+    .map(surface => ({ id: `panelwin:${surface.id}`, label: surface.windowLabel, key: '', category: 'View' as const })),
   { id: 'tab-coordination', label: 'Agent control center in a new tab', key: '', category: 'View' },
   { id: 'tab-editor', label: 'Editor in a new tab', key: '', category: 'View' },
   { id: 'window-float', label: 'Float the focused window (or dock it)', key: '⌃B f', category: 'View' },

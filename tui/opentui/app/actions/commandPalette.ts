@@ -245,6 +245,13 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     if (isPopoverWindowKind(kind)) openPopoverWindow(kind)
     return
   }
+  if (id.startsWith('panelwin:')) {
+    const kind = id.slice('panelwin:'.length)
+    if (!isPluginSurfaceId(kind)) return
+    if (getPluginSurface(kind).pin === 'cwd' && !gitRepoCwd) { showNotice('info', `${getPluginSurface(kind).title.slice(2)} needs a git repository`); return }
+    openSurfaceWindow(kind as never)
+    return
+  }
   const userCommand = userCommandForChordId(id)
   if (userCommand) {
     // A managed process in the Terminal view, in the focused session's folder.
