@@ -1,38 +1,42 @@
 /** @jsxImportSource @opentui/react */
+// The ⌃B / ⌃K help panel, with the command palette's affordances: a selected
+// entry (↑↓/j/k, PgUp/PgDn, Home/End, or hovering), ⏎ or a click to run it, the
+// wheel to scroll, typing to filter, and a press outside to close.
+//
+// Two modes. Opened with `?` (dismissOnKey) it owns the keyboard like the
+// palette. Revealed by hesitating on a prefix, its keys still belong to the
+// pending chord — so there the mouse is how to use it as a palette.
+import { useEffect, useRef, useState } from 'react'
 import type { Toast } from '../../toastStore'
 import type { TuiThemePalette } from '../../../theme'
 import { toastExtraRows, toastStackTop } from '../../ToastOverlay'
 import { fitText } from '../../textLayout'
-import { chordHelpKeyWidth, chordHelpRows, SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
+import { chordHelpKeyWidth, chordHelpRows, filterChordHelpRows, SPLIT_CHORD_MAP, type ChordHelpRow, type ChordHelpState } from '../../chordHelp'
 import { RUNNING_INSIDE_TMUX } from '../commands'
-import type { ScrollBoxRenderable } from '@opentui/core'
 import { MODAL_CONTENT_Z_INDEX } from '../../layers'
+import { renderInlineTextSegments } from '../inlineText'
+import { clamp } from '../util'
 
-/**
- * The panel's scrollbox, for the key handler: a panel opened with `?` scrolls
- * on ↑↓/j/k/PgUp/PgDn/Home/End. A self-revealed panel scrolls on the wheel
- * only, since its keys belong to the pending chord.
- */
-export const chordHelpScroll: { current: ScrollBoxRenderable | null; page: number } = { current: null, page: 6 }
-
-/** Scroll the open panel for a key; false for a key that is not a scroll key. */
-export function scrollChordHelpForKey(key: { name: string; sequence?: string; shift?: boolean }): boolean {
-  const box = chordHelpScroll.current
-  if (!box) return false
-  const step = key.name === 'down' || key.sequence === 'j' ? 1
-    : key.name === 'up' || key.sequence === 'k' ? -1
-    : key.name === 'pagedown' || key.name === 'space' ? chordHelpScroll.page
-    : key.name === 'pageup' ? -chordHelpScroll.page
-    : key.name === 'home' ? -Number.MAX_SAFE_INTEGER
-    : key.name === 'end' ? Number.MAX_SAFE_INTEGER
-    : 0
-  if (!step) return false
-  box.scrollTop = Math.max(0, Math.min(box.scrollTop + step, Math.max(box.scrollHeight - box.viewport.height, 0)))
-  return true
+/** What the panel asks the root to do from the mouse. Stable callbacks. */
+export type ChordHelpMouse = {
+  readonly select: (index: number) => void
+  readonly run: (row: ChordHelpRow) => void
+  readonly close: () => void
 }
 
-export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, composerDockHeight, composerStatusBlockHeight, toasts, theme }: {
-  chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
+/** The rows on show and the runnable entries the selection indexes, for the overlay and the key handler alike. */
+export function chordHelpView(state: ChordHelpState): { rows: ChordHelpRow[]; entries: ChordHelpRow[]; selected: ChordHelpRow | null; index: number } {
+  const rows = filterChordHelpRows(chordHelpRows(state.map), state.query ?? '')
+  const entries = rows.filter(row => row.keys !== null && row.runnable)
+  const index = entries.length ? clamp(state.index ?? 0, 0, entries.length - 1) : 0
+  return { rows, entries, selected: entries[index] ?? null, index }
+}
+
+type MouseLike = { button?: number; stopPropagation?: () => void; scroll?: { direction?: string } }
+const WHEEL_ROWS = 3
+
+export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, composerDockHeight, composerStatusBlockHeight, toasts, theme, mouse }: {
+  chordHelp: ChordHelpState | null
   width: number
   height: number
   /** The main area the panel is drawn in (and clipped to): the rows between the spaces bar and the composer. */
@@ -41,97 +45,124 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
   composerStatusBlockHeight: number
   toasts: Toast[]
   theme: TuiThemePalette
+  mouse?: ChordHelpMouse
 }) {
+  const [wheelStart, setWheelStart] = useState<number | null>(null)
+  const hovered = useRef<number | null>(null)
+  const index = chordHelp?.index ?? 0
+  useEffect(() => { if (hovered.current !== index) setWheelStart(null) }, [index])
+  useEffect(() => { hovered.current = null; setWheelStart(null) }, [chordHelp?.map, chordHelp?.query, chordHelp === null])
+  if (!chordHelp) return null
+
+  const map = chordHelp.map
+  const view = chordHelpView(chordHelp)
+  const keysW = chordHelpKeyWidth(map)
+  const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
+  const labelW = overlayW - keysW - 7
+  const overlayTop = 2
+  const headerRows = chordHelp.dismissOnKey ? 3 : 1
+  const overlayChromeRows = 3 + headerRows // two borders, the footer, the header
+  // In the area's coordinates: rows above it (the spaces bar) are not ours to count.
+  // A toast draws over the panel's last row (how to close it), so end above the stack.
+  const areaOffset = Math.max(0, height - composerDockHeight - composerStatusBlockHeight - areaHeight)
+  const panelBottom = Math.min(
+    areaHeight,
+    toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) - areaOffset : areaHeight,
+  )
+  const bodyRows = Math.max(Math.min(view.rows.length, panelBottom - overlayTop - overlayChromeRows), 3)
+  const selectedRow = view.selected ? view.rows.indexOf(view.selected) : 0
+  const maxStart = Math.max(0, view.rows.length - bodyRows)
+  const followStart = clamp(selectedRow - Math.floor(bodyRows / 2), 0, maxStart)
+  const startIdx = clamp(wheelStart ?? followStart, 0, maxStart)
+  const visible = view.rows.slice(startIdx, startIdx + bodyRows)
+  const hiddenBelow = Math.max(0, view.rows.length - startIdx - bodyRows)
+  const scrollBy = (delta: number) => setWheelStart(clamp(startIdx + delta, 0, maxStart))
+  const footer = chordHelp.dismissOnKey
+    ? `${startIdx > 0 ? `▲ ${startIdx}  ` : ''}${hiddenBelow > 0 ? `▼ ${hiddenBelow}  ` : ''}⏎ or click runs · esc closes`
+    : `${startIdx > 0 ? `▲ ${startIdx}  ` : ''}${hiddenBelow > 0 ? `▼ ${hiddenBelow}  ` : ''}press a key · or click a row`
   return (
-    chordHelp ? (() => {
-          const map = chordHelp.map
-          const keysW = chordHelpKeyWidth(map)
-          const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
-          // One column for the scrollbar, drawn only when the table overflows.
-          const labelW = overlayW - keysW - 7
-          // Sized to the content, and scrolled once that outgrows the space
-          // above the composer dock (which draws over it): the old `height - 8`
-          // budget ignored the dock and swallowed the footer, which is where
-          // the panel says how to dismiss it.
-          const overlayTop = 2
-          const overlayChromeRows = 4 // two borders, the header, the footer
-          const rows = chordHelpRows(map)
-          // A toast (the "is not bound" notice a hesitated chord leaves behind)
-          // draws over this panel too, and over its last row, which is the one
-          // that says how to close it — so end above the stack while it shows.
-          // In the area's coordinates: rows above it (the spaces bar) are not ours to count.
-          const areaOffset = Math.max(0, height - composerDockHeight - composerStatusBlockHeight - areaHeight)
-          const panelBottom = Math.min(
-            areaHeight,
-            toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) - areaOffset : areaHeight,
-          )
-          const maxRows = Math.max(panelBottom - overlayTop - overlayChromeRows, 6)
-          const bodyRows = Math.min(rows.length, maxRows)
-          const hidden = rows.length - bodyRows
-          chordHelpScroll.page = Math.max(bodyRows - 1, 1)
+    <>
+      {mouse ? (
+        <box position="absolute" top={0} left={0} width={width} height={areaHeight} zIndex={MODAL_CONTENT_Z_INDEX + 1}
+          onMouseDown={(event: MouseLike) => { event.stopPropagation?.(); mouse.close() }} />
+      ) : null}
+      <box
+        id="chord-help"
+        position="absolute"
+        top={overlayTop}
+        left={Math.max(Math.floor((width - overlayW) / 2), 2)}
+        width={overlayW}
+        border
+        borderStyle="single"
+        borderColor={theme.amber}
+        backgroundColor={theme.surface}
+        // Above every piece of chrome: it is a reference card over all of it.
+        zIndex={MODAL_CONTENT_Z_INDEX + 2}
+        flexDirection="column"
+        onMouseDown={(event: MouseLike) => event.stopPropagation?.()}
+        onMouseScroll={(event: MouseLike) => { event.stopPropagation?.(); scrollBy(event.scroll?.direction === 'up' ? -WHEEL_ROWS : WHEEL_ROWS) }}
+      >
+        <box paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+          <box flexGrow={1}>
+            <text fg={theme.amber} wrapMode="none" selectable={false}>{map.title}</text>
+          </box>
+          <text fg={theme.dim} wrapMode="none" selectable={false}>
+            {map === SPLIT_CHORD_MAP && RUNNING_INSIDE_TMUX ? 'tmux owns ⌃B — use ?' : `prefix ${map.prefix}`}
+          </text>
+        </box>
+        {chordHelp.dismissOnKey ? (
+          <box paddingX={1} paddingTop={1} paddingBottom={1} backgroundColor={theme.surface2}>
+            <text wrapMode="none" selectable={false}>
+              {renderInlineTextSegments([
+                { text: '> ', fg: theme.dim },
+                { text: chordHelp.query || 'type to filter', fg: chordHelp.query ? theme.text : theme.dim },
+                { text: '█', fg: theme.cyan },
+                { text: view.entries.length ? `  ${view.index + 1}/${view.entries.length}` : '', fg: theme.muted },
+                { text: '  j/k move', fg: theme.dim },
+              ], overlayW - 4, theme.dim)}
+            </text>
+          </box>
+        ) : null}
+        {view.rows.length === 0 ? (
+          <box paddingX={1}><text fg={theme.dim}>no matches</text></box>
+        ) : visible.map((row, slot) => {
+          if (row.keys === null) {
+            return (
+              <box key={`chord-row:${slot}`} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none" selectable={false}>{`┄ ${row.label.toUpperCase()}`}</text>
+              </box>
+            )
+          }
+          const entryIndex = row.runnable ? view.entries.indexOf(row) : -1
+          const isSelected = row === view.selected
           return (
             <box
-              position="absolute"
-              top={overlayTop}
-              left={Math.max(Math.floor((width - overlayW) / 2), 2)}
-              width={overlayW}
-              border
-              borderStyle="single"
-              borderColor={theme.amber}
-              backgroundColor={theme.surface}
-              // Above every piece of chrome (tab bar, window title buttons, the
-              // composer, the spaces bars): it is a reference card over all of it.
-              zIndex={MODAL_CONTENT_Z_INDEX + 2}
-              flexDirection="column"
+              key={`chord-row:${slot}`}
+              id={`chord-help-row:${row.id}`}
+              paddingX={1}
+              flexDirection="row"
+              backgroundColor={isSelected ? theme.surface3 : theme.surface}
+              onMouseOver={() => { if (entryIndex >= 0 && !isSelected) { hovered.current = entryIndex; mouse?.select(entryIndex) } }}
+              onMouseDown={(event: MouseLike) => {
+                event.stopPropagation?.()
+                if ((event.button ?? 0) !== 0 || entryIndex < 0) return
+                mouse?.run(row)
+              }}
             >
-              <box paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-                <box flexGrow={1}>
-                  <text fg={theme.amber} wrapMode="none">{map.title}</text>
-                </box>
-                <text fg={theme.dim} wrapMode="none">
-                  {map === SPLIT_CHORD_MAP && RUNNING_INSIDE_TMUX
-                    ? 'tmux owns ⌃B — use ?'
-                    : `prefix ${map.prefix}`}
-                </text>
+              <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
+              <box width={keysW}>
+                <text fg={row.runnable ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{fitText(row.keys, keysW)}</text>
               </box>
-              <scrollbox
-                ref={(box: ScrollBoxRenderable | null) => { chordHelpScroll.current = box }}
-                id="chord-help-scroll"
-                height={bodyRows}
-                scrollY
-                scrollX={false}
-                backgroundColor={theme.surface}
-                verticalScrollbarOptions={{ visible: hidden > 0, trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
-                horizontalScrollbarOptions={{ visible: false }}
-              >
-                {rows.map((row) => (row.keys === null ? (
-                  <box key={row.id} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-                    <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
-                    <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
-                  </box>
-                ) : (
-                  <box key={row.id} paddingX={1} flexDirection="row">
-                    <box width={keysW}>
-                      <text fg={theme.amber} wrapMode="none">{fitText(row.keys, keysW)}</text>
-                    </box>
-                    <box flexGrow={1} paddingLeft={2}>
-                      <text fg={theme.muted} wrapMode="none">{fitText(row.label, labelW)}</text>
-                    </box>
-                  </box>
-                )))}
-              </scrollbox>
-              <box paddingX={1} backgroundColor={theme.surface2}>
-                <text fg={theme.dim} wrapMode="none">
-                  {fitText(
-                    chordHelp.dismissOnKey
-                      ? (hidden > 0 ? 'any other key closes · ↑↓ PgUp/PgDn wheel scroll' : 'any key closes')
-                      : (hidden > 0 ? 'press a key · wheel scrolls' : 'press a key'),
-                    overlayW - 4,
-                  )}
-                </text>
+              <box flexGrow={1} paddingLeft={2}>
+                <text fg={isSelected ? theme.text : row.runnable ? theme.muted : theme.dim} wrapMode="none" selectable={false}>{fitText(row.label, labelW)}</text>
               </box>
             </box>
           )
-        })() : null
+        })}
+        <box paddingX={1} backgroundColor={theme.surface2}>
+          <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(footer, overlayW - 4)}</text>
+        </box>
+      </box>
+    </>
   )
 }

@@ -29,7 +29,7 @@ import { writeTuiTabOrientation, type TuiSidebarSort } from '../../../../lib/tui
 import { type MessageBookmark } from '../../../../lib/messageBookmarks'
 import { type ProviderSelection, type Session } from '../../../../lib/types'
 import { fitText } from '../../textLayout'
-import { type ChordMap } from '../../chordHelp'
+import { type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type MenuPoint, type WindowItem, type SidebarEntry, type ModelPickerOption, type PaneFocus, type TuiCopilotContextTier, type ModelPickerFocus, type PaletteRow, type NoticeTone } from '../types'
 import { type ThemeMenuGroup } from '../themes'
 import { sessionKey } from '../sessionList'
@@ -229,7 +229,8 @@ type WorkspaceBodyProps = {
   commandPaletteTopOffset: 2 | 4
   commandPaletteQuery: string
   commandPaletteMouse?: import('./CommandPaletteOverlay').CommandPaletteMouse
-  chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
+  chordHelpMouse?: import('./ChordHelpOverlay').ChordHelpMouse
+  chordHelp: ChordHelpState | null
   composerDockHeight: number
   composerStatusBlockHeight: number
   toasts: Toast[]
@@ -272,7 +273,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, tabDisplay, editedBuiltinViews, viewMenuOriginKey,
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
-    commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery, commandPaletteMouse,
+    commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery, commandPaletteMouse, chordHelpMouse,
     chordHelp, composerDockHeight, composerStatusBlockHeight, toasts,
   } = props
   // The selected tab is on the pinned row: the strip below then highlights none of its own.
@@ -537,7 +538,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} height={height} mouse={commandPaletteMouse} />
 
-        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={mainContentHeight} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} />
+        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={mainContentHeight} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} mouse={chordHelpMouse} />
 
 
       </box>

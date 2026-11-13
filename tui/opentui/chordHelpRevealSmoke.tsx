@@ -14,6 +14,15 @@ process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-chord-help-smoke-'))
 const { CHORD_HELP_REVEAL_MS } = await import('./chordHelp')
 const { default: OpenTuiApp } = await import('./App')
 
+function collectIds(): string[] {
+  const out: string[] = []
+  const walk = (node: { id?: string; getChildren?: () => unknown[] }) => {
+    if (node.id) out.push(node.id)
+    for (const child of node.getChildren?.() ?? []) walk(child as never)
+  }
+  walk(setup.renderer.root as never)
+  return out
+}
 const setup = await testRender(<OpenTuiApp />, { width: 120, height: 40, kittyKeyboard: true })
 const { captureCharFrame, mockInput } = setup
 
@@ -50,40 +59,74 @@ assert.ok(afterUnbound.includes('is not bound'),
 assert.ok(!afterUnbound.includes('split pane keybinds'),
   'Resolving the chord takes the self-revealed panel with it')
 
-// ── a panel opened on purpose does absorb the next key ─────────────────────
-// It is a reference card the user asked for, so any key dismisses it rather
-// than leaving them hunting for the one that does.
+// ── a panel opened on purpose is a palette over the chord table ───────────
+// It owns the keyboard: j/k and arrows move the selection, typing filters,
+// ⏎ runs the selected chord, Esc closes. No key reaches the chord dispatcher.
 await act(async () => { mockInput.pressKey('b', { ctrl: true }) })
 await settle(50)
 await act(async () => { mockInput.pressKey('?') })
 await settle(200)
 assert.ok(captureCharFrame().includes('split pane keybinds'), '⌃B ? opens the panel')
-assert.ok(/any (other )?key closes/.test(captureCharFrame()),
-  'An explicitly opened panel must say it closes on any key — and that line lives in the footer, '
-  + 'which the composer dock used to draw over')
+assert.ok(captureCharFrame().includes('esc closes'), 'the footer says how to close it')
+const selectedPosition = () => /\b(\d+)\/(\d+)\b/.exec(captureCharFrame().split('\n').find(line => line.includes('type to filter') || line.includes('> ')) ?? '')
+assert.equal(selectedPosition()?.[1], '1', 'the panel opens on its first entry')
+await act(async () => { mockInput.pressKey('j') })
+await settle(100)
+await act(async () => { mockInput.pressArrow('down') })
+await settle(100)
+assert.equal(selectedPosition()?.[1], '3', 'j and ↓ move the selection')
+await act(async () => { await mockInput.typeText('widen') })
+await settle(150)
+assert.ok(captureCharFrame().includes('> widen'), 'typing filters the table')
+assert.ok(!captureCharFrame().includes('⌃B w is not bound'), 'a typed key reached the chord dispatcher')
+assert.ok(captureCharFrame().includes('split pane keybinds'), 'typing closed the panel')
+await act(async () => { mockInput.pressEscape() })
+await settle(200)
+assert.ok(!captureCharFrame().includes('split pane keybinds'), 'Esc closes the panel')
 
-// ⌃B has more entries than fit at 40 rows: scroll keys move the panel instead of closing it.
-{
-  const { chordHelpScroll } = await import('./app/overlays/ChordHelpOverlay')
-  const box = chordHelpScroll.current!
-  assert.ok(box && box.scrollHeight > box.viewport.height, 'the ⌃B table should overflow 40 rows (or this check proves nothing)')
-  await act(async () => { mockInput.pressKey('j') })
-  await settle(100)
-  await act(async () => { mockInput.pressArrow('down') })
-  await settle(100)
-  assert.equal(box.scrollTop, 2, 'j and ↓ scroll the panel')
-  assert.ok(captureCharFrame().includes('split pane keybinds'), 'a scroll key closed the panel')
-}
+// ⏎ on an entry runs its chord exactly as typing it would: ⌃B ? then filter to
+// the window layout menu (⌃B w) and run it.
+await act(async () => { mockInput.pressKey('b', { ctrl: true }) })
+await settle(50)
+await act(async () => { mockInput.pressKey('?') })
+await settle(200)
+await act(async () => { await mockInput.typeText('layout menu') })
+await settle(150)
+await act(async () => { mockInput.pressEnter() })
+await settle(400)
+assert.ok(!captureCharFrame().includes('split pane keybinds'), 'running an entry closed the panel')
+const layoutMenuOpen = () => collectIds().some(id => id.startsWith('window-layout:'))
+assert.ok(layoutMenuOpen(), `⏎ did not run ⌃B w (the layout menu):\n${captureCharFrame()}`)
+await act(async () => { mockInput.pressEscape() })
+await settle(200)
+assert.ok(!layoutMenuOpen(), 'the layout menu did not close')
 
-// A different unbound key from the one used above: the earlier notice is still
-// on screen, so the assertion has to be about *this* key rather than about any
-// notice at all.
-await act(async () => { mockInput.pressKey('w') })
-await settle(300)
-const afterDismiss = captureCharFrame()
-assert.ok(!afterDismiss.includes('split pane keybinds'), 'Any key dismisses a panel that was asked for')
-assert.ok(!afterDismiss.includes('⌃B w is not bound'),
-  'A dismissing key is absorbed by the panel, not re-dispatched as a chord')
+// ── the mouse, as in the palette: hover selects, a click runs, a press outside closes ──
+await act(async () => { mockInput.pressKey('b', { ctrl: true }) })
+await settle(50)
+await act(async () => { mockInput.pressKey('?') })
+await settle(200)
+type Frame = { x: number; y: number }
+const rowNode = (id: string) => setup.renderer.root.findDescendantById(id) as unknown as Frame | null
+const stacked = rowNode('chord-help-row:split:" · s')
+assert.ok(stacked, `no row for ⌃B " :\n${JSON.stringify(collectIds().filter(id => id.startsWith('chord-help-row')).slice(0, 5))}`)
+await act(async () => { await setup.mockMouse.moveTo(stacked.x + 6, stacked.y) })
+await settle(150)
+assert.equal(selectedPosition()?.[1], '2', 'hovering an entry selects it')
+await act(async () => { await setup.mockMouse.click(2, 12) })
+await settle(200)
+assert.ok(!captureCharFrame().includes('split pane keybinds'), 'a press outside closes the panel')
+// The self-revealed panel answers the mouse too: hesitate on ⌃B, then click "layout menu".
+await act(async () => { mockInput.pressKey('b', { ctrl: true }) })
+await settle(CHORD_HELP_REVEAL_MS + 300)
+const layoutRow = collectIds().find(id => id.startsWith('chord-help-row:') && id.endsWith(':w'))
+assert.ok(layoutRow, 'the revealed panel has no ⌃B w row')
+const layoutFrame = rowNode(layoutRow)!
+await act(async () => { await setup.mockMouse.click(layoutFrame.x + 6, layoutFrame.y) })
+await settle(400)
+assert.ok(layoutMenuOpen(), 'clicking a revealed entry did not run its chord')
+await act(async () => { mockInput.pressEscape() })
+await settle(200)
 
 // ── the same machinery serves ⌃K ───────────────────────────────────────────
 await act(async () => { mockInput.pressKey('k', { ctrl: true }) })
@@ -96,5 +139,5 @@ await act(async () => { mockInput.pressEscape() })
 await settle(200)
 assert.ok(!captureCharFrame().includes('command chords'), 'Cancelling the chord closes its panel')
 
-console.log('Chord help reveal smoke passed (delayed reveal, no key swallowing, explicit panel absorbs, ⌃K parity)')
+console.log('Chord help reveal smoke passed (delayed reveal, no key swallowing, palette keys/filter/run, ⌃K parity)')
 process.exit(0)

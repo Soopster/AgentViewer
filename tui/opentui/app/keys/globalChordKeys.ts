@@ -12,7 +12,7 @@ import { formatSessionTitle, type TuiTranscriptCard } from '../../../format'
 import { interruptTuiSessionTurn } from '../../../../lib/tui/service'
 import { transcriptWindowCommand } from '../../transcriptWindowInput'
 import { type Session } from '../../../../lib/types'
-import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, type ChordMap } from '../../chordHelp'
+import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { portableChordCommand, portableCommandChord } from '../../shortcutKeys'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { TASK_PANEL_RESIZE_STEP } from '../layoutConstants'
@@ -51,7 +51,7 @@ export function handleGlobalChordKeys({
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   sequence: string
   executeCommandPalette: (id: string) => void
-  setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
+  setChordHelp: React.Dispatch<React.SetStateAction<ChordHelpState | null>>
   setSplitChordPending: React.Dispatch<React.SetStateAction<boolean>>
   isShifted: (char: string) => boolean
   toggleFullscreenMode: (forced?: boolean) => void

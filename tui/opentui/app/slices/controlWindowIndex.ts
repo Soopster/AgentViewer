@@ -20,7 +20,7 @@ import { useStableEvent } from '../../useStableEvent'
 import { type Session } from '../../../../lib/types'
 import { type PendingPermission } from '../../../../lib/permissions'
 import { type SplitPaneOrientation } from '../../splitPaneState'
-import { type ChordMap } from '../../chordHelp'
+import { type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { FLOATING_PANE_INDEX } from '../layoutConstants'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
@@ -65,7 +65,7 @@ export type UseControlWindowIndexGroupContext = {
   commandPaletteOpen: boolean
   setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; title: string; items: ContextMenuItem[]; } | null>>
   setControlMenuTarget: React.Dispatch<React.SetStateAction<string | null>>
-  setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
+  setChordHelp: React.Dispatch<React.SetStateAction<ChordHelpState | null>>
   setSplitChordPending: React.Dispatch<React.SetStateAction<boolean>>
   setCommandChordPending: React.Dispatch<React.SetStateAction<boolean>>
   setWindowControlMode: React.Dispatch<React.SetStateAction<'identify' | 'manage' | null>>

@@ -14,7 +14,7 @@ import { runTuiSessionAction, type WorktreeTask, writeTuiDensity, writeTuiDiffLa
 import { type ProtocolRunSnapshot } from '../../../../lib/agentProtocol'
 import { type ProviderSelection, type Session, type SessionComposerAgentOption } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
-import { SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
+import { SPLIT_CHORD_MAP, type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { TASK_PANEL_RESIZE_STEP, SIDEBAR_RESIZE_STEP } from '../layoutConstants'
 import { sessionKey } from '../sessionList'
@@ -157,7 +157,7 @@ export type ExecuteCommandPaletteContext = {
   openRecentWindows: () => void
   focusPreviousWindow: () => void
   undoWindowLayout: () => void
-  setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
+  setChordHelp: React.Dispatch<React.SetStateAction<ChordHelpState | null>>
   closeSplitPane: (paneIndex?: number) => void
   toggleSplitPanes: () => void
   cycleSplitFocus: (direction: 1 | -1) => void

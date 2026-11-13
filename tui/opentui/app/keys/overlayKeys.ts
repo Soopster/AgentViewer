@@ -15,8 +15,9 @@ import { type TuiThemeMode } from '../../../theme'
 import { type MessageBookmark } from '../../../../lib/messageBookmarks'
 import { type Session } from '../../../../lib/types'
 import { type PendingPermission } from '../../../../lib/permissions'
-import { type ChordMap } from '../../chordHelp'
-import { scrollChordHelpForKey } from '../overlays/ChordHelpOverlay'
+import { type ChordMap, type ChordHelpState } from '../../chordHelp'
+import { chordHelpView } from '../overlays/ChordHelpOverlay'
+import type { ChordHelpRow } from '../../chordHelp'
 import { type ModelPickerOption, type TuiCopilotContextTier, type ModelPickerFocus } from '../types'
 import { SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_MIN_WIDTH, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH } from '../layoutConstants'
 import { clamp } from '../util'
@@ -33,7 +34,7 @@ export function handleOverlayAndMenuKeys({
   surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement,
   isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef,
   pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef,
-  chordHelp, setChordHelp, isCtrl, attentionOpen,
+  chordHelp, setChordHelp, runChordHelpRow, isCtrl, attentionOpen,
   attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename,
   providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut,
   setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex,
@@ -75,8 +76,9 @@ export function handleOverlayAndMenuKeys({
   pluginManagerKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   newSessionModalOpen: boolean
   newSessionKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
-  chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
-  setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
+  chordHelp: ChordHelpState | null
+  runChordHelpRow: (map: ChordMap, row: ChordHelpRow) => void
+  setChordHelp: React.Dispatch<React.SetStateAction<ChordHelpState | null>>
   isCtrl: (char: string) => boolean
   attentionOpen: boolean
   attentionKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
@@ -244,7 +246,22 @@ export function handleOverlayAndMenuKeys({
     // that chord's next key would make hesitating change what the key does.
     if (chordHelp?.dismissOnKey) {
       // Scroll keys move a long panel (⌃B has more entries than fit); any other key closes it.
-      handled(() => { if (!scrollChordHelpForKey(key)) setChordHelp(null) })
+      // Opened with `?`, the panel is a palette over the chord table.
+      handled(() => {
+        const view = chordHelpView(chordHelp)
+        const move = (index: number) => setChordHelp(current => current ? { ...current, index: Math.max(0, Math.min(index, Math.max(view.entries.length - 1, 0))) } : current)
+        if (key.name === 'escape') { setChordHelp(null); return }
+        if (key.name === 'return') { if (view.selected) runChordHelpRow(chordHelp.map, view.selected); return }
+        if (key.name === 'down' || (key.name === 'j' && !key.ctrl)) { move(view.index + 1); return }
+        if (key.name === 'up' || (key.name === 'k' && !key.ctrl)) { move(view.index - 1); return }
+        if (key.name === 'pagedown') { move(view.index + 10); return }
+        if (key.name === 'pageup') { move(view.index - 10); return }
+        if (key.name === 'home') { move(0); return }
+        if (key.name === 'end') { move(view.entries.length - 1); return }
+        if (key.name === 'backspace' || key.name === 'delete') { setChordHelp(current => current ? { ...current, query: (current.query ?? '').slice(0, -1), index: 0 } : current); return }
+        const typed = key.sequence ?? ''
+        if (!key.ctrl && !key.meta && typed.length === 1 && typed >= ' ') setChordHelp(current => current ? { ...current, query: `${current.query ?? ''}${typed}`, index: 0 } : current)
+      })
       return true
     }
 

@@ -111,15 +111,65 @@ export type ChordHelpRow = {
   /** Null on a section heading. */
   keys: string | null
   label: string
+  /** Reached through the prefix, so a click or ⏎ can run it (reference rows cannot). */
+  runnable?: boolean
+}
+
+/**
+ * The open help panel, which behaves like the command palette: a query (typed
+ * when the panel was opened with `?`), a selected entry (index into the
+ * filtered runnable entries), and the wheel's own scroll position.
+ */
+export type ChordHelpState = { map: ChordMap; dismissOnKey: boolean; query?: string; index?: number }
+
+/** Rows matching a query on keys or label; a heading stays while any of its entries does. */
+export function filterChordHelpRows(rows: ChordHelpRow[], query: string): ChordHelpRow[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return rows
+  const out: ChordHelpRow[] = []
+  let heading: ChordHelpRow | null = null
+  for (const row of rows) {
+    if (row.keys === null) { heading = row; continue }
+    if (!row.label.toLowerCase().includes(needle) && !row.keys.toLowerCase().includes(needle)) continue
+    if (heading) { out.push(heading); heading = null }
+    out.push(row)
+  }
+  return out
+}
+
+export type ChordKeyEvent = { name: string; sequence: string; ctrl: boolean; shift: boolean; meta: boolean; option: boolean }
+const ARROWS: Record<string, string> = { '←': 'left', '→': 'right', '↑': 'up', '↓': 'down' }
+
+/**
+ * The keystroke an entry's key label stands for (its first alias), so a click
+ * or ⏎ runs the chord exactly as typing it would. Null when the label is not
+ * one keystroke ("cancel the chord" is answered by closing instead).
+ */
+export function chordKeyEvent(keys: string): ChordKeyEvent | null {
+  const first = keys.split(' · ')[0]!.split(' … ')[0]!.trim()
+  const key = (name: string, sequence: string, extra: Partial<ChordKeyEvent> = {}): ChordKeyEvent => ({ name, sequence, ctrl: false, shift: false, meta: false, option: false, ...extra })
+  if (first === 'space') return key('space', ' ')
+  if (first === 'enter' || first === '↵') return key('return', '\r')
+  if (first === 'tab') return key('tab', '\t')
+  if (first === 'esc') return null
+  if (ARROWS[first]) return key(ARROWS[first]!, '')
+  if (first.startsWith('⇧') && ARROWS[first.slice(1)]) return key(ARROWS[first.slice(1)]!, '', { shift: true })
+  if (first.startsWith('⌃') && /^[a-z]$/i.test(first.slice(1))) {
+    const letter = first.slice(1).toLowerCase()
+    return key(letter, String.fromCharCode(letter.charCodeAt(0) - 96), { ctrl: true })
+  }
+  if ([...first].length === 1) return key(/[A-Z]/.test(first) ? first.toLowerCase() : first, first, { shift: /[A-Z]/.test(first) })
+  return null
 }
 
 /** Overlay rows: a heading per section, then its entries. */
 export function chordHelpRows(map: ChordMap): ChordHelpRow[] {
   const rows: ChordHelpRow[] = []
+  const prefixed = new Set(map.sections)
   for (const section of [...map.sections, ...(map.unprefixedSections ?? [])]) {
     rows.push({ id: `head:${section.title}`, keys: null, label: section.title })
     for (const entry of section.entries) {
-      rows.push({ id: `${section.title}:${entry.keys}`, keys: entry.keys, label: entry.label })
+      rows.push({ id: `${section.title}:${entry.keys}`, keys: entry.keys, label: entry.label, runnable: prefixed.has(section) && (chordKeyEvent(entry.keys) !== null || entry.keys.startsWith('esc')) })
     }
   }
   return rows

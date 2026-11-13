@@ -251,6 +251,9 @@ import { adjustSplitReaderShare, calculateSplitPaneLayout, evenSplitReaderShare,
 import {
   CHORD_HELP_REVEAL_MS,
   CHORD_PENDING_TIMEOUT_MS,
+  chordKeyEvent,
+  type ChordKeyEvent,
+  type ChordHelpRow,
   chordHelpKeyWidth,
   chordHelpRows,
   chordHintText,
@@ -6025,6 +6028,33 @@ function OpenTuiWorkspace() {
     })
   })
 
+  // ⌃B/⌃K help as a palette: running an entry types its chord. A chord already
+  // pending (the self-revealed panel) takes the key now; otherwise the prefix is
+  // armed and the key follows once that state has rendered.
+  const rootKeyHandlerRef = useRef<((key: Parameters<Parameters<typeof useKeyboard>[0]>[0]) => void) | null>(null)
+  const pendingChordKeyRef = useRef<ChordKeyEvent | null>(null)
+  const dispatchChordKey = (event: ChordKeyEvent) => {
+    rootKeyHandlerRef.current?.({ ...event, eventType: 'press', preventDefault() {}, stopPropagation() {} } as never)
+  }
+  const runChordHelpRow = useStableEvent((map: ChordMap, row: ChordHelpRow) => {
+    const event = row.keys ? chordKeyEvent(row.keys) : null
+    const split = map === SPLIT_CHORD_MAP
+    setChordHelp(null)
+    if (!event) { setSplitChordPending(false); setCommandChordPending(false); return }
+    if (split ? splitChordPending : commandChordPending) { dispatchChordKey(event); return }
+    pendingChordKeyRef.current = event
+    if (split) { setCommandChordPending(false); setSplitChordPending(true) } else { setSplitChordPending(false); setCommandChordPending(true) }
+  })
+  useEffect(() => {
+    const event = pendingChordKeyRef.current
+    if (!event || !(splitChordPending || commandChordPending)) return
+    pendingChordKeyRef.current = null
+    dispatchChordKey(event)
+  }, [splitChordPending, commandChordPending])
+  const selectChordHelpIndex = useStableEvent((index: number) => setChordHelp(current => current ? { ...current, index } : current))
+  const runChordHelpFromMouse = useStableEvent((row: ChordHelpRow) => { if (chordHelp) runChordHelpRow(chordHelp.map, row) })
+  const closeChordHelpFromMouse = useStableEvent(() => { setChordHelp(null); setSplitChordPending(false); setCommandChordPending(false) })
+  const chordHelpMouse = useMemo(() => ({ select: selectChordHelpIndex, run: runChordHelpFromMouse, close: closeChordHelpFromMouse }), [selectChordHelpIndex, runChordHelpFromMouse, closeChordHelpFromMouse])
   // Mouse on the palette: hover selects, a click runs, a press outside closes.
   const selectPaletteIndex = useStableEvent((index: number) => setCommandPaletteIndex(index))
   const runPaletteCommand = useStableEvent((id: string) => executeCommandPalette(id))
@@ -6254,7 +6284,7 @@ function OpenTuiWorkspace() {
     if (controlMenuTarget && controlWindowIndex(controlMenuTarget) === undefined) { setContextMenu(null); setControlMenuTarget(null) }
   })
 
-  useKeyboard((key) => {
+  useKeyboard(rootKeyHandlerRef.current = (key) => {
     if (key.eventType === 'release') return
     const sequence = key.sequence || ''
     const isShifted = (char: string): boolean => isShiftedKey(key, char)
@@ -6361,7 +6391,7 @@ function OpenTuiWorkspace() {
       toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused,
       surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef,
       newSessionModalOpen, newSessionKeyHandlerRef,
-      chordHelp, setChordHelp,
+      chordHelp, setChordHelp, runChordHelpRow,
       isCtrl, attentionOpen, attentionKeyHandlerRef,
       renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename, providerMenuOpen,
       closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen,
@@ -6998,6 +7028,7 @@ function OpenTuiWorkspace() {
         commandPaletteTopOffset={commandPaletteTopOffset}
         commandPaletteQuery={commandPaletteQuery}
         commandPaletteMouse={commandPaletteMouse}
+        chordHelpMouse={chordHelpMouse}
         chordHelp={chordHelp}
         composerDockHeight={composerDockHeight}
         composerStatusBlockHeight={composerStatusBlockHeight}

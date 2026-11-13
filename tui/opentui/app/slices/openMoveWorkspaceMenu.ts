@@ -20,7 +20,7 @@ import { type Session } from '../../../../lib/types'
 import { type RemoteCoordinatorTarget } from '../../../../lib/tui/remoteCoordinator'
 import { type PendingPermission } from '../../../../lib/permissions'
 import { type SplitPaneOrientation } from '../../splitPaneState'
-import { type ChordMap } from '../../chordHelp'
+import { type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type PaneFocus, type NoticeTone } from '../types'
 import { type TranscriptDiffNoteDraft } from '../transcriptDiffSelection'
 import { runSplitFocusedWindow } from '../actions/windows'
@@ -95,7 +95,7 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   folderPickerForNewSession: boolean
   pluginManagerOpen: boolean
   transcriptDiffDraft: TranscriptDiffNoteDraft | null
-  chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
+  chordHelp: ChordHelpState | null
   windowResizeGroupRef: React.RefObject<boolean>
   windowResizeCheckpointRef: React.RefObject<boolean>
   setWindowControlMode: React.Dispatch<React.SetStateAction<'identify' | 'manage' | null>>

@@ -7,7 +7,7 @@ import React, { useMemo, useRef, useState } from 'react'
 import { useWorkspaceState } from '../../workspaceContext'
 import { useStableEvent } from '../../useStableEvent'
 import { type Session } from '../../../../lib/types'
-import { type ChordMap } from '../../chordHelp'
+import { type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type MenuPoint } from '../types'
 import { useWindowGestureState } from '../state/windowGestureState'
 import { useWindowLayoutState } from '../state/windowLayoutState'
@@ -78,7 +78,7 @@ export function usePopoverTabHostKeyGroup(ctx: UsePopoverTabHostKeyGroupContext)
   // user opened deliberately is dismissed by the next key; one that revealed
   // itself while a chord is pending must NOT be, or it would swallow the very
   // keystroke it is advertising.
-  const [chordHelp, setChordHelp] = useState<{ map: ChordMap; dismissOnKey: boolean } | null>(null)
+  const [chordHelp, setChordHelp] = useState<ChordHelpState | null>(null)
   // Portable command prefix for actions whose Ctrl+Shift shortcuts cannot be
   // distinguished from Ctrl on legacy/raw terminals (notably on Windows).
   const [commandChordPending, setCommandChordPending] = useState(false)

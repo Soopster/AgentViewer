@@ -13,7 +13,7 @@ import { type WindowDirection } from '../../windowLayout'
 import { type RightPanelSurfaceKind } from '../../../../lib/rightPanel'
 import { type SendState, type Session } from '../../../../lib/types'
 import { type SplitPaneOrientation } from '../../splitPaneState'
-import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
+import { chordUnknownKeyNotice, COMMAND_CHORD_MAP, SPLIT_CHORD_MAP, type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { portableChordCommand, portableCommandChord } from '../../shortcutKeys'
 import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { type WindowSurfaceId } from '../SplitTranscriptPane'
@@ -57,7 +57,7 @@ export function handleWindowControlKeys({
   commandChordPending: boolean
   setCommandChordPending: React.Dispatch<React.SetStateAction<boolean>>
   executeCommandPalette: (id: string) => void
-  setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
+  setChordHelp: React.Dispatch<React.SetStateAction<ChordHelpState | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   setSplitChordPending: React.Dispatch<React.SetStateAction<boolean>>
   cancelPointerGesture: () => boolean
