@@ -9,6 +9,8 @@ import { fitText } from '../textLayout'
 import type { PluginWidgetSlot } from '../../../lib/plugins/types'
 import type { TuiThemePalette } from '../../theme'
 import { tuiPluginWidgets } from './widgetPlugins'
+import type { LoadedPluginWidget } from '../../../lib/plugins/usePluginWidgets'
+import type { TuiPluginWidget, TuiPluginWidgetProps } from './pluginTypes'
 
 class WidgetBoundary extends React.Component<{ id: string; children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false }
@@ -18,6 +20,19 @@ class WidgetBoundary extends React.Component<{ id: string; children: React.React
 }
 
 export const CORNER_WIDGET_MAX_WIDTH = 76
+
+/** A reserved shell row, never an overlay over reader headers or prompts. */
+export function TopBarWidgetHost({ widgets, ...props }: Omit<TuiPluginWidgetProps, 'slot'> & {
+  widgets: readonly LoadedPluginWidget<TuiPluginWidget>[]
+}) {
+  if (!widgets.length) return null
+  const width = Math.floor(props.width / widgets.length)
+  return <box id="plugin-widget-slot:top-bar" width={props.width} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
+    {widgets.map(({ pluginId, id, view: Widget }) => <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}>
+      <Widget {...props} width={width} height={1} slot="top-bar" />
+    </WidgetBoundary>)}
+  </box>
+}
 
 export const PluginWidgetHost = memo(function PluginWidgetHost({ slot, theme, width, height, zIndex }: {
   slot: PluginWidgetSlot

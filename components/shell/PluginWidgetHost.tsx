@@ -15,11 +15,11 @@ class WidgetBoundary extends React.Component<{ id: string; children: React.React
   render() { return this.state.failed ? null : this.props.children }
 }
 
-const SLOT_STYLE: Record<PluginWidgetSlot, React.CSSProperties> = {
+const SLOT_STYLE: Record<Exclude<PluginWidgetSlot, 'top-bar'>, React.CSSProperties> = {
   corner: { position: 'fixed', right: 20, bottom: 20, zIndex: 50, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'none' },
 }
 
-export function PluginWidgetHost({ slot }: { slot: PluginWidgetSlot }) {
+export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'top-bar'> }) {
   const widgets = usePluginWidgets('web', webPluginWidgets, slot)
   // Mods' widgets are content from their server module; the shell draws them.
   const local = useLocalPluginWidgets()

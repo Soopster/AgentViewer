@@ -18,6 +18,8 @@ export type UseComposerHeightGroupContext = {
   embeddedComposer: boolean
   composerDraftLines: number
   height: number
+  /** Shell rows already removed from height; charge them to the draft's growth budget. */
+  reservedHeaderRows?: number
   fullscreenMode: boolean
   composerDockChromeHeight: 1 | 2
   windowPresentation: WindowPresentation | null
@@ -44,14 +46,16 @@ export function useComposerHeightGroup(ctx: UseComposerHeightGroupContext) {
   } = ctx
 
   const size = ctx.composerSize ?? 'auto'
+  const reservedRows = ctx.reservedHeaderRows ?? 0
+  const growthLimit = (share: number) => Math.floor((height + reservedRows) * share) - reservedRows
   const minHeight = embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : fullscreenMode ? COMPOSER_MIN_HEIGHT - 1 : COMPOSER_MIN_HEIGHT
   // A tall dock keeps room for a paragraph before it starts to grow; never more than 40% of the screen.
-  const tallFloor = Math.min(embeddedComposer ? 8 : 10, Math.floor(height * 0.4))
+  const tallFloor = Math.min(embeddedComposer ? 8 : 10, growthLimit(0.4))
   const grown = embeddedComposer
     ? Math.max(CHAT_COMPOSER_MIN_HEIGHT, Math.min(
         composerDraftLines + CHAT_COMPOSER_CHROME_HEIGHT,
         COMPOSER_MAX_HEIGHT,
-        Math.floor(height * 0.35),
+        growthLimit(0.35),
       ))
     : Math.max(
         minHeight,
@@ -63,7 +67,7 @@ export function useComposerHeightGroup(ctx: UseComposerHeightGroupContext) {
   // Compact holds the smallest dock and scrolls the draft inside it.
   const naturalComposerHeight = size === 'compact' ? minHeight : size === 'tall' ? Math.max(grown, tallFloor) : grown
   const composerHeight = ctx.composerHeightPreference === undefined ? naturalComposerHeight
-    : Math.max(embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, Math.min(ctx.composerHeightPreference, Math.floor(height * .4)))
+    : Math.max(embeddedComposer ? CHAT_COMPOSER_MIN_HEIGHT : COMPOSER_MIN_HEIGHT, Math.min(ctx.composerHeightPreference, growthLimit(.4)))
   const presentationHidesComposer = fullscreenMode && windowPresentation?.target !== composerTargetSessionIdentity
   const composerDockHeight = composerWindowOpen || composerHidden || presentationHidesComposer ? 0 : composerHeight
   const composerDockTextareaHeight = embeddedComposer

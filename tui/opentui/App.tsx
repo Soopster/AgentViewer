@@ -42,7 +42,10 @@ import {
 } from '../../lib/channelBridgeOutbox'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { ToastOverlay, toastExtraRows, toastStackTop, useToasts } from './ToastOverlay'
-import { PluginWidgetHost } from './shell/PluginWidgetHost'
+import { PluginWidgetHost, TopBarWidgetHost } from './shell/PluginWidgetHost'
+import { usePluginWidgets } from '../../lib/plugins/usePluginWidgets'
+import { tuiPluginWidgets } from './shell/widgetPlugins'
+import type { PluginShellOverview, ShellOverviewAction } from '../../lib/plugins/shellOverview'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
@@ -496,16 +499,7 @@ function OpenTuiWorkspace() {
   noteRootRender()
   const renderer = useRenderer()
   const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions()
-  const engineeringLayout = useEngineeringLayout(terminalWidth, terminalHeight)
-  const { activity: sidebarActivity, setActivity: setSidebarActivity, pinnedKeys: legacySidebarPinnedKeys, dropLegacyPin } = useSessionSidebarState()
-  const { width, height } = engineeringLayout
-  const [composerHeightPreference, setComposerHeightPreference] = useWorkspaceState<number | undefined>('composerHeightPreference', undefined)
-  const manualComposerHeight = engineeringLayout.active ? engineeringLayout.preferences.composerRows : composerHeightPreference
-  const setManualComposerHeight = (rows: number | undefined) => {
-    if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, composerRows: rows }))
-    else setComposerHeightPreference(rows)
-  }
-  const engineeringKeyRef = useRef<EngineeringKeyHandler | null>(null)
+  const topBarWidgets = usePluginWidgets('tui', tuiPluginWidgets, 'top-bar')
 
   // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
   // every render; the effect below reads it after commit.
@@ -559,6 +553,19 @@ function OpenTuiWorkspace() {
     setWindowSurfaces, windowSurfaceMeta, setWindowSurfaceMeta, popoverTabs, setPopoverTabs,
     popoverTabFrameRef, activePopoverTab, setActivePopoverTab, shownPopoverTab,
   } = useProviderGroup()
+  const topBarRows = !fullscreenMode && topBarWidgets.length > 0 && terminalHeight > 1 ? 1 : 0
+  const shellHeight = terminalHeight - topBarRows
+  const engineeringLayout = useEngineeringLayout(terminalWidth, shellHeight)
+  const { activity: sidebarActivity, setActivity: setSidebarActivity, pinnedKeys: legacySidebarPinnedKeys, dropLegacyPin } = useSessionSidebarState()
+  const { width, height } = engineeringLayout
+  const [composerHeightPreference, setComposerHeightPreference] = useWorkspaceState<number | undefined>('composerHeightPreference', undefined)
+  const manualComposerHeight = engineeringLayout.active ? engineeringLayout.preferences.composerRows : composerHeightPreference
+  const setManualComposerHeight = (rows: number | undefined) => {
+    if (engineeringLayout.active) engineeringLayout.setPreferences(previous => ({ ...previous, composerRows: rows }))
+    else setComposerHeightPreference(rows)
+  }
+  const engineeringKeyRef = useRef<EngineeringKeyHandler | null>(null)
+
   const {
     popoverTabHostKey, setPopoverTabHostKey, pendingSurfaceFocusRef, surfaceTitleClicksRef,
     windowOrder, setWindowOrder, windowStacks, setWindowStacks, floatingWindow, setFloatingWindow,
@@ -1578,7 +1585,7 @@ function OpenTuiWorkspace() {
     filteredModelPickerOptions,
   } = useComposerHeightGroup({
     composerHeightPreference: manualComposerHeight, composerSize: viewSpec.composerSize,
-    embeddedComposer, composerDraftLines, height, fullscreenMode, composerDockChromeHeight,
+    embeddedComposer, composerDraftLines, height, reservedHeaderRows: topBarRows, fullscreenMode, composerDockChromeHeight,
     windowPresentation, composerTargetSessionIdentity, composerWindowOpen, composerHidden,
     composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
     tuiModelOverride, tuiReportedModelByKey, contextUsage, modelPickerOptions, modelPickerQuery,
@@ -5126,6 +5133,35 @@ function OpenTuiWorkspace() {
   })
   // Only a warm Claude session can stop its background tasks (query.stopTask()).
   // What the root offers plugin views. Each surface receives only the services it declares.
+  const runShellOverviewAction = useStableEvent((action: ShellOverviewAction) => {
+    switch (action) {
+      case 'repository': runPluginCommandId('git'); break
+      case 'session':
+        if (selectedSession) { focusReaderFromSplit(); setComposerActive(false); setFocusedPane('messages') }
+        break
+      case 'attention': setAttentionOpen(true); break
+      case 'commands': setCommandPaletteQuery(''); setCommandPaletteIndex(0); setCommandPaletteOpen(true); break
+    }
+  })
+  const readOverviewGit = useStableEvent((cwd: string) => readGitSummaryCached(cwd))
+  const overviewRunning = Boolean(selectedSessionKey && runningSessions.some(session => sessionKey(session) === selectedSessionKey))
+  const overviewNeedsInput = attentionItems.some(item => item.sessionKey === selectedSessionKey && attentionItemNeedsInput(item))
+  const shellOverview = useMemo((): PluginShellOverview => ({
+    snapshot: {
+      cwd: gitRepoCwd || workspaceCwd || process.cwd(),
+      sessionKey: selectedSessionKey,
+      sessionTitle: selectedSession ? formatSessionTitle(selectedSession) : null,
+      activity: overviewNeedsInput ? 'Needs input' : overviewRunning
+        ? visibleLiveToolActivities.find(tool => tool.status === 'running')?.label || 'Working'
+        : selectedSession ? 'Idle' : 'No session selected',
+      running: overviewRunning,
+      startedAt: overviewRunning && composerActivityVisible && composerSendStartedAt !== null && composerSendStartedAt > 0 ? composerSendStartedAt : null,
+      runningCount: runningSessions.length,
+      attentionCount: attentionNeedsInputCount,
+    },
+    readGit: readOverviewGit,
+    run: runShellOverviewAction,
+  }), [gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction])
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     ...(subagentTranscriptSelection ? { 'subagent-transcript': {
       label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,
@@ -5259,8 +5295,10 @@ function OpenTuiWorkspace() {
       select: (session: Session) => { selectTabSession(session); setFocusedPane('messages') },
     },
   } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems, visibleTabSessions, pinnedTabs, pinnedTabsRowOption, toggleSessionTabsRow, selectedSessionKey, toggleSessionTabPin, moveSessionTab, closeSessionTab])
+  const overviewPluginServices = useMemo(() => ({ ...pluginServices, 'shell-overview': shellOverview }), [pluginServices, shellOverview])
   const pluginServicesFor = (surfaceId: PluginSurfaceId): TuiProvidedPluginServices => (
-    pluginSurfaceWants(surfaceId, 'session-fleet') || pluginSurfaceWants(surfaceId, 'session-tabs') ? fleetPluginServices : pluginServices
+    pluginSurfaceWants(surfaceId, 'shell-overview') ? overviewPluginServices
+      : pluginSurfaceWants(surfaceId, 'session-fleet') || pluginSurfaceWants(surfaceId, 'session-tabs') ? fleetPluginServices : pluginServices
   )
   // Why a service the root offers only sometimes is missing right now.
   const pluginServiceGaps = useMemo((): Partial<Record<PluginServiceId, string>> => ({
@@ -6825,6 +6863,8 @@ function OpenTuiWorkspace() {
   return (
     <BordersContext.Provider value={showBorders}>
     <PaneResizeProvider value={paneResize.context}>
+    <box width={terminalWidth} height={terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
+    {topBarRows ? <TopBarWidgetHost widgets={topBarWidgets} theme={theme} width={terminalWidth} height={1} services={{ 'shell-overview': shellOverview }} /> : null}
     <EngineeringFrame
       inspectorWindowOpen={engineeringLayout.preferences.inspectorPlacement === 'window'}
       inspectorWindowExpanded={splitFocusIndex !== null && windowZoom === splitFocusIndex}
@@ -6833,7 +6873,7 @@ function OpenTuiWorkspace() {
       onInspectorWindow={() => openSurfaceWindow('engineering-inspector')}
       onInspectorExpandWindow={() => toggleWindowZoom(splitFocusIndex)}
       onActivateEngineering={() => chooseTranscriptView('engineering')}
-      layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={terminalHeight}
+      layout={engineeringLayout} terminalWidth={terminalWidth} terminalHeight={shellHeight}
       theme={theme} cwd={gitRepoCwd || workspaceCwd || process.cwd()} workspaceId={workspaceId}
       coordination={watchedCoordinator} onOpenCoordinator={runId => { if (runId) setCoordBoardRunId(runId); runPluginCommandId('coord-board') }} onOpenCoordinatorAgent={openCoordinationAgentSession}
       sessions={sessions} sessionsLoading={loadingSessions} transcriptLoading={loadingDetail} getSelectedMessageKey={() => selectedWindowHandleRef.current?.()?.getCursorCard()?.key ?? readTranscriptCursorKey()} composerContext={composerAccessories.snapshot.summary ?? undefined}
@@ -7665,6 +7705,7 @@ function OpenTuiWorkspace() {
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
     </box>
     </EngineeringFrame>
+    </box>
     {paneResize.layer}
     </PaneResizeProvider>
     </BordersContext.Provider>

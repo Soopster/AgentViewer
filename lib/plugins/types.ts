@@ -53,9 +53,10 @@ export type PluginSurfaceSpec = {
 
 /**
  * Where a widget may sit. 'corner': floating over the app's top-right (TUI) or
- * bottom-right (Web) corner, stacked with the others there.
+ * bottom-right (Web) corner, stacked with the others there. 'top-bar': a
+ * reserved one-row strip above the TUI workspace, hidden in fullscreen.
  */
-export type PluginWidgetSlot = 'corner'
+export type PluginWidgetSlot = 'corner' | 'top-bar'
 
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
 
@@ -169,6 +170,7 @@ export type PluginManifest = {
  * provider's SessionCapabilities: these describe the host, not the session.
  */
 export type PluginServiceId =
+  | 'shell-overview'
   | 'run-launch'
   | 'playbooks'
   /** Read what every agent did over a day or week, with the host's attention inbox filed in. */

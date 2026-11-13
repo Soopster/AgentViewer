@@ -13,6 +13,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { TuiTranscriptCard } from '../format'
+import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
 
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-scrollback-smoke-')))
 
@@ -157,8 +158,48 @@ try {
     const borderTitle = rows[titleRow] ?? ''
     // The title is a tab chip on the border; its padding must not swallow the rule after it.
     if (!/╰─{3,}/.test(borderTitle)) fail('Trailing title padding hides the top border')
+    // The shell bar adds a row above the workspace, never over its sticky prompt.
+    const omni = setup.renderer.root.findDescendantById('omni-bar')
+    if (!omni || omni.y !== 0 || omni.height !== 1) fail('Omni bar did not reserve exactly the top row')
+    const enabledViewport = scroll().viewport.height
+    const enabledSettings = readPluginSettings()
+    await act(async () => { applyPluginSettings(withPluginEnabled(enabledSettings, 'omni-bar', false)) })
+    await settle()
+    if (setup.renderer.root.findDescendantById('omni-bar')) fail('Disabled omni bar remained mounted')
+    if (scroll().viewport.height !== enabledViewport + 1) fail('Disabling omni bar did not return one transcript row')
+    if (!rowWith('▌ PROMPT  Explain the pool.')) fail('Disabling omni bar lost the sticky prompt')
+    if (!followsTail()) fail('Disabling omni bar lost follow-tail')
+    await act(async () => { applyPluginSettings(enabledSettings) })
+    await settle(300)
+    if (scroll().viewport.height !== enabledViewport) fail('Re-enabling omni bar did not reserve exactly one row')
+    if (!rowWith('▌ PROMPT  Explain the pool.') || !followsTail()) fail('Re-enabling omni bar lost prompt or follow-tail')
+    // Mouse opens the real palette; the plugin command opens its keyboard action menu.
+    const commands = setup.renderer.root.findDescendantById('omni-bar:commands')!
+    await act(async () => { await setup.mockMouse.click(commands.x + 1, commands.y) })
+    await settle()
+    if (!setup.renderer.root.findDescendantById('command-palette')) fail('Omni commands did not open the palette')
+    await act(async () => { await setup.mockInput.typeText('Omni bar actions') })
+    await settle()
+    await act(async () => { setup.mockInput.pressEnter() })
+    await settle(400)
+    if (!setup.renderer.root.findDescendantById('omni-bar-actions')) fail('Omni action command did not open its plugin surface')
+    await act(async () => { setup.mockInput.pressArrow('down') })
+    await settle()
+    await act(async () => { setup.mockInput.pressArrow('down') })
+    await settle()
+    await act(async () => { setup.mockInput.pressEnter() })
+    await settle()
+    if (!rowWith('Attention')) fail('Keyboard action did not open attention inbox')
+    await act(async () => { setup.mockInput.pressEscape() })
+    await settle()
+    await act(async () => { setup.mockInput.pressKey('Z', { shift: true }) })
+    await settle()
+    if (setup.renderer.root.findDescendantById('omni-bar')) fail('Fullscreen kept the omni bar visible')
+    await act(async () => { setup.mockInput.pressKey('Z', { shift: true }) })
+    await settle(600)
+    if (!setup.renderer.root.findDescendantById('omni-bar')) fail('Leaving fullscreen did not restore the omni bar')
     if (process.env.STICKY_HEADER_SMOKE_ONLY) {
-      console.log('Sticky header smoke passed (accent marker, prompt label, no spare row above header)')
+      console.log('Sticky header and omni bar smoke passed (prompt preserved, one row reclaimed, mouse/palette/keyboard actions, fullscreen restore)')
       setup.renderer.destroy()
       process.exit(0)
     }

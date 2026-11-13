@@ -4,5 +4,6 @@ import { createPluginWidgetRegistry } from '../../../lib/plugins/widgetHost'
 import type { TuiPluginWidget } from './pluginTypes'
 
 export const tuiPluginWidgets = createPluginWidgetRegistry<TuiPluginWidget>('tui', PLUGIN_MANIFESTS, {
+  'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).widgets,
   'pi-activity': async () => (await import('../../../plugins/pi-activity/tui')).widgets,
 })
