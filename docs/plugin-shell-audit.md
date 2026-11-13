@@ -133,12 +133,12 @@ load its code, which needs a build. `npm run plugins:web:live` drives the real W
 app through the migrated plugins and a fixture mod.
 
 The permission hook is verified per bridge: Claude's `canUseTool` and the ACP
-pool hermetically (`localPluginSmoke`, `pluginPermissionAcpSmoke`), and Codex,
-Copilot and OpenCode against the real CLIs (`npm run plugins:permission:live`:
-a mod denies a probe command; the hook is consulted and the command never
-runs). A user's own Claude Code `PreToolUse`/`PermissionRequest` hooks answer
-before the SDK asks, so on such a machine the plugin hook is not reached for
-Claude, which is the intended precedence.
+pool hermetically (`localPluginSmoke`, `pluginPermissionAcpSmoke`), and Claude,
+Codex, Copilot and OpenCode against the real agents (`npm run
+plugins:permission:live`: a mod denies a probe command; the hook is consulted
+and the command never runs). Claude asks only when the composer requests
+approvals (`manualPermissions`), as the UI does; without it there is no approval
+for a person or a plugin to answer.
 
 ## Composer accessory contributions
 

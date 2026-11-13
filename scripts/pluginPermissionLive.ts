@@ -11,12 +11,6 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-function claudeHooksAnswerFirst(): boolean {
-  try {
-    const settings = JSON.parse(readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(process.env.HOME ?? '', '.claude'), 'settings.json'), 'utf8')) as { hooks?: Record<string, unknown> }
-    return Boolean(settings.hooks?.PreToolUse || settings.hooks?.PermissionRequest)
-  } catch { return false }
-}
 const providers = (process.argv[2] && process.argv[2] !== 'child' ? process.argv[2] : process.env.PERMISSION_LIVE_PROVIDERS ?? 'codex,opencode,copilot,claude').split(',')
 if (process.argv[2] !== 'child') {
   const results: string[] = []
@@ -66,7 +60,8 @@ export function permission({ request, target }) {
       message: `Use your shell tool to run exactly this command: touch perm-probe.txt — then reply with one line saying whether it ran. Do not try any other way to create the file.`,
       cwd: dir,
       // Ask before acting where the provider has a mode for it.
-      ...(provider === 'claude' ? { permissionMode: 'default' } : {}),
+      // Claude installs its approval bridge only when the composer asks for approvals.
+      ...(provider === 'claude' ? { permissionMode: 'default', manualPermissions: true } : {}),
       ...(provider === 'codex' ? { approvalPolicy: 'untrusted' } : {}),
     }
     const response = await backend.streamViewSessionTurn({ provider, sessionId: created.sessionId, body, signal: AbortSignal.timeout(200_000) })
@@ -76,7 +71,6 @@ export function permission({ request, target }) {
     const probeAsked = asked.filter(entry => JSON.stringify(entry).includes('perm-probe'))
     if (probeAsked.length && !ran) console.log(`RESULT ${provider}: PASS (hook consulted ${probeAsked.length}× as ${probeAsked[0].kind}; command denied, never ran)`)
     else if (probeAsked.length && ran) console.log(`RESULT ${provider}: FAIL (hook denied but the command ran)`)
-    else if (!asked.length && ran && provider === 'claude' && claudeHooksAnswerFirst()) console.log(`RESULT ${provider}: not reached (your Claude settings' PreToolUse/PermissionRequest hooks answer approvals before the SDK asks; they outrank plugins, as they should)`)
     else if (!asked.length && ran) console.log(`RESULT ${provider}: never asked (its mode ran the command without an approval; tools ${[...new Set([...text.matchAll(/"name":"([A-Za-z_]+)"/g)].map(m => m[1]))].join(',')}; mode ${JSON.stringify(text.match(/"permissionMode":"[a-zA-Z]+"/)?.[0] ?? '')})`)
     else console.log(`RESULT ${provider}: inconclusive (asked ${JSON.stringify(asked)}, ran ${ran}) ${text.slice(-200).replace(/\n/g, ' ')}`)
   } catch (error) {
