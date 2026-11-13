@@ -1,6 +1,6 @@
 'use client'
 
-import { sessionSelectionKey as sessionKey } from '@/components/session-catalog/selectionKey'
+import { sessionSelectionKey as sessionKey } from '@/components/shell/sdk'
 
 import { memo, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'

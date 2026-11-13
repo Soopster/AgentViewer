@@ -29,7 +29,7 @@ function Fixture() {
       <SessionList sessions={sessions} loading={false} error={null} provider="all" providerInstanceId="all"
         providerInstances={[]} switchingProvider={false} selectedId={selectedId} selectedProject={null}
         onSelect={session => { setSelectedId(`claude:${session.sessionId}`); record(`session:${session.sessionId}`) }}
-        onSelectProject={noop} onOpenDashboard={noop}
+        onSelectProject={noop}
         onRename={(target, customTitle) => {
           setSessions(previous => patchSessionList(previous, target, { customTitle }))
           record(`rename:${target.sessionId}:${customTitle}`)

@@ -14,6 +14,16 @@ export type WebPluginServices = {
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
+  /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */
+  'session-fleet'?: {
+    readonly sessions: Session[]
+    readonly selected: Session | null
+    readonly selectedMessages: import('@/lib/types').SessionMessage[]
+    readonly loading: boolean
+    readonly providerLabel: string
+    readonly scopeLabel: string | null
+    readonly select: (session: Session) => void
+  }
   'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
   'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
   'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService

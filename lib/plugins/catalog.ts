@@ -34,9 +34,10 @@ import { manifest as bookmarks } from '../../plugins/bookmarks/manifest'
 import { manifest as provenance } from '../../plugins/provenance/manifest'
 import { manifest as remoteAccess } from '../../plugins/remote-access/manifest'
 import { manifest as piActivity } from '../../plugins/pi-activity/manifest'
+import { manifest as runDashboard } from '../../plugins/run-dashboard/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 
-export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, goals] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, goals] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

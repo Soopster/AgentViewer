@@ -12,6 +12,7 @@ export const manifest = {
   description: 'The agent control center over every Coordinator run, and the teammates panel for a conversation.',
   renderers: ['web', 'tui'],
   stateVersion: 1,
+  dashboards: [{ id: 'agents', title: 'Agent Operations', glyph: '◎', icon: 'users-round', launcherLabel: 'Open Agent Operations dashboard', command: 'coord-board', surface: 'coordination', order: -10 }],
   surfaces: [{
     // One coordination store, so one view of it.
     id: 'coordination',
@@ -59,7 +60,10 @@ export const manifest = {
     category: 'Coordination',
     opens: 'coordination',
     requires: null,
+    scope: 'application',
     renderers: ['web', 'tui'],
+    // On the Web the control center is a dashboard tab.
+    webDashboard: 'agents',
     // ⌃K a is the portable path where Ctrl+Shift cannot be told from Ctrl.
     tuiKey: { name: 'a', ctrl: true, shift: true },
     tuiKeyLabel: '⌃K a / ⌃⇧A',

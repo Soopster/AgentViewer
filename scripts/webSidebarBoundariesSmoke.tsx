@@ -17,7 +17,7 @@ const props: React.ComponentProps<typeof SessionList> = {
   sessions, loading: false, error: null, provider: 'all', providerInstanceId: 'all', providerInstances: [],
   switchingProvider: false, selectedId: 'codex-work:shared', selectedProject: null,
   teamAttention: { 'claude:shared': { waiting: 1, finished: 0 } },
-  onSelect: noop, onSelectProject: noop, onOpenDashboard: noop, onRename: noop, onTag: noop,
+  onSelect: noop, onSelectProject: noop, onRename: noop, onTag: noop,
   onChangeProvider: noop, scopeMode: 'all', scopeProjectName: null, canScopeToProject: true,
   includeWorktrees: true, onChangeScope: noop, onToggleWorktrees: noop, onOpenCommandPalette: noop,
   onOpenCoordinator: noop, canOpenGit: true, onOpenGit: noop,
@@ -36,7 +36,11 @@ assert.ok(html[4]!.includes('Expand sidebar'))
 const digest = createHash('sha256').update(JSON.stringify(html)).digest('hex')
 assert.ok(html[0]!.includes('aria-label="Open cross-session messaging"'))
 assert.ok(html[0]!.includes('✉'))
-assert.equal(digest, 'a23237de371bad6c33ff7d69e433b7dc37fca6b9c737c3484161f502a08693cd')
+// The run dashboard and Agent Operations launchers are plugin dashboards too, in metadata order.
+const launchers = [...html[0]!.matchAll(/aria-label="(Open (?:run dashboard|Agent Operations dashboard|cross-session messaging))"/g)].map(match => match[1])
+assert.deepEqual(launchers, ['Open run dashboard', 'Open Agent Operations dashboard', 'Open cross-session messaging'])
+assert.ok(html[4]!.includes('aria-label="Open run dashboard"') && html[4]!.includes('aria-label="Open Agent Operations dashboard"'), 'the collapsed rail lost a dashboard launcher')
+assert.equal(digest, '9957cf513b68f34d956c78583f36889d54f1f67819c7a6f96dd11002287a2c53')
 assert.equal(sessionTabKey(sessions[1]!), 'codex-work:shared')
 assert.notEqual(sessionTabKey(sessions[0]!), sessionTabKey(sessions[1]!))
 assert.ok(bestScore(['alpha'], 'alpha') > bestScore(['alpha task'], 'alpha'))

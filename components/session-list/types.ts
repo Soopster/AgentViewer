@@ -20,7 +20,6 @@ export type SessionListProps = {
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
-  onOpenDashboard: () => void
   onRename: SessionMetadataCallbacks['onRename']
   onTag: SessionMetadataCallbacks['onTag']
   onChangeProvider: (provider: ProviderSelection, providerInstanceId?: string) => void

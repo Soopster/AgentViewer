@@ -1,6 +1,7 @@
 'use client'
 
 import { usePluginDashboards } from './shell/usePluginDashboards'
+import { DashboardIcon } from './shell/dashboardIcons'
 import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
 import { useSidebarResize } from './session-list/useSidebarResize'
 
@@ -41,7 +42,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
-import { BookOpen, Bot, Command, GitBranch, LayoutDashboard, ListTree, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BookOpen, Bot, Command, GitBranch, LayoutDashboard, ListTree, Search, SlidersHorizontal } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 import { useSessionListModel } from './session-list/useSessionListModel'
 
@@ -60,7 +61,6 @@ function SessionListInner({
   scrollToSessionRequest,
   onSelect,
   onSelectProject,
-  onOpenDashboard,
   onRename,
   onTag,
   onChangeProvider,
@@ -300,32 +300,22 @@ function SessionListInner({
             </button>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setCollapsedPanel(null)
-                  onOpenDashboard()
-                }}
-                aria-label="Run dashboard"
-                title="Run dashboard"
-                className="av-hover-control"
-                style={collapsedIconButtonStyle(selectedDashboard === 'sessions')}
-              >
-                <LayoutDashboard size={20} strokeWidth={2.2} />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setCollapsedPanel(null)
-                  onOpenCoordinator()
-                }}
-                aria-label="Agent Operations dashboard"
-                title="Agent Operations"
-                className="av-hover-control"
-                style={collapsedIconButtonStyle(selectedDashboard === 'agents')}
-              >
-                <UsersRound size={20} strokeWidth={2.2} />
-              </button>
+              {pluginDashboards.map(dashboard => (
+                <button
+                  key={dashboard.id}
+                  type="button"
+                  onClick={() => {
+                    setCollapsedPanel(null)
+                    dispatchPluginCommand(dashboard.command)
+                  }}
+                  aria-label={dashboard.launcherLabel ?? `Open ${dashboard.title}`}
+                  title={dashboard.title}
+                  className="av-hover-control"
+                  style={collapsedIconButtonStyle(selectedDashboard === dashboard.id)}
+                >
+                  <DashboardIcon icon={dashboard.icon} glyph={dashboard.glyph} size={20} />
+                </button>
+              ))}
               <button
                 type="button"
                 onClick={() => handleCollapsedAction('provider')}
@@ -970,31 +960,11 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                       marginLeft: 'auto',
                     }}
                   >
-                    <Button
-                      onClick={onOpenDashboard}
-                      variant="outline"
-                      size="sm"
-                      aria-label="Open run dashboard"
-                      className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'sessions', accent: 'cyan' })}
-                    >
-                      <LayoutDashboard size={15} strokeWidth={2.2} />
-                    </Button>
-                    <Button
-                      onClick={onOpenCoordinator}
-                      variant="outline"
-                      size="sm"
-                      aria-label="Open Agent Operations dashboard"
-                      className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ active: selectedDashboard === 'agents', accent: 'cyan' })}
-                    >
-                      <UsersRound size={16} strokeWidth={2.2} />
-                    </Button>
                     {pluginDashboards.map(dashboard => <Button key={dashboard.id}
                       onClick={() => dispatchPluginCommand(dashboard.command)} variant="outline" size="sm"
                       aria-label={dashboard.launcherLabel ?? `Open ${dashboard.title}`}
                       className="av-hover-control" style={sidebarHeaderIconActionStyle({ active: selectedDashboard === dashboard.id, accent: 'cyan' })}>
-                      <span aria-hidden="true">{dashboard.glyph}</span>
+                      <DashboardIcon icon={dashboard.icon} glyph={dashboard.glyph} size={15} />
                     </Button>)}
                     <Button
                       onClick={onOpenCommandPalette}

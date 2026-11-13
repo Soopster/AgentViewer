@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { renderToStaticMarkup } from 'react-dom/server'
 import TabBar from '../components/TabBar'
-import RunDashboard from '../components/RunDashboard'
+import RunDashboard from '../plugins/run-dashboard/web/RunDashboard'
 import { sessionSelectionKey } from '../components/session-catalog/selectionKey'
 import type { Session } from '../lib/types'
 

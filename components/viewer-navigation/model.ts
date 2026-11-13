@@ -7,7 +7,8 @@ import { stabilizeSessionIdentities, refreshOpenSessionMetadata } from '@/compon
 import { patchSessionList, removeSessionFromList, type SessionMetadataPatch } from '@/components/session-catalog/actions'
 
 export const RUN_DASHBOARD_KEY = '__run-dashboard__'
-export type DashboardTab = 'sessions' | 'agents' | import('@/lib/plugins/dashboard').PluginDashboardId
+/** A dashboard is a plugin contribution; `sessions` (run dashboard) is the default tab. */
+export type DashboardTab = import('@/lib/plugins/dashboard').PluginDashboardId
 export type ProjectSelection = { key: string; dir: string; sessions: Session[] }
 export type MessageTarget = { messageId: string; requestId: number }
 export type ViewerLocation =

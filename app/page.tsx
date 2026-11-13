@@ -49,7 +49,6 @@ import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
-const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const PluginWidgetHost = dynamic(() => import('@/components/shell/PluginWidgetHost').then(module => module.PluginWidgetHost), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
 
@@ -377,13 +376,17 @@ export default function Home() {
       sessionsChanged: () => { void fetchSessions(false) },
     },
   }), [panelCoordinationServices, fetchSessions])
-  // The control center's command opens the run dashboard on it.
-  useEffect(() => subscribePluginCommands((commandId) => {
-    const command = getPluginCommand(commandId)
-    if (!command || command.opens !== 'coordination' || !isPluginEnabled(command.pluginId)) return false
-    openCoordinator()
-    return true
-  }), [openCoordinator])
+  // What every dashboard plugin may use; each receives only what it declares.
+  const dashboardServices = useMemo<WebPluginServices>(() => ({
+    session: { session: selectedSession },
+    coordination: dashboardCoordinationServices.coordination,
+    'session-navigation': { open: openSessionFromPlugin },
+    'session-fleet': {
+      sessions, selected: selectedSession, selectedMessages: messages, loading: loadingSessions,
+      providerLabel: provider, scopeLabel: sessionScope === 'project' ? activeProjectName : null,
+      select: selectSession,
+    },
+  }), [selectedSession, dashboardCoordinationServices, openSessionFromPlugin, sessions, messages, loadingSessions, provider, sessionScope, activeProjectName, selectSession])
   // What the Terminal and Browser views are given: a way to attach what they
   // show to the message being written, when there is one.
   const contextServices = useMemo<WebPluginServices>(() => (!selectedProject && selectedSession ? {
@@ -414,7 +417,6 @@ export default function Home() {
             scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}
-            onOpenDashboard={openRunDashboard}
             onRename={handleRename}
             onTag={handleTag}
             onChangeProvider={handleChangeProvider}
@@ -440,23 +442,9 @@ export default function Home() {
               <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
                 {dashboardSelected ? (
                   <DashboardViews value={dashboardTab} onValueChange={setDashboardTab}>
-                    <DashboardView value="sessions">
-                      <RunDashboard
-                        sessions={sessions}
-                        selectedSession={selectedSession}
-                        messages={messages}
-                        loading={loadingSessions}
-                        providerLabel={provider}
-                        scopeLabel={sessionScope === 'project' ? activeProjectName : null}
-                        onSelectSession={selectSession}
-                      />
-                    </DashboardView>
-                    <DashboardView value="agents">
-                      <PluginSurfaceHost surfaceId="coordination" placement="window" sessionKey={null} services={dashboardCoordinationServices} onClose={openRunDashboard} />
-                    </DashboardView>
                     {pluginDashboards.map(dashboard => <DashboardView key={dashboard.id} value={dashboard.id as DashboardTab}>
                       <PluginSurfaceHost surfaceId={dashboard.surface} placement="window" sessionKey={null}
-                        services={{ session: { session: selectedSession } }} onClose={openRunDashboard} />
+                        services={dashboardServices} onClose={openRunDashboard} />
                     </DashboardView>)}
                   </DashboardViews>
                 ) : (

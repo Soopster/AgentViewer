@@ -125,6 +125,8 @@ export type PluginManifest = {
     readonly id: string
     readonly title: string
     readonly glyph: string
+    /** A host icon name (the Web's dashboard icon table); the glyph stands in when the host has none. */
+    readonly icon?: string
     readonly launcherLabel?: string
     readonly command: string
     readonly surface: string
