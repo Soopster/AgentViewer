@@ -36,7 +36,10 @@ try {
     await page.waitForTimeout(400)
     await page.keyboard.press('Enter')
   }
+  // E2E_ONLY=<regex> runs only the checks whose name matches (the rest are skipped, not passed).
+  const only = process.env.E2E_ONLY ? new RegExp(process.env.E2E_ONLY, 'i') : null
   const check = async (name, run) => {
+    if (only && !only.test(name)) return
     // Each check is capped, so one stuck step reports itself instead of hanging the run.
     let timer
     const cap = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out after 90s')), 90_000) })
@@ -231,12 +234,13 @@ try {
       const buffer = view.locator(`[data-editor-buffer="${fixture}"]`)
       await buffer.waitFor()
       await view.getByText(/CRLF/).waitFor()
-      await buffer.press('End')
-      await buffer.press('ControlOrMeta+End')
+      // The caret at the end of the buffer (End/⌘End differ by platform in a textarea).
+      await buffer.click()
+      await buffer.evaluate(element => { element.selectionStart = element.selectionEnd = element.value.length })
       await buffer.type('three')
       await page.keyboard.press('ControlOrMeta+s')
       await view.getByText(`Saved ${fixture}`).waitFor()
-      assert.equal(readFileSync(fixture, 'utf8'), 'one\r\ntwo\r\nthree', 'line endings survive the textarea')
+      { const written = readFileSync(fixture, 'utf8'); assert.equal(written, 'one\r\ntwo\r\nthree', `line endings survive the textarea; wrote ${JSON.stringify(written)}`) }
       writeFileSync(fixture, 'changed elsewhere\r\n')
       await buffer.type('!')
       await page.keyboard.press('ControlOrMeta+s')
@@ -246,7 +250,7 @@ try {
       // The buffer is unsaved: closing asks, and accepting discards it.
       let asked = ''
       page.once('dialog', dialog => { asked = dialog.message(); void dialog.accept() })
-      await view.getByRole('button', { name: 'Close' }).click()
+      await view.getByRole('button', { name: 'Close', exact: true }).click()
       await view.waitFor({ state: 'detached' })
       assert.match(asked, /Discard unsaved changes/)
     } finally { rmSync(fixture, { force: true }) }
