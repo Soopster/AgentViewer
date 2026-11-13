@@ -204,6 +204,7 @@ try {
   const up = await wheel('up', 700)
   assert.ok(up.slides >= 10, `scrolling up ${up.rows} rows slid the window only ${up.slides} times`)
   const rootRenders = readRootRenderCount() - rootBefore
+  assert.ok(thumbSamples > 100, `the scrollbar thumb was sampled only ${thumbSamples} times`)
   const slides = down.slides + up.slides
   // SCROLLBACK parks its hidden cursor from the root as the text moves; in
   // every other view a slide re-renders the transcript window alone.
@@ -211,7 +212,7 @@ try {
     assert.ok(rootRenders * 4 < slides, `${slides} window slides re-rendered the root ${rootRenders} times`)
   }
   console.log(`Reader window smoke passed (${view}): ${slides} slides across ${down.rows + up.rows} rows and `
-    + `${down.frames + up.frames} frames, no row out of place, ${rootRenders} root renders`)
+    + `${down.frames + up.frames} frames, no row out of place, thumb steady over ${thumbSamples} frames, ${rootRenders} root renders`)
 } finally {
   act(() => setup.renderer.destroy())
 }
