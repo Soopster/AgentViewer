@@ -113,7 +113,8 @@ assert.ok(stacked, `no row for ⌃B " :\n${JSON.stringify(collectIds().filter(id
 await act(async () => { await setup.mockMouse.moveTo(stacked.x + 6, stacked.y) })
 await settle(150)
 assert.equal(selectedPosition()?.[1], '2', 'hovering an entry selects it')
-await act(async () => { await setup.mockMouse.click(2, 12) })
+// Column 0 is outside the panel at any width (it is centred with a two-column margin).
+await act(async () => { await setup.mockMouse.click(0, 12) })
 await settle(200)
 assert.ok(!captureCharFrame().includes('split pane keybinds'), 'a press outside closes the panel')
 // The self-revealed panel answers the mouse too: hesitate on ⌃B, then click "layout menu".

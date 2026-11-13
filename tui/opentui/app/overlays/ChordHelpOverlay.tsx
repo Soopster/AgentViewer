@@ -68,10 +68,35 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
   const view = chordHelpView(chordHelp)
   const keysW = chordHelpKeyWidth(map)
   // Wide enough for the longest description (the ⌃B table's run long): the
-  // selection marker, the key gutter, a gap, the label and the scrollbar.
-  const longestLabel = view.rows.reduce((widest, row) => Math.max(widest, row.keys === null ? 0 : row.label.length), 0)
-  const overlayW = Math.min(width - 4, Math.max(keysW + longestLabel + 9, 56))
-  const labelW = overlayW - keysW - 8
+  // selection marker, the key gutter, a gap and the label.
+  const longestLabel = view.rows.reduce((widest, row) => Math.max(widest, row.keys === null ? row.label.length + 2 : row.label.length), 0)
+  const cellNeed = keysW + longestLabel + 5
+  // Two columns when the table is long and the terminal has room for two
+  // readable ones (the ⌃B table is far taller than most terminals).
+  const minCell = keysW + 26
+  const twoColumns = view.rows.length > 14 && width - 4 >= minCell * 2 + 2
+  const cellW = twoColumns ? Math.min(cellNeed, Math.floor((width - 4 - 3) / 2)) : Math.min(width - 4 - 3, Math.max(cellNeed, 53))
+  const overlayW = (twoColumns ? cellW * 2 + 1 : cellW) + 3 // borders and the scrollbar
+  const labelW = cellW - keysW - 5
+  // Split at the section boundary nearest the middle, so a section is never torn across columns.
+  const split = (() => {
+    if (!twoColumns) return view.rows.length
+    const half = Math.ceil(view.rows.length / 2)
+    let best = half
+    view.rows.forEach((row, i) => { if (row.keys === null && i > 0 && Math.abs(i - half) < Math.abs(best - half)) best = i })
+    return Math.abs(best - half) <= Math.ceil(view.rows.length / 6) ? best : half
+  })()
+  const columns = (() => {
+    if (!twoColumns) return [view.rows]
+    const right = view.rows.slice(split)
+    // A section split across the columns says so at the top of the second.
+    if (right[0] && right[0].keys !== null) {
+      const heading = [...view.rows.slice(0, split)].reverse().find(row => row.keys === null)
+      if (heading) right.unshift({ ...heading, id: `${heading.id}:continued`, label: `${heading.label} (continued)` })
+    }
+    return [view.rows.slice(0, split), right]
+  })()
+  const lineCount = Math.max(...columns.map(column => column.length), 0)
   const overlayTop = 2
   // Two borders, the title row and the footer, plus the filter row (with its padding) when opened with `?`.
   const overlayChromeRows = 4 + (chordHelp.dismissOnKey ? 3 : 0)
@@ -82,14 +107,49 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
     areaHeight - 1,
     toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) - areaOffset : areaHeight,
   )
-  const bodyRows = Math.max(Math.min(view.rows.length, panelBottom - overlayTop - overlayChromeRows), 3)
-  const selectedRow = view.selected ? view.rows.indexOf(view.selected) : 0
-  const maxStart = Math.max(0, view.rows.length - bodyRows)
-  const followStart = clamp(selectedRow - Math.floor(bodyRows / 2), 0, maxStart)
+  const bodyRows = Math.max(Math.min(lineCount, panelBottom - overlayTop - overlayChromeRows), 3)
+  const selectedLine = view.selected ? columns.map(column => column.indexOf(view.selected!)).find(line => line >= 0) ?? 0 : 0
+  const maxStart = Math.max(0, lineCount - bodyRows)
+  const followStart = clamp(selectedLine - Math.floor(bodyRows / 2), 0, maxStart)
   const startIdx = clamp(wheelStart ?? followStart, 0, maxStart)
-  const visible = view.rows.slice(startIdx, startIdx + bodyRows)
-  const hiddenBelow = Math.max(0, view.rows.length - startIdx - bodyRows)
+  const hiddenBelow = Math.max(0, lineCount - startIdx - bodyRows)
   const scrollBy = (delta: number) => setWheelStart(clamp(startIdx + delta, 0, maxStart))
+  const renderCell = (row: ChordHelpRow | undefined, key: string) => {
+    if (!row) return <box key={key} width={cellW} />
+    if (row.keys === null) {
+      return (
+        <box key={key} width={cellW} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+          <text fg={theme.cyan} wrapMode="none" selectable={false}>{fitText(`┄ ${row.label.toUpperCase()}`, cellW - 2)}</text>
+        </box>
+      )
+    }
+    const entryIndex = row.runnable ? view.entries.indexOf(row) : -1
+    const isSelected = row === view.selected
+    return (
+      <box
+        key={key}
+        id={`chord-help-row:${row.id}`}
+        width={cellW}
+        paddingX={1}
+        flexDirection="row"
+        backgroundColor={isSelected ? theme.surface3 : theme.surface}
+        onMouseOver={() => { if (entryIndex >= 0 && !isSelected) { hovered.current = entryIndex; mouse?.select(entryIndex) } }}
+        onMouseDown={(event: MouseLike) => {
+          event.stopPropagation?.()
+          if ((event.button ?? 0) !== 0 || entryIndex < 0) return
+          mouse?.run(row)
+        }}
+      >
+        <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
+        <box width={keysW} flexShrink={0}>
+          <text fg={row.runnable ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{fitText(row.keys, keysW)}</text>
+        </box>
+        <box flexGrow={1} paddingLeft={2}>
+          <text fg={isSelected ? theme.text : row.runnable ? theme.muted : theme.dim} wrapMode="none" selectable={false}>{fitText(row.label, labelW)}</text>
+        </box>
+      </box>
+    )
+  }
   const footer = chordHelp.dismissOnKey
     ? `${startIdx > 0 ? `▲ ${startIdx}  ` : ''}${hiddenBelow > 0 ? `▼ ${hiddenBelow}  ` : ''}⏎ or click runs · esc closes`
     : `${startIdx > 0 ? `▲ ${startIdx}  ` : ''}${hiddenBelow > 0 ? `▼ ${hiddenBelow}  ` : ''}press a key · or click a row`
@@ -141,42 +201,18 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
           <box flexGrow={1} flexDirection="column">
             {view.rows.length === 0 ? (
               <box paddingX={1}><text fg={theme.dim}>no matches</text></box>
-            ) : visible.map((row, slot) => {
-              if (row.keys === null) {
-                return (
-                  <box key={`chord-row:${slot}`} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-                    <text fg={theme.cyan} wrapMode="none" selectable={false}>{`┄ ${row.label.toUpperCase()}`}</text>
-                  </box>
-                )
-              }
-              const entryIndex = row.runnable ? view.entries.indexOf(row) : -1
-              const isSelected = row === view.selected
+            ) : Array.from({ length: Math.min(bodyRows, lineCount - startIdx) }, (_, slot) => {
+              const line = startIdx + slot
               return (
-                <box
-                  key={`chord-row:${slot}`}
-                  id={`chord-help-row:${row.id}`}
-                  paddingX={1}
-                  flexDirection="row"
-                  backgroundColor={isSelected ? theme.surface3 : theme.surface}
-                  onMouseOver={() => { if (entryIndex >= 0 && !isSelected) { hovered.current = entryIndex; mouse?.select(entryIndex) } }}
-                  onMouseDown={(event: MouseLike) => {
-                    event.stopPropagation?.()
-                    if ((event.button ?? 0) !== 0 || entryIndex < 0) return
-                    mouse?.run(row)
-                  }}
-                >
-                  <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
-                  <box width={keysW}>
-                    <text fg={row.runnable ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{fitText(row.keys, keysW)}</text>
-                  </box>
-                  <box flexGrow={1} paddingLeft={2}>
-                    <text fg={isSelected ? theme.text : row.runnable ? theme.muted : theme.dim} wrapMode="none" selectable={false}>{fitText(row.label, labelW)}</text>
-                  </box>
+                <box key={`chord-line:${slot}`} flexDirection="row">
+                  {renderCell(columns[0]![line], 'left')}
+                  {twoColumns ? <text fg={theme.border} wrapMode="none" selectable={false}>│</text> : null}
+                  {twoColumns ? renderCell(columns[1]![line], 'right') : null}
                 </box>
               )
             })}
           </box>
-          <ListScrollbar id="chord-help-scrollbar" total={view.rows.length} rows={visible.length} start={startIdx} theme={theme} onJump={setWheelStart} />
+          <ListScrollbar id="chord-help-scrollbar" total={lineCount} rows={Math.min(bodyRows, lineCount)} start={startIdx} theme={theme} onJump={setWheelStart} />
         </box>
         <box paddingX={1} backgroundColor={theme.surface2}>
           <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(footer, overlayW - 4)}</text>
