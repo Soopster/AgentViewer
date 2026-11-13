@@ -10,7 +10,7 @@
 // (`{ notice, insertText, replaceText }`), which the renderer applies.
 import { pathToFileURL } from 'node:url'
 import { localPluginDiscovery, type LocalPlugin } from './localPlugins'
-import { decodeLocalCommandEffects, type LocalCommandEffects } from './localManifest'
+import { decodeLocalCommandEffects, decodeLocalWidgetContent, type LocalCommandEffects, type LocalWidgetContent } from './localManifest'
 import { isPluginEnabled } from './enablement'
 import { PLUGIN_API_VERSION } from './types'
 import type { PluginBehaviorModule } from './behavior'
@@ -24,6 +24,7 @@ type LocalServerModule = {
   permission?: PluginBehaviorModule['permission']
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
+  widgets?: Record<string, (context: { signal: AbortSignal }) => unknown>
 }
 
 export type LocalCommandContext = {
@@ -115,4 +116,31 @@ export async function runLocalPluginCommand(request: { pluginId: string; command
     },
   }
   return decodeLocalCommandEffects(await handler(context))
+}
+
+const WIDGET_TIMEOUT_MS = 2_000
+
+/**
+ * Every enabled mod's widget content. A widget function that throws, returns
+ * nothing or takes longer than two seconds is simply not shown this round.
+ */
+export async function readLocalPluginWidgets(signal: AbortSignal = new AbortController().signal): Promise<LocalWidgetContent[]> {
+  const plugins = localPluginDiscovery().plugins.filter(plugin => plugin.manifest.localWidgets?.length && isPluginEnabled(plugin.manifest.id))
+  const results = await Promise.all(plugins.flatMap(plugin => plugin.manifest.localWidgets!.map(async (widget) => {
+    try {
+      const module = await loadServerModule(plugin)
+      const read = module.widgets?.[widget.id]
+      if (typeof read !== 'function') return null
+      const widgetSignal = AbortSignal.any([signal, AbortSignal.timeout(WIDGET_TIMEOUT_MS)])
+      const value = await Promise.race([
+        Promise.resolve(read({ signal: widgetSignal })),
+        new Promise((_, reject) => widgetSignal.addEventListener('abort', () => reject(widgetSignal.reason), { once: true })),
+      ])
+      return decodeLocalWidgetContent(plugin.manifest.id, widget.id, plugin.manifest.title, value)
+    } catch (error) {
+      if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Local plugin ${plugin.manifest.id} widget ${widget.id} failed:`, error)
+      return null
+    }
+  })))
+  return results.filter((entry): entry is LocalWidgetContent => entry !== null)
 }

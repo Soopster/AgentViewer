@@ -18,7 +18,40 @@ const LOCAL_COMMAND_SERVICES: readonly PluginCommandServiceId[] = ['notices', 'c
 const CATEGORIES = ['Session', 'View', 'Transcript', 'Coordination'] as const
 
 /** A validated local plugin manifest, as the catalog and both plugin managers list it. */
-export type LocalPluginManifest = PluginManifest & { readonly source: 'local' }
+export type LocalPluginManifest = PluginManifest & {
+  readonly source: 'local'
+  /** A mod's widgets are content from its server module, drawn by the shell. */
+  readonly localWidgets?: readonly { readonly id: string; readonly slot: 'corner'; readonly refreshMs: number }[]
+}
+
+export const LOCAL_WIDGET_REFRESH_MS = 5_000
+export const LOCAL_WIDGET_MIN_REFRESH_MS = 1_000
+
+/** What a mod widget shows: a title and a few lines, in a tone the shell colours. */
+export type LocalWidgetContent = {
+  readonly pluginId: string
+  readonly id: string
+  readonly title: string
+  readonly lines: readonly string[]
+  readonly tone: 'info' | 'success' | 'warning' | 'error'
+}
+
+/** Decoded from untrusted module output or an HTTP body; null hides the widget. */
+export function decodeLocalWidgetContent(pluginId: string, id: string, fallbackTitle: string, value: unknown): LocalWidgetContent | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const text = typeof raw.text === 'string' ? raw.text : Array.isArray(raw.lines) ? raw.lines.filter((line): line is string => typeof line === 'string').join('\n') : ''
+  const lines = text.split('\n').map(line => line.slice(0, 200)).filter((line, index, all) => line || index < all.length - 1).slice(0, 8)
+  if (!lines.length) return null
+  const tone = raw.tone === 'success' || raw.tone === 'warning' || raw.tone === 'error' ? raw.tone : 'info'
+  return { pluginId, id, title: typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim().slice(0, 60) : fallbackTitle, lines, tone }
+}
+
+/** Reads every enabled mod widget's content where the mods run (in process, or the daemon). */
+export type LocalWidgetReader = (signal: AbortSignal) => Promise<LocalWidgetContent[]>
+let widgetReader: LocalWidgetReader | null = null
+export function setLocalWidgetReader(next: LocalWidgetReader): void { widgetReader = next }
+export function localWidgetReader(): LocalWidgetReader | null { return widgetReader }
 
 export function isLocalManifest(manifest: PluginManifest): manifest is LocalPluginManifest {
   return (manifest as { source?: unknown }).source === 'local'
@@ -81,12 +114,21 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
         ? { tuiChord: { key: chord.key, short: chord.short.slice(0, 8) } } : {}),
     })
   }
-  if (!behavior && commands.length === 0) problems.push('declares neither behavior hooks nor commands')
+  const widgets: { id: string; slot: 'corner'; refreshMs: number }[] = []
+  if (value.widgets !== undefined && !Array.isArray(value.widgets)) problems.push('widgets must be a list')
+  for (const [index, entry] of (Array.isArray(value.widgets) ? value.widgets : []).entries()) {
+    const widget = entry as Record<string, unknown>
+    if (typeof widget?.id !== 'string' || !LOCAL_PLUGIN_ID.test(widget.id)) { problems.push(`widgets[${index}].id is invalid`); continue }
+    if (widget.slot !== undefined && widget.slot !== 'corner') { problems.push(`widgets[${index}].slot must be "corner"`); continue }
+    const refresh = typeof widget.refreshMs === 'number' && Number.isFinite(widget.refreshMs) ? widget.refreshMs : LOCAL_WIDGET_REFRESH_MS
+    widgets.push({ id: widget.id, slot: 'corner', refreshMs: Math.max(LOCAL_WIDGET_MIN_REFRESH_MS, Math.min(refresh, 600_000)) })
+  }
+  if (!behavior && commands.length === 0 && widgets.length === 0) problems.push('declares no behavior hooks, commands or widgets')
   if (problems.length) return { manifest: null, problems }
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces: [], commands, ...(behavior ? { behavior } : {}), source: 'local',
+      surfaces: [], commands, ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), source: 'local',
     },
     problems,
   }

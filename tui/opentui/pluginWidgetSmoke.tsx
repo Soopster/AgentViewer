@@ -41,6 +41,40 @@ try {
   await settle()
   assert(!screen().includes('Pi activity'), 'a finished widget stayed up')
   console.log('Plugin widgets: lazy corner slot, draw-on-demand, disable evicts without stopping the feed, re-enable restores.')
+
+  // A mod's widget: content from its server module, drawn by the shell, refreshed on its interval.
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const path = await import('node:path')
+  const dir = mkdtempSync(path.join(tmpdir(), 'mod-widgets-'))
+  mkdirSync(path.join(dir, 'build-light'))
+  writeFileSync(path.join(dir, 'build-light', 'plugin.json'), JSON.stringify({ id: 'build-light', title: 'Build light', widgets: [{ id: 'status', refreshMs: 1000 }, { id: 'broken' }, { id: 'hangs' }] }))
+  writeFileSync(path.join(dir, 'build-light', 'server.mjs'), `let n = 0
+export const widgets = {
+  status: () => ({ title: 'CI', text: 'build #' + (++n) + ' green', tone: 'success' }),
+  broken: () => { throw new Error('widget fixture failure') },
+  hangs: () => new Promise(() => {}),
+}`)
+  process.env.AGENT_VIEWER_PLUGINS_DIR = dir
+  const { resetLocalPluginDiscovery } = await import('../../lib/plugins/localPlugins')
+  resetLocalPluginDiscovery()
+  const originalError = console.error
+  console.error = () => {}
+  try {
+    const { installTuiLocalPlugins } = await import('./shell/localPlugins')
+    await act(async () => { installTuiLocalPlugins() })
+    await settle(2600)
+    assert(/CI/.test(screen()) && /build #\d+ green/.test(screen()), `the mod widget did not draw:\n${screen()}`)
+    const first = Number(/build #(\d+)/.exec(screen())![1])
+    // A hanging widget costs each round at most its 2s timeout, never the others' content.
+    await settle(3200)
+    assert(Number(/build #(\d+)/.exec(screen())![1]) > first, 'the mod widget did not refresh')
+    await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'build-light', false)) })
+    await settle(300)
+    assert(!/build #/.test(screen()), 'a disabled mod kept its widget on screen')
+    await act(async () => { applyPluginSettings(DEFAULT_PLUGIN_SETTINGS) })
+  } finally { console.error = originalError }
+  console.log('Mod widgets: content from a mod server module is drawn and refreshed; a failing or hanging widget is skipped; disabling hides it.')
 } finally {
   act(() => setup.renderer.destroy())
 }

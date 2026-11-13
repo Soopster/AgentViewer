@@ -2,7 +2,7 @@
 // before the root loads (the ⌃K chord table and the command catalog are built
 // from manifests at module load), and run their commands in this process.
 import { registerLocalPluginManifests } from '../../../lib/plugins/catalog'
-import { setLocalCommandRunner } from '../../../lib/plugins/localManifest'
+import { setLocalCommandRunner, setLocalWidgetReader } from '../../../lib/plugins/localManifest'
 import { localPluginDiscovery } from '../../../lib/plugins/localPlugins'
 
 export function installTuiLocalPlugins(): void {
@@ -11,5 +11,9 @@ export function installTuiLocalPlugins(): void {
   setLocalCommandRunner(async (request, signal) => {
     const { runLocalPluginCommand } = await import('../../../lib/plugins/localPluginRuntime')
     return runLocalPluginCommand(request, signal)
+  })
+  setLocalWidgetReader(async (signal) => {
+    const { readLocalPluginWidgets } = await import('../../../lib/plugins/localPluginRuntime')
+    return readLocalPluginWidgets(signal)
   })
 }

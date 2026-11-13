@@ -3,7 +3,7 @@
 // The Web's half of local plugins: register the manifests the daemon found,
 // and run their commands there (their code is the daemon's, never the page's).
 import { registerLocalPluginManifests } from '@/lib/plugins/catalog'
-import { decodeLocalCommandEffects, parseLocalPluginManifest, setLocalCommandRunner, type LocalPluginManifest } from '@/lib/plugins/localManifest'
+import { decodeLocalCommandEffects, decodeLocalWidgetContent, parseLocalPluginManifest, setLocalCommandRunner, setLocalWidgetReader, type LocalPluginManifest, type LocalWidgetContent } from '@/lib/plugins/localManifest'
 import { PLUGIN_MANIFESTS } from '@/lib/plugins/catalog'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
@@ -19,6 +19,17 @@ setLocalCommandRunner(async (request, signal) => {
   return decodeLocalCommandEffects(body)
 })
 
+setLocalWidgetReader(async (signal) => {
+  const response = await fetch('/api/plugins/local', { signal })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok || !Array.isArray(body?.widgets)) return []
+  return (body.widgets as Array<Record<string, unknown>>).flatMap((entry): LocalWidgetContent[] => {
+    if (typeof entry.pluginId !== 'string' || typeof entry.id !== 'string') return []
+    const decoded = decodeLocalWidgetContent(entry.pluginId, entry.id, entry.pluginId, { ...entry, text: Array.isArray(entry.lines) ? (entry.lines as unknown[]).join('\n') : '' })
+    return decoded ? [decoded] : []
+  })
+})
+
 /** Apply the daemon's `local` section of GET /api/plugins. Manifests are re-validated, never trusted. */
 export function applyWebLocalPlugins(value: unknown): void {
   const local = (value as { local?: { dir?: unknown; plugins?: unknown; refused?: unknown } } | null)?.local
@@ -30,7 +41,7 @@ export function applyWebLocalPlugins(value: unknown): void {
     const entry = raw as LocalPluginManifest
     if (entry?.source !== 'local' || typeof entry.id !== 'string' || reserved.has(entry.id)) continue
     const reparsed = parseLocalPluginManifest({
-      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior,
+      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets,
       commands: (entry.commands ?? []).map(command => ({ ...command, id: command.handler })),
     }, reserved)
     if (reparsed.manifest) manifests.push(reparsed.manifest)

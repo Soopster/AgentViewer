@@ -6,6 +6,13 @@ import { isAgentProvider } from '@/lib/provider'
 // Run one local plugin ("mod") command where its code lives: this daemon. The
 // command answers with effects as data, which the Web client applies through
 // its own command host.
+// The enabled mods' widget content, for the Web shell's corner slot.
+export async function GET(request: NextRequest) {
+  applyPluginSettings(readPluginSettingsFile())
+  const { readLocalPluginWidgets } = await import('@/lib/plugins/localPluginRuntime')
+  return NextResponse.json({ widgets: await readLocalPluginWidgets(request.signal) }, { headers: { 'Cache-Control': 'no-store' } })
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({})) as { pluginId?: unknown; commandId?: unknown; target?: { session?: unknown; cwd?: unknown } }
   if (typeof body.pluginId !== 'string' || typeof body.commandId !== 'string') {

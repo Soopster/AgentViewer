@@ -4,6 +4,8 @@
 // takes no clicks. Each widget has its own error boundary.
 import React, { memo } from 'react'
 import { usePluginWidgets } from '../../../lib/plugins/usePluginWidgets'
+import { useLocalPluginWidgets } from '../../../lib/plugins/useLocalPluginWidgets'
+import { fitText } from '../textLayout'
 import type { PluginWidgetSlot } from '../../../lib/plugins/types'
 import type { TuiThemePalette } from '../../theme'
 import { tuiPluginWidgets } from './widgetPlugins'
@@ -25,7 +27,9 @@ export const PluginWidgetHost = memo(function PluginWidgetHost({ slot, theme, wi
   zIndex: number
 }) {
   const widgets = usePluginWidgets('tui', tuiPluginWidgets, slot)
-  if (widgets.length === 0) return null
+  // Mods' widgets are content from their server module; the shell draws them.
+  const local = useLocalPluginWidgets()
+  if (widgets.length === 0 && local.length === 0) return null
   const slotWidth = Math.max(20, Math.min(width - 4, CORNER_WIDGET_MAX_WIDTH))
   return (
     <box id={`plugin-widget-slot:${slot}`} position="absolute" top={1} left={Math.max(1, width - slotWidth - 2)} width={slotWidth} zIndex={zIndex} flexDirection="column">
@@ -34,6 +38,15 @@ export const PluginWidgetHost = memo(function PluginWidgetHost({ slot, theme, wi
           <Widget slot={slot} theme={theme} width={slotWidth} height={height} />
         </WidgetBoundary>
       ))}
+      {local.map(entry => {
+        const tone = entry.tone === 'error' ? theme.red : entry.tone === 'warning' ? theme.amber : entry.tone === 'success' ? theme.green : theme.cyan
+        return (
+          <box key={`local:${entry.pluginId}:${entry.id}`} id={`plugin-widget:${entry.pluginId}:${entry.id}`} width={slotWidth} border borderStyle="single" borderColor={tone}
+            backgroundColor={theme.surface} flexDirection="column" paddingX={1} title={` ${fitText(entry.title, slotWidth - 6)} `} titleColor={tone}>
+            {entry.lines.map((line, index) => <text key={index} fg={theme.text} wrapMode="none" selectable={false}>{fitText(line, slotWidth - 4) || ' '}</text>)}
+          </box>
+        )
+      })}
     </box>
   )
 })
