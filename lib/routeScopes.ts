@@ -86,6 +86,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/version': { GET: 'read' },
   '/api/voice/transcribe': { POST: 'write' },
   '/api/plugins': { GET: 'read', PATCH: 'write' },
+  // Runs the user's own plugin code, so never something a read-only device may do.
+  '/api/plugins/local': { POST: 'write' },
   '/api/provider': { GET: 'read', PATCH: 'write' },
   '/api/views': { GET: 'read', PUT: 'write' },
   '/api/sidebar-preferences': { GET: 'read', PATCH: 'write' },

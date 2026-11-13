@@ -36,6 +36,7 @@ import { manifest as remoteAccess } from '../../plugins/remote-access/manifest'
 import { manifest as piActivity } from '../../plugins/pi-activity/manifest'
 import { manifest as runDashboard } from '../../plugins/run-dashboard/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
+import type { LocalPluginManifest } from './localManifest'
 
 export const PLUGIN_MANIFESTS = [analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, goals] as const satisfies readonly PluginManifest[]
 
@@ -98,4 +99,38 @@ export function getPluginCommand(id: string): ResolvedPluginCommand | undefined 
 
 export function listPluginCommands(renderer: PluginRenderer): ResolvedPluginCommand[] {
   return [...commands.values()].filter(command => command.renderers.includes(renderer))
+}
+
+// ── Local plugins ─────────────────────────────────────────────────────────
+// Mods from the user's config directory join the catalog at runtime: the TUI
+// registers them before its root loads, the Web after asking its daemon. They
+// contribute commands and behavior only (no surfaces), so the typed bundled
+// unions above are unaffected.
+let localManifests: readonly LocalPluginManifest[] = []
+let localVersion = 0
+const localListeners = new Set<() => void>()
+
+/** Replace the registered local plugins. A manifest naming a bundled id or a taken command id is skipped. */
+export function registerLocalPluginManifests(manifests: readonly LocalPluginManifest[]): void {
+  for (const manifest of localManifests) for (const command of manifest.commands) commands.delete(command.id)
+  const accepted: LocalPluginManifest[] = []
+  const ids = new Set(PLUGIN_MANIFESTS.map(manifest => manifest.id as string))
+  for (const manifest of manifests) {
+    if (ids.has(manifest.id) || manifest.surfaces.length > 0 || manifest.commands.some(command => commands.has(command.id) || !command.handler)) continue
+    ids.add(manifest.id)
+    accepted.push(manifest)
+    for (const command of manifest.commands) commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })
+  }
+  localManifests = accepted
+  localVersion += 1
+  for (const listener of [...localListeners]) listener()
+}
+
+export function listLocalPluginManifests(): readonly LocalPluginManifest[] { return localManifests }
+/** Bundled and local manifests: what plugin managers list and command hosts load. */
+export function allPluginManifests(): readonly PluginManifest[] { return [...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...localManifests] }
+export function localPluginsVersion(): number { return localVersion }
+export function subscribeLocalPlugins(listener: () => void): () => void {
+  localListeners.add(listener)
+  return () => { localListeners.delete(listener) }
 }

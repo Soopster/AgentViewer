@@ -6,7 +6,9 @@
 // its commands stop being offered.
 import { useEffect, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
-import { PLUGIN_MANIFESTS } from '../../lib/plugins/catalog'
+import { allPluginManifests } from '../../lib/plugins/catalog'
+import { isLocalManifest } from '../../lib/plugins/localManifest'
+import { localPluginDiscovery } from '../../lib/plugins/localPlugins'
 import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
 import { PROVIDER_PLUGINS, isProviderPluginId, wouldDisableEveryProvider, type ProviderPlugin } from '../../lib/plugins/providerPlugins'
@@ -30,13 +32,18 @@ const RENDERER_LABELS = { tui: 'TUI', web: 'Web' } as const
 
 function pluginSummary(manifest: PluginManifest | ProviderPlugin): string {
   if (!('renderers' in manifest)) return 'Provider'
+  if (isLocalManifest(manifest)) {
+    const parts = [manifest.behavior ? manifest.behavior.hooks.join(' + ') : null, ...manifest.commands.map(command => (command.tuiChord ? `⌃K ${command.tuiChord.key} ${command.label}` : command.label))].filter(Boolean)
+    return `Local mod · ${parts.join(', ')}`
+  }
   const renderers = manifest.renderers.map(renderer => RENDERER_LABELS[renderer]).join(' · ')
   const commands = manifest.commands.map(command => (command.tuiKeyLabel ? `${command.tuiKeyLabel} ${command.label}` : command.label)).join(', ')
   return `${renderers}${commands ? ` · ${commands}` : ''}`
 }
 
 export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandlerReady, onNotice }: PluginManagerPopoverProps) {
-  const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...PROVIDER_PLUGINS]
+  const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...allPluginManifests(), ...PROVIDER_PLUGINS]
+  const local = localPluginDiscovery()
   const disabled = useDisabledPlugins()
   const [cursor, setCursor] = useState(0)
   const scroll = useRef<ScrollBoxRenderable>(null)
@@ -75,7 +82,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
 
   const panelWidth = Math.min(Math.max(width - 6, 40), 76)
   // Allow descriptions and command summaries to wrap inside the scroll area.
-  const panelHeight = Math.min(height - 2, manifests.length * 3 + 4)
+  const panelHeight = Math.min(height - 2, (manifests.length + local.refused.length) * 3 + 5)
   const footer = '↑↓ move · wheel scroll · space toggle · esc close'
   const footerRows = Math.ceil(footer.length / Math.max(1, panelWidth - 4))
   return (
@@ -111,6 +118,13 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
           </box>
         )
       })}
+      {local.refused.map(entry => (
+        <box key={`refused:${entry.dir}`} flexDirection="column" flexShrink={0}>
+          <text width="100%" wrapMode="word" selectable={false}><span fg={theme.red}>✕ </span><span fg={theme.text}>{entry.id ?? entry.dir}</span><span fg={theme.red}>  not loaded</span></text>
+          <text fg={theme.muted} width="100%" wrapMode="word" selectable={false}>{`  ${entry.problems.join('; ')}`}</text>
+        </box>
+      ))}
+      <text fg={theme.dim} width="100%" wrapMode="word" selectable={false}>{`Local mods: ${local.dir}`}</text>
       </scrollbox>
       <text height={footerRows} flexShrink={0} fg={theme.muted} wrapMode="word" selectable={false}>{footer}</text>
     </box>

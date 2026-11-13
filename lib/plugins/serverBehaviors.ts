@@ -11,6 +11,8 @@ import { readPluginSettingsFile } from './settingsFile'
 import { PLUGIN_FOLLOW_UP_LIMIT, type PluginBeforeTurnContext, type PluginTurnTarget } from './behavior'
 import type { PluginBehaviorModule } from './behavior'
 import type { PluginManifest } from './types'
+import { localPluginDiscovery } from './localPlugins'
+import { localBehaviorLoaders } from './localPluginRuntime'
 
 /** Field a plugin follow-up turn carries; stripped before the provider sees the body. */
 export const PLUGIN_FOLLOW_UP_FIELD = 'pluginFollowUp'
@@ -41,7 +43,11 @@ function state(): BehaviorState {
 
 function host() {
   const current = state()
-  current.host ??= createPluginBehaviorHost(PLUGIN_MANIFESTS as readonly PluginManifest[], BUNDLED_BEHAVIORS)
+  if (!current.host) {
+    // Local plugins (the user's mods) join the bundled behaviors in one ordered pipeline.
+    const local = localPluginDiscovery().plugins.map(plugin => plugin.manifest).filter(manifest => manifest.behavior)
+    current.host = createPluginBehaviorHost([...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...local], { ...BUNDLED_BEHAVIORS, ...localBehaviorLoaders() })
+  }
   return current.host
 }
 

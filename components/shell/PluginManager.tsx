@@ -3,9 +3,11 @@
 // The plugin manager: every bundled feature plugin, what it adds, and a switch.
 // Host code, not a plugin. The choice is saved through /api/plugins into the
 // same file the TUI reads, so turning Git off here turns it off there too.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Puzzle, X } from 'lucide-react'
-import { PLUGIN_MANIFESTS } from '@/lib/plugins/catalog'
+import { allPluginManifests, localPluginsVersion, subscribeLocalPlugins } from '@/lib/plugins/catalog'
+import { isLocalManifest } from '@/lib/plugins/localManifest'
+import { webLocalPluginReport } from './localPlugins'
 import { applyPluginSettings, decodePluginSettings } from '@/lib/plugins/enablement'
 import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
 import { PROVIDER_PLUGINS, type ProviderPlugin } from '@/lib/plugins/providerPlugins'
@@ -16,6 +18,8 @@ const RENDERER_LABELS = { tui: 'TUI', web: 'Web' } as const
 
 export default function PluginManager({ open, onClose }: { open: boolean; onClose: () => void }) {
   const disabled = useDisabledPlugins()
+  useSyncExternalStore(subscribeLocalPlugins, localPluginsVersion, localPluginsVersion)
+  const localReport = webLocalPluginReport()
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,7 +68,7 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
           <button type="button" aria-label="Close" onClick={onClose} style={{ color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}><X size={16} /></button>
         </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 8, overflowY: 'auto' }}>
-          {[...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...PROVIDER_PLUGINS].map((manifest: PluginManifest | ProviderPlugin) => {
+          {[...allPluginManifests(), ...PROVIDER_PLUGINS].map((manifest: PluginManifest | ProviderPlugin) => {
             const enabled = !disabled.has(manifest.id)
             const switchId = `plugin-switch-${manifest.id}`
             return (
@@ -73,7 +77,9 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
                   <label htmlFor={switchId} style={{ fontWeight: 600, color: enabled ? 'var(--text)' : 'var(--text-2)', cursor: 'pointer' }}>{manifest.title}</label>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{manifest.description}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-3, var(--text-2))', marginTop: 4 }}>
-                    {'renderers' in manifest
+                    {'renderers' in manifest && isLocalManifest(manifest)
+                      ? `Local mod · ${[manifest.behavior ? manifest.behavior.hooks.join(' + ') : null, ...manifest.commands.map(command => command.label)].filter(Boolean).join(', ')}`
+                      : 'renderers' in manifest
                       ? `${manifest.renderers.map(renderer => RENDERER_LABELS[renderer]).join(' · ')}${manifest.commands.length ? ` · ${manifest.commands.map(command => command.label).join(', ')}` : ''}`
                       : 'Provider'}
                   </div>
@@ -92,6 +98,13 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
               </li>
             )
           })}
+          {localReport?.refused.map(entry => (
+            <li key={`refused:${entry.dir}`} data-plugin-refused={entry.id ?? entry.dir} style={{ padding: '10px 8px' }}>
+              <div style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.id ?? entry.dir} <span style={{ color: 'var(--red, #e5484d)', fontWeight: 400 }}>not loaded</span></div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{entry.problems.join('; ')}</div>
+            </li>
+          ))}
+          {localReport?.dir ? <li style={{ padding: '8px', fontSize: 11, color: 'var(--text-3, var(--text-2))' }}>Local mods: {localReport.dir}</li> : null}
         </ul>
         {error ? <div role="alert" style={{ padding: '8px 16px 12px', fontSize: 12, color: 'var(--red, #e5484d)' }}>Could not save: {error}</div> : null}
       </div>
