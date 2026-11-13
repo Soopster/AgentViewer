@@ -1026,13 +1026,18 @@ function askOpenCodePluginsOnce(sessionId: string, permission: { id: string; typ
     const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
     const metadata = permission.metadata ?? {}
     const patterns = Array.isArray(permission.pattern) ? permission.pattern.filter((entry): entry is string => typeof entry === 'string') : typeof permission.pattern === 'string' ? [permission.pattern] : []
+    // OpenCode 2 renamed `bash` to `shell` (sessions migrated from 1.x keep the old name), so both spell a command.
+    const isShell = permission.type === 'bash' || permission.type === 'shell'
+    const command = typeof metadata.command === 'string' ? metadata.command
+      : typeof (metadata.input as { command?: unknown } | undefined)?.command === 'string' ? (metadata.input as { command: string }).command
+      : isShell && patterns.length ? patterns.join(' ') : undefined
     const decided = await askPluginsAboutPermission('opencode', sessionId, {
-      toolName: permission.type,
-      kind: permission.type === 'bash' ? 'command' : permission.type === 'edit' || permission.type === 'write' ? 'file' : permission.type === 'webfetch' ? 'network' : undefined,
+      toolName: isShell ? 'bash' : permission.type,
+      kind: isShell ? 'command' : permission.type === 'edit' || permission.type === 'write' ? 'file' : permission.type === 'webfetch' ? 'network' : undefined,
       title: permission.title,
       input: metadata,
-      ...(typeof metadata.command === 'string' ? { command: metadata.command } : permission.type === 'bash' && patterns.length ? { command: patterns.join(' ') } : {}),
-      ...(typeof metadata.filepath === 'string' ? { paths: [metadata.filepath] } : permission.type !== 'bash' && patterns.length ? { paths: patterns } : {}),
+      ...(command ? { command } : {}),
+      ...(typeof metadata.filepath === 'string' ? { paths: [metadata.filepath] } : !isShell && patterns.length ? { paths: patterns } : {}),
     })
     if (!decided) return
     const { runViewSessionAction } = await import('./sessionBackend')

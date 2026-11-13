@@ -75,11 +75,15 @@ try {
   assert.equal(await page.evaluate(() => globalThis.__permissionRequests), 1)
   await dialog.getByRole('button', { name: 'Close', exact: true }).click()
   await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }))
+  // Each step waits for the poll it triggers: polls are real (routed) fetches
+  // under a fake clock, and advancing the clock past one still in flight let
+  // the observer miss the turn under load.
+  const poll = async (ms) => { const served = page.waitForResponse('**/api/sessions/running'); await page.clock.runFor(ms); await served; await page.clock.runFor(50) }
   activity = { running: [{ sessionId: 'same', provider: 'claude', providerInstanceId: 'work', pendingPrompts: [], pendingPermissions: [] }], waiting: [], attention: [] }
-  await page.clock.runFor(2600)
-  await page.clock.runFor(16000)
+  await poll(2600)
+  await poll(16000)
   activity = { running: [], waiting: [], attention: [] }
-  await page.clock.runFor(2600)
+  await poll(2600)
   await page.waitForFunction(() => globalThis.__desktop.length === 1)
   assert.match((await page.evaluate(() => globalThis.__desktop[0])).body, /Work finished/)
   assert.deepEqual(errors, [])
