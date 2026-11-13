@@ -1,6 +1,6 @@
 // Renderer-independent behavior contract. Implementations live in server entries;
 // importing these types never loads a provider SDK or a plugin implementation.
-import type { AgentProvider } from '../types'
+import type { AgentProvider, SessionMessage } from '../types'
 import type { PLUGIN_API_VERSION } from './types'
 
 export type PluginTurnTarget = {
@@ -22,10 +22,38 @@ export type PluginBeforeTurnResult =
   | { readonly action: 'block'; readonly reason: string }
   | void
 
+export type PluginAfterTurnContext = {
+  /** The session whose turn just settled, provider instance included. */
+  readonly target: PluginTurnTarget
+  /** Aborted when the plugin is turned off or its host is disposed. */
+  readonly signal: AbortSignal
+  /** The session's newest messages, read on demand (most hooks never need them). */
+  readonly readMessages: (limit?: number) => Promise<SessionMessage[]>
+  /** How many plugin follow-ups have run since the user last sent a turn. */
+  readonly followUps: number
+}
+
+/**
+ * 'follow-up' sends one more turn to the same session through the ordinary send
+ * path (so every beforeTurn hook sees it). The first contributor to ask wins,
+ * and the host stops following up after PLUGIN_FOLLOW_UP_LIMIT in a row.
+ */
+export type PluginAfterTurnResult =
+  | { readonly action: 'follow-up'; readonly message: string }
+  | void
+
+export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn'
+
+/** Consecutive plugin follow-ups allowed before a user turn resets the count. */
+export const PLUGIN_FOLLOW_UP_LIMIT = 25
+
 export type PluginBehaviorModule = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
   readonly pluginId: string
-  readonly beforeTurn: (context: PluginBeforeTurnContext) => PluginBeforeTurnResult | Promise<PluginBeforeTurnResult>
+  /** Rewrite or refuse a turn before it reaches the provider. */
+  readonly beforeTurn?: (context: PluginBeforeTurnContext) => PluginBeforeTurnResult | Promise<PluginBeforeTurnResult>
+  /** Observe a settled turn, and optionally send a follow-up. */
+  readonly afterTurn?: (context: PluginAfterTurnContext) => PluginAfterTurnResult | Promise<PluginAfterTurnResult>
   readonly deactivate?: () => void
 }
 

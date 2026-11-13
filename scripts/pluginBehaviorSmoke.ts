@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createPluginBehaviorHost } from '../lib/plugins/behaviorHost'
 import { PluginTurnBlockedError, type PluginBehaviorModule, type PluginBeforeTurnContext } from '../lib/plugins/behavior'
 import { PLUGIN_API_VERSION, type PluginManifest } from '../lib/plugins/types'
-import { applyPluginSettings, DEFAULT_PLUGIN_SETTINGS } from '../lib/plugins/enablement'
+import { applyPluginSettings, DEFAULT_PLUGIN_SETTINGS, withPluginEnabled } from '../lib/plugins/enablement'
 
 const manifest = (id: string, order = 0): PluginManifest => ({
   apiVersion: PLUGIN_API_VERSION, id, title: id, description: id, renderers: ['web', 'tui'],
@@ -122,4 +122,38 @@ assert.equal((await b).message, 'account-b')
 releases.get('account-a')!()
 concurrent.dispose()
 await assert.rejects(concurrent.beforeTurn(context()), /disposed/)
-console.log('plugin behavior: PASS (composition, laziness, refusal, retry, disable race, cancellation and instance isolation)')
+
+// afterTurn: ordered observers, failure isolation, first follow-up wins, declared hooks validated, disable.
+const afterManifest = (id: string, order = 0, hooks: ('beforeTurn' | 'afterTurn')[] = ['afterTurn']): PluginManifest => ({ ...manifest(id, order), behavior: { hooks, order } })
+const seen: string[] = []
+const after = createPluginBehaviorHost([afterManifest('observer', 0), afterManifest('broken', 1), afterManifest('asker', 2), afterManifest('late-asker', 3)], {
+  observer: async () => ({ apiVersion: PLUGIN_API_VERSION, pluginId: 'observer', afterTurn: async ({ target, readMessages, followUps }) => {
+    assert.equal(Object.isFrozen(target), true)
+    assert.equal(followUps, 2)
+    seen.push(`observer:${(await readMessages(5)).length}`)
+  } }),
+  broken: async () => ({ apiVersion: PLUGIN_API_VERSION, pluginId: 'broken', afterTurn: () => { seen.push('broken'); throw new Error('fixture failure') } }),
+  asker: async () => ({ apiVersion: PLUGIN_API_VERSION, pluginId: 'asker', afterTurn: () => { seen.push('asker'); return { action: 'follow-up', message: 'keep going' } } }),
+  'late-asker': async () => ({ apiVersion: PLUGIN_API_VERSION, pluginId: 'late-asker', afterTurn: () => { seen.push('late'); return { action: 'follow-up', message: 'ignored' } } }),
+})
+const settled = { target: { provider: 'codex' as const, providerInstanceId: 'account-a', sessionId: 'same-native-id' }, readMessages: async () => [], followUps: 2 }
+assert.equal(after.observesSettledTurns(), true)
+const errors: unknown[] = []
+const originalError = console.error
+console.error = (...args: unknown[]) => { errors.push(args) }
+try {
+  assert.deepEqual(await after.afterTurn(settled), { pluginId: 'asker', message: 'keep going' })
+} finally { console.error = originalError }
+assert.deepEqual(seen, ['observer:0', 'broken', 'asker', 'late'], 'every observer runs, in order, past a failing one')
+assert.equal(errors.length, 1, 'a failing afterTurn hook is reported once')
+applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'asker', false))
+seen.length = 0
+assert.deepEqual(await after.afterTurn(settled), { pluginId: 'late-asker', message: 'ignored' }, 'a disabled plugin no longer answers')
+applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
+const onlyBefore = createPluginBehaviorHost([manifest('before-only')], { 'before-only': async () => entry('before-only', () => undefined) })
+assert.equal(onlyBefore.observesSettledTurns(), false, 'a host with no afterTurn contributor skips settle work')
+const missing = createPluginBehaviorHost([afterManifest('declares-after')], { 'declares-after': async () => entry('declares-after', () => undefined) })
+console.error = () => {}
+try { assert.equal(await missing.afterTurn(settled), null, 'a module missing a declared hook is refused') } finally { console.error = originalError }
+await assert.rejects(missing.beforeTurn(context()).then(() => missing.isLoaded('declares-after') ? Promise.resolve() : Promise.reject(new Error('refused'))), /refused/)
+console.log('plugin behavior: PASS (composition, laziness, refusal, retry, disable race, cancellation, instance isolation and afterTurn ordering/isolation/follow-up)')

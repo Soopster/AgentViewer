@@ -2,23 +2,32 @@ import { createLazyRegistry } from '../extensions/lazyRegistry'
 import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { createPluginResourceScope } from './lifecycle'
 import { PLUGIN_API_VERSION, type PluginManifest } from './types'
-import { PluginTurnBlockedError, type PluginBehaviorModule, type PluginBeforeTurnContext } from './behavior'
+import {
+  PluginTurnBlockedError,
+  type PluginAfterTurnContext,
+  type PluginAfterTurnResult,
+  type PluginBehaviorHook,
+  type PluginBehaviorModule,
+  type PluginBeforeTurnContext,
+} from './behavior'
+
+const order = (a: PluginManifest, b: PluginManifest) => (a.behavior?.order ?? 0) - (b.behavior?.order ?? 0) || a.id.localeCompare(b.id)
 
 /** Headless plugins have a lifetime independent of their views. No work at registration. */
 export function createPluginBehaviorHost(
   manifests: readonly PluginManifest[],
   loaders: Readonly<Record<string, () => Promise<PluginBehaviorModule>>>,
 ) {
-  const contributors = manifests.filter(m => m.behavior?.hooks.includes('beforeTurn'))
-    .sort((a, b) => (a.behavior?.order ?? 0) - (b.behavior?.order ?? 0) || a.id.localeCompare(b.id))
+  const contributors = manifests.filter(m => (m.behavior?.hooks.length ?? 0) > 0).sort(order)
+  const hooked = (hook: PluginBehaviorHook) => contributors.filter(m => m.behavior!.hooks.includes(hook))
   for (const manifest of contributors) {
     if (!Object.hasOwn(loaders, manifest.id)) throw new Error(`Plugin ${manifest.id} has no behavior loader`)
   }
   const scopes = new Map<string, ReturnType<typeof createPluginResourceScope>>()
   const registry = createLazyRegistry(loaders, (id, module) => {
-    if (!contributors.some(m => m.id === id && m.apiVersion === PLUGIN_API_VERSION)
-      || module?.apiVersion !== PLUGIN_API_VERSION || module.pluginId !== id
-      || typeof module.beforeTurn !== 'function'
+    const manifest = contributors.find(m => m.id === id && m.apiVersion === PLUGIN_API_VERSION)
+    const declaredMissing = manifest?.behavior?.hooks.some(hook => typeof module?.[hook] !== 'function')
+    if (!manifest || module?.apiVersion !== PLUGIN_API_VERSION || module.pluginId !== id || declaredMissing
       || (module.deactivate !== undefined && typeof module.deactivate !== 'function')) {
       throw new Error(`Plugin ${id} behavior API or identity mismatch`)
     }
@@ -33,9 +42,19 @@ export function createPluginBehaviorHost(
   const unsubscribe = subscribePluginEnablement(() => {
     for (const manifest of contributors) if (!isPluginEnabled(manifest.id)) deactivate(manifest.id)
   })
+  const scopeFor = (id: string) => {
+    let scope = scopes.get(id)
+    if (!scope) {
+      scope = createPluginResourceScope(id)
+      scopes.set(id, scope)
+    }
+    return scope
+  }
   let disposed = false
   return {
     isLoaded: (id: string) => registry.peek(id) !== undefined,
+    /** Whether any enabled plugin observes settled turns: the host skips its work otherwise. */
+    observesSettledTurns: () => hooked('afterTurn').some(m => isPluginEnabled(m.id)),
     dispose() {
       if (disposed) return
       disposed = true
@@ -47,19 +66,14 @@ export function createPluginBehaviorHost(
       context.signal.throwIfAborted()
       let body = structuredClone(context.body)
       const target = Object.freeze({ ...context.target })
-      for (const manifest of contributors) {
+      for (const manifest of hooked('beforeTurn')) {
         if (!isPluginEnabled(manifest.id)) continue
-        let scope = scopes.get(manifest.id)
-        if (!scope) {
-          scope = createPluginResourceScope(manifest.id)
-          scopes.set(manifest.id, scope)
-        }
-        const signal = AbortSignal.any([context.signal, scope.signal])
+        const signal = AbortSignal.any([context.signal, scopeFor(manifest.id).signal])
         const result = await abortable(signal, async () => {
           signal.throwIfAborted()
           const module = await registry.get(manifest.id)
           signal.throwIfAborted()
-          return module.beforeTurn({ target, signal, body: structuredClone(body) })
+          return module.beforeTurn!({ target, signal, body: structuredClone(body) })
         })
         signal.throwIfAborted()
         if (!result) continue
@@ -73,6 +87,38 @@ export function createPluginBehaviorHost(
       }
       context.signal.throwIfAborted()
       return body
+    },
+    /**
+     * Run every enabled afterTurn hook in order. One hook's failure is logged
+     * and the next still runs; the first valid follow-up is returned with the
+     * plugin that asked for it.
+     */
+    async afterTurn(context: Omit<PluginAfterTurnContext, 'signal'>): Promise<{ pluginId: string; message: string } | null> {
+      if (disposed) return null
+      const target = Object.freeze({ ...context.target })
+      let followUp: { pluginId: string; message: string } | null = null
+      for (const manifest of hooked('afterTurn')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = scopeFor(manifest.id).signal
+        let result: PluginAfterTurnResult
+        try {
+          result = await abortable(signal, async () => {
+            const module = await registry.get(manifest.id)
+            signal.throwIfAborted()
+            return module.afterTurn!({ target, signal, readMessages: context.readMessages, followUps: context.followUps })
+          })
+        } catch (error) {
+          if (!(error instanceof Error && error.name === 'AbortError')) console.error(`Plugin ${manifest.id} afterTurn failed:`, error)
+          continue
+        }
+        if (!result || followUp) continue
+        if (result.action === 'follow-up' && typeof result.message === 'string' && result.message.trim()) {
+          followUp = { pluginId: manifest.id, message: result.message }
+        } else {
+          console.error(`Plugin ${manifest.id} returned an invalid afterTurn result`)
+        }
+      }
+      return followUp
     },
   }
 }
