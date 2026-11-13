@@ -2883,7 +2883,7 @@ function OpenTuiWorkspace() {
   const commandPaletteTopOffset = presentationFocusMode ? 2 : 4
   const commandPaletteBodyRows = Math.max(1, Math.min(
     paletteDisplayRows.length || 1,
-    mainContentHeight - commandPaletteTopOffset - 8,
+    height - commandPaletteTopOffset - 7,
   ))
 
   const chooseProvider = useStableEvent(async (nextProvider: ProviderSelection, targetSession: Session | null = null, nextInstanceId: string | null = null) => runChooseProvider({
@@ -7561,6 +7561,10 @@ function OpenTuiWorkspace() {
 
       <SurfacePanelResizeLayer surfacePanelResizing={surfacePanelResizing} width={width} height={height} surfacePanelResizeFromRef={surfacePanelResizeFromRef} surfacePanelAtBottom={surfacePanelAtBottom} resizeSurfacePanelBy={resizeSurfacePanelBy} setSurfacePanelResizing={setSurfacePanelResizing} />
 
+      {/* Drawn at the root, over every piece of chrome: inside the main area they
+          sat under the tab strip, the spaces bar and the window title buttons. */}
+      <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} height={height} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} mouse={commandPaletteMouse} />
+      <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={height} composerDockHeight={0} composerStatusBlockHeight={0} toasts={toasts} theme={theme} mouse={chordHelpMouse} />
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
       {worktreeModalOpen || worktreeConfirm  || (pluginOverlay && getPluginSurface(pluginOverlay).scrim) || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || windowPickerOpen || pluginManagerOpen ? (

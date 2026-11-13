@@ -39,7 +39,15 @@ await settle()
 assert.notEqual(screen(), firstRowBefore, 'clicking ▼ did not page the list')
 
 // Hover selects the row under the pointer.
-const rows = () => (setup.renderer.root.findDescendantById('command-palette') as unknown as { getChildren(): Array<{ id: string; x: number; y: number }> }).getChildren().filter(child => child.id?.startsWith('command-palette-row:'))
+const rows = () => {
+  const out: Array<{ id: string; x: number; y: number }> = []
+  const walk = (node: { id?: string; x: number; y: number; getChildren?: () => unknown[] }) => {
+    if (node.id?.startsWith('command-palette-row:')) out.push(node as { id: string; x: number; y: number })
+    for (const child of node.getChildren?.() ?? []) walk(child as never)
+  }
+  walk(setup.renderer.root.findDescendantById('command-palette') as never)
+  return out
+}
 const target = rows()[3]!
 await act(async () => { await setup.mockMouse.moveTo(target.x + 4, target.y) })
 await settle()
@@ -62,6 +70,15 @@ await act(async () => { await setup.mockMouse.click(run.x + 4, run.y) })
 await settle(500)
 assert(!node('command-palette'), 'running a command left the palette open')
 assert(node('plugin-manager'), `clicking the row did not run it:\n${screen()}`)
-console.log('Command palette mouse smoke passed (wheel scroll, ▼ paging, hover select, click outside, click to run)')
+// The scrollbar track jumps the list.
+await act(async () => { setup.mockInput.pressEscape() })
+await settle(200)
+await openPalette()
+const track = setup.renderer.root.findDescendantById('command-palette-scrollbar') as unknown as { x: number; y: number; height: number } | null
+assert(track, 'the palette has no scrollbar')
+await act(async () => { await setup.mockMouse.click(track.x, track.y + track.height - 1) })
+await settle()
+assert(!screen().includes('▼ '), 'a press at the bottom of the track did not jump to the end')
+console.log('Command palette mouse smoke passed (wheel scroll, ▼ paging, hover select, click outside, click to run, scrollbar)')
 act(() => setup.renderer.destroy())
 process.exit(0)

@@ -6,7 +6,9 @@
 // Two modes. Opened with `?` (dismissOnKey) it owns the keyboard like the
 // palette. Revealed by hesitating on a prefix, its keys still belong to the
 // pending chord — so there the mouse is how to use it as a palette.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { BoxRenderable } from '@opentui/core'
+import { registerTabPaintOccluder } from '../../SessionTabConnection'
 import type { Toast } from '../../toastStore'
 import type { TuiThemePalette } from '../../../theme'
 import { toastExtraRows, toastStackTop } from '../../ToastOverlay'
@@ -16,6 +18,7 @@ import { RUNNING_INSIDE_TMUX } from '../commands'
 import { MODAL_CONTENT_Z_INDEX } from '../../layers'
 import { renderInlineTextSegments } from '../inlineText'
 import { clamp } from '../util'
+import { ListScrollbar } from './ListScrollbar'
 
 /** What the panel asks the root to do from the mouse. Stable callbacks. */
 export type ChordHelpMouse = {
@@ -48,6 +51,13 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
   mouse?: ChordHelpMouse
 }) {
   const [wheelStart, setWheelStart] = useState<number | null>(null)
+  // The tab strip's connector is painted after the frame; without this it draws
+  // through the panel's top rows wherever the panel sits over the strip.
+  const panelRef = useRef<BoxRenderable | null>(null)
+  useLayoutEffect(() => registerTabPaintOccluder(() => {
+    const box = panelRef.current
+    return box && !box.isDestroyed ? { x: box.x, y: box.y, width: box.width, height: box.height } : null
+  }), [])
   const hovered = useRef<number | null>(null)
   const index = chordHelp?.index ?? 0
   useEffect(() => { if (hovered.current !== index) setWheelStart(null) }, [index])
@@ -57,16 +67,19 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
   const map = chordHelp.map
   const view = chordHelpView(chordHelp)
   const keysW = chordHelpKeyWidth(map)
-  const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
-  const labelW = overlayW - keysW - 7
+  // Wide enough for the longest description (the ⌃B table's run long): the
+  // selection marker, the key gutter, a gap, the label and the scrollbar.
+  const longestLabel = view.rows.reduce((widest, row) => Math.max(widest, row.keys === null ? 0 : row.label.length), 0)
+  const overlayW = Math.min(width - 4, Math.max(keysW + longestLabel + 9, 56))
+  const labelW = overlayW - keysW - 8
   const overlayTop = 2
-  const headerRows = chordHelp.dismissOnKey ? 3 : 1
-  const overlayChromeRows = 3 + headerRows // two borders, the footer, the header
+  // Two borders, the title row and the footer, plus the filter row (with its padding) when opened with `?`.
+  const overlayChromeRows = 4 + (chordHelp.dismissOnKey ? 3 : 0)
   // In the area's coordinates: rows above it (the spaces bar) are not ours to count.
   // A toast draws over the panel's last row (how to close it), so end above the stack.
   const areaOffset = Math.max(0, height - composerDockHeight - composerStatusBlockHeight - areaHeight)
   const panelBottom = Math.min(
-    areaHeight,
+    areaHeight - 1,
     toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) - areaOffset : areaHeight,
   )
   const bodyRows = Math.max(Math.min(view.rows.length, panelBottom - overlayTop - overlayChromeRows), 3)
@@ -83,11 +96,12 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
   return (
     <>
       {mouse ? (
-        <box position="absolute" top={0} left={0} width={width} height={areaHeight} zIndex={MODAL_CONTENT_Z_INDEX + 1}
+        <box position="absolute" top={0} left={0} width={width} height={height} zIndex={MODAL_CONTENT_Z_INDEX + 1}
           onMouseDown={(event: MouseLike) => { event.stopPropagation?.(); mouse.close() }} />
       ) : null}
       <box
         id="chord-help"
+        ref={panelRef}
         position="absolute"
         top={overlayTop}
         left={Math.max(Math.floor((width - overlayW) / 2), 2)}
@@ -123,42 +137,47 @@ export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, compose
             </text>
           </box>
         ) : null}
-        {view.rows.length === 0 ? (
-          <box paddingX={1}><text fg={theme.dim}>no matches</text></box>
-        ) : visible.map((row, slot) => {
-          if (row.keys === null) {
-            return (
-              <box key={`chord-row:${slot}`} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
-                <text fg={theme.cyan} wrapMode="none" selectable={false}>{`┄ ${row.label.toUpperCase()}`}</text>
-              </box>
-            )
-          }
-          const entryIndex = row.runnable ? view.entries.indexOf(row) : -1
-          const isSelected = row === view.selected
-          return (
-            <box
-              key={`chord-row:${slot}`}
-              id={`chord-help-row:${row.id}`}
-              paddingX={1}
-              flexDirection="row"
-              backgroundColor={isSelected ? theme.surface3 : theme.surface}
-              onMouseOver={() => { if (entryIndex >= 0 && !isSelected) { hovered.current = entryIndex; mouse?.select(entryIndex) } }}
-              onMouseDown={(event: MouseLike) => {
-                event.stopPropagation?.()
-                if ((event.button ?? 0) !== 0 || entryIndex < 0) return
-                mouse?.run(row)
-              }}
-            >
-              <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
-              <box width={keysW}>
-                <text fg={row.runnable ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{fitText(row.keys, keysW)}</text>
-              </box>
-              <box flexGrow={1} paddingLeft={2}>
-                <text fg={isSelected ? theme.text : row.runnable ? theme.muted : theme.dim} wrapMode="none" selectable={false}>{fitText(row.label, labelW)}</text>
-              </box>
-            </box>
-          )
-        })}
+        <box flexDirection="row">
+          <box flexGrow={1} flexDirection="column">
+            {view.rows.length === 0 ? (
+              <box paddingX={1}><text fg={theme.dim}>no matches</text></box>
+            ) : visible.map((row, slot) => {
+              if (row.keys === null) {
+                return (
+                  <box key={`chord-row:${slot}`} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                    <text fg={theme.cyan} wrapMode="none" selectable={false}>{`┄ ${row.label.toUpperCase()}`}</text>
+                  </box>
+                )
+              }
+              const entryIndex = row.runnable ? view.entries.indexOf(row) : -1
+              const isSelected = row === view.selected
+              return (
+                <box
+                  key={`chord-row:${slot}`}
+                  id={`chord-help-row:${row.id}`}
+                  paddingX={1}
+                  flexDirection="row"
+                  backgroundColor={isSelected ? theme.surface3 : theme.surface}
+                  onMouseOver={() => { if (entryIndex >= 0 && !isSelected) { hovered.current = entryIndex; mouse?.select(entryIndex) } }}
+                  onMouseDown={(event: MouseLike) => {
+                    event.stopPropagation?.()
+                    if ((event.button ?? 0) !== 0 || entryIndex < 0) return
+                    mouse?.run(row)
+                  }}
+                >
+                  <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
+                  <box width={keysW}>
+                    <text fg={row.runnable ? theme.amber : theme.dim} wrapMode="none" selectable={false}>{fitText(row.keys, keysW)}</text>
+                  </box>
+                  <box flexGrow={1} paddingLeft={2}>
+                    <text fg={isSelected ? theme.text : row.runnable ? theme.muted : theme.dim} wrapMode="none" selectable={false}>{fitText(row.label, labelW)}</text>
+                  </box>
+                </box>
+              )
+            })}
+          </box>
+          <ListScrollbar id="chord-help-scrollbar" total={view.rows.length} rows={visible.length} start={startIdx} theme={theme} onJump={setWheelStart} />
+        </box>
         <box paddingX={1} backgroundColor={theme.surface2}>
           <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(footer, overlayW - 4)}</text>
         </box>

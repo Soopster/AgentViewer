@@ -35,8 +35,6 @@ import { type ThemeMenuGroup } from '../themes'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, type SplitPaneHandle } from '../SplitTranscriptPane'
 import { ThemeMenuOverlay } from './ThemeMenuOverlay'
-import { CommandPaletteOverlay } from './CommandPaletteOverlay'
-import { ChordHelpOverlay } from './ChordHelpOverlay'
 import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
 import type { TabDisplay } from '../../../viewSpec'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
@@ -536,9 +534,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} height={height} viewMenuItems={viewMenuItems} editedBuiltinViews={editedBuiltinViews} viewMenuOriginKey={viewMenuOriginKey} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} previewViewMenuItem={previewViewMenuItem} chooseViewMenuItem={chooseViewMenuItem} lightweightWindows={lightweightWindows} />
 
-        <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} height={height} mouse={commandPaletteMouse} />
 
-        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={mainContentHeight} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} mouse={chordHelpMouse} />
 
 
       </box>
