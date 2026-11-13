@@ -1,3 +1,9 @@
+13 November 2026: the base-shell migration is complete for the built-ins listed
+in [the audit](plugin-shell-audit.md), with widgets, `afterTurn`, plugin ⌃K
+chords and local plugins (mods) added as contribution points. The audit's
+status section lists what remains deliberately in the shell and what is not yet
+extensible.
+
 # Composable application core and feature plugins
 
 8 November 2026: the target now explicitly includes behavioral customization

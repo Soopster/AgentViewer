@@ -100,15 +100,30 @@ case, palette branch and host implementation. The contributor smoke adds both
 a panel and a headless action using only their packages and registration lists,
 then typechecks both applications.
 
-## Next acceptance boundaries
+## Status, 13 November 2026
 
-1. Migrate remaining rows and remove compatibility paths after callers move.
-2. Keep proving new contributions change only their packages and registration lists.
-   Verify disable/re-enable, restore, hidden lifetimes, failure isolation and
-   provider-instance collisions in both actual renderers.
+Every row in the table above is a plugin in both renderers, or a plugin that
+declares one renderer explicitly. What stays in the shell is deliberate: the
+attention inbox and approvals (core runtime control), marking bookmarks and the
+transcript's own navigation, the engineering inspector (a view mode of the
+reader), the coordinator rail, and the plugin manager itself.
 
-This audit records incomplete work. Passing host typechecks and focused hook
-checks proves neither a fully reduced shell nor complete Web/TUI parity.
+Contribution points available to a plugin, each in both renderers unless noted:
+surfaces (overlay/window/panel), executable commands, ⌃K chords (`tuiChord`,
+TUI), composer accessories, application observers, Web dashboards and reader
+slots, **widgets** (`corner` slot), and server behavior (**`beforeTurn`** and
+**`afterTurn`** with plugin follow-ups). Shared services added in this pass:
+`daily-summary`, `handoff`, `bookmarks`, `session-navigation`, and a Web
+`session-fleet`.
+
+**Local plugins (mods)** load from the user's config directory and contribute
+behavior hooks and commands without a build (see the authoring reference): a
+user changes how the app behaves on their machine without touching the checkout.
+
+Not yet extensible, by design of this pass: mid-turn steering, per-provider tool
+permission decisions (each provider has its own bridge; a shared `permission`
+hook would have to be threaded through all of them), transcript card renderers,
+and surfaces or widgets from mods (Web views need a build).
 
 ## Composer accessory contributions
 
