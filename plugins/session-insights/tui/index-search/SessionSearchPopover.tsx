@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiPluginKeyEvent, type TuiThemePalette } from '../../../../tui/opentui/shell/sdk'
-import { searchTuiSessionIndex } from '../../../../lib/tui/service'
+import type { PluginSessionInsightsService } from '../../../../lib/plugins/sessionInsights'
 import type { PersistedSearchResult } from '../../../../lib/session-index/types'
 import type { Session } from '../../../../lib/types'
 import { changeFacet, DATE_FACETS, EMPTY_FACETS, editText, searchParamsFor, stepField, type SearchFacets, type SearchField } from './model'
@@ -11,6 +11,7 @@ type Props = {
   width: number
   height: number
   sessions: readonly Session[]
+  insights: PluginSessionInsightsService
   onOpenSession: (session: Session) => void
   onClose: () => void
   onDetach?: () => void
@@ -21,7 +22,7 @@ type Props = {
 const DEBOUNCE_MS = 200
 const baseName = (cwd: string | undefined) => (cwd ? cwd.split('/').filter(Boolean).pop() ?? cwd : '')
 
-export function SessionSearchPopover({ theme, width, height, sessions, onOpenSession, onClose, onDetach, onKeyHandlerReady, docked = false }: Props) {
+export function SessionSearchPopover({ theme, width, height, sessions, insights, onOpenSession, onClose, onDetach, onKeyHandlerReady, docked = false }: Props) {
   const [facets, setFacets] = useState<SearchFacets>(EMPTY_FACETS)
   const [field, setField] = useState<SearchField>('query')
   const [results, setResults] = useState<PersistedSearchResult[]>([])
@@ -37,7 +38,7 @@ export function SessionSearchPopover({ theme, width, height, sessions, onOpenSes
     const mine = ++generation.current
     setStatus('searching')
     const timer = setTimeout(() => {
-      searchTuiSessionIndex(params)
+      insights.search(params)
         .then((response) => { if (mine === generation.current) { setResults(response.results); setCursor(0); setStatus('idle') } })
         .catch((failure) => { if (mine === generation.current) { setError(failure instanceof Error ? failure.message : 'Search failed'); setStatus('error') } })
     }, DEBOUNCE_MS)

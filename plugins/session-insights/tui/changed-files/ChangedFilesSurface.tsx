@@ -14,6 +14,7 @@ export function ChangedFilesSurface({ services, theme, width, height, placement,
       height={height}
       cards={transcript?.detail?.transcriptCards ?? null}
       session={services.session?.session ?? null}
+      insights={services['session-insights']}
       loading={transcript?.status === 'loading'}
       onOpenFile={services['open-file']?.open}
       onClose={close}

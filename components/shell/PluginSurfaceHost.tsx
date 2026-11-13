@@ -5,6 +5,7 @@ import { webPlaybooks } from './playbooksService'
 import { webDailySummary } from './dailySummaryService'
 import { webHandoff } from './handoffService'
 import { webCheckpoints } from './checkpointsService'
+import { webSessionInsights } from './sessionInsightsService'
 import { webBookmarks } from './bookmarksService'
 
 // Presents one plugin surface on the web. Loads the plugin's chunk on first
@@ -66,7 +67,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, p
   const [attempt, setAttempt] = useState(0)
   const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
-  const resolved = useMemo(() => resolvePluginServices(surface, { 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, handoff: webHandoff, checkpoints: webCheckpoints, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
+  const resolved = useMemo(() => resolvePluginServices(surface, { 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, handoff: webHandoff, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
   useEffect(() => {

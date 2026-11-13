@@ -9,7 +9,7 @@ export const manifest = {
   id: 'run-dashboard',
   title: 'Run dashboard',
   description: 'Every session in scope as a run: status, project, branch, the last tool and what it waits on.',
-  renderers: ['web'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   dashboards: [{ id: 'sessions', title: 'Runs', glyph: '▦', icon: 'layout-dashboard', launcherLabel: 'Open run dashboard', command: 'open-run-dashboard', surface: 'run-dashboard', order: -20 }],
   surfaces: [{
@@ -18,7 +18,7 @@ export const manifest = {
     pin: null,
     single: true,
     keys: 'window',
-    placements: ['window'],
+    placements: ['overlay', 'window'],
     windowLabel: 'Run dashboard',
     services: ['session-fleet'],
   }],
@@ -32,5 +32,15 @@ export const manifest = {
     renderers: ['web'],
     webDashboard: 'sessions',
     keywords: ['dashboard', 'runs', 'sessions', 'overview', 'status'],
+  }, {
+    // The TUI has no dashboard tabs: the same surface opens over the layout, or as a window.
+    id: 'run-dashboard',
+    label: 'Run dashboard',
+    category: 'View',
+    opens: 'run-dashboard',
+    requires: null,
+    renderers: ['tui'],
+    tuiChord: { key: 'r', short: 'runs', label: 'Run dashboard: every session as a run', hint: false },
+    keywords: ['dashboard', 'runs', 'sessions', 'overview', 'status', 'fleet'],
   }],
 } as const satisfies PluginManifest

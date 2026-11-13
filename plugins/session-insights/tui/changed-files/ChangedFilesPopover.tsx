@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiPluginKeyEvent, type TuiThemePalette } from '../../../../tui/opentui/shell/sdk'
 import type { TuiTranscriptCard } from '../../../../tui/format'
-import { readTuiSessionProvenance } from '../../../../lib/tui/service'
+import type { PluginSessionInsightsService } from '../../../../lib/plugins/sessionInsights'
 import type { Session } from '../../../../lib/types'
 import { relativeTo, touchedRows, touchedTurns, touchedTurnsFromProvenance, type TouchedRow, type TouchedTurn } from './model'
 
@@ -12,6 +12,8 @@ type Props = {
   height: number
   cards: readonly TuiTranscriptCard[] | null
   session: Session | null
+  /** The index's record of this session's edits; without it the transcript's own edit stats are shown. */
+  insights?: PluginSessionInsightsService
   loading: boolean
   onOpenFile?: (path: string, line?: number | null) => void
   onClose: () => void
@@ -26,7 +28,7 @@ const kept = (row: Extract<TouchedRow, { kind: 'file' }>) =>
 
 const isFile = (row: TouchedRow | undefined): row is Extract<TouchedRow, { kind: 'file' }> => row?.kind === 'file'
 
-export function ChangedFilesPopover({ theme, width, height, cards, session, loading, onOpenFile, onClose, onDetach, onKeyHandlerReady, docked = false }: Props) {
+export function ChangedFilesPopover({ theme, width, height, cards, session, insights, loading, onOpenFile, onClose, onDetach, onKeyHandlerReady, docked = false }: Props) {
   const cwd = typeof session?.cwd === 'string' ? session.cwd : undefined
   // The provenance index is the source: it records each edit with the prompt that led to it and can say how
   // many lines still survive. A session it has not indexed yet falls back to the transcript's own edit stats.
@@ -34,9 +36,9 @@ export function ChangedFilesPopover({ theme, width, height, cards, session, load
   const sessionKey = session?.provider && session.sessionId ? `${session.provider}:${session.sessionId}` : null
   useEffect(() => {
     setIndexed(null)
-    if (!session?.provider || !session.sessionId) return
+    if (!session?.provider || !session.sessionId || !insights) { setIndexed([]); return }
     let cancelled = false
-    void readTuiSessionProvenance(session.provider, session.sessionId)
+    void insights.provenance({ provider: session.provider, sessionId: session.sessionId })
       .then(({ summary, edits }) => {
         if (cancelled) return
         setIndexed(edits.length > 0 ? touchedTurnsFromProvenance(edits, summary) : [])

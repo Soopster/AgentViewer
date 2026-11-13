@@ -134,7 +134,8 @@ try {
     for (let index = 0; index < Math.min(await turns.count(), 15) && !(await history.count()); index++) {
       await turns.nth(index).click()
       await view.getByText(/Changed since|Nothing has changed/).first().waitFor()
-      await page.waitForTimeout(300)
+      // Wait for this turn's own changes, not the previous turn's still on screen.
+      await view.getByText('Reading…', { exact: true }).waitFor({ state: 'detached' })
     }
     assert.ok(await history.count(), 'no turn among the newest 15 has a changed file to open the history of')
     {
@@ -152,6 +153,29 @@ try {
     await shot('checkpoints')
     await page.keyboard.press('Escape')
     await view.waitFor({ state: 'detached' })
+  })
+  await check('session insights: files touched, tool timing, index search', async () => {
+    await palette('Files touched by this session')
+    const files = page.locator('[data-plugin-view="changed-files"]')
+    await files.waitFor()
+    await files.getByText(/turns ·|no edits recorded/).first().waitFor()
+    await page.keyboard.press('Escape')
+    await files.waitFor({ state: 'detached' })
+    await palette('Tool timing by turn')
+    const timing = page.locator('[data-plugin-view="tool-timing"]')
+    await timing.waitFor()
+    await timing.locator('[data-timing-turn], :text("No timed tool calls")').first().waitFor()
+    await shot('tool-timing')
+    await page.keyboard.press('Escape')
+    await timing.waitFor({ state: 'detached' })
+    await palette('Search the session index')
+    const search = page.locator('[data-plugin-view="index-search"]')
+    await search.waitFor()
+    await search.getByLabel('Search').fill('plugin')
+    await search.locator('[data-search-result]').first().waitFor()
+    await shot('index-search')
+    await search.locator('[data-search-result]').first().click()
+    await search.waitFor({ state: 'detached' })
   })
   await check('mod view: draw and run an action', async () => {
     await palette('Mod views')

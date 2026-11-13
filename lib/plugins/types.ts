@@ -202,6 +202,8 @@ export type PluginServiceId =
   | 'file-history'
   /** Turn checkpoints: list, diff, restore, and the working diff's hunks, commit and PR. */
   | 'checkpoints'
+  /** A session's recorded edits, and faceted search over the session index. */
+  | 'session-insights'
   /** Web: the pull request linked to the selected session, and linking one to it. */
   | 'session-pull-request'
   | 'subagent-transcript'

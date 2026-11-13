@@ -16,6 +16,11 @@ export async function GET(
   const provider = isAgentProvider(configured) ? configured : 'claude'
   try {
     const result = await sessionProvenanceSummary(provider, sessionId)
+    // `edits=1` adds the recorded edits with their prompts (the Files touched view).
+    if (new URL(request.url).searchParams.get('edits') === '1') {
+      const { readFileEditsForSession } = await import('@/lib/sessionPersistence')
+      return NextResponse.json({ ...result, edits: await readFileEditsForSession(provider, sessionId) })
+    }
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

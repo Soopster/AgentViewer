@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'bookmarks', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'bookmarks', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'prompt-library': async () => (await import('../../../plugins/prompt-library/tui')).module,
@@ -35,6 +35,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,
   provenance: async () => (await import('../../../plugins/provenance/tui')).module,
   'remote-access': async () => (await import('../../../plugins/remote-access/tui')).module,
+  'run-dashboard': async () => (await import('../../../plugins/run-dashboard/tui')).module,
 }, TUI_PLUGIN_SERVICES, undefined,
 // A mod's views are its surfaces, drawn by the Mod views renderer pinned to each.
 async (manifest) => (await import('../../../plugins/mod-views/tui')).modViewSurfaces(manifest))

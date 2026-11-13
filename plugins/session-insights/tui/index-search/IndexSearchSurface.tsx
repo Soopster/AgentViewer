@@ -11,6 +11,7 @@ export function IndexSearchSurface({ services, theme, width, height, placement, 
       width={width}
       height={height}
       sessions={fleet.sessions}
+      insights={services['session-insights']!}
       onOpenSession={(session) => { if (placement === 'overlay') close(); fleet.open(session) }}
       onClose={close}
       onDetach={detach}
