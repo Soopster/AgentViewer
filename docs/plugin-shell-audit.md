@@ -127,9 +127,10 @@ and `toolCard` (transcript presentation on the read path, drawn by both
 renderers). Mods also contribute widgets as server-computed content. Mods can also be agent backends (provider mods: instances of the bundled
 `mod` provider). Mods add
 interactive views as data (headings, text, selectable rows and buttons whose
-actions run in the mod), drawn by the bundled Mod views plugin in both
-renderers. What a mod cannot add is a bespoke component: the Web would need to
-load its code, which needs a build. `npm run plugins:web:live` drives the real Web
+actions run in the mod), and their own React components (`web.mjs` /
+`tui.mjs`: plain ES modules that import nothing and are handed the app's
+React), both shown by the bundled Mod views plugin in each renderer. No build
+step is involved in either. `npm run plugins:web:live` drives the real Web
 app through the migrated plugins and a fixture mod.
 
 The permission hook is verified per bridge: Claude's `canUseTool` and the ACP

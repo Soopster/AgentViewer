@@ -9,6 +9,8 @@
 // through the ordinary send path. It returns effects as data
 // (`{ notice, insertText, replaceText }`), which the renderer applies.
 import { pathToFileURL } from 'node:url'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { localPluginDiscovery, type LocalPlugin } from './localPlugins'
 import { decodeLocalCommandEffects, decodeLocalWidgetContent, type LocalCommandEffects, type LocalWidgetContent } from './localManifest'
 import { isPluginEnabled } from './enablement'
@@ -157,9 +159,20 @@ export async function readLocalPluginWidgets(signal: AbortSignal = new AbortCont
 }
 
 /** Every enabled mod's declared views. */
-export function listLocalPluginViews(): Array<{ pluginId: string; viewId: string; title: string }> {
+export function listLocalPluginViews(): Array<{ pluginId: string; viewId: string; title: string; component?: boolean }> {
   return localPluginDiscovery().plugins.filter(plugin => isPluginEnabled(plugin.manifest.id))
-    .flatMap(plugin => (plugin.manifest.localViews ?? []).map(view => ({ pluginId: plugin.manifest.id, viewId: view.id, title: view.title })))
+    .flatMap(plugin => (plugin.manifest.localViews ?? []).map(view => ({ pluginId: plugin.manifest.id, viewId: view.id, title: view.title, ...(view.component ? { component: true } : {}) })))
+}
+
+/** The file holding a mod's components for a renderer: `<renderer>.mjs` or `<renderer>.js`. */
+export function localPluginComponentFile(pluginId: string, renderer: 'web' | 'tui'): string | null {
+  const plugin = localPluginDiscovery().plugins.find(entry => entry.manifest.id === pluginId)
+  if (!plugin || !isPluginEnabled(pluginId)) return null
+  for (const name of [`${renderer}.mjs`, `${renderer}.js`]) {
+    const file = path.join(plugin.dir, name)
+    if (existsSync(file)) return file
+  }
+  return null
 }
 
 function enabledViewPlugin(pluginId: string, viewId: string) {

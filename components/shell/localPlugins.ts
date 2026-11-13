@@ -5,7 +5,8 @@
 import { registerLocalPluginManifests } from '@/lib/plugins/catalog'
 import { decodeLocalCommandEffects, decodeLocalWidgetContent, parseLocalPluginManifest, setLocalCommandRunner, setLocalWidgetReader, type LocalPluginManifest, type LocalWidgetContent } from '@/lib/plugins/localManifest'
 import { PLUGIN_MANIFESTS, listLocalPluginManifests } from '@/lib/plugins/catalog'
-import { decodeModView, setModViewService } from '@/lib/plugins/modViews'
+import * as React from 'react'
+import { decodeModView, readModComponentViews, setModViewService } from '@/lib/plugins/modViews'
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
@@ -34,7 +35,7 @@ setLocalWidgetReader(async (signal) => {
 
 setModViewService({
   list: () => listLocalPluginManifests().filter(manifest => isPluginEnabled(manifest.id))
-    .flatMap(manifest => (manifest.localViews ?? []).map(view => ({ pluginId: manifest.id, viewId: view.id, title: view.title }))),
+    .flatMap(manifest => (manifest.localViews ?? []).map(view => ({ pluginId: manifest.id, viewId: view.id, title: view.title, ...(view.component ? { component: true } : {}) }))),
   render: async (view, signal) => {
     const response = await fetch(`/api/plugins/local/views?plugin=${encodeURIComponent(view.pluginId)}&view=${encodeURIComponent(view.viewId)}`, { signal })
     const body = await response.json().catch(() => ({}))
@@ -50,7 +51,22 @@ setModViewService({
     if (!response.ok || body?.error) throw new Error(body?.error || `Action failed (${response.status})`)
     return decodeLocalCommandEffects(body)
   },
+  // web.mjs: a plain ES module the daemon serves; imported from a blob URL
+  // (outside the bundler) and handed the page's own React.
+  loadComponent: async (view) => {
+    const response = await fetch(`/api/plugins/local/component?plugin=${encodeURIComponent(view.pluginId)}`)
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`Could not load ${view.pluginId}'s component (${response.status})`)
+    const url = URL.createObjectURL(new Blob([await response.text()], { type: 'text/javascript' }))
+    try {
+      const exported = await importAtRuntime(url)
+      return readModComponentViews(exported, React)[view.viewId] ?? null
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  },
 })
+const importAtRuntime = new Function('url', 'return import(url)') as (url: string) => Promise<unknown>
 
 /** Apply the daemon's `local` section of GET /api/plugins. Manifests are re-validated, never trusted. */
 export function applyWebLocalPlugins(value: unknown): void {

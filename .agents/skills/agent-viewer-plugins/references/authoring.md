@@ -525,8 +525,17 @@ export const commands = {
   (⌃K x, palette "Mod views") draws them in both renderers: rows and buttons
   are clickable, and in the TUI ↑↓/j/k select and Enter runs. An action runs
   where the mod lives, its notice is shown, and the view re-renders. A view is
-  data, not code, so it needs no build; a bespoke component still needs a
-  bundled plugin.
+  data, not code, so it needs no build.
+- Components: a view declared `"component": true` is the mod's own React
+  component. Ship `web.mjs` and/or `tui.mjs` beside `plugin.json` — plain ES
+  modules that import nothing — exporting a factory that receives the app's
+  React: `export function views({ React }) { return { gauge: Gauge } }`. Build
+  elements with `React.createElement` (in the TUI the intrinsic elements are
+  OpenTUI's: `box`, `text`, `span`). Props: `run(action, item)` (a server
+  action; resolves to its notice), `close`, `view`, and in the TUI `theme`,
+  `width`, `height` and `registerKeys` (return true from the handler to keep a
+  key). No bundler is involved, the component shares the app's React, it keeps
+  its state across its own actions, and an error is caught at its boundary.
 - `scripts/localPluginSmoke.ts` is the worked example end to end.
 
 ## Provider mods

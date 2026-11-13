@@ -2,11 +2,17 @@
 // TUI entry for Mod views. Keys: ←/→ or Tab switch view, ↑/↓ or j/k select a
 // row or button, Enter runs it, r refreshes, Esc closes. Rows and buttons are
 // clickable too.
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import { modViewActionables } from '../../../lib/plugins/modViews'
 import { useModView } from '../../../lib/plugins/useModView'
 import { fitText, MODAL_CONTENT_Z_INDEX, popoverFrameCells, popoverRootProps, type TuiPluginView, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
+
+class ComponentBoundary extends React.Component<{ name: string; color: string; children: React.ReactNode }, { failed: Error | null }> {
+  state = { failed: null as Error | null }
+  static getDerivedStateFromError(failed: Error) { return { failed } }
+  render() { return this.state.failed ? <text fg={this.props.color}>{`${this.props.name} failed: ${this.state.failed.message}`}</text> : this.props.children }
+}
 
 function ModViews({ theme, accent, width, height, placement, registerKeys, close, services, useState: useScopedState }: TuiPluginViewProps) {
   const [selectedKey, setSelectedKey] = useScopedState<string | null>('view', null)
@@ -27,8 +33,11 @@ function ModViews({ theme, accent, width, height, placement, registerKeys, close
     setSelectedKey(`${next.pluginId}:${next.viewId}`)
     setCursor(0)
   }
+  const componentKeys = React.useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean | void) | null>(null)
   useEffect(() => {
     registerKeys((key) => {
+      // A mod component sees keys first; returning true keeps one.
+      if (view.selected?.component && componentKeys.current?.(key) === true) return true
       if (key.name === 'escape' || key.sequence === 'q') { close(); return true }
       if (key.name === 'tab' || key.name === 'right' || key.name === 'left') { switchView(key.name === 'left' || key.shift ? -1 : 1); return true }
       if (key.name === 'down' || key.sequence === 'j') { setCursor(value => Math.min(value + 1, Math.max(actionables.length - 1, 0))); return true }
@@ -73,6 +82,13 @@ function ModViews({ theme, accent, width, height, placement, registerKeys, close
       <scrollbox height={Math.max(popH - frame - 3, 3)} scrollY backgroundColor={theme.surface}>
         <box paddingX={1} flexDirection="column">
           {view.error ? <text fg={theme.red} wrapMode="word" width={innerW}>{view.error}</text>
+            : view.selected?.component ? (view.component
+              ? <ComponentBoundary key={view.key ?? ''} name={view.selected.title} color={theme.red}>{React.createElement(view.component as React.ComponentType<Record<string, unknown>>, {
+                  view: view.selected, close, React, theme, width: innerW, height: Math.max(popH - frame - 3, 3),
+                  run: async (action: string, item?: string) => { const result = await view.run(action, item); setNotice(result); return result },
+                  registerKeys: (handler: typeof componentKeys.current) => { componentKeys.current = handler },
+                })}</ComponentBoundary>
+              : <text fg={theme.dim}>Loading…</text>)
             : !view.content ? <text fg={theme.dim}>{view.views.length ? 'Loading…' : 'A mod declares views in its plugin.json and returns each from its server module.'}</text>
             : [<text key="title" fg={theme.text} wrapMode="none">{fitText(view.content.title, innerW)}</text>,
               ...view.content.blocks.map((block, index) => {

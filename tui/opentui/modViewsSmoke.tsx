@@ -12,7 +12,27 @@ import { testRender, act } from './testRender'
 const workspace = mkdtempSync(path.join(tmpdir(), 'mod-views-'))
 const plugins = path.join(workspace, 'mods')
 mkdirSync(path.join(plugins, 'counter'), { recursive: true })
-writeFileSync(path.join(plugins, 'counter', 'plugin.json'), JSON.stringify({ id: 'counter', title: 'Counter', views: [{ id: 'tally', title: 'Tally' }] }))
+writeFileSync(path.join(plugins, 'counter', 'plugin.json'), JSON.stringify({ id: 'counter', title: 'Counter', views: [{ id: 'tally', title: 'Tally' }, { id: 'gauge', title: 'Gauge', component: true }] }))
+// A bespoke component: a plain ES module importing nothing, built with the app's React.
+writeFileSync(path.join(plugins, 'counter', 'tui.mjs'), `
+export function views({ React }) {
+  const h = React.createElement
+  function Gauge({ run, registerKeys, theme, width }) {
+    const [level, setLevel] = React.useState(3)
+    React.useEffect(() => {
+      registerKeys((key) => {
+        if (key.sequence === '+') { setLevel(value => value + 1); return true }
+        if (key.sequence === 'b') { void run('bump', 'apples'); return true }
+        return false
+      })
+      return () => registerKeys(null)
+    }, [])
+    return h('box', { flexDirection: 'column' },
+      h('text', { fg: theme.cyan }, 'GAUGE ' + '#'.repeat(level) + ' level ' + level),
+      h('text', { fg: theme.dim }, 'width ' + width))
+  }
+  return { gauge: Gauge }
+}`)
 writeFileSync(path.join(plugins, 'counter', 'server.mjs'), `
 const counts = { apples: 0, pears: 0 }
 export const views = {
@@ -60,8 +80,18 @@ try {
   await act(async () => { await setup.mockMouse.click(reset.x + 3, reset.y) })
   await waitFor('a button runs its action', () => /apples\s+count 0/.test(screen()) && /pears\s+count 0/.test(screen()))
   console.log('Actions: Enter and clicks run the mod\'s actions; the view re-renders and shows the notice.')
+  // The mod's own component: its state, its keys, and a call to its server action.
+  await act(async () => { setup.mockInput.pressArrow('right') })
+  await waitFor('the component view draws', () => screen().includes('GAUGE ### level 3'))
+  await act(async () => { await setup.mockInput.typeText('+') })
+  await waitFor('the component handles its own key', () => screen().includes('GAUGE #### level 4'))
+  await act(async () => { await setup.mockInput.typeText('b') })
+  await waitFor('the component runs a server action', () => screen().includes('bumped apples'))
+  await settle(500)
+  assert(screen().includes('GAUGE #### level 4'), 'running a server action remounted the component and lost its state')
+  console.log('Components: a mod\'s own component renders with the app\'s React, keeps state, handles keys and calls its server actions.')
   await act(async () => { setup.mockInput.pressEscape() })
-  await waitFor('Esc closes it', () => !screen().includes('Fruit tally'))
+  await waitFor('Esc closes it', () => !screen().includes('GAUGE') && !screen().includes('Fruit tally'))
   console.log('Mod views smoke passed')
 } finally {
   act(() => setup.renderer.destroy())

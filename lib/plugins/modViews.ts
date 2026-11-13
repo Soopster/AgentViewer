@@ -22,7 +22,36 @@ export type ModViewBlock =
   | { readonly type: 'button'; readonly label: string; readonly action: string }
 
 export type ModViewContent = { readonly title: string; readonly blocks: readonly ModViewBlock[] }
-export type ModViewRef = { readonly pluginId: string; readonly viewId: string; readonly title: string }
+export type ModViewRef = { readonly pluginId: string; readonly viewId: string; readonly title: string; readonly component?: boolean }
+
+/**
+ * A mod's own components, for views declared with `"component": true`. The mod
+ * ships `web.mjs` and/or `tui.mjs` — plain ES modules that import nothing — and
+ * exports a factory: `export function views({ React }) { return { tally: Tally } }`.
+ * The host passes its own React (elements via `React.createElement`; the TUI's
+ * intrinsic elements are 'box', 'text', 'span'), so no bundler is involved and
+ * the component shares the app's React. Props are ModComponentProps.
+ */
+export type ModComponentProps = {
+  readonly view: ModViewRef
+  /** Run one of the mod's server actions; resolves to its notice, if any. */
+  readonly run: (action: string, item?: string) => Promise<{ kind: 'info' | 'error'; text: string } | null>
+  readonly close: () => void
+  readonly React: unknown
+  /** TUI only: the palette, the box the view has, and its key handler. */
+  readonly theme?: unknown
+  readonly width?: number
+  readonly height?: number
+  readonly registerKeys?: (handler: ((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean | void) | null) => void
+}
+
+/** A loaded component module's views, validated. */
+export function readModComponentViews(exported: unknown, React: unknown): Record<string, unknown> {
+  const factory = (exported as { views?: unknown } | null)?.views
+  const views = typeof factory === 'function' ? (factory as (deps: { React: unknown }) => unknown)({ React }) : factory
+  if (!views || typeof views !== 'object') throw new Error('the component module exports no views')
+  return views as Record<string, unknown>
+}
 
 const TONES = new Set(['default', 'muted', 'success', 'warning', 'error'])
 const MAX_BLOCKS = 200
@@ -55,6 +84,8 @@ export type ModViewService = {
   readonly list: () => readonly ModViewRef[]
   readonly render: (view: ModViewRef, signal: AbortSignal) => Promise<ModViewContent>
   readonly act: (view: ModViewRef, action: string, item: string | undefined, signal: AbortSignal) => Promise<LocalCommandEffects>
+  /** The mod's component for a `component` view, in this renderer (null when the mod ships none). */
+  readonly loadComponent: (view: ModViewRef) => Promise<unknown>
 }
 let service: ModViewService | null = null
 export function setModViewService(next: ModViewService): void { service = next }

@@ -25,7 +25,7 @@ export type LocalPluginManifest = PluginManifest & {
   /** A mod that is an agent backend: its sessions appear under the `mod` provider (lib/modProvider.ts). */
   readonly localProvider?: { readonly displayName: string }
   /** Interactive views the mod returns as data (lib/plugins/modViews.ts). */
-  readonly localViews?: readonly { readonly id: string; readonly title: string }[]
+  readonly localViews?: readonly { readonly id: string; readonly title: string; readonly component?: boolean }[]
 }
 
 export const LOCAL_WIDGET_REFRESH_MS = 5_000
@@ -133,12 +133,12 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (!spec || typeof spec !== 'object') problems.push('provider must be an object')
     else localProvider = { displayName: typeof spec.displayName === 'string' && spec.displayName.trim() ? spec.displayName.trim().slice(0, 40) : title }
   }
-  const views: { id: string; title: string }[] = []
+  const views: { id: string; title: string; component?: boolean }[] = []
   if (value.views !== undefined && !Array.isArray(value.views)) problems.push('views must be a list')
   for (const [index, entry] of (Array.isArray(value.views) ? value.views : []).entries()) {
     const view = entry as Record<string, unknown>
     if (typeof view?.id !== 'string' || !LOCAL_PLUGIN_ID.test(view.id)) { problems.push(`views[${index}].id is invalid`); continue }
-    views.push({ id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id })
+    views.push({ id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id, ...(view.component === true ? { component: true } : {}) })
   }
   if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
   if (problems.length) return { manifest: null, problems }

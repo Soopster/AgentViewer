@@ -2,7 +2,8 @@
 // Start one with a fixture mod first, e.g.
 //   AGENT_VIEWER_PLUGINS_DIR=<dir with an e2e-mod> AGENT_VIEWER_PLUGIN_SETTINGS=<tmp file> npx next dev -p 3917
 // (the mod: a 'light' widget saying "mod widget is live", a 'hello' command
-// noticing "hello from the e2e mod", and a toolCard for Bash calls). Use
+// noticing "hello from the e2e mod", a toolCard for Bash calls, a 'tally' data
+// view, a 'gauge' component view in web.mjs, and an "Echo agent" provider). Use
 // `localhost`, not 127.0.0.1: next dev withholds its client assets from an
 // origin it does not allow, and the page never hydrates.
 import assert from 'node:assert/strict'
@@ -112,6 +113,20 @@ try {
     await page.getByText(`count ${before + 1}`).waitFor()
     await page.getByText('bumped apples').waitFor()
     await shot('mod-views')
+    await page.keyboard.press('Escape')
+  })
+  await check('mod component: its own React UI, state and server action', async () => {
+    await palette('Mod views')
+    await page.locator('[data-plugin-view="mod-views"]').waitFor()
+    await page.getByRole('button', { name: 'Gauge', exact: true }).click()
+    await page.getByText('GAUGE level 3').waitFor()
+    await page.getByRole('button', { name: 'raise' }).click()
+    await page.getByText('GAUGE level 4').waitFor()
+    await page.getByRole('button', { name: 'bump on the server' }).click()
+    await page.getByText('bumped apples').first().waitFor()
+    await page.waitForTimeout(800)
+    assert.ok(await page.getByText('GAUGE level 4').isVisible(), 'running a server action remounted the component and lost its state')
+    await shot('mod-component')
     await page.keyboard.press('Escape')
   })
   await check('provider mod: pick it, start a session, stream a reply', async () => {
