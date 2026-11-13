@@ -147,6 +147,28 @@ transformation logic independent of provider SDKs. This hook does not currently
 intercept mid-turn steering, provider tool execution, or transcript rendering;
 extend the shared contract explicitly for those requirements.
 
+### afterTurn
+
+Declare `behavior: { hooks: ['afterTurn'] }` (or both hooks) and export an
+`afterTurn` function. It runs about two seconds after a turn leaves the running
+registry (transcript writes land just after), for any provider and any surface,
+unless another turn has started meanwhile.
+
+```ts
+afterTurn: async ({ target, readMessages, followUps, signal }) => {
+  const [last] = await readMessages(1)
+  if (followUps < 3 && String(last?.message?.content).includes('TODO')) {
+    return { action: 'follow-up', message: 'Finish the TODOs you left.' }
+  }
+}
+```
+
+Every enabled hook runs in order; one hook's failure is logged and the others
+still run. The first valid follow-up wins and is sent through the ordinary send
+path, so every `beforeTurn` hook sees it. `followUps` counts plugin follow-ups
+since the user last sent a turn; the host stops at 25 (`PLUGIN_FOLLOW_UP_LIMIT`)
+whatever a plugin asks. Disabling a plugin aborts its `signal`.
+
 ## Application observers
 
 For app behavior that must run with no view open, declare
@@ -403,3 +425,73 @@ presentation signals to reads and fence local updates after awaits.
 Run `pluginRunLaunchServiceSmoke.ts`, `coordRunLaunchIdentitySmoke.ts`, the Web
 run-launch browser check and native `newWorkflowPluginSmoke.tsx`. These use
 mocked SDK/provider boundaries and local fixtures, not live agent execution.
+
+## Widgets
+
+A widget is UI a plugin keeps on screen while enabled, with no opening command
+(`plugins/pi-activity/` is the example). Declare it in the manifest and add one
+line to each renderer's widget loader list
+(`components/shell/widgetPlugins.ts`, `tui/opentui/shell/widgetPlugins.ts`):
+
+```ts
+widgets: [{ id: 'build-status', slot: 'corner' }],
+```
+
+The entry exports `widgets: PluginWidgetModule<...>`. A widget is loaded at boot,
+so keep its module small, read its own state (a store or a subscription), and
+return `null` when it has nothing to say: an empty `corner` slot covers no cells
+and takes no clicks. Each widget has its own error boundary. Disabling the
+plugin evicts the module and removes the widget at once; it must not stop the
+feed behind it.
+
+## Chords and navigation
+
+`tuiChord: { key: 's', short: 'sum' }` on a command binds `⌃K s`. Two
+contributions of one key fail at load; `keys.json` still rebinds any of them.
+`session-navigation` (`open(session, messageUuid?)`) shows a session in the
+reader and lands on a message once it loads, switching provider or instance
+when needed — both renderers offer it to application views and dashboards.
+
+## Local plugins (mods)
+
+A mod is a directory in the user's plugin directory. `plugin.json`:
+
+```json
+{
+  "id": "todo-nag",
+  "title": "TODO nag",
+  "description": "Asks the agent to finish TODOs it leaves behind.",
+  "behavior": { "hooks": ["afterTurn"] },
+  "commands": [
+    { "id": "summarize", "label": "Summarize the last reply", "scope": "session",
+      "services": ["notices", "composer"], "tuiChord": { "key": "y", "short": "sum" } }
+  ]
+}
+```
+
+and `server.mjs` (or `.js`, or `.ts` under Bun):
+
+```js
+export async function afterTurn({ readMessages, followUps }) { /* as above */ }
+export const commands = {
+  async summarize({ target, readMessages, sendTurn, signal }) {
+    const [last] = await readMessages(1)
+    return { notice: 'Summary ready', insertText: `Summarize: ${String(last.message.content).slice(0, 200)}` }
+  },
+}
+```
+
+- The id must not be a bundled plugin's; commands are namespaced `<id>:<command>`.
+- Code runs where turns run: in the TUI's process, or the Web daemon's (the
+  page calls `POST /api/plugins/local`, a write-scoped route). A command returns
+  effects as data — `notice` (string or `{ kind, text }`), `insertText`,
+  `replaceText` — and the renderer applies them through its command host, so
+  a stale or retargeted command cannot write into another composer.
+  `sendTurn(message)` sends a turn to the target session through the send path.
+- `scope` is `application` (default), `session` or `repository`; `services` is a
+  subset of `notices`, `composer`, `transcript` (default `notices`), all required.
+- Discovery runs once per process; restart after adding a mod. Both plugin
+  managers list mods (they can be turned off like any plugin) and any refused,
+  with the reasons. Mods contribute no surfaces or widgets yet: those need a
+  bundled plugin.
+- `scripts/localPluginSmoke.ts` is the worked example end to end.

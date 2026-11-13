@@ -70,6 +70,13 @@ surfaces capture their opening cwd and own editor state and cancellation.
 Run setup uses `lib/plugins/runLaunch.ts` and the Coordination plugin
 `new-workflow` surface. Plugins own form state/keys; host adapters register
 accepted sessions and watchers without selection-changing late callbacks.
+Persistent plugin UI uses `widgets` (`lib/plugins/widgetHost.ts`, loader lists
+`components/shell/widgetPlugins.ts` and `tui/opentui/shell/widgetPlugins.ts`).
+Settled-turn behavior uses the `afterTurn` hook. ⌃K chords come from a command's
+`tuiChord`; only window commands stay in `tui/opentui/shortcutKeys.ts`.
+Every Web dashboard tab (including the default run dashboard) is a plugin
+dashboard. Users' own mods load from `~/.config/agent-viewer/plugins`
+(`lib/plugins/localPlugins.ts`), never from a project directory.
 
 ### Multi-provider session backend
 

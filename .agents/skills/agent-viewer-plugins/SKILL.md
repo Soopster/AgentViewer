@@ -1,15 +1,21 @@
 ---
 name: agent-viewer-plugins
-description: Add or customize Agent Viewer functionality through feature plugins, shared behavior hooks, and Web/OpenTUI plugin surfaces. Use when extending the Agent Viewer app or migrating built-in features into its base-shell plugin architecture.
+description: Add or customize Agent Viewer functionality through feature plugins, local mods, shared behavior hooks, widgets and Web/OpenTUI plugin surfaces. Use when extending the Agent Viewer app, writing a mod in the user's plugin directory, or migrating built-in features into its base-shell plugin architecture.
 ---
 
 # Agent Viewer plugins
 
 Build app functionality as a plugin. Keep Web and OpenTUI aligned on manifest,
 identity, enablement and domain behavior; supply separate renderer adapters.
-This skill targets an Agent Viewer source checkout. The current host loads
-trusted bundled code through static loader lists; it does not install arbitrary
-JavaScript from a user's workspace. Locate the checkout before making changes.
+Two kinds of plugin exist. **Bundled plugins** live in `plugins/<id>/` of an
+Agent Viewer checkout and are reached through static loader lists; they can
+contribute anything below. **Local plugins (mods)** live in the user's own
+config directory (`$AGENT_VIEWER_PLUGINS_DIR`, else
+`~/.config/agent-viewer/plugins/<id>/`) and need no build: a `plugin.json` plus
+a server module contributing behavior hooks and commands. A mod is never read
+from a project or workspace directory. For a user who wants to change how the
+app behaves on their machine, write a mod; for a feature of the app, write a
+bundled plugin in the checkout.
 
 ## Choose the contribution
 
@@ -28,6 +34,14 @@ JavaScript from a user's workspace. Locate the checkout before making changes.
 - For changing what is sent to an agent, use the server `beforeTurn` behavior
   hook. It applies to both apps through the shared send path. It can patch the
   request or block it with a reason; no feature branch belongs in either root.
+- For reacting when a turn finishes (logging, auto-continuing, chaining work),
+  use the `afterTurn` hook. It runs off the runtime's turn-settled event for
+  every provider, can read the transcript, and can ask for one follow-up turn.
+- For persistent UI that is not opened by a command (a status badge, progress
+  in a corner), declare a `widgets` entry for a shell slot.
+- For a ⌃K shortcut, give the command a `tuiChord`; the chord table, hint and
+  help overlay pick it up. To show a session at a message, use the
+  `session-navigation` service rather than any selection callback.
 - For inline composer controls or a composer-owned modal, declare a composer
   accessory. Share its contract across Web and OpenTUI; keep its state, reads and
   native keys in the plugin. Use the scoped send capability.
