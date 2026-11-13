@@ -25,4 +25,6 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'daily-summary': async () => (await import('@/plugins/daily-summary/web')).module,
   handoff: async () => (await import('@/plugins/handoff/web')).module,
   bookmarks: async () => (await import('@/plugins/bookmarks/web')).module,
+  provenance: async () => (await import('@/plugins/provenance/web')).module,
+  'remote-access': async () => (await import('@/plugins/remote-access/web')).module,
 }, WEB_PLUGIN_SERVICES)

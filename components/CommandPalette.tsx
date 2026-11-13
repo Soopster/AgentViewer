@@ -7,7 +7,7 @@ import { MESSAGE_SEARCH_RESULT_LIMIT, sessionTabKey, getSessionTitle, getSession
 import { providerStyle, providerIconLabel, messageTypeLabel, formatMessageMatchTime } from './command-palette/presentation'
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bot, Database, FileSearch, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, Smartphone, SquareTerminal, UsersRound } from 'lucide-react'
+import { BarChart3, Bot, Database, FolderOpen, Fullscreen, Layers3, ListTodo, Maximize2, Minimize2, PanelLeftOpen, PanelRight, PanelRightOpen, Plug, Puzzle, Radio, RefreshCw, Search, SlidersHorizontal, SquareTerminal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -80,8 +80,6 @@ export default function CommandPalette({
   onOpenRightPanelSurface,
   onToggleMessageViewMaximized,
   onEnterMessageViewFullscreen,
-  onOpenProvenance,
-  onOpenRemoteAccess,
   onOpenPlugins,
 }: CommandPaletteProps) {
   const disabledPlugins = useDisabledPlugins()
@@ -254,27 +252,6 @@ export default function CommandPalette({
         },
       },
       {
-        id: 'open-provenance',
-        label: 'Code provenance — agent blame',
-        description: 'See which sessions wrote a file, or what code traces back to the current session',
-        icon: <FileSearch size={16} />,
-        shortcut: 'Blame',
-        group: 'actions',
-        keywords: ['provenance', 'blame', 'who wrote', 'origin', 'trace', 'code', 'file', 'history', 'agent blame'],
-        score: 0,
-        run: onOpenProvenance,
-      },
-      {
-        id: 'open-remote-access',
-        label: 'Remote access',
-        description: 'Pair a phone on your network to view and drive sessions',
-        icon: <Smartphone size={16} />,
-        group: 'actions',
-        keywords: ['remote', 'mobile', 'phone', 'pair', 'pairing', 'qr', 'lan', 'network', 'settings'],
-        score: 0,
-        run: onOpenRemoteAccess,
-      },
-      {
         id: 'open-plugins',
         label: 'Plugins',
         description: 'Turn features such as Git and Analytics on or off',
@@ -351,7 +328,7 @@ export default function CommandPalette({
     }
 
     return items
-  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenProvenance, onOpenRemoteAccess, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
+  }, [rightPanelOpen, rightPanelAvailability, onToggleRightPanel, onOpenRightPanelSurface, canMaximizeMessageView, canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, messageViewFullscreen, messageViewMaximized, onChangeProvider, onChangeScope, onEnterMessageViewFullscreen, onOpenPlugins, disabledPlugins, onToggleMessagePane, onToggleMessageViewMaximized, onToggleWorktrees, provider, providerInstanceId, providerInstances, rebuildSearchIndex, scopeMode, scopeProjectName, selectedProject, selectedSession, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

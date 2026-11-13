@@ -82,7 +82,8 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
       return true
     }
     if (!isPluginSurfaceId(command.opens)) return false
-    setOverlay({ surface: command.opens, cwd: command.scope === 'repository' ? cwd : null, session: selectedSession ? { ...selectedSession } : null })
+    // The repository is captured for any app view that declares it; others never receive it.
+    setOverlay({ surface: command.opens, cwd, session: selectedSession ? { ...selectedSession } : null })
     return true
   }), [executeCommand, executeRepositoryCommand, cwd, selectedSession])
   useEffect(() => {

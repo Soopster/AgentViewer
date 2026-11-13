@@ -48,9 +48,7 @@ import { usePluginSettingsSync } from '@/components/shell/usePluginSettingsSync'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
-const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
-const RemoteAccessPopover = dynamic(() => import('@/components/RemoteAccessPopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
@@ -90,8 +88,6 @@ export default function Home() {
   const [repositoryOverlay, setRepositoryOverlay] = useState<PluginSurfaceId | null>(null)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
   const composerInsertRequestRef = useRef(0)
-  const [provenanceOpen, setProvenanceOpen] = useState(false)
-  const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
   usePluginSettingsSync()
   const rightPanel = useRightPanel()
@@ -522,8 +518,6 @@ export default function Home() {
                   onOpenRightPanelSurface={rightPanel.openSurface}
                   onToggleMessageViewMaximized={toggleMessageViewMaximized}
                   onEnterMessageViewFullscreen={enterMessageViewFullscreen}
-                  onOpenProvenance={() => setProvenanceOpen(true)}
-                  onOpenRemoteAccess={() => setRemoteAccessOpen(true)}
                   onOpenPlugins={() => setPluginManagerOpen(true)}
                 />
               ) : null}
@@ -561,26 +555,6 @@ export default function Home() {
             services={repositoryServices!}
             onClose={() => setRepositoryOverlay(null)}
           />
-        ) : null}
-        {provenanceOpen ? (
-          <ProvenancePopover
-            open={provenanceOpen}
-            onClose={() => setProvenanceOpen(false)}
-                    session={selectedSession && !selectedSession.isPending
-                      ? {
-                          sessionId: selectedSession.sessionId,
-                          provider: selectedSession.provider,
-                          providerInstanceId: selectedSession.providerInstanceId,
-                        }
-                      : null}
-            cwd={activeProjectDir}
-            onOpenSession={({ sessionId, provider: editProvider, uuid }) => {
-              selectCommandPaletteSession({ sessionId, provider: editProvider } as Session, uuid)
-            }}
-          />
-        ) : null}
-        {remoteAccessOpen ? (
-          <RemoteAccessPopover open={remoteAccessOpen} onClose={() => setRemoteAccessOpen(false)} />
         ) : null}
         {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
         {!isMessageViewMaximized ? <PiActivityPopover /> : null}

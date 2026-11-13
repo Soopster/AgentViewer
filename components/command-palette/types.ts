@@ -37,8 +37,6 @@ export type CommandPaletteProps = {
   onOpenRightPanelSurface: (kind: RightPanelSurfaceKind) => void
   onToggleMessageViewMaximized: () => void
   onEnterMessageViewFullscreen: () => void
-  onOpenProvenance: () => void
-  onOpenRemoteAccess: () => void
   onOpenPlugins: () => void
 }
 
