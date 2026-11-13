@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
@@ -31,6 +31,10 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   checkpoints: async () => (await import('@/plugins/checkpoints/web')).module,
   'file-history': async () => (await import('@/plugins/file-history/web')).module,
   'session-insights': async () => (await import('@/plugins/session-insights/web')).module,
+  subagents: async () => (await import('@/plugins/subagents/web')).module,
+  'tab-manager': async () => (await import('@/plugins/tab-manager/web')).module,
+  desk: async () => (await import('@/plugins/desk/web')).module,
+  editor: async () => (await import('@/plugins/editor/web')).module,
   'remote-access': async () => (await import('@/plugins/remote-access/web')).module,
 }, WEB_PLUGIN_SERVICES, undefined,
 // A mod's views are its surfaces, drawn by the Mod views renderer pinned to each.

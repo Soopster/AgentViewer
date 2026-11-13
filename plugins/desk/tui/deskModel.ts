@@ -1,4 +1,5 @@
-import { sessionIdentityKey } from '../../../tui/opentui/shell/sdk'
+// Renderer-neutral: the TUI's DeskView and the Web's desk both draw these tables.
+import { sessionIdentityKey } from '../../../lib/sessionIdentity'
 // The desk: a Bloomberg-Terminal-style workspace over the session list.
 //
 // Everything here is pure — the functions a panel can run, the launchpad
@@ -13,7 +14,12 @@ import { sessionIdentityKey } from '../../../tui/opentui/shell/sdk'
 
 import type { AgentProvider, ContextUsage, Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../../tui/format'
-import { formatSessionTitle } from '../../../tui/format'
+import { truncateLine } from '../../../tui/format/text'
+
+/** A session's name on the desk (tui/format's formatSessionTitle, without loading the card formatters). */
+function formatSessionTitle(session: Session): string {
+  return truncateLine(session.customTitle ?? session.summary ?? '(untitled session)', 72)
+}
 
 export type DeskActivity = 'needs-input' | 'running' | 'waiting'
 

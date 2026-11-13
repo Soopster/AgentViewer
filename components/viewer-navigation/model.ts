@@ -18,12 +18,14 @@ export type ViewerLocation =
   | { kind: 'dashboard'; tab: DashboardTab; context: Session | null }
 export type ViewerNavigationState = {
   tabs: Session[]
+  /** Pinned tabs' keys. Pinned tabs lead the strip and cannot be closed until unpinned (the tab manager's rule in both renderers). */
+  pinned: string[]
   location: ViewerLocation
   scrollRequest: { sessionKey: string; requestId: number } | null
 }
 
 export function initialViewerNavigation(): ViewerNavigationState {
-  return { tabs: [], location: { kind: 'empty' }, scrollRequest: null }
+  return { tabs: [], pinned: [], location: { kind: 'empty' }, scrollRequest: null }
 }
 export function selectedViewerSession(state: ViewerNavigationState, catalog: Session[]): Session | null {
   if (state.location.kind === 'dashboard') return state.location.context
@@ -80,6 +82,8 @@ export type ViewerNavigationAction =
   | { type: 'dashboard-tab'; tab: DashboardTab }
   | { type: 'add-tab'; session: Session }
   | { type: 'close-tab'; key: string }
+  | { type: 'pin-tab'; key: string }
+  | { type: 'move-tab'; key: string; delta: -1 | 1 }
   | { type: 'clear' }
   | { type: 'scroll'; sessionKey: string; requestId: number }
   | { type: 'project-sessions'; dir: string; sessions: Session[] }
@@ -98,9 +102,30 @@ export function viewerNavigationReducer(state: ViewerNavigationState, action: Vi
     case 'add-tab': return { ...state, tabs: openTab(state.tabs, action.session) }
     case 'clear': return { ...state, location: { kind: 'empty' }, scrollRequest: null }
     case 'scroll': return { ...state, scrollRequest: { sessionKey: action.sessionKey, requestId: action.requestId } }
-    case 'close-tab': {
+    case 'pin-tab': {
       const index = state.tabs.findIndex(tab => viewerSessionKey(tab) === action.key)
       if (index < 0) return state
+      const pinning = !state.pinned.includes(action.key)
+      const pinned = pinning ? [...state.pinned, action.key] : state.pinned.filter(key => key !== action.key)
+      // The tab joins the end of the pinned group, or leaves it for the first unpinned place.
+      const rest = state.tabs.filter((_, position) => position !== index)
+      const boundary = rest.filter(tab => pinned.includes(viewerSessionKey(tab))).length
+      const tabs = [...rest.slice(0, boundary), state.tabs[index]!, ...rest.slice(boundary)]
+      return { ...state, tabs, pinned }
+    }
+    case 'move-tab': {
+      const index = state.tabs.findIndex(tab => viewerSessionKey(tab) === action.key)
+      const other = index + action.delta
+      if (index < 0 || other < 0 || other >= state.tabs.length) return state
+      // A tab moves within its group: pinned tabs stay first.
+      if (state.pinned.includes(action.key) !== state.pinned.includes(viewerSessionKey(state.tabs[other]!))) return state
+      const tabs = [...state.tabs]
+      ;[tabs[index], tabs[other]] = [tabs[other]!, tabs[index]!]
+      return { ...state, tabs }
+    }
+    case 'close-tab': {
+      const index = state.tabs.findIndex(tab => viewerSessionKey(tab) === action.key)
+      if (index < 0 || state.pinned.includes(action.key)) return state
       const tabs = state.tabs.filter((_, position) => position !== index)
       if (state.location.kind !== 'session' || state.location.key !== action.key) return { ...state, tabs }
       const adjacent = tabs[Math.min(index, tabs.length - 1)]

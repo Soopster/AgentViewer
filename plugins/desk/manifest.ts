@@ -7,7 +7,7 @@ export const manifest = {
   id: 'desk',
   title: 'Desk',
   description: 'A Bloomberg-style workspace over every session: monitors, movers, alerts and a command line.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'desk',
@@ -28,7 +28,8 @@ export const manifest = {
     category: 'View',
     opens: 'desk',
     requires: null,
-    renderers: ['tui'],
+    scope: 'application',
+    renderers: ['web', 'tui'],
     tuiChord: { key: 'b', short: 'desk', label: 'Bloomberg-style desk' },
     tuiKeyLabel: '⌃K b',
     keywords: ['bloomberg', 'terminal', 'monitor', 'fleet', 'dashboard'],

@@ -9,7 +9,7 @@ export const manifest = {
   id: 'tab-manager',
   title: 'Tab manager',
   description: 'Pin tabs so they stay first and cannot be closed by accident, and reorder tabs from a list or the tab menu.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'tab-manager',
@@ -19,7 +19,7 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window'],
     windowLabel: 'Pinned tabs and order in a window',
-    services: ['session-fleet'],
+    services: ['session-tabs'],
   }],
   commands: [{
     id: 'tab-manager',
@@ -27,7 +27,8 @@ export const manifest = {
     category: 'View',
     opens: 'tab-manager',
     requires: null,
-    renderers: ['tui'],
+    scope: 'application',
+    renderers: ['web', 'tui'],
     tuiChord: { key: 'm', short: 'tabs', label: 'Manage tabs (pin, reorder)', hint: false },
     tuiKeyLabel: '⌃K m',
     keywords: ['tabs', 'pin', 'reorder', 'move', 'close'],

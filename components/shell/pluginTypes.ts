@@ -14,6 +14,9 @@ export type WebPluginServices = {
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
   checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../lib/plugins/sessionInsights').PluginSessionInsightsService
+  'session-tabs'?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
+  /** A session's captured subagents and their conversations (the TUI's is one transcript, opened from the rail). */
+  'subagent-transcript'?: import('./subagentsService').WebSubagentTranscriptService
   /** Open a file's history across agent turns (the file-history plugin). */
   'file-history'?: { readonly open: (path: string) => void }
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService

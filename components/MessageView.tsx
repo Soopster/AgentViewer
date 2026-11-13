@@ -176,6 +176,7 @@ function MessageViewInner({
   onFork,
   onDelete,
   openTabs,
+  pinnedTabKeys,
   selectedTabId,
   onSelectTab,
   onCloseTab,
@@ -2153,6 +2154,7 @@ function MessageViewInner({
           activeId={selectedTabId ?? null}
           onSelect={onSelectTab ?? (() => {})}
           onClose={onCloseTab ?? (() => {})}
+          pinned={pinnedTabKeys}
         />
       )}
 

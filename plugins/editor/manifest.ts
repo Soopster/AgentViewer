@@ -8,7 +8,7 @@ export const manifest = {
   id: 'editor',
   title: 'Editor',
   description: 'Edit project files with buffers, language servers, search and highlighting.',
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'editor',
@@ -29,7 +29,9 @@ export const manifest = {
     category: 'Session',
     opens: 'editor',
     requires: null,
-    renderers: ['tui'],
+    // The Web opens it on the active project.
+    scope: 'repository',
+    renderers: ['web', 'tui'],
     tuiKey: { name: 'e', ctrl: true },
     tuiKeyLabel: '⌃E',
     keywords: ['edit', 'code', 'buffer', 'lsp', 'files'],

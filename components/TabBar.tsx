@@ -22,9 +22,11 @@ type Props = {
   activeId: string | null
   onSelect: (session: Session) => void
   onClose: (sessionKey: string) => void
+  /** Pinned tabs' keys: marked, and with no close button until unpinned. */
+  pinned?: readonly string[]
 }
 
-export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
+export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] }: Props) {
   if (tabs.length === 0) return null
 
   return (
@@ -45,6 +47,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
         const tabKey = sessionTabKey(session)
         const isActive = tabKey === activeId
         const title = sessionTabTitle(session)
+        const isPinned = pinned.includes(tabKey)
         return (
           <ViewTransition key={tabKey} enter="fade-in" exit="fade-out" default="none">
           <button
@@ -84,9 +87,10 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
                 textAlign: 'left',
               }}
             >
+              {isPinned ? <span data-tab-pinned aria-label="Pinned" style={{ color: 'var(--cyan)', marginRight: 4 }}>◆</span> : null}
               {title}
             </span>
-            <span
+            {isPinned ? null : <span
               role="button"
               aria-label="Close tab"
               onClick={(e) => {
@@ -113,7 +117,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
               }}
             >
               ×
-            </span>
+            </span>}
           </button>
           </ViewTransition>
         )

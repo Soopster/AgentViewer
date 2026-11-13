@@ -64,6 +64,8 @@ export function useViewerNavigation({ sessions, provider, scope }: {
     remove: (target: SessionIdentity) => send({ type: 'remove', target }),
     materialize: (source: SessionIdentity, session: Session) => send({ type: 'materialize', source, session }),
     addTab: (session: Session) => send({ type: 'add-tab', session }),
+    pinTab: (key: string) => send({ type: 'pin-tab', key }),
+    moveTab: (key: string, delta: -1 | 1) => send({ type: 'move-tab', key, delta }),
     isActiveTab: (target: SessionIdentity) => mountedRef.current && intentRef.current.location.kind === 'session'
       && intentRef.current.location.key === viewerSessionKey(target),
     isCurrentSession: (target: SessionIdentity) => {
@@ -79,7 +81,7 @@ export function useViewerNavigation({ sessions, provider, scope }: {
   }), [send])
   const selectedSession = useMemo(() => selectedViewerSession(state, sessions), [state, sessions])
   return {
-    ...actions, selectedSession, openTabSessions: state.tabs,
+    ...actions, selectedSession, openTabSessions: state.tabs, pinnedTabKeys: state.pinned,
     selectedTabKey: state.location.kind === 'session' ? state.location.key : state.location.kind === 'dashboard' ? RUN_DASHBOARD_KEY : null,
     selectedProject: state.location.kind === 'project' ? state.location.project : null,
     targetMessage: state.location.kind === 'session' ? state.location.target : null,

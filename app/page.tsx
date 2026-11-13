@@ -30,6 +30,8 @@ import { panelSurfaceAvailability } from '@/lib/rightPanel'
 
 
 import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
+import type { PluginSessionTabs } from '@/lib/plugins/sessionTabs'
+import { sessionSelectionKey } from '@/components/session-catalog/selectionKey'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
@@ -78,7 +80,7 @@ export default function Home() {
     openSession: navigateSession, openProject: navigateProject, openDashboard: navigateDashboard,
     setDashboardTab, scrollToSession: scrollSessionListToSession, closeTab: closeNavigationTab,
     clear: clearNavigation, updateProjectSessions, patch: patchNavigation, remove: removeNavigation,
-    materialize: materializeNavigation, addTab: addNavigationTab,
+    materialize: materializeNavigation, addTab: addNavigationTab, pinTab, moveTab, pinnedTabKeys,
     isActiveTab, isCurrentSession, isDashboardContext, isEmpty: navigationIsEmpty, currentProjectDir, currentSession, captureIntent, invalidateIntent,
   } = useViewerNavigation({ sessions, provider, scope: sessionScope })
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
@@ -268,6 +270,17 @@ export default function Home() {
     if (adjacent) void selectSession(adjacent)
     else clearTranscripts()
   }, [closeNavigationTab, clearCreationError, clearTranscripts, selectSession])
+  // The tab strip as the Tab manager plugin's `session-tabs` service (the TUI serves the same contract).
+  const sessionTabs = useMemo<PluginSessionTabs>(() => ({
+    sessions: openTabSessions,
+    pinned: new Set(pinnedTabKeys),
+    selectedKey: selectedTabKey,
+    keyOf: sessionSelectionKey,
+    togglePin: (session) => { pinTab(sessionSelectionKey(session)); return true },
+    move: (session, delta) => moveTab(sessionSelectionKey(session), delta),
+    close: (session) => closeTab(sessionSelectionKey(session)),
+    select: selectOpenTab,
+  }), [openTabSessions, pinnedTabKeys, selectedTabKey, pinTab, moveTab, closeTab, selectOpenTab])
 
   const selectProject = useCallback(async (projectDir: string, projectName: string, projectSessions: Session[]) => {
     clearCreationError()
@@ -398,7 +411,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} />
+    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} sessionTabs={sessionTabs} sessionFleet={dashboardServices['session-fleet']} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">
@@ -461,6 +474,7 @@ export default function Home() {
                     selectedTabId={selectedTabKey}
                     onSelectTab={selectOpenTab}
                     onCloseTab={closeTab}
+                    pinnedTabKeys={pinnedTabKeys}
                     onOpenSession={selectCommandPaletteSession}
                     composerInsertRequest={composerInsertRequest}
                     onComposerInsertConsumed={consumeComposerInsertRequest}

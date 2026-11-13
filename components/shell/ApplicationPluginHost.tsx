@@ -7,6 +7,7 @@ import { pluginRuntimeActivity } from '../../lib/plugins/runtimeActivity'
 import { getPluginCommand, isPluginSurfaceId, type PluginSurfaceId } from '../../lib/plugins/catalog'
 import { subscribePluginCommands } from '../../lib/plugins/commandBus'
 import { isPluginEnabled } from '../../lib/plugins/enablement'
+import type { WebPluginServices } from './pluginTypes'
 import type { PluginApplicationServices } from '../../lib/plugins/application'
 import type { PluginSessionRef } from '../../lib/plugins/bookmarks'
 import { webApplicationPlugins } from './applicationPlugins'
@@ -15,7 +16,7 @@ import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
 import { webPluginCommands } from './pluginCommands'
 
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
-export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession }: {
+export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet }: {
   sessions: readonly Session[]
   selectedSession: Session | null
   cwd?: string | null
@@ -23,6 +24,10 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   insertText?: (text: string) => void
   /** The page's session selection, offered to app-scoped views as `session-navigation`. */
   openSession?: (session: PluginSessionRef, messageUuid?: string) => void
+  /** The page's tab strip, offered as `session-tabs` (the Tab manager). */
+  sessionTabs?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
+  /** Every session in scope and the selected one's transcript, offered as `session-fleet` (the Desk). */
+  sessionFleet?: WebPluginServices['session-fleet']
 }) {
   const [notice, setNotice] = useState<{ text: string } | null>(null)
   const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null; path?: string } | null>(null)
@@ -102,6 +107,6 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   }, [])
   return <>
     {notice && <div role="status" style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 }}>{notice.text}</div>}
-    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

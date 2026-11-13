@@ -21,6 +21,8 @@ export type Props = {
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void
   onCloseTab?: (sessionKey: string) => void
+  /** Pinned tabs' keys (the tab manager plugin pins and orders them). */
+  pinnedTabKeys?: readonly string[]
   /** Opens a session that isn't necessarily in the current sidebar/tab list — e.g. an OpenCode subagent's own real child session, deep-linked from an inline AgentCard's "Open session" action. */
   onOpenSession?: (session: Session) => void
   composerInsertRequest?: { requestId: number; text: string}  | null

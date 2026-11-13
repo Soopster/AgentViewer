@@ -5245,9 +5245,22 @@ function OpenTuiWorkspace() {
         return true
       },
     },
+    // The strip itself, for the Tab manager (the same contract the Web's tabs serve).
+    'session-tabs': {
+      sessions: visibleTabSessions,
+      pinned: pinnedTabs,
+      selectedKey: selectedSessionKey,
+      keyOf: sessionKey,
+      row: pinnedTabsRowOption,
+      toggleRow: toggleSessionTabsRow,
+      togglePin: toggleSessionTabPin,
+      move: moveSessionTab,
+      close: closeSessionTab,
+      select: (session: Session) => { selectTabSession(session); setFocusedPane('messages') },
+    },
   } : pluginServices), [fleetViewShown, pluginServices, sessions, sidebarSessionActivity, fleetAlerts, selectedSession, fleetDetailOwned, transcriptCards, sessionDetail, attentionItems, visibleTabSessions, pinnedTabs, pinnedTabsRowOption, toggleSessionTabsRow, selectedSessionKey, toggleSessionTabPin, moveSessionTab, closeSessionTab])
   const pluginServicesFor = (surfaceId: PluginSurfaceId): TuiProvidedPluginServices => (
-    pluginSurfaceWants(surfaceId, 'session-fleet') ? fleetPluginServices : pluginServices
+    pluginSurfaceWants(surfaceId, 'session-fleet') || pluginSurfaceWants(surfaceId, 'session-tabs') ? fleetPluginServices : pluginServices
   )
   // Why a service the root offers only sometimes is missing right now.
   const pluginServiceGaps = useMemo((): Partial<Record<PluginServiceId, string>> => ({

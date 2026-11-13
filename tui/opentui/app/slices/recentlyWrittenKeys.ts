@@ -49,7 +49,7 @@ export function useRecentlyWrittenKeysGroup(ctx: UseRecentlyWrittenKeysGroupCont
   // Derived only while such a view is shown, full screen or in a window:
   // nothing else reads it, and the attention items change on every registry poll.
   const fleetViewShown = [...(pluginOverlay ? [pluginOverlay] : []), ...windowedPopoverKinds]
-    .some((id) => isPluginSurfaceId(id) && pluginSurfaceWants(id, 'session-fleet'))
+    .some((id) => isPluginSurfaceId(id) && (pluginSurfaceWants(id, 'session-fleet') || pluginSurfaceWants(id, 'session-tabs')))
   const fleetAlerts = useMemo(() => (fleetViewShown ? attentionItems.map((item) => ({
     key: item.key,
     sessionKey: item.sessionKey,

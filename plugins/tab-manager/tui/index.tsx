@@ -5,16 +5,16 @@ import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/she
 import { TabManagerPopover } from './TabManagerPopover'
 
 function TabManagerSurface({ services, theme, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
-  const fleet = services['session-fleet']!
-  if (!fleet.tabs) return <text fg={theme.dim}>  Tabs are not available here.</text>
+  const tabs = services['session-tabs']!
+  if (tabs.row === undefined || !tabs.toggleRow) return <text fg={theme.dim}>  Tabs are not available here.</text>
   return (
     <TabManagerPopover
       docked={placement !== 'overlay'}
       theme={theme}
       width={width}
       height={height}
-      tabs={fleet.tabs}
-      onSelect={(session) => { if (placement === 'overlay') close(); fleet.open(session) }}
+      tabs={{ ...tabs, row: tabs.row, toggleRow: tabs.toggleRow }}
+      onSelect={(session) => { if (placement === 'overlay') close(); tabs.select(session) }}
       onClose={close}
       onDetach={detach}
       onKeyHandlerReady={registerKeys}

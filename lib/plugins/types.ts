@@ -204,6 +204,8 @@ export type PluginServiceId =
   | 'checkpoints'
   /** A session's recorded edits, and faceted search over the session index. */
   | 'session-insights'
+  /** The session tab strip: order, pins, and acting on a tab. */
+  | 'session-tabs'
   /** Web: the pull request linked to the selected session, and linking one to it. */
   | 'session-pull-request'
   | 'subagent-transcript'
