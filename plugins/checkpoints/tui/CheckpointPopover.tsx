@@ -10,25 +10,14 @@ import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiTheme
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { checkpointForPrompt } from '../../../lib/rewindCheckpoint'
-import {
-  commitTuiAllChanges,
-  createTuiReviewPullRequest,
-  deleteTuiUntrackedFile,
-  listTuiCheckpoints,
-  listTuiWorkingDiff,
-  readTuiCheckpointChanges,
-  readTuiCheckpointDiff,
-  rejectTuiWorkingHunk,
-  restoreTuiCheckpoint,
-  type CheckpointFileChange,
-  type TurnCheckpoint,
-  type WorkingDiffHunk,
-} from '../../../lib/tui/service'
+import type { CheckpointFileChange, PluginCheckpointsService, TurnCheckpoint, WorkingDiffHunk } from '../../../lib/plugins/checkpoints'
 
 type CheckpointKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
 type Props = {
   cwd: string
+  /** The host's checkpoint operations (lib/plugins/checkpoints.ts). */
+  service: PluginCheckpointsService
   theme: TuiThemePalette
   accentColor: string
   width: number
@@ -81,6 +70,7 @@ function statusColor(status: CheckpointFileChange['status'], theme: TuiThemePale
 
 export function CheckpointPopover({
   cwd,
+  service,
   theme,
   accentColor,
   width,
@@ -115,8 +105,8 @@ export function CheckpointPopover({
     setLoading(true)
     try {
       const [nextCheckpoints, workingDiff] = await Promise.all([
-        listTuiCheckpoints(cwd).catch(() => [] as TurnCheckpoint[]),
-        listTuiWorkingDiff(cwd).catch(() => ({ hunks: [], untracked: [] })),
+        service.list(cwd).catch(() => [] as TurnCheckpoint[]),
+        service.working(cwd).catch(() => ({ hunks: [], untracked: [] })),
       ])
       if (generation !== generationRef.current) return
       setCheckpoints(nextCheckpoints)
@@ -135,7 +125,7 @@ export function CheckpointPopover({
       return
     }
     let cancelled = false
-    void readTuiCheckpointChanges(cwd, expandedSha)
+    void service.changes(cwd, expandedSha)
       .then((changes) => { if (!cancelled) setExpandedChanges(changes) })
       .catch(() => { if (!cancelled) setExpandedChanges([]) })
     return () => { cancelled = true }
@@ -207,20 +197,20 @@ export function CheckpointPopover({
     setBusy(true)
     try {
       if (action.kind === 'restore-all') {
-        const result = await restoreTuiCheckpoint(cwd, action.sha, undefined, action)
+        const result = await service.restore(cwd, action.sha, undefined, action)
         onNotice('info', `Restored ${result.restored} file${result.restored === 1 ? '' : 's'}, removed ${result.deleted}`, 4000)
       } else if (action.kind === 'restore-file') {
-        await restoreTuiCheckpoint(cwd, action.sha, [action.path], action)
+        await service.restore(cwd, action.sha, [action.path], action)
         onNotice('info', `Restored ${action.path}`, 4000)
       } else if (action.kind === 'reject-hunk') {
-        await rejectTuiWorkingHunk(cwd, action.hunk.patchText)
+        await service.rejectHunk(cwd, action.hunk.patchText)
         onNotice('info', `Rejected hunk in ${action.hunk.file}`, 4000)
       } else if (action.kind === 'delete-untracked') {
-        await deleteTuiUntrackedFile(cwd, action.path)
+        await service.deleteUntracked(cwd, action.path)
         onNotice('info', `Deleted ${action.path}`, 4000)
       } else {
         const title = checkpoints[0]?.label ?? 'Agent review'
-        const url = await createTuiReviewPullRequest(cwd, title)
+        const url = await service.pullRequest(cwd, title)
         onNotice('info', url ? `PR created: ${url}` : 'PR created', 8000)
       }
       await reload()
@@ -237,7 +227,7 @@ export function CheckpointPopover({
     if (!message || busy) return
     setBusy(true)
     try {
-      const sha = await commitTuiAllChanges(cwd, message)
+      const sha = await service.commit(cwd, message)
       onNotice('info', `Committed ${sha.slice(0, 8)}`, 5000)
       setCommitMode(false)
       setCommitDraft('')
@@ -251,7 +241,7 @@ export function CheckpointPopover({
 
   const openDiff = useCallback(async (sha: string, filePath?: string, untilSha?: string) => {
     try {
-      const diff = await readTuiCheckpointDiff(cwd, sha, filePath, untilSha)
+      const diff = await service.diff(cwd, sha, filePath, untilSha)
       setDiffLines(diff ? diff.split('\n') : [untilSha ? '(this turn changed no files)' : '(no changes since this checkpoint)'])
     } catch (err) {
       onNotice('error', err instanceof Error ? err.message : 'Failed to read diff')

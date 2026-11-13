@@ -306,6 +306,7 @@ import { createTuiRunLaunchService } from './shell/runLaunchService'
 import { tuiHandoff } from './shell/handoffService'
 import { tuiBookmarks } from './shell/bookmarksService'
 import { tuiProvenance } from './shell/provenanceService'
+import { tuiCheckpoints } from './shell/checkpointsService'
 import { tuiRemoteAccess } from './shell/remoteAccessService'
 import type { StartProtocolRunResult } from '../../lib/agentProtocol'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
@@ -5170,6 +5171,7 @@ function OpenTuiWorkspace() {
     bookmarks: tuiBookmarks,
     'session-navigation': { open: openSessionAtMessage },
     provenance: tuiProvenance,
+    checkpoints: tuiCheckpoints,
     'remote-access': tuiRemoteAccess,
     'daily-summary': { read: readPluginDailySummary },
     handoff: tuiHandoff,

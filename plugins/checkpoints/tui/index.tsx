@@ -8,12 +8,14 @@ const IGNORE_NOTICE = () => {}
 
 function CheckpointsSurface({ services, target, theme, accent, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
   const repository = services.repository!
+  const checkpoints = services.checkpoints!
   const fileHistory = services['file-history']
   const overlay = placement === 'overlay'
   return (
     <CheckpointPopover
       docked={!overlay}
       cwd={repository.cwd}
+      service={checkpoints}
       theme={theme}
       accentColor={accent}
       width={width}

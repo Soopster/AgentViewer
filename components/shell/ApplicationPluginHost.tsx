@@ -67,15 +67,18 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   useEffect(() => subscribePluginCommands(id => {
     const command = getPluginCommand(id)
     if (!command || !command.renderers.includes('web') || !isPluginEnabled(command.pluginId)) return false
+    // A repository command with no repository says so, rather than doing nothing.
+    if (command.scope === 'repository' && !cwd && !command.webDashboard && !command.webReader) {
+      setNotice({ text: `${command.label} needs a project: open a session first` })
+      return true
+    }
     if (command.handler && command.scope === 'repository') {
-      if (!cwd) return false
       void executeRepositoryCommand(id, { session: selectedSession, cwd }, { notices: { show: (_kind, text) => setNotice({ text }) } })
         .catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setNotice({ text: error instanceof Error ? error.message : 'Plugin command failed' }) })
       return true
     }
     if (command.webDashboard || command.webReader) return false
     if (command.scope !== 'application' && command.scope !== 'repository') return false
-    if (command.scope === 'repository' && !cwd) return false
     if (command.handler) {
       void executeCommand(id, { session: null, cwd: null }, { notices: { show: (_kind, text) => setNotice({ text }) } })
         .catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setNotice({ text: error instanceof Error ? error.message : 'Plugin command failed' }) })

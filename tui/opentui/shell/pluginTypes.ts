@@ -30,6 +30,7 @@ export type TuiPluginServices = {
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
+  checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService
   'remote-access'?: import('../../../lib/plugins/remoteAccess').PluginRemoteAccessService
   messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }

@@ -17,7 +17,8 @@ implicit interrupt or process kill.
 | Family | Current implementation | Remaining migration |
 | --- | --- | --- |
 | Analytics, Git, Files, Terminal, Browser, Pull requests, Coordination, GitHub, Recaps | Shared manifests and separate lazy Web/TUI surface adapters in `plugins/` | Audit domain operations/state still supplied from roots; preserve runtime ownership |
-| Editor, checkpoints, file history, desk, insights, tab manager | Bundled plugins; renderer support varies by manifest | Expose equivalent capabilities where applicable on Web; do not assume a TUI surface establishes Web parity |
+| Checkpoints & review | `plugins/checkpoints/` in Web and OpenTUI over the shared `checkpoints` service (TUI: lib/checkpoints.ts in process; Web: `/api/checkpoints`, whose mutations act only on a listed checkpoint, a current hunk or a current untracked file). Restore tells the provider through the shared `restoreCheckpointForSession` | `checkpointsRouteSmoke.ts` (real repository; guards verified by mutation), the TUI checkpoint smokes, the live Web check |
+| Editor, file history, desk, insights, tab manager, subagents | Bundled plugins, TUI-only by manifest. The desk and tab manager are terminal workspace chrome; the Web's subagent transcripts are inline cards and rail rows; the editor and file history have no Web surface | Expose equivalent capabilities where applicable on Web; do not assume a TUI surface establishes Web parity |
 | Composer context expansion | Now a headless `composer-context` plugin; shared ordered `beforeTurn` pipeline in `lib/sessionBackend.ts` | Context-chip presentation still belongs to the composer; disabled expansion does not remove chip controls |
 | Prompt library | Migrated to `plugins/prompt-library/` in Web and OpenTUI. One manifest retains existing command IDs and TUI window ID. Search/draft/fill state belongs to plugin instances; storage stays behind the prompt API/TUI service | Browser host and real TUI App checks cover lazy activation, placement draft retention, template insertion and disable/re-enable. Web additionally checks that late reads after close cannot insert into the composer |
 | Reuse last prompt | Migrated from TUI root/keys/palette into the headless `composer-tools` plugin. The same action is available on Web; no view is loaded | Shared command host checks identity/capabilities and cancels per invocation. Real TUI verifies ⇧R and typed-character precedence; real Web MessageView in StrictMode verifies account-switch cancellation, parked draft preservation and disable/re-enable |
@@ -46,9 +47,13 @@ instance and native session ID before any hook runs. Each hook gets its own
 request copy. Hook failure/refusal occurs before checkpoint/provider submission.
 
 Web and TUI enter the same `streamViewSessionTurn` boundary. Goal continuations
-that use ordinary sending pass through it too. Mid-turn steering, provider tool
-execution and arbitrary transcript rendering do not yet have feature hooks.
-Those need explicit extension points rather than claims of full mod support.
+that use ordinary sending pass through it too. Three further hooks reach past
+the send path: `beforeSteer` (mid-turn messages, at the shared steering entry
+point), `permission` (tool approvals, through `lib/plugins/permissionBridge.ts`
+on every provider bridge — Claude, ACP, Codex, Copilot, OpenCode; undecided,
+failing or slow hooks fall back to the person) and `toolCard` (how a tool call
+is presented, on the read path, drawn by both renderers). `localPluginSmoke`,
+`pluginPermissionAcpSmoke` and `npm run plugins:permission:live` pin them.
 
 The shared command contract now also supports `webComposerLabel` and
 `webComposerGlyph`. Composer buttons come from command metadata and dispatch

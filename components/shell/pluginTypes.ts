@@ -12,6 +12,7 @@ export type WebPluginServices = {
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
+  checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
   /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */

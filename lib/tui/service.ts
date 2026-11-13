@@ -1,7 +1,5 @@
 import { beginProviderLoading } from '../providerLoading'
 import { timeSendPhase } from '../sendPhaseTrace'
-import { isAgentProvider } from '../provider'
-import { getProviderManifest } from '../extensions/providers/catalog'
 import {
   buildThreadedMessages,
   buildThreadedMessagesIncremental,
@@ -190,7 +188,6 @@ import {
   listWorkingDiffHunks,
   readFileCheckpointHistory,
   rejectWorkingHunk,
-  restoreCheckpoint,
   revertFileHistoryHunk,
   type CheckpointFileChange,
   type FileHistory,
@@ -831,19 +828,8 @@ export async function restoreTuiCheckpoint(
   paths?: string[],
   context?: { sessionId?: string; provider?: string; providerInstanceId?: string },
 ): Promise<{ restored: number; deleted: number }> {
-  const result = await restoreCheckpoint(cwd, sha, paths)
-  if (context?.sessionId && isAgentProvider(context.provider) && getProviderManifest(context.provider).fileRestoreHook) {
-    const provider = context.provider
-    const sessionId = context.sessionId
-    const { currentProviderInstanceId, withProviderInstance } = await import('../providerInstances')
-    const run = async () => {
-      const runtime = await (await import('../extensions/providers/registry')).getProviderRuntime(provider)
-      await runtime.afterFileRestore?.({ sessionId, cwd, paths, provider, providerInstanceId: currentProviderInstanceId(provider) })
-    }
-    if (context.providerInstanceId) await withProviderInstance(context.providerInstanceId, provider, run)
-    else await withSessionInstance(provider, sessionId, run)
-  }
-  return result
+  const { restoreCheckpointForSession } = await import('../checkpointRestore')
+  return restoreCheckpointForSession(cwd, sha, paths, context)
 }
 
 export async function listTuiWorkingDiff(cwd: string): Promise<{ hunks: WorkingDiffHunk[]; untracked: string[] }> {

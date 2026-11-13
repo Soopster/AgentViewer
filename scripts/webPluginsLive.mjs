@@ -82,6 +82,11 @@ try {
     await page.waitForTimeout(1000)
     await shot('dashboards')
   })
+  await check('a repository command with no project says why', async () => {
+    await palette('Checkpoints & review')
+    await page.getByText('Checkpoints & review needs a project').waitFor()
+    assert.equal(await page.locator('[data-plugin-view="checkpoints"]').count(), 0)
+  })
   await check('mod command from the palette', async () => {
     await palette('E2E mod says hello')
     await page.getByText('hello from the e2e mod').waitFor()
@@ -107,6 +112,23 @@ try {
     await card.waitFor({ timeout: 8000 })
     await card.scrollIntoViewIfNeeded()
     await shot('tool-card')
+  })
+  await check('checkpoints plugin: turns, a turn\'s changes, working changes', async () => {
+    await palette('Checkpoints & review')
+    const view = page.locator('[data-plugin-view="checkpoints"]')
+    await view.waitFor()
+    await view.getByText(/^Turns · \d+/).waitFor()
+    const first = view.locator('[data-checkpoint]').first()
+    if (await first.count()) {
+      await first.click()
+      await view.getByText(/Changed since|Nothing has changed/).first().waitFor()
+    }
+    await view.getByRole('button', { name: /^Working changes/ }).click()
+    await view.getByPlaceholder('Commit message').waitFor()
+    assert.equal(await view.locator('[role="status"]').filter({ hasText: /error|failed|unknown/i }).count(), 0, 'the view reported an error')
+    await shot('checkpoints')
+    await page.keyboard.press('Escape')
+    await view.waitFor({ state: 'detached' })
   })
   await check('mod view: draw and run an action', async () => {
     await palette('Mod views')

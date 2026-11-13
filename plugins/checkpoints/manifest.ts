@@ -2,13 +2,14 @@ import { PLUGIN_API_VERSION, type PluginManifest } from '../../lib/plugins/types
 
 // Checkpoints & review: the snapshot every agent turn took of the working tree,
 // what changed since any of them, restoring files, and the working diff as
-// rejectable hunks with commit and PR. Snapshots stay in lib/checkpoints.ts.
+// rejectable hunks with commit and PR. Snapshots stay in lib/checkpoints.ts;
+// both renderers reach them through the `checkpoints` service.
 export const manifest = {
   apiVersion: PLUGIN_API_VERSION,
   id: 'checkpoints',
   title: 'Checkpoints & review',
   description: "Every agent turn's working-tree snapshot, restore, and the working diff as rejectable hunks.",
-  renderers: ['tui'],
+  renderers: ['web', 'tui'],
   stateVersion: 1,
   surfaces: [{
     id: 'checkpoints',
@@ -19,8 +20,8 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window'],
     windowLabel: 'Checkpoints & review in a window',
-    services: ['repository'],
-    optionalServices: ['notices', 'file-history'],
+    services: ['repository', 'checkpoints'],
+    optionalServices: ['notices', 'file-history', 'session'],
   }],
   commands: [{
     id: 'checkpoints',
@@ -28,7 +29,8 @@ export const manifest = {
     category: 'Session',
     opens: 'checkpoints',
     requires: 'repository',
-    renderers: ['tui'],
+    scope: 'repository',
+    renderers: ['web', 'tui'],
     tuiKey: { name: 'u', shift: true },
     tuiKeyLabel: '⇧U',
     keywords: ['checkpoint', 'snapshot', 'restore', 'undo', 'turn', 'review', 'hunk', 'commit'],

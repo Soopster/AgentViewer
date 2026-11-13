@@ -200,6 +200,8 @@ export type PluginServiceId =
   | 'notices'
   /** Open a file's history across agent turns. */
   | 'file-history'
+  /** Turn checkpoints: list, diff, restore, and the working diff's hunks, commit and PR. */
+  | 'checkpoints'
   /** Web: the pull request linked to the selected session, and linking one to it. */
   | 'session-pull-request'
   | 'subagent-transcript'
