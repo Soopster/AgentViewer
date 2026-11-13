@@ -50,7 +50,7 @@ const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ss
 const PluginSurfaceHost = dynamic(() => import('@/components/shell/PluginSurfaceHost'), { ssr: false })
 const PluginManager = dynamic(() => import('@/components/shell/PluginManager'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
-const PiActivityPopover = dynamic(() => import('@/components/PiActivityPopover'), { ssr: false })
+const PluginWidgetHost = dynamic(() => import('@/components/shell/PluginWidgetHost').then(module => module.PluginWidgetHost), { ssr: false })
 const RightPanel = dynamic(() => import('@/components/RightPanel'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
@@ -557,7 +557,7 @@ export default function Home() {
           />
         ) : null}
         {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
-        {!isMessageViewMaximized ? <PiActivityPopover /> : null}
+        {!isMessageViewMaximized ? <PluginWidgetHost slot="corner" /> : null}
       </div>
     </SidebarProvider>
     </CodeThemeProvider>

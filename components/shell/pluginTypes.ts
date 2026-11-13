@@ -82,3 +82,7 @@ export type WebPluginViewProps = {
 }
 
 export type WebPluginView = ComponentType<WebPluginViewProps>
+
+/** What a Web widget receives: the slot it sits in. Widgets read their own state. */
+export type WebPluginWidgetProps = { readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

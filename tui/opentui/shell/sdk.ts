@@ -4,7 +4,7 @@
 export { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../dockedPopover'
 export { tuiWorkerUrl } from '../workerUrl'
 export type { TuiThemePalette } from '../../theme'
-export type { TuiPluginView, TuiPluginViewProps, TuiPluginServices, TuiPluginKeyEvent, TuiPluginCapture } from './pluginTypes'
+export type { TuiPluginView, TuiPluginViewProps, TuiPluginServices, TuiPluginKeyEvent, TuiPluginCapture, TuiPluginWidget, TuiPluginWidgetProps } from './pluginTypes'
 export { useWorkspaceContext, useWorkspaceState } from '../workspaceContext'
 export { createScrollVelocityState, velocityScrollStep } from '../scrollVelocity'
 export { createSidebarSessionSearch } from '../sidebarSessionSearch'

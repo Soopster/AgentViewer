@@ -27,7 +27,8 @@ function initialSnapshot(): PiActivitySnapshot {
   }
 }
 
-export default function PiActivityPopover() {
+/** Pi's package/extension loading progress, while it runs, has failed, or just finished. */
+export function PiActivityWidget() {
   const [snapshot, setSnapshot] = useState<PiActivitySnapshot>(initialSnapshot)
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -62,7 +63,7 @@ export default function PiActivityPopover() {
   const recentEvents = snapshot.events.slice(-8)
 
   return (
-    <div className="fixed bottom-5 right-5">
+    <div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm" aria-label="Show Pi loading activity">

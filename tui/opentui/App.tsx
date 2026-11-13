@@ -42,7 +42,7 @@ import {
 } from '../../lib/channelBridgeOutbox'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { ToastOverlay, toastExtraRows, toastStackTop, useToasts } from './ToastOverlay'
-import { PiActivityPopover } from './PiActivityPopover'
+import { PluginWidgetHost } from './shell/PluginWidgetHost'
 import { toast } from './toastStore'
 import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage, channelBridgeFileOutboxStorage } from '../../lib/bridgeMessages'
@@ -7586,7 +7586,7 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      {!fullscreenMode ? <PiActivityPopover theme={theme} width={width} height={height} /> : null}
+      {!fullscreenMode ? <PluginWidgetHost slot="corner" theme={theme} width={width} height={height} zIndex={48} /> : null}
 
       {exitConfirmOpen ? (
         <box

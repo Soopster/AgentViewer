@@ -215,3 +215,12 @@ export type TuiPluginViewProps = {
 }
 
 export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
+
+/** What a TUI widget receives: the width it may use in its slot, and the screen. */
+export type TuiPluginWidgetProps = {
+  readonly theme: TuiThemePalette
+  readonly width: number
+  readonly height: number
+  readonly slot: import('../../../lib/plugins/types').PluginWidgetSlot
+}
+export type TuiPluginWidget = (props: TuiPluginWidgetProps) => ReactNode

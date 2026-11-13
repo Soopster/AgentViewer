@@ -51,6 +51,12 @@ export type PluginSurfaceSpec = {
   readonly scrim?: boolean
 }
 
+/**
+ * Where a widget may sit. 'corner': floating over the app's top-right (TUI) or
+ * bottom-right (Web) corner, stacked with the others there.
+ */
+export type PluginWidgetSlot = 'corner'
+
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
 
 type PluginCommandCommon = {
@@ -132,6 +138,12 @@ export type PluginManifest = {
     readonly maxRows: number
     readonly services: readonly 'composer'[]
   }[]
+  /**
+   * Persistent UI the plugin keeps on screen while enabled (a status chip, a
+   * corner badge). Unlike a surface it is not opened by a command: the shell's
+   * slot host loads it at boot, so a widget module must stay small.
+   */
+  readonly widgets?: readonly { readonly id: string; readonly slot: PluginWidgetSlot; readonly order?: number }[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
   readonly behavior?: { readonly hooks: readonly 'beforeTurn'[]; readonly order?: number }
   /** App-lifetime observers, independent of whether any surface is open. */
@@ -236,5 +248,13 @@ export type PluginViewModule<View> = {
   readonly pluginId: string
   readonly views: Readonly<Record<string, View>>
   /** Release module-owned caches and resources. Must be idempotent; runs on disable. */
+  readonly deactivate?: () => void
+}
+
+/** A renderer's lazy widget entry: one component per declared widget. */
+export type PluginWidgetModule<Widget> = {
+  readonly apiVersion: typeof PLUGIN_API_VERSION
+  readonly pluginId: string
+  readonly widgets: Readonly<Record<string, Widget>>
   readonly deactivate?: () => void
 }
