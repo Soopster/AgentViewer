@@ -346,8 +346,26 @@ async function resumeCopilotSession(
   const client = await getCopilotClient()
   try {
     return await client.resumeSession(sessionId, {
-      onPermissionRequest: (request, invocation) =>
-        (copilotPermissionHandlers.get(sessionId) ?? approveAll)(request, invocation),
+      onPermissionRequest: async (request, invocation) => {
+        // Plugins answer first (lib/plugins/permissionBridge.ts); only a session
+        // that has a handler (a live turn the person watches) is asked about.
+        const handler = copilotPermissionHandlers.get(sessionId)
+        if (handler) {
+          const raw = request as unknown as Record<string, unknown>
+          const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
+          const decided = await askPluginsAboutPermission('copilot', sessionId, {
+            toolName: typeof raw.toolName === 'string' ? raw.toolName : typeof raw.kind === 'string' ? raw.kind : undefined,
+            kind: raw.kind === 'shell' ? 'command' : raw.kind === 'write' ? 'file' : raw.kind === 'url' ? 'network' : undefined,
+            input: raw,
+            ...(typeof raw.fullCommandText === 'string' ? { command: raw.fullCommandText } : {}),
+            ...(typeof raw.fileName === 'string' ? { paths: [raw.fileName] } : {}),
+            ...(typeof raw.intention === 'string' ? { title: raw.intention } : {}),
+          })
+          if (decided?.decision === 'allow') return { kind: 'approve-once' } as never
+          if (decided?.decision === 'deny') return { kind: 'reject', feedback: decided.reason ?? `Denied by the ${decided.pluginId} plugin` } as never
+        }
+        return (handler ?? approveAll)(request, invocation)
+      },
       onElicitationRequest: (context) =>
         (copilotElicitationHandlers.get(sessionId) ?? (() => ({ action: 'decline' as const })))(context),
       hooks: {

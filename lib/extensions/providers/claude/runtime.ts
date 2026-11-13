@@ -6,6 +6,7 @@ import { steerViewSession } from '../../../sessionSteering'
 import { listPendingProviderPermissionPayloads } from '../../../sessionControlPlane'
 import { claudeArtifactStore } from "../../../claudeArtifactStore";
 import { readClaudeMcpApp } from "../../../claudeMcpApps";
+import { askPluginsAboutPermission } from "../../../plugins/permissionBridge";
 import { coordinatorPermissionToken } from "../../../coordinatorNativePermission";
 import { extractPendingPermissions } from "../../../permissions";
 import { readFile } from 'node:fs/promises';
@@ -426,7 +427,20 @@ export function createClaudePermissionBridge(sessionId: string, controller: Read
             // The client may disconnect while Claude is still resolving a tool permission.
         }
     };
-    return (toolName, input, options) => {
+    return async (toolName, input, options) => {
+        // Plugins answer first (lib/plugins/permissionBridge.ts). Questions and
+        // plan approvals are the person's by definition, never a policy's.
+        if (toolName !== 'AskUserQuestion' && toolName !== 'ExitPlanMode') {
+            const decided = await askPluginsAboutPermission('claude', sessionId, {
+                toolName,
+                title: options.title,
+                input,
+                ...(typeof input.command === 'string' ? { command: input.command } : {}),
+                ...(typeof input.file_path === 'string' ? { paths: [input.file_path] } : options.blockedPath ? { paths: [options.blockedPath] } : {}),
+            }, options.signal);
+            if (decided?.decision === 'allow') return { behavior: 'allow', updatedInput: input };
+            if (decided?.decision === 'deny') return { behavior: 'deny', message: decided.reason ?? `Denied by the ${decided.pluginId} plugin` };
+        }
         // SDK 0.3.199+ dropped requestId from the CanUseTool options type but the
         // CLI still sends it — read it loosely so ids stay stable across versions.
         const requestId = (options as {

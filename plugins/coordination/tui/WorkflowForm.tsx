@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { AgentProvider } from '../../../lib/types'
 import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import React from 'react'
 import { type TextareaRenderable } from '@opentui/core'
@@ -24,8 +25,8 @@ export function WorkflowForm({ docked = false, onDetach, focused, cwd, zIndex, a
   coordError: string | null
   provider: ProviderSelection
   selectedSession: Session | null
-  coordProviderOverride: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
-  coordTeammateProviderOverride: ('claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp')[] | null
+  coordProviderOverride: AgentProvider | null
+  coordTeammateProviderOverride: AgentProvider[] | null
   coordPlaybookName: string | null
   coordPlaybooks: PlaybookSummary[]
   coordPlaybookArgsDraft: string

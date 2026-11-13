@@ -873,6 +873,7 @@ class OpenCodeHarness {
         const next = existing.permissions.filter((p) => p.id !== event.properties.id)
         next.push(event.properties)
         existing.permissions = next
+        askOpenCodePluginsOnce(sessionId, event.properties)
         break
       }
       case 'permission.replied': {
@@ -1010,4 +1011,31 @@ export function getOpenCodeProjectDiagnostics(directory: string | undefined): Pr
   const harness = getHarness()
   harness.ensureStarted(directory)
   return harness.getProjectDiagnostics(directory)
+}
+
+// Plugins answer an OpenCode approval before a person does
+// (lib/plugins/permissionBridge.ts). An ask is delivered to every ancestor's
+// snapshot, so it is put to plugins once, and answered through the same
+// respondPermission action the cards use (which finds the asking child session).
+const pluginAskedPermissions = new Set<string>()
+function askOpenCodePluginsOnce(sessionId: string, permission: { id: string; type?: string; title?: string; pattern?: unknown; metadata?: Record<string, unknown> }): void {
+  if (pluginAskedPermissions.has(permission.id)) return
+  pluginAskedPermissions.add(permission.id)
+  if (pluginAskedPermissions.size > 500) pluginAskedPermissions.delete(pluginAskedPermissions.values().next().value!)
+  void (async () => {
+    const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
+    const metadata = permission.metadata ?? {}
+    const patterns = Array.isArray(permission.pattern) ? permission.pattern.filter((entry): entry is string => typeof entry === 'string') : typeof permission.pattern === 'string' ? [permission.pattern] : []
+    const decided = await askPluginsAboutPermission('opencode', sessionId, {
+      toolName: permission.type,
+      kind: permission.type === 'bash' ? 'command' : permission.type === 'edit' || permission.type === 'write' ? 'file' : permission.type === 'webfetch' ? 'network' : undefined,
+      title: permission.title,
+      input: metadata,
+      ...(typeof metadata.command === 'string' ? { command: metadata.command } : permission.type === 'bash' && patterns.length ? { command: patterns.join(' ') } : {}),
+      ...(typeof metadata.filepath === 'string' ? { paths: [metadata.filepath] } : permission.type !== 'bash' && patterns.length ? { paths: patterns } : {}),
+    })
+    if (!decided) return
+    const { runViewSessionAction } = await import('./sessionBackend')
+    await runViewSessionAction({ sessionId, provider: 'opencode', body: { action: 'respondPermission', permissionId: permission.id, response: decided.decision === 'allow' ? 'once' : 'reject' } })
+  })().catch((error) => console.error('[plugins] OpenCode permission decision failed:', error))
 }

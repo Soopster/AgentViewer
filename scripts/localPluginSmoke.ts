@@ -15,7 +15,7 @@ const pluginsDir = path.join(temporary, 'plugins')
 const write = (file: string, text: string) => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text) }
 write(path.join(pluginsDir, 'echo-mod', 'plugin.json'), JSON.stringify({
   id: 'echo-mod', title: 'Echo mod', description: 'Fixture mod',
-  behavior: { hooks: ['beforeTurn', 'afterTurn'] },
+  behavior: { hooks: ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission'] },
   commands: [{ id: 'shout', label: 'Shout the last reply', scope: 'session', services: ['notices', 'composer'], tuiChord: { key: 'y', short: 'shout' } }],
 }))
 write(path.join(pluginsDir, 'echo-mod', 'server.mjs'), `
@@ -36,6 +36,16 @@ export const commands = {
   },
 }
 export function settledCount() { return settled }
+export function beforeSteer({ message }) {
+  if (message === 'stop that') return { action: 'block', reason: 'echo-mod refused the steer' }
+  return { action: 'patch', message: message + ' (steered)' }
+}
+export function permission({ request, target }) {
+  if (request.kind === 'command' && String(request.command).startsWith('rm ')) return { decision: 'deny', reason: 'echo-mod: no rm in ' + target.sessionId }
+  if (request.toolName === 'Read') return { decision: 'allow' }
+  if (request.toolName === 'Slow') return new Promise(() => {})
+  if (request.toolName === 'Broken') throw new Error('broken policy')
+}
 `)
 write(path.join(pluginsDir, 'takeover', 'plugin.json'), JSON.stringify({ id: 'git', commands: [{ id: 'x' }] }))
 write(path.join(pluginsDir, 'broken', 'plugin.json'), '{ not json')
@@ -97,6 +107,54 @@ try {
   assert.equal(submissions.at(-1)!.message, 'continue please [mod:fixture]', 'the follow-up went through beforeTurn too')
   assert(!('pluginFollowUp' in submissions.at(-1)!), 'the follow-up marker reached the provider')
   console.log('afterTurn: a settled turn wakes the mod, and its follow-up runs through the send path with the marker stripped.')
+
+  // permission: the real Claude approval bridge asks plugins before the person.
+  {
+    const { createClaudePermissionBridge } = await import('../lib/extensions/providers/claude/runtime')
+    const frames: string[] = []
+    const controller = { enqueue: (chunk: Uint8Array) => frames.push(new TextDecoder().decode(chunk)) } as unknown as ReadableStreamDefaultController<Uint8Array>
+    const canUseTool = createClaudePermissionBridge('fixture', controller, new TextEncoder(), new Set())
+    const ask = (toolName: string, input: Record<string, unknown>, signal = new AbortController().signal) =>
+      canUseTool(toolName, input, { signal, toolUseID: `t-${toolName}`, suggestions: [] } as never)
+    const denied = await ask('Bash', { command: 'rm -rf build' }) as { behavior: string; message?: string }
+    assert.equal(denied.behavior, 'deny')
+    assert.match(denied.message!, /no rm in fixture/)
+    const allowed = await ask('Read', { file_path: '/tmp/x' }) as { behavior: string; updatedInput?: unknown }
+    assert.equal(allowed.behavior, 'allow')
+    assert.deepEqual(allowed.updatedInput, { file_path: '/tmp/x' })
+    assert.equal(frames.length, 0, 'a plugin-decided approval still reached the person')
+    // Undecided, broken and slow hooks all fall back to asking the person.
+    for (const toolName of ['Grep', 'Broken']) {
+      const abort = new AbortController()
+      const pending = ask(toolName, {}, abort.signal)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      assert(frames.some(frame => frame.includes('permission.requested') && frame.includes(`"toolName":"${toolName}"`)), `${toolName} was not put to the person`)
+      abort.abort()
+      assert.equal((await pending as { behavior: string }).behavior, 'deny')
+    }
+    const slowStarted = Date.now()
+    const slowAbort = new AbortController()
+    const slow = ask('Slow', {}, slowAbort.signal)
+    while (Date.now() - slowStarted < 7000 && !frames.some(frame => frame.includes('"toolName":"Slow"'))) await new Promise(resolve => setTimeout(resolve, 100))
+    assert(frames.some(frame => frame.includes('"toolName":"Slow"')), 'a hook that never answers held the approval forever')
+    slowAbort.abort()
+    await slow
+    console.log('permission: a mod allows and denies tool approvals on the real Claude bridge; undecided, failing and slow hooks fall back to the person.')
+  }
+
+  // beforeSteer: mid-turn input passes through plugins, and a refusal is an error, not a silent drop.
+  {
+    const { steerViewSession } = await import('../lib/sessionSteering')
+    const steered: string[] = []
+    runtime.setRunningSession('fixture', { provider: 'codex', interrupt: async () => undefined, steer: async (text: string) => { steered.push(text) }, requestId: 'r2' })
+    assert.equal((await steerViewSession('fixture', { message: 'look at the tests' }, 'codex')).delivered, true)
+    assert.deepEqual(steered, ['look at the tests (steered)'])
+    await assert.rejects(steerViewSession('fixture', { message: 'stop that' }, 'codex'), /refused the steer/)
+    assert.equal(steered.length, 1, 'a refused steer was delivered')
+    runtime.clearRunningSession('fixture', 'r2')
+    await new Promise(resolve => setTimeout(resolve, 2500))
+    console.log('beforeSteer: a mod rewrites and refuses mid-turn messages at the shared steering entry point.')
+  }
 
   // A command answers with effects, which the shared command module applies through the host's services.
   const { localCommandModule, setLocalCommandRunner } = await import('../lib/plugins/localManifest')

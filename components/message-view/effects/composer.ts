@@ -1,3 +1,4 @@
+import type { AgentProvider } from '../../../lib/types'
 import type { ComposerSessions } from '../../../lib/composerSessions'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
@@ -21,7 +22,7 @@ export type MentionSearchEffectContext = {
   mentionQuery: { start: number; query: string; } | null
   mentionAbortRef: RefObject<AbortController | null>
   setMentionResults: Dispatch<SetStateAction<MentionResult[]>>
-  activeProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
+  activeProvider: AgentProvider | undefined
   composerMentionAgentOptions: SessionComposerAgentOption[]
   session: Session | null
   setMentionActiveIndex: Dispatch<SetStateAction<number>>
@@ -87,7 +88,7 @@ export function runMentionSearchEffect(ctx: MentionSearchEffectContext) {
 export type SlashCommandsEffectContext = {
   commandSessionId: string | undefined
   setLiveSlashCommands: Dispatch<SetStateAction<SlashCommandSuggestion[]>>
-  commandSessionProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
+  commandSessionProvider: AgentProvider | undefined
 }
 
 export function runSlashCommandsEffect(ctx: SlashCommandsEffectContext) {

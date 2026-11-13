@@ -4,7 +4,7 @@ import { getRunningSession, interruptRunningSession, steerRunningSessionIdempote
 import { isNativeComposerCommandText } from "./composerCommands";
 import type { AgentProvider } from "./types";
 export async function steerViewSession(sessionId: string, body: Record<string, unknown>, resolvedProvider: AgentProvider): Promise<Record<string, unknown>> {
-    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    let message = typeof body.message === 'string' ? body.message.trim() : '';
     const turnRequestId = typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
         ? body.turnRequestId.trim()
         : undefined;
@@ -17,6 +17,17 @@ export async function steerViewSession(sessionId: string, body: Record<string, u
         throw new Error('steerRequestId is too long');
     if (isNativeComposerCommandText(message))
         return { delivered: false };
+    // Plugins see mid-turn input too. A refusal is the caller's error (it says
+    // why), never a silent drop; a failing hook leaves the message unchanged.
+    const running = getRunningSession(sessionId);
+    try {
+        const { applyPluginBeforeSteer } = await import('./plugins/serverBehaviors');
+        message = await applyPluginBeforeSteer({ provider: running?.provider ?? resolvedProvider, sessionId, ...(running?.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) }, message);
+    }
+    catch (error) {
+        if (error instanceof Error && error.name === 'PluginTurnBlockedError') throw error;
+        console.error('[plugins] beforeSteer failed:', error);
+    }
     try {
         const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId);
         if (!steered.delivered && body.allowInterrupt !== false && getRunningSession(sessionId)) {

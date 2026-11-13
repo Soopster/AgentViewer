@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { AgentProvider } from '../../../../lib/types'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -42,7 +43,7 @@ export type UseSubmitComposerFromDockGroupContext = {
   composerMentionIndex: number
   composerAccentColor: string
   composerConfig: ProviderComposerConfig
-  composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
+  composerProvider: AgentProvider | null
   composerSlashOpen: boolean
   composerSlashVisibleCount: number
   composerSlashCommands: SlashCommandSuggestion[]

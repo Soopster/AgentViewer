@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { AgentProvider } from '../../../../lib/types'
 import type { TuiThemePalette } from '../../../theme'
 import { fitText } from '../../textLayout'
 import { LivePreviewCard } from '../inlineText'
@@ -12,7 +13,7 @@ export function ComposerStatusMessage({ composerStatusMessage, visibleComposerSe
   /** The view draws the streaming reply in the transcript, not above the composer. */
   hideLiveText: boolean
   liveAssistantTextCardVisible: boolean
-  composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
+  composerProvider: AgentProvider | null
   liveAssistantPreviewLines: string[]
   composerAccentColor: string
   theme: TuiThemePalette

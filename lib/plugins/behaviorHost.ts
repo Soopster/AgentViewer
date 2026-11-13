@@ -9,6 +9,9 @@ import {
   type PluginBehaviorHook,
   type PluginBehaviorModule,
   type PluginBeforeTurnContext,
+  type PluginPermissionRequest,
+  type PluginTurnTarget,
+  PLUGIN_PERMISSION_TIMEOUT_MS,
 } from './behavior'
 
 const order = (a: PluginManifest, b: PluginManifest) => (a.behavior?.order ?? 0) - (b.behavior?.order ?? 0) || a.id.localeCompare(b.id)
@@ -87,6 +90,48 @@ export function createPluginBehaviorHost(
       }
       context.signal.throwIfAborted()
       return body
+    },
+    /** Run beforeSteer hooks in order; a block refuses delivery with its reason. */
+    async beforeSteer(context: { target: PluginTurnTarget; signal: AbortSignal; message: string }): Promise<string> {
+      if (disposed) return context.message
+      let message = context.message
+      const target = Object.freeze({ ...context.target })
+      for (const manifest of hooked('beforeSteer')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([context.signal, scopeFor(manifest.id).signal])
+        const result = await abortable(signal, async () => (await registry.get(manifest.id)).beforeSteer!({ target, signal, message }))
+        if (!result) continue
+        if (result.action === 'block' && typeof result.reason === 'string' && result.reason.trim()) throw new PluginTurnBlockedError(manifest.id, result.reason)
+        if (result.action !== 'patch' || typeof result.message !== 'string' || !result.message.trim()) throw new Error(`Plugin ${manifest.id} returned an invalid beforeSteer result`)
+        message = result.message
+      }
+      return message
+    },
+    /** Whether any enabled plugin answers approvals: bridges skip the call otherwise. */
+    observesSteering: () => hooked('beforeSteer').some(m => isPluginEnabled(m.id)),
+    decidesPermissions: () => hooked('permission').some(m => isPluginEnabled(m.id)),
+    /**
+     * The first plugin decision on an approval, or null to ask the person. A
+     * failing or slow hook counts as undecided — never as allow.
+     */
+    async permission(context: { target: PluginTurnTarget; request: PluginPermissionRequest; signal?: AbortSignal }): Promise<{ pluginId: string; decision: 'allow' | 'deny'; reason?: string } | null> {
+      if (disposed) return null
+      const target = Object.freeze({ ...context.target })
+      const request = Object.freeze(structuredClone(context.request))
+      for (const manifest of hooked('permission')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const timeout = AbortSignal.timeout(PLUGIN_PERMISSION_TIMEOUT_MS)
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, timeout, ...(context.signal ? [context.signal] : [])])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).permission!({ target, signal, request }))
+          if (result && (result.decision === 'allow' || result.decision === 'deny')) {
+            return { pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) }
+          }
+        } catch (error) {
+          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} permission hook failed:`, error)
+        }
+      }
+      return null
     },
     /**
      * Run every enabled afterTurn hook in order. One hook's failure is logged

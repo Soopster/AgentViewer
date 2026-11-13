@@ -175,6 +175,28 @@ function ruleApproval(sessionId: string, request: RequestPermissionRequest): Req
   }
 }
 
+/**
+ * Plugins answer an ACP approval before a person sees it (lib/plugins/permissionBridge.ts).
+ * The agent offers its own option ids, so a decision picks the matching kind.
+ */
+async function pluginApproval(agentKind: AcpAgentKind, sessionId: string, request: RequestPermissionRequest): Promise<RequestPermissionResponse | null> {
+  const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
+  const call = request.toolCall as { title?: string | null; kind?: string | null; rawInput?: unknown; locations?: Array<{ path?: string }> | null }
+  const input = call.rawInput && typeof call.rawInput === 'object' && !Array.isArray(call.rawInput) ? call.rawInput as Record<string, unknown> : undefined
+  const kind = call.kind === 'execute' ? 'command' : call.kind === 'edit' || call.kind === 'delete' || call.kind === 'move' ? 'file' : call.kind === 'fetch' ? 'network' : 'tool'
+  const provider = agentKind === 'claude' ? 'claude-acp' : agentKind === 'codex' ? 'codex-acp' : 'acp'
+  const decided = await askPluginsAboutPermission(provider, sessionId, {
+    kind,
+    ...(call.title ? { title: call.title, toolName: call.title } : {}),
+    ...(input ? { input } : {}),
+    ...(typeof input?.command === 'string' ? { command: input.command } : Array.isArray(input?.command) ? { command: (input.command as unknown[]).join(' ') } : {}),
+    ...(call.locations?.length ? { paths: call.locations.flatMap(location => location.path ? [location.path] : []) } : {}),
+  })
+  if (!decided) return null
+  const option = request.options.find(entry => entry.kind === (decided.decision === 'allow' ? 'allow_once' : 'reject_once'))
+  return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : null
+}
+
 let requestCounter = 0
 function nextRequestId(): string {
   requestCounter += 1
@@ -327,7 +349,9 @@ class AcpClientPool {
     }
 
     const clientApp = client({ name: 'agent-viewer' })
-      .onRequest('session/request_permission', async (reqCtx) => ruleApproval(sessionId, reqCtx.params) ?? queueClientRequest('session/request_permission', reqCtx.params))
+      .onRequest('session/request_permission', async (reqCtx) => ruleApproval(sessionId, reqCtx.params)
+        ?? await pluginApproval(agentKind, sessionId, reqCtx.params)
+        ?? queueClientRequest('session/request_permission', reqCtx.params))
       .onRequest('elicitation/create', async (reqCtx) => queueClientRequest('elicitation/create', reqCtx.params))
       .onRequest('fs/read_text_file', async () => {
         throw new Error('agent-viewer does not expose client-side filesystem access over ACP')

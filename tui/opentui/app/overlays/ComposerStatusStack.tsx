@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { AgentProvider } from '../../../../lib/types'
 import type { TuiThemePalette } from '../../../theme'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { type SendState, type Session, type ThinkingBlock } from '../../../../lib/types'
@@ -17,7 +18,7 @@ type ComposerStatusStackProps = {
   width: number
   composerLiveReasoning: string
   hideLiveReasoning: boolean
-  composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
+  composerProvider: AgentProvider | null
   tuiEffort: TuiEffort
   composerThinkingTokens: number
   codexThinking?: ThinkingBlock

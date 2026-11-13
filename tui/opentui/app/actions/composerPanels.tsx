@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { AgentProvider } from '../../../../lib/types'
 import type { TuiThemePalette } from '../../../theme'
 import type { ProviderComposerConfig } from '../../../../lib/providerComposer'
 import { fitText } from '../../textLayout'
@@ -204,7 +205,7 @@ export type RenderComposerMentionPanelContext = {
   theme: TuiThemePalette
   composerAccentColor: string
   composerConfig: ProviderComposerConfig
-  composerProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
+  composerProvider: AgentProvider | null
 }
 
 export function runRenderComposerMentionPanel(ctx: RenderComposerMentionPanelContext, panelWidth: number, rowWidth: number) {

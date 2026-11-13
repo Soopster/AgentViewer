@@ -20,6 +20,8 @@ import type { SessionMessage } from '../types'
 type LocalServerModule = {
   beforeTurn?: PluginBehaviorModule['beforeTurn']
   afterTurn?: PluginBehaviorModule['afterTurn']
+  beforeSteer?: PluginBehaviorModule['beforeSteer']
+  permission?: PluginBehaviorModule['permission']
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
 }
@@ -61,6 +63,8 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
       pluginId: plugin.manifest.id,
       ...(module.beforeTurn ? { beforeTurn: module.beforeTurn } : {}),
       ...(module.afterTurn ? { afterTurn: module.afterTurn } : {}),
+      ...(module.beforeSteer ? { beforeSteer: module.beforeSteer } : {}),
+      ...(module.permission ? { permission: module.permission } : {}),
       ...(module.deactivate ? { deactivate: module.deactivate } : {}),
     } satisfies PluginBehaviorModule
   }]))

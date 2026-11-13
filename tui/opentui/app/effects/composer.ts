@@ -1,3 +1,4 @@
+import type { AgentProvider } from '../../../../lib/types'
 import { listComposerTerminals, terminalHandle } from '../../terminalPrompt'
 import type { ComposerSessions } from '../../../../lib/composerSessions'
 /** @jsxImportSource @opentui/react */
@@ -224,7 +225,7 @@ export function runPlanLimitsEffect(ctx: PlanLimitsEffectContext) {
 export type ComposerMentionSearchEffectContext = {
   composerMention: { start: number; query: string; } | null
   setComposerMentionResults: React.Dispatch<React.SetStateAction<TuiMentionResult[]>>
-  composerMentionProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp'
+  composerMentionProvider: AgentProvider
   composerMentionAgents: SessionComposerAgentOption[]
   composerMentionCwd: string | null
   setComposerMentionIndex: React.Dispatch<React.SetStateAction<number>>

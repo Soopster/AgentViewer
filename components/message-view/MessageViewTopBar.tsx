@@ -1,3 +1,4 @@
+import type { AgentProvider } from '../../lib/types'
 import type { Session } from '../../lib/types'
 import type { SessionMessage } from '../../lib/types'
 import type { RefObject } from 'react'
@@ -72,7 +73,7 @@ type MessageViewTopBarProps = {
   cliPopoverOpen: boolean
   handleExport: () => Promise<void>
   exporting: boolean
-  activeProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
+  activeProvider: AgentProvider | undefined
   sessionCapabilities: SessionCapabilities | undefined
   runSessionAction: (action: string) => Promise<void>
   sessionActionLoading: string | null

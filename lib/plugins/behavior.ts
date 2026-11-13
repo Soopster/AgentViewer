@@ -42,7 +42,52 @@ export type PluginAfterTurnResult =
   | { readonly action: 'follow-up'; readonly message: string }
   | void
 
-export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn'
+export type PluginBeforeSteerContext = {
+  readonly target: PluginTurnTarget
+  readonly signal: AbortSignal
+  /** The text the user is sending into the running turn. */
+  readonly message: string
+}
+
+/** Rewrite a mid-turn message, or refuse to deliver it (the caller is told why). */
+export type PluginBeforeSteerResult =
+  | { readonly action: 'patch'; readonly message: string }
+  | { readonly action: 'block'; readonly reason: string }
+  | void
+
+/**
+ * A tool approval an agent is asking for, in one shape for every provider.
+ * `kind` says what it is about; `toolName`, `command`, `paths` and `input` say
+ * as much as the provider told us.
+ */
+export type PluginPermissionRequest = {
+  readonly kind: 'tool' | 'command' | 'file' | 'network' | 'other'
+  readonly toolName?: string
+  readonly title?: string
+  readonly command?: string
+  readonly paths?: readonly string[]
+  readonly input?: Readonly<Record<string, unknown>>
+}
+
+export type PluginPermissionContext = {
+  readonly target: PluginTurnTarget
+  readonly signal: AbortSignal
+  readonly request: PluginPermissionRequest
+}
+
+/**
+ * 'allow' or 'deny' answers the agent without asking anyone; returning nothing
+ * leaves the decision to the person (or the next plugin). The first plugin to
+ * decide wins; a hook that fails or takes longer than PLUGIN_PERMISSION_TIMEOUT_MS
+ * is treated as undecided, so a broken plugin can only ever fall back to asking.
+ */
+export type PluginPermissionResult =
+  | { readonly decision: 'allow' | 'deny'; readonly reason?: string }
+  | void
+
+export const PLUGIN_PERMISSION_TIMEOUT_MS = 5_000
+
+export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission'
 
 /** Consecutive plugin follow-ups allowed before a user turn resets the count. */
 export const PLUGIN_FOLLOW_UP_LIMIT = 25
@@ -54,6 +99,10 @@ export type PluginBehaviorModule = {
   readonly beforeTurn?: (context: PluginBeforeTurnContext) => PluginBeforeTurnResult | Promise<PluginBeforeTurnResult>
   /** Observe a settled turn, and optionally send a follow-up. */
   readonly afterTurn?: (context: PluginAfterTurnContext) => PluginAfterTurnResult | Promise<PluginAfterTurnResult>
+  /** Rewrite or refuse a message sent into a running turn. */
+  readonly beforeSteer?: (context: PluginBeforeSteerContext) => PluginBeforeSteerResult | Promise<PluginBeforeSteerResult>
+  /** Answer a tool approval before it reaches a person. */
+  readonly permission?: (context: PluginPermissionContext) => PluginPermissionResult | Promise<PluginPermissionResult>
   readonly deactivate?: () => void
 }
 

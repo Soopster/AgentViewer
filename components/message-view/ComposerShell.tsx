@@ -1,3 +1,4 @@
+import type { AgentProvider } from '../../lib/types'
 import { useMemo } from 'react'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { useState } from 'react'
@@ -86,7 +87,7 @@ type ComposerShellProps = {
   composerTab: string
   setComposerDock: Dispatch<SetStateAction<{ sessionId: string; tab: string; }>>
   teamAttention: { sessionId: string; count: number; }
-  activeProvider: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | undefined
+  activeProvider: AgentProvider | undefined
   selectedModelValue: string | null
   commitClaudeModelSelection: (nextModel: string) => void
   modelOptions: SessionModelInfo[]

@@ -1,4 +1,5 @@
 // Provider architecture extraction: SDK behavior preserved from the session backend.
+import { askPluginsAboutPermission } from '../../../plugins/permissionBridge';
 import { randomUUID } from 'node:crypto'
 import { createCodexReasoningTracker } from '../../../codexReasoning'
 import { saveCodexReasoningMetadata } from '../../../codexReasoningStore'
@@ -234,6 +235,21 @@ export const CODEX_APPROVAL_METHOD_NAMES = [
 export const CODEX_APPROVAL_METHODS = new Set<string>(CODEX_APPROVAL_METHOD_NAMES);
 export function isCodexApprovalRequest(method: string): boolean {
     return CODEX_APPROVAL_METHODS.has(method);
+}
+const CODEX_PLUGIN_DECIDED_METHODS = new Set<string>(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'applyPatchApproval', 'execCommandApproval']);
+function codexPluginPermissionRequest(method: string, params: Record<string, unknown>): Parameters<typeof askPluginsAboutPermission>[2] {
+    const command = Array.isArray(params.command) ? (params.command as unknown[]).join(' ') : typeof params.command === 'string' ? params.command : undefined;
+    const isCommand = method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval';
+    const changes = params.changes ?? params.fileChanges;
+    const paths = changes && typeof changes === 'object' ? Object.keys(changes as Record<string, unknown>) : undefined;
+    return {
+        kind: isCommand ? 'command' : 'file',
+        toolName: isCommand ? 'shell' : 'apply_patch',
+        input: params,
+        ...(command ? { command } : {}),
+        ...(paths?.length ? { paths } : {}),
+        ...(typeof params.reason === 'string' ? { title: params.reason } : {}),
+    };
 }
 export function codexApprovalThreadId(params: Record<string, unknown>): string | undefined {
     return typeof params.threadId === 'string' ? params.threadId : undefined;
@@ -631,7 +647,23 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                     method: request.method,
                     params,
                 });
-                safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`);
+                // Plugins answer tool approvals first; questions and elicitations are the person's.
+                if (!CODEX_PLUGIN_DECIDED_METHODS.has(request.method)) {
+                    safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`);
+                    return true;
+                }
+                void askPluginsAboutPermission('codex', sessionId, codexPluginPermissionRequest(request.method, params)).then((decided) => {
+                    if (!decided) {
+                        safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`);
+                        return;
+                    }
+                    try {
+                        respondCodexApproval(sessionId, String(request.id), decided.decision === 'allow' ? 'once' : 'reject');
+                    }
+                    catch {
+                        // Already answered or the turn ended: nothing is waiting.
+                    }
+                });
                 return true;
             });
             // Coordinator agents get their coord_* tools declared as Codex

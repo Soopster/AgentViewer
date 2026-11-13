@@ -49,8 +49,9 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   let behavior: PluginManifest['behavior']
   if (value.behavior !== undefined) {
     const spec = value.behavior as { hooks?: unknown; order?: unknown }
-    const hooks = Array.isArray(spec?.hooks) ? spec.hooks.filter((hook): hook is 'beforeTurn' | 'afterTurn' => hook === 'beforeTurn' || hook === 'afterTurn') : []
-    if (!hooks.length || hooks.length !== (spec.hooks as unknown[]).length) problems.push('behavior.hooks must list beforeTurn and/or afterTurn')
+    const known = ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission'] as const
+    const hooks = Array.isArray(spec?.hooks) ? spec.hooks.filter((hook): hook is typeof known[number] => known.includes(hook)) : []
+    if (!hooks.length || hooks.length !== (spec.hooks as unknown[]).length) problems.push(`behavior.hooks must list some of ${known.join(', ')}`)
     else behavior = { hooks: [...new Set(hooks)], ...(typeof spec.order === 'number' && Number.isFinite(spec.order) ? { order: spec.order } : {}) }
   }
 

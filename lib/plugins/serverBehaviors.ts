@@ -8,7 +8,7 @@ import { PLUGIN_MANIFESTS } from './catalog'
 import { createPluginBehaviorHost } from './behaviorHost'
 import { applyPluginSettings } from './enablement'
 import { readPluginSettingsFile } from './settingsFile'
-import { PLUGIN_FOLLOW_UP_LIMIT, type PluginBeforeTurnContext, type PluginTurnTarget } from './behavior'
+import { PLUGIN_FOLLOW_UP_LIMIT, type PluginBeforeTurnContext, type PluginPermissionRequest, type PluginTurnTarget } from './behavior'
 import type { PluginBehaviorModule } from './behavior'
 import type { PluginManifest } from './types'
 import { localPluginDiscovery } from './localPlugins'
@@ -122,4 +122,24 @@ async function runAfterTurn(target: PluginTurnTarget): Promise<void> {
   } catch (error) {
     console.error(`[plugins] ${followUp.pluginId} follow-up failed:`, error)
   }
+}
+
+/** Plugins' say on a message sent into a running turn: the rewritten text, or a PluginTurnBlockedError. */
+export async function applyPluginBeforeSteer(target: PluginTurnTarget, message: string, signal: AbortSignal = new AbortController().signal): Promise<string> {
+  applyPluginSettings(readPluginSettingsFile())
+  if (!host().observesSteering()) return message
+  return host().beforeSteer({ target, signal, message })
+}
+
+/**
+ * Ask plugins about a tool approval before a person sees it. Null means ask the
+ * person. Every provider's approval bridge calls this, so a plugin's policy
+ * holds whichever agent is running.
+ */
+export async function decidePermissionByPlugins(target: PluginTurnTarget, request: PluginPermissionRequest, signal?: AbortSignal): Promise<{ pluginId: string; decision: 'allow' | 'deny'; reason?: string } | null> {
+  applyPluginSettings(readPluginSettingsFile())
+  if (!host().decidesPermissions()) return null
+  const decided = await host().permission({ target, request, signal })
+  if (decided) console.info(`[plugins] ${decided.pluginId} ${decided.decision === 'allow' ? 'approved' : 'denied'} ${request.toolName ?? request.kind}${decided.reason ? `: ${decided.reason}` : ''}`)
+  return decided
 }
