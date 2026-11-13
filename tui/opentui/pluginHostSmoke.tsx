@@ -221,6 +221,23 @@ check(screen().includes('REUSE plug-alphaR'), 'disabled reuse action changed the
 actionSettings.applyPluginSettings(actionSettings.DEFAULT_PLUGIN_SETTINGS)
 console.log('Reuse last prompt is a plugin action; its navigation shortcut yields to composer input and respects disablement.')
 
+// Former root overlays are plugin surfaces now: their shortcuts reach them through the plugin command path.
+await key('h', { shift: true })
+await waitFor('⇧H opens the handoff plugin', () => screen().includes('Handoff brief') && tuiPluginViews.isLoaded('handoff'))
+await key('escape')
+await waitFor('handoff closes', () => !screen().includes('j/k scroll · d/u page · c copy'))
+await key('k', { ctrl: true })
+await key('s')
+await waitFor('⌃K s opens the daily summary plugin', () => screen().includes('Daily summary') && tuiPluginViews.isLoaded('daily-summary'))
+await key('escape')
+await waitFor('daily summary closes', () => !screen().includes('t/y/w or Tab range'))
+await act(async () => { actionSettings.applyPluginSettings(actionSettings.withPluginEnabled(actionSettings.DEFAULT_PLUGIN_SETTINGS, 'handoff', false)) })
+await key('h', { shift: true })
+await settle(200)
+check(!screen().includes('j/k scroll · d/u page · c copy'), 'a disabled handoff plugin still opened')
+await act(async () => { actionSettings.applyPluginSettings(actionSettings.DEFAULT_PLUGIN_SETTINGS) })
+console.log('Handoff (⇧H) and the daily summary (⌃K s) open as plugins and respect disablement.')
+
 // Composer accessories own their modal and native input without root goal cases.
 fixtureGoal = { provider: 'claude', providerInstanceId: 'default', sessionId: 'plug-alpha', objective: 'PLUGIN-GOAL-OBJECTIVE', status: 'active', tokenBudget: null, tokensUsed: 0, continuations: 0, maxContinuations: 25, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastNote: null, lastDecision: null, lastEvaluatedAt: null, error: null }
 const openGoal = async () => {

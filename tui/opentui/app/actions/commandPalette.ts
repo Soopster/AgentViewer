@@ -181,7 +181,6 @@ export type ExecuteCommandPaletteContext = {
   setThinkingMode: React.Dispatch<React.SetStateAction<boolean>>
   setComposerEnableWorkflow: React.Dispatch<React.SetStateAction<boolean>>
   setPluginManagerOpen: React.Dispatch<React.SetStateAction<boolean>>
-  openHandoffBrief: () => void
   setRenameSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>
   copyCliCommand: () => Promise<void>
@@ -234,7 +233,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     closeSessionTab, setComposerHidden, setComposerActive, openComposerWindow,
     pasteSystemClipboardToComposer, toggleComposerHidden, stashComposerPrompt, popComposerStash,
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
-    openHandoffBrief, setRenameSessionKey, setRenameDraft, copyCliCommand,
+    setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
@@ -750,9 +749,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
       break
     case 'plugins':
       setPluginManagerOpen(true)
-      break
-    case 'handoff-brief':
-      openHandoffBrief()
       break
     case 'rename':
       if (focusedSession) {

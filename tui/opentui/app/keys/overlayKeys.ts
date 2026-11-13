@@ -32,7 +32,6 @@ export function handleOverlayAndMenuKeys({
   surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth, toggleSurfacePanelPlacement,
   isShifted, setSurfacePanelOpen, setSurfacePanelFocused, surfacePanelKeyHandlerRef,
   pluginManagerOpen, pluginManagerKeyHandlerRef, newSessionModalOpen, newSessionKeyHandlerRef,
-  handoffBriefOpen, handoffBriefKeyHandlerRef,
   chordHelp, setChordHelp, bookmarksOverlayOpen, isCtrl, setBookmarksOverlayOpen, bookmarksOverlay,
   setBookmarksOverlayIndex, bookmarksOverlayIndex, openBookmarkRecord, attentionOpen,
   attentionKeyHandlerRef, renameSessionKey, setRenameSessionKey, setRenameDraft, commitRename,
@@ -76,8 +75,6 @@ export function handleOverlayAndMenuKeys({
   pluginManagerKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   newSessionModalOpen: boolean
   newSessionKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
-  handoffBriefOpen: boolean
-  handoffBriefKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
   setChordHelp: React.Dispatch<React.SetStateAction<{ map: ChordMap; dismissOnKey: boolean; } | null>>
   bookmarksOverlayOpen: boolean
@@ -244,11 +241,6 @@ export function handleOverlayAndMenuKeys({
 
     if (newSessionModalOpen) {
       handled(() => { newSessionKeyHandlerRef.current?.(key) })
-      return true
-    }
-
-    if (handoffBriefOpen) {
-      handled(() => { handoffBriefKeyHandlerRef.current?.(key) })
       return true
     }
 

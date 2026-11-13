@@ -152,6 +152,8 @@ export type PluginServiceId =
   | 'playbooks'
   /** Read what every agent did over a day or week, with the host's attention inbox filed in. */
   | 'daily-summary'
+  /** Git state and bookmarks for a session's handoff brief. */
+  | 'handoff'
   /** The target session's transcript, read for the target, not the selection. */
   | 'session-transcript'
   /** The target repository: its working directory, and the session scoping its turns. */

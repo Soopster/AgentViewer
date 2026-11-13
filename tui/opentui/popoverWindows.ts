@@ -17,7 +17,7 @@ import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugi
 
 type BuiltinPopoverWindowKind =
   | 'engineering-inspector'
-  | 'attention' | 'handoff'
+  | 'attention'
 
 /**
  * Built-in kinds plus every TUI plugin surface that is not also a side-panel
@@ -37,7 +37,6 @@ export type PopoverWindowSpec = {
 const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpec> = {
   'engineering-inspector': { title: '▤ Inspector', pin: null, single: true, keys: 'window', palette: 'Engineering inspector in a window' },
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
-  handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
 }
 
 export const POPOVER_WINDOWS: Record<PopoverWindowKind, PopoverWindowSpec> = {

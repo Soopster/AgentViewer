@@ -2,11 +2,12 @@ import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from './analytics'
 import type { GitData } from './gitProvider'
 import type { Session, ContentBlock, ToolUseBlock } from './types'
 import type { ThreadedBlock, ThreadedMessage } from './threading'
-import type { TuiSessionDetail } from './tui/service'
+import type { AnalyticsInput } from './analytics'
 
 export type HandoffBriefInput = {
   session: Session | null
-  detail: TuiSessionDetail | null
+  /** The transcript: a TUI session detail or the Web's analytics input both carry it. */
+  detail: AnalyticsInput | null
   git: GitData | null
   gitError?: string | null
   bookmarkIds: ReadonlySet<string>

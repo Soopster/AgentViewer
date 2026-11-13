@@ -9,7 +9,6 @@ import React from 'react'
 import { PluginSurfaceHost } from '../../shell/PluginSurfaceHost'
 import { type TuiPluginCapture, type TuiProvidedPluginServices } from '../../shell/pluginTypes'
 import { getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, type PluginSurfaceId } from '../../../../lib/plugins/catalog'
-import { HandoffBriefPopover } from '../../HandoffBriefPopover'
 import { TaskSidePanel } from '../../TaskSidePanel'
 import { type WindowSurfaceKind } from '../../windowSurfaceNames'
 import { type SurfaceMeta } from '../../popoverWindows'
@@ -187,25 +186,6 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
           onRespond={(item, response) => { void respondToAttentionItem(item, response) }}
           onOpenSession={openAttentionSession} onDismiss={dismissAttentionItem}
           onClose={leave} onKeyHandlerReady={keysReady({ current: null })} />
-      )
-    case 'handoff':
-      return (
-        <PinnedSessionDetail session={slot ? pinnedSessionOf(slot) : selectedSession} density={density} showToolCalls={showToolCalls} shouldYield={splitPaneShouldYield} theme={theme}>
-          {(detail, session) => (
-            <HandoffBriefPopover docked session={session} detail={detail} bookmarkIds={bookmarkKeys}
-              theme={theme} syntaxStyle={handoffBriefSyntaxStyle} width={box.width} height={box.height}
-              onClose={leave}
-              onCopy={async (text) => {
-                try {
-                  await writeClipboard(text, renderer)
-                  showNotice('info', 'Copied handoff brief to clipboard')
-                } catch (err) {
-                  showNotice('error', err instanceof Error ? err.message : 'Failed to copy handoff brief')
-                }
-              }}
-              onKeyHandlerReady={keysReady({ current: null })} />
-          )}
-        </PinnedSessionDetail>
       )
   }
 }

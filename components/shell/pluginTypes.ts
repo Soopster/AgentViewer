@@ -11,6 +11,7 @@ export type WebPluginServices = {
   'run-launch'?: import('../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
+  handoff?: import('../../lib/plugins/handoff').PluginHandoffService
   'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
   'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
   'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService

@@ -34,7 +34,6 @@ import { readPluginSettingsFile } from '../../lib/plugins/settingsFile'
 import { getPluginCommand, getPluginSurface, isPluginPanelSurfaceId, isPluginSurfaceId, listPluginCommands, type PluginSurfaceId, type ResolvedPluginCommand } from '../../lib/plugins/catalog'
 import type { PluginKeyChord, PluginServiceId } from '../../lib/plugins/types'
 import { NewSessionModal, enabledNewSessionProviders } from './NewSessionModal'
-import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { readBridgeConfigFromEnv, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import {
   createChannelBridgeMessageId,
@@ -301,6 +300,7 @@ import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
 import { tuiPlaybooks } from './shell/playbooksService'
 import { createTuiRunLaunchService } from './shell/runLaunchService'
+import { tuiHandoff } from './shell/handoffService'
 import type { StartProtocolRunResult } from '../../lib/agentProtocol'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
@@ -678,8 +678,7 @@ function OpenTuiWorkspace() {
     newSessionCwd, setNewSessionCwd, newSessionBusy, setNewSessionBusy, folderPickerForNewSession,
     setFolderPickerForNewSession, newSessionKeyHandlerRef, pluginOverlay, setPluginOverlay,
     pluginOpenRequests, setPluginOpenRequests, pluginManagerOpen, setPluginManagerOpen,
-    pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef, handoffBriefOpen,
-    setHandoffBriefOpen, handoffBriefKeyHandlerRef,
+    pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef,
     channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
     routeComposerToBridgeRef, routeComposerToIde, setRouteComposerToIde, routeComposerToIdeRef,
   } = useLoadingSessionsGroup({
@@ -831,7 +830,7 @@ function OpenTuiWorkspace() {
     composerAccessoryModal: composerAccessories.snapshot.modal,
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
-    pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen, handoffBriefOpen,
+    pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen,
     bookmarksOverlayOpen, renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
@@ -4494,7 +4493,7 @@ function OpenTuiWorkspace() {
   })
   const {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, openHandoffBrief, toggleComposerBridgeRoute,
+    openBookmarksOverlay, toggleComposerBridgeRoute,
     toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   } = useCopySelectedMessageGroup({
@@ -4502,7 +4501,7 @@ function OpenTuiWorkspace() {
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
     setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen,
+    setBookmarksOverlayIndex, setBookmarksOverlay,
     canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
@@ -4868,7 +4867,6 @@ function OpenTuiWorkspace() {
     // Teammates stay open while windowed (below); every other plugin surface is the overlay.
     else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'attention') setAttentionOpen(open)
-    else if (kind === 'handoff') setHandoffBriefOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
     // suppressed), so moving between the two forms changes nothing here.
   }
@@ -4878,7 +4876,6 @@ function OpenTuiWorkspace() {
     fileHistoryPath && gitRepoCwd ? 'file-history'
     : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay
     : attentionOpen ? 'attention'
-    : handoffBriefOpen ? 'handoff'
     : teammatesModalOpen ? 'teammates' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
   // A popover into a window, pinned to the reader's session (or nothing),
@@ -5168,6 +5165,7 @@ function OpenTuiWorkspace() {
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     playbooks: tuiPlaybooks,
     'daily-summary': { read: readPluginDailySummary },
+    handoff: tuiHandoff,
     'run-launch': runLaunchService,
     'task-control': {
       jumpTo: jumpToTaskCard,
@@ -5843,7 +5841,7 @@ function OpenTuiWorkspace() {
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
   }, [pluginOverlay, attentionOpen,
-    handoffBriefOpen, fileHistoryPath])
+    fileHistoryPath])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
     if (!teammatesOpen && windowedPopoverKinds.has('teammates')) closeSurfaceWindow('teammates')
@@ -6071,7 +6069,7 @@ function OpenTuiWorkspace() {
     closeSessionTab, setComposerHidden, setComposerActive, openComposerWindow,
     pasteSystemClipboardToComposer, toggleComposerHidden, stashComposerPrompt, popComposerStash,
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
-    openHandoffBrief, setRenameSessionKey, setRenameDraft, copyCliCommand,
+    setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
@@ -6187,7 +6185,7 @@ function OpenTuiWorkspace() {
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
     pluginOverlay, attentionOpen,
-    handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
+    fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
     modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
@@ -6357,7 +6355,7 @@ function OpenTuiWorkspace() {
       setSurfacePanelRows, surfacePanelMaxRows, setSurfacePanelWidth, surfacePanelMaxWidth,
       toggleSurfacePanelPlacement, isShifted, setSurfacePanelOpen, setSurfacePanelFocused,
       surfacePanelKeyHandlerRef, pluginManagerOpen, pluginManagerKeyHandlerRef,
-      newSessionModalOpen, newSessionKeyHandlerRef, handoffBriefOpen, handoffBriefKeyHandlerRef,
+      newSessionModalOpen, newSessionKeyHandlerRef,
       chordHelp, setChordHelp, bookmarksOverlayOpen,
       isCtrl, setBookmarksOverlayOpen, bookmarksOverlay, setBookmarksOverlayIndex,
       bookmarksOverlayIndex, openBookmarkRecord, attentionOpen, attentionKeyHandlerRef,
@@ -6423,7 +6421,7 @@ function OpenTuiWorkspace() {
       splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer,
       showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, 
       runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled,
-      setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft,
+      setFleetStripEnabled, jumpToFleetEntry, setFleetPage, setWorktreeDraft,
       setWorktreeModalOpen, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
       taskPanelTab, resizeTaskPanel, setTaskPanelExpanded, toggleComposerHidden,
       openBookmarksOverlay, selectedSession, setRenameSessionKey, setRenameDraft,
@@ -7273,40 +7271,6 @@ function OpenTuiWorkspace() {
       ) : null}
 
 
-      {handoffBriefOpen ? (
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={width}
-          height={height}
-          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-          zIndex={49}
-        />
-      ) : null}
-
-      {handoffBriefOpen ? (
-        <HandoffBriefPopover
-          session={selectedSessionTarget}
-          detail={sessionDetail}
-          bookmarkIds={bookmarkKeys}
-          theme={theme}
-          syntaxStyle={handoffBriefSyntaxStyle}
-          width={width}
-          height={height}
-          onClose={() => setHandoffBriefOpen(false)}
-          onCopy={async (text) => {
-            try {
-              await writeClipboard(text, renderer)
-              showNotice('info', 'Copied handoff brief to clipboard')
-            } catch (err) {
-              showNotice('error', err instanceof Error ? err.message : 'Failed to copy handoff brief')
-            }
-          }}
-          onKeyHandlerReady={(handler) => { handoffBriefKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('handoff')}
-        />
-      ) : null}
 
       {composerWindowOpen && !presentationHidesComposer ? rectsAround(width, height, composerBackdropHole).map((rect, index) => (
         <box

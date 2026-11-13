@@ -128,7 +128,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'fleet', label: 'Toggle fleet strip', key: '⇧A', category: 'View' },
   { id: 'fleet-prev', label: 'Previous fleet page', key: '{', category: 'View' },
   { id: 'fleet-next', label: 'Next fleet page', key: '}', category: 'View' },
-  { id: 'handoff-brief', label: 'Handoff brief', key: '⇧H', category: 'Session' },
   { id: 'provider', label: 'Switch provider', key: 'p', category: 'Session' },
   { id: 'sort', label: 'Toggle sidebar sort', key: '⇧S', category: 'Session' },
   { id: 'scratch', label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },

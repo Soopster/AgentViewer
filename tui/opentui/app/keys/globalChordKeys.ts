@@ -36,7 +36,7 @@ export function handleGlobalChordKeys({
   requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane,
   tabFromRail, setFocusedPane, isCtrlShift, runPluginCommand,
   setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry,
-  setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen,
+  setFleetPage, setWorktreeDraft, setWorktreeModalOpen,
   taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel,
   setTaskPanelExpanded, toggleComposerHidden, openBookmarksOverlay, selectedSession,
   setRenameSessionKey, setRenameDraft,
@@ -110,7 +110,6 @@ export function handleGlobalChordKeys({
   setFleetStripEnabled: React.Dispatch<React.SetStateAction<boolean>>
   jumpToFleetEntry: (index: number) => void
   setFleetPage: React.Dispatch<React.SetStateAction<number>>
-  openHandoffBrief: () => void
   setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
   setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
   taskPanelOpen: boolean
@@ -352,12 +351,6 @@ export function handleGlobalChordKeys({
         const delta = sequence === '{' || isShifted('[') ? -1 : 1
         return (current + delta + fleetPageCount) % fleetPageCount
       }))
-      return true
-    }
-
-    // Global handoff brief popover
-    if (isShifted('H')) {
-      handled(openHandoffBrief)
       return true
     }
 

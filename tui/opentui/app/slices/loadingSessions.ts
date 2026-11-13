@@ -37,8 +37,6 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
   })
   const disabledPlugins = useDisabledPlugins()
   const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
-  const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
-  const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // The bridge panels are the bridges plugin's; the bridges and routing are the composer's.
   const channelBridgeOpen = pluginOverlay === 'channel-bridge'
   // Global Channel Bridge binding: when on, the main composer's send routes to
@@ -67,8 +65,7 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
     newSessionCwd, setNewSessionCwd, newSessionBusy, setNewSessionBusy, folderPickerForNewSession,
     setFolderPickerForNewSession, newSessionKeyHandlerRef, pluginOverlay, setPluginOverlay,
     pluginOpenRequests, setPluginOpenRequests, pluginManagerOpen, setPluginManagerOpen,
-    pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef, handoffBriefOpen,
-    setHandoffBriefOpen, handoffBriefKeyHandlerRef,
+    pluginManagerKeyHandlerRef, disabledPlugins, pluginOverlayKeyHandlerRef,
     channelBridgeOpen, routeComposerToBridge, setRouteComposerToBridge,
     routeComposerToBridgeRef, routeComposerToIde, setRouteComposerToIde, routeComposerToIdeRef,
   }

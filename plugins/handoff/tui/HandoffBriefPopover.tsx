@@ -1,14 +1,12 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { displayHighlightClient } from '../../../tui/opentui/shell/sdkHighlight'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, SyntaxStyle } from '@opentui/core'
-import { fetchGitData, type GitData } from '../../lib/gitProvider'
-import { runGitCommand } from '../../lib/gitNodeProvider'
-import type { Session } from '../../lib/types'
-import type { TuiThemePalette } from '../theme'
-import type { TuiSessionDetail } from '../../lib/tui/service'
-import { buildHandoffBriefMarkdown } from '../../lib/handoffBrief'
-import { displayHighlightClient } from './displayHighlightClient'
+import type { GitData } from '../../../lib/gitProvider'
+import type { Session } from '../../../lib/types'
+import type { TuiSessionDetail } from '../../../lib/tui/service'
+import { buildHandoffBriefMarkdown } from '../../../lib/handoffBrief'
 
 type HandoffBriefKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -23,6 +21,7 @@ type Props = {
   onClose: () => void
   onCopy: (text: string) => Promise<void>
   onKeyHandlerReady: (handler: (key: HandoffBriefKeyEvent) => void) => void
+  readGit: (cwd: string, signal?: AbortSignal) => Promise<GitData>
   /** Fill the given box inside a window, with no frame of its own. */
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
@@ -45,6 +44,7 @@ export function HandoffBriefPopover({
   onClose,
   onCopy,
   onKeyHandlerReady,
+  readGit,
   docked = false,
   onDetach,
 }: Props) {
@@ -63,8 +63,11 @@ export function HandoffBriefPopover({
     bookmarkIds,
   }), [bookmarkIds, detail, gitData, gitError, session])
 
+  const readGitRef = useRef(readGit)
+  readGitRef.current = readGit
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     if (!cwd) {
       setGitData(null)
       setGitError(null)
@@ -76,7 +79,7 @@ export function HandoffBriefPopover({
 
     setGitLoading(true)
     setGitError(null)
-    void fetchGitData(cwd, runGitCommand)
+    void readGitRef.current(cwd, controller.signal)
       .then((data) => {
         if (cancelled) return
         setGitData(data)
@@ -92,6 +95,7 @@ export function HandoffBriefPopover({
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [cwd])
 

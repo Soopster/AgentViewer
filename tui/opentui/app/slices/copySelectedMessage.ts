@@ -49,7 +49,6 @@ export type UseCopySelectedMessageGroupContext = {
   setBookmarksOverlayOpen: React.Dispatch<React.SetStateAction<boolean>>
   setBookmarksOverlayIndex: React.Dispatch<React.SetStateAction<number>>
   setBookmarksOverlay: React.Dispatch<React.SetStateAction<MessageBookmark[]>>
-  setHandoffBriefOpen: React.Dispatch<React.SetStateAction<boolean>>
   canUseChannelBridge: boolean
   setRouteComposerToBridge: React.Dispatch<React.SetStateAction<boolean>>
   canUseIdeBridge: boolean
@@ -134,7 +133,7 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     composerTextareaRef, composerDraft, applyComposerSnapshot, composerMentionAttachments,
     composerPromptParts, setComposerActive, selectedSessionTarget, bookmarkKeysRef,
     setBookmarkKeys, readerTitle, jumpToTranscriptIndex, setBookmarksOverlayOpen,
-    setBookmarksOverlayIndex, setBookmarksOverlay, setHandoffBriefOpen,
+    setBookmarksOverlayIndex, setBookmarksOverlay,
     canUseChannelBridge, setRouteComposerToBridge, canUseIdeBridge,
     setRouteComposerToIde, insertComposerTextAtCursor, selectedSessionKeyRef, transcriptIndexByKey,
     pendingBookmarkCursorRef, setFocusedPane, selectTabSession, selectedSession, sessionDetail,
@@ -196,14 +195,6 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to load bookmarks')
     }
-  })
-
-  const openHandoffBrief = useStableEvent(() => {
-    if (!selectedSessionTarget) {
-      showNotice('error', 'No session selected')
-      return
-    }
-    setHandoffBriefOpen(true)
   })
 
   const toggleComposerBridgeRoute = useStableEvent(() => {
@@ -322,7 +313,7 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
 
   return {
     copySelectedMessage, replySelectedMessage, toggleBookmarkForCursor, jumpToBookmark,
-    openBookmarksOverlay, openHandoffBrief, toggleComposerBridgeRoute,
+    openBookmarksOverlay, toggleComposerBridgeRoute,
     toggleComposerIdeRoute, insertComposerPromptText, openBookmarkRecord, copyCliCommand,
     captureWindowLayout, windowHistory, checkpointWindowLayout, restoreWindowSnapshot,
   }

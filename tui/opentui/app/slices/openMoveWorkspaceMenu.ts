@@ -67,7 +67,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   treeDividerCheckpointedRef: React.RefObject<boolean>
   pluginOverlay: PluginSurfaceId | null
   attentionOpen: boolean
-  handoffBriefOpen: boolean
   fileHistoryPath: string | null
   gitRepoCwd: string
   teammatesModalOpen: boolean
@@ -114,7 +113,7 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
     pluginOverlay, attentionOpen,
-    handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
+    fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
     spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, 
     remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
@@ -184,7 +183,6 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
   const blockingWindowPopover = Object.entries({
     ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 
     attention: attentionOpen,
-    handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),
     teammates: teammatesModalOpen,
   }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))

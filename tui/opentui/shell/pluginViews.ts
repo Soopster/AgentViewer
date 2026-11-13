@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'prompt-library': async () => (await import('../../../plugins/prompt-library/tui')).module,
@@ -30,4 +30,5 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'session-alerts': async () => (await import('../../../plugins/session-alerts/tui')).module,
   recaps: async () => (await import('../../../plugins/recaps/tui')).module,
   'daily-summary': async () => (await import('../../../plugins/daily-summary/tui')).module,
+  handoff: async () => (await import('../../../plugins/handoff/tui')).module,
 }, TUI_PLUGIN_SERVICES)
