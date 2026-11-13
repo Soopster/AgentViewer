@@ -228,6 +228,7 @@ type WorkspaceBodyProps = {
   commandPaletteBodyRows: number
   commandPaletteTopOffset: 2 | 4
   commandPaletteQuery: string
+  commandPaletteMouse?: import('./CommandPaletteOverlay').CommandPaletteMouse
   chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
   composerDockHeight: number
   composerStatusBlockHeight: number
@@ -271,7 +272,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, tabDisplay, editedBuiltinViews, viewMenuOriginKey,
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
-    commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery,
+    commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery, commandPaletteMouse,
     chordHelp, composerDockHeight, composerStatusBlockHeight, toasts,
   } = props
   // The selected tab is on the pinned row: the strip below then highlights none of its own.
@@ -534,9 +535,9 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} height={height} viewMenuItems={viewMenuItems} editedBuiltinViews={editedBuiltinViews} viewMenuOriginKey={viewMenuOriginKey} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} previewViewMenuItem={previewViewMenuItem} chooseViewMenuItem={chooseViewMenuItem} lightweightWindows={lightweightWindows} />
 
-        <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} />
+        <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} height={height} mouse={commandPaletteMouse} />
 
-        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} />
+        <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={mainContentHeight} composerDockHeight={composerDockHeight} composerStatusBlockHeight={composerStatusBlockHeight} toasts={toasts} theme={theme} />
 
 
       </box>

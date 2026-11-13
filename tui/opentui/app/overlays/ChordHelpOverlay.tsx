@@ -6,6 +6,7 @@ import { fitText } from '../../textLayout'
 import { chordHelpKeyWidth, chordHelpRows, SPLIT_CHORD_MAP, type ChordMap } from '../../chordHelp'
 import { RUNNING_INSIDE_TMUX } from '../commands'
 import type { ScrollBoxRenderable } from '@opentui/core'
+import { MODAL_CONTENT_Z_INDEX } from '../../layers'
 
 /**
  * The panel's scrollbox, for the key handler: a panel opened with `?` scrolls
@@ -30,10 +31,12 @@ export function scrollChordHelpForKey(key: { name: string; sequence?: string; sh
   return true
 }
 
-export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight, composerStatusBlockHeight, toasts, theme }: {
+export function ChordHelpOverlay({ chordHelp, width, height, areaHeight, composerDockHeight, composerStatusBlockHeight, toasts, theme }: {
   chordHelp: { map: ChordMap; dismissOnKey: boolean; } | null
   width: number
   height: number
+  /** The main area the panel is drawn in (and clipped to): the rows between the spaces bar and the composer. */
+  areaHeight: number
   composerDockHeight: number
   composerStatusBlockHeight: number
   toasts: Toast[]
@@ -44,7 +47,8 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
           const map = chordHelp.map
           const keysW = chordHelpKeyWidth(map)
           const overlayW = Math.min(width - 6, Math.max(keysW + 44, 52))
-          const labelW = overlayW - keysW - 6
+          // One column for the scrollbar, drawn only when the table overflows.
+          const labelW = overlayW - keysW - 7
           // Sized to the content, and scrolled once that outgrows the space
           // above the composer dock (which draws over it): the old `height - 8`
           // budget ignored the dock and swallowed the footer, which is where
@@ -55,9 +59,11 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
           // A toast (the "is not bound" notice a hesitated chord leaves behind)
           // draws over this panel too, and over its last row, which is the one
           // that says how to close it — so end above the stack while it shows.
+          // In the area's coordinates: rows above it (the spaces bar) are not ours to count.
+          const areaOffset = Math.max(0, height - composerDockHeight - composerStatusBlockHeight - areaHeight)
           const panelBottom = Math.min(
-            height - composerDockHeight - composerStatusBlockHeight,
-            toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) : height,
+            areaHeight,
+            toasts.length > 0 ? toastStackTop(toasts.length, height, toastExtraRows(toasts.map(item => item.message), width)) - areaOffset : areaHeight,
           )
           const maxRows = Math.max(panelBottom - overlayTop - overlayChromeRows, 6)
           const bodyRows = Math.min(rows.length, maxRows)
@@ -73,7 +79,9 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
               borderStyle="single"
               borderColor={theme.amber}
               backgroundColor={theme.surface}
-              zIndex={32}
+              // Above every piece of chrome (tab bar, window title buttons, the
+              // composer, the spaces bars): it is a reference card over all of it.
+              zIndex={MODAL_CONTENT_Z_INDEX + 2}
               flexDirection="column"
             >
               <box paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
@@ -91,8 +99,10 @@ export function ChordHelpOverlay({ chordHelp, width, height, composerDockHeight,
                 id="chord-help-scroll"
                 height={bodyRows}
                 scrollY
+                scrollX={false}
                 backgroundColor={theme.surface}
-                scrollbarOptions={{ visible: hidden > 0, trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+                verticalScrollbarOptions={{ visible: hidden > 0, trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+                horizontalScrollbarOptions={{ visible: false }}
               >
                 {rows.map((row) => (row.keys === null ? (
                   <box key={row.id} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">

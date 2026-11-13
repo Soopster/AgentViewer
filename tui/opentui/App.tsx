@@ -6025,6 +6025,11 @@ function OpenTuiWorkspace() {
     })
   })
 
+  // Mouse on the palette: hover selects, a click runs, a press outside closes.
+  const selectPaletteIndex = useStableEvent((index: number) => setCommandPaletteIndex(index))
+  const runPaletteCommand = useStableEvent((id: string) => executeCommandPalette(id))
+  const closePaletteFromMouse = useStableEvent(() => closeCommandPalette())
+  const commandPaletteMouse = useMemo(() => ({ select: selectPaletteIndex, run: runPaletteCommand, close: closePaletteFromMouse }), [selectPaletteIndex, runPaletteCommand, closePaletteFromMouse])
   const executeCommandPalette = useStableEvent((id: string) => {
     if (id === 'engineering-view') { closeCommandPalette(); chooseTranscriptView('engineering'); return }
     if (id === 'view-studio-new') { closeCommandPalette(); openViewStudio(null, false); return }
@@ -6992,6 +6997,7 @@ function OpenTuiWorkspace() {
         commandPaletteBodyRows={commandPaletteBodyRows}
         commandPaletteTopOffset={commandPaletteTopOffset}
         commandPaletteQuery={commandPaletteQuery}
+        commandPaletteMouse={commandPaletteMouse}
         chordHelp={chordHelp}
         composerDockHeight={composerDockHeight}
         composerStatusBlockHeight={composerStatusBlockHeight}

@@ -427,6 +427,16 @@ export function handleOverlayAndMenuKeys({
         handled(() => setCommandPaletteIndex((i) => Math.max(i - 1, 0)))
         return true
       }
+      if (key.name === 'pagedown' || key.name === 'pageup' || key.name === 'home' || key.name === 'end') {
+        const page = 10
+        handled(() => setCommandPaletteIndex((i) => {
+          const last = Math.max(0, filteredCommands.length - 1)
+          if (key.name === 'home') return 0
+          if (key.name === 'end') return last
+          return Math.max(0, Math.min(last, i + (key.name === 'pagedown' ? page : -page)))
+        }))
+        return true
+      }
       if (key.name === 'return') {
         handled(() => {
           const cmd = filteredCommands[commandPaletteIndex]
