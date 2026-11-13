@@ -19,3 +19,6 @@ export { sessionIdentityKey } from '../sessionIdentity'
 
 export { createPluginResourceScope } from '../../../lib/plugins/lifecycle'
 export type { TuiComposerAccessoryProps } from './composerPlugins'
+
+export { composerKeyBindings } from '../app/composerInput'
+export { renderInlineTextSegments } from '../app/inlineText'

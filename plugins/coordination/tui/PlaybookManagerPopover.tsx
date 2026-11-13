@@ -1,15 +1,10 @@
 /** @jsxImportSource @opentui/react */
-import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from './dockedPopover'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { PopoverDetachButton, popoverFrameCells, popoverRootProps } from '../../../tui/opentui/shell/sdk'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
-import type { PlaybookPhase, PlaybookSummary, PlaybookTask, RunPlaybook } from '../../lib/agentProtocol'
-import {
-  deleteTuiRunPlaybook,
-  listTuiRunPlaybooks,
-  readTuiRunPlaybook,
-  writeTuiRunPlaybook,
-} from '../../lib/tui/service'
-import type { TuiThemePalette } from '../theme'
+import type { PlaybookPhase, PlaybookSummary, PlaybookTask, RunPlaybook } from '../../../lib/agentProtocol'
+import type { PluginPlaybookService } from '../../../lib/plugins/playbooks'
+import { createPluginResourceScope, type TuiThemePalette, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 
 type ManagerKey = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; option?: boolean; sequence: string }
 type ManagerMode = 'list' | 'edit' | 'delete'
@@ -22,7 +17,9 @@ export type PlaybookManagerPopoverProps = {
   height: number
   cwd: string
   onClose: () => void
-  onChanged: (playbooks: PlaybookSummary[], selectedName?: string) => void
+  service: PluginPlaybookService
+  useState: TuiPluginViewProps['useState']
+  onChanged?: (playbooks: PlaybookSummary[], selectedName?: string) => void
   onNotice: (kind: 'info' | 'error', message: string, duration?: number) => void
   onKeyHandlerReady?: (handler: (key: ManagerKey) => boolean) => void
   /** Fill the given box inside a window, with no frame of its own. */
@@ -96,6 +93,8 @@ export function PlaybookManagerPopover({
   width,
   height,
   cwd,
+  service,
+  useState: usePluginState,
   onClose,
   onChanged,
   onNotice,
@@ -105,41 +104,51 @@ export function PlaybookManagerPopover({
 }: PlaybookManagerPopoverProps) {
   const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([])
   const [invalidCount, setInvalidCount] = useState(0)
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const [mode, setMode] = useState<ManagerMode>('list')
-  const [editingName, setEditingName] = useState<string | null>(null)
-  const [draft, setDraft] = useState<RunPlaybook>(() => clonePlaybook(NEW_PLAYBOOK))
-  const [phaseIndex, setPhaseIndex] = useState(0)
-  const [taskIndex, setTaskIndex] = useState(0)
-  const [editorFocus, setEditorFocus] = useState<EditorFocus>('name')
+  const [selectedIndex, setSelectedIndex] = usePluginState(`playbooks:${cwd}:selectedIndex`, 0)
+  const [mode, setMode] = usePluginState<ManagerMode>(`playbooks:${cwd}:mode`, 'list')
+  const [editingName, setEditingName] = usePluginState<string | null>(`playbooks:${cwd}:editingName`, null)
+  const [draft, setDraft] = usePluginState<RunPlaybook>(`playbooks:${cwd}:draft`, NEW_PLAYBOOK)
+  const [phaseIndex, setPhaseIndex] = usePluginState(`playbooks:${cwd}:phaseIndex`, 0)
+  const [taskIndex, setTaskIndex] = usePluginState(`playbooks:${cwd}:taskIndex`, 0)
+  const [editorFocus, setEditorFocus] = usePluginState<EditorFocus>(`playbooks:${cwd}:editorFocus`, 'name')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const multilineEditorRef = useRef<TextareaRenderable | null>(null)
   const editorScrollRef = useRef<ScrollBoxRenderable | null>(null)
 
-  const reload = useCallback(async (preferredName?: string) => {
-    const listing = await listTuiRunPlaybooks(cwd)
+  const owner = useMemo(() => ({ cwd, service }), [cwd, service])
+  const currentOwner = useRef(owner)
+  useLayoutEffect(() => { currentOwner.current = owner }, [owner])
+  const scopeRef = useRef<ReturnType<typeof createPluginResourceScope> | null>(null)
+  const isActive = useCallback((scope: ReturnType<typeof createPluginResourceScope> | null) =>
+    Boolean(scope && scopeRef.current === scope && currentOwner.current === owner && !scope.signal.aborted), [owner])
+
+  const reload = useCallback(async (preferredName?: string, scope = scopeRef.current) => {
+    if (!scope || !isActive(scope)) return
+    const listing = await service.list(cwd, scope.signal)
+    if (!isActive(scope)) return
     setPlaybooks(listing.playbooks)
     setInvalidCount(listing.invalid.length)
     const nextIndex = preferredName
       ? Math.max(0, listing.playbooks.findIndex((entry) => entry.name === preferredName))
       : Math.min(selectedIndex, Math.max(0, listing.playbooks.length - 1))
     setSelectedIndex(nextIndex)
-    onChanged(listing.playbooks, preferredName)
-  }, [cwd, onChanged, selectedIndex])
+    onChanged?.(listing.playbooks, preferredName)
+  }, [cwd, service, onChanged, selectedIndex, isActive, setSelectedIndex])
 
   useEffect(() => {
-    let cancelled = false
-    void listTuiRunPlaybooks(cwd).then((listing) => {
-      if (cancelled) return
+    const scope = createPluginResourceScope('coordination')
+    scopeRef.current = scope
+    void service.list(cwd, scope.signal).then((listing) => {
+      if (!isActive(scope)) return
       setPlaybooks(listing.playbooks)
       setInvalidCount(listing.invalid.length)
-      onChanged(listing.playbooks)
+      onChanged?.(listing.playbooks)
     }).catch((caught) => {
-      if (!cancelled) setError(caught instanceof Error ? caught.message : 'Failed to load playbooks')
+      if (isActive(scope)) setError(caught instanceof Error ? caught.message : 'Failed to load playbooks')
     })
-    return () => { cancelled = true }
-  }, [cwd, onChanged])
+    return () => { scope.dispose(); if (scopeRef.current === scope) scopeRef.current = null }
+  }, [cwd, service, onChanged, isActive])
 
   const resetEditor = useCallback((playbook: RunPlaybook, previousName: string | null) => {
     setDraft(clonePlaybook(playbook))
@@ -153,17 +162,20 @@ export function PlaybookManagerPopover({
 
   const beginEdit = useCallback(async () => {
     const selected = playbooks[selectedIndex]
-    if (!selected || busy) return
+    const scope = scopeRef.current
+    if (!selected || busy || !scope || !isActive(scope)) return
     setBusy(true)
     setError(null)
     try {
-      resetEditor(await readTuiRunPlaybook(cwd, selected.name), selected.name)
+      const playbook = await service.read(cwd, selected.name, scope.signal)
+      if (isActive(scope)) resetEditor(playbook, selected.name)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to open playbook')
+      if (isActive(scope)) setError(caught instanceof Error ? caught.message : 'Failed to open playbook')
     } finally {
-      setBusy(false)
+      const active = isActive(scope)
+      setBusy(previous => active ? false : previous)
     }
-  }, [busy, cwd, playbooks, resetEditor, selectedIndex])
+  }, [busy, cwd, service, isActive, playbooks, resetEditor, selectedIndex])
 
   const updateDraft = useCallback((patch: Partial<RunPlaybook>) => {
     setDraft((current) => ({ ...current, ...patch }))
@@ -221,37 +233,43 @@ export function PlaybookManagerPopover({
   }, [draft.phases.length, phaseIndex])
 
   const saveDraft = useCallback(async () => {
-    if (busy) return
+    const scope = scopeRef.current
+    if (busy || !scope || !isActive(scope)) return
     setBusy(true)
     setError(null)
     try {
-      const result = await writeTuiRunPlaybook(cwd, draft, editingName ?? undefined)
-      await reload(result.playbook.name)
+      const result = await service.write(cwd, draft, editingName ?? undefined, scope.signal)
+      await reload(result.playbook.name, scope)
+      if (!isActive(scope)) return
       setMode('list')
       onNotice('info', `Saved playbook ${result.playbook.name}`, 3500)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to save playbook')
+      if (isActive(scope)) setError(caught instanceof Error ? caught.message : 'Failed to save playbook')
     } finally {
-      setBusy(false)
+      const active = isActive(scope)
+      setBusy(previous => active ? false : previous)
     }
-  }, [busy, cwd, draft, editingName, onNotice, reload])
+  }, [busy, cwd, service, isActive, draft, editingName, onNotice, reload, setMode])
 
   const deleteSelected = useCallback(async () => {
     const selected = playbooks[selectedIndex]
-    if (!selected || busy) return
+    const scope = scopeRef.current
+    if (!selected || busy || !scope || !isActive(scope)) return
     setBusy(true)
     setError(null)
     try {
-      await deleteTuiRunPlaybook(cwd, selected.name)
-      await reload()
+      await service.remove(cwd, selected.name, scope.signal)
+      await reload(undefined, scope)
+      if (!isActive(scope)) return
       setMode('list')
       onNotice('info', `Deleted playbook ${selected.name}`, 3500)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to delete playbook')
+      if (isActive(scope)) setError(caught instanceof Error ? caught.message : 'Failed to delete playbook')
     } finally {
-      setBusy(false)
+      const active = isActive(scope)
+      setBusy(previous => active ? false : previous)
     }
-  }, [busy, cwd, onNotice, playbooks, reload, selectedIndex])
+  }, [busy, cwd, service, isActive, onNotice, playbooks, reload, selectedIndex, setMode])
 
   const handleEditorKey = useCallback((key: ManagerKey) => {
     if (key.name === 'escape') {

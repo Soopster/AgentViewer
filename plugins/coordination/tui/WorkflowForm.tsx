@@ -1,18 +1,23 @@
 /** @jsxImportSource @opentui/react */
-import type { TuiThemePalette } from '../../../theme'
+import type { TuiThemePalette } from '../../../tui/opentui/shell/sdk'
 import React from 'react'
 import { type TextareaRenderable } from '@opentui/core'
-import { getProviderAccent } from '../../../theme'
-import { type TuiSessionDetail } from '../../../../lib/tui/service'
-import { type PlaybookSummary, type ProtocolAutonomy } from '../../../../lib/agentProtocol'
-import { type ProviderSelection, type Session } from '../../../../lib/types'
-import { fitText } from '../../textLayout'
+import { getProviderAccent } from '../../../tui/opentui/shell/sdk'
+import { type PlaybookSummary, type ProtocolAutonomy } from '../../../lib/agentProtocol'
+import { type ProviderSelection, type Session } from '../../../lib/types'
+import { fitText, PopoverDetachButton, popoverRootProps } from '../../../tui/opentui/shell/sdk'
 import { basename, join } from 'node:path'
-import { composerKeyBindings } from '../composerInput'
-import { renderInlineTextSegments } from '../inlineText'
-import { type CoordModalFocus, parseCoordContractLines, coordRunProviders } from '../pickers'
+import { composerKeyBindings } from '../../../tui/opentui/shell/sdk'
+import { renderInlineTextSegments } from '../../../tui/opentui/shell/sdk'
+import { type CoordModalFocus, parseCoordContractLines, coordRunProviders } from './runSetup'
 
-export function CoordRunModal({ coordModalOpen, width, height, coordError, provider, selectedSession, coordProviderOverride, coordTeammateProviderOverride, sessionDetail, coordPlaybookName, coordPlaybooks, coordPlaybookArgsDraft, coordDraft, coordModalFocus, theme, coordTextareaRef, handleCoordContentChange, submitCoordinatedRun, composerBaseTextareaStyle, coordAcceptanceDraft, setCoordAcceptanceDraft, coordNonGoalsDraft, setCoordNonGoalsDraft, coordManualQaDraft, setCoordManualQaDraft, coordEscalationDraft, setCoordEscalationDraft, setCoordPlaybookArgsDraft, setCoordModalFocus, coordProviderPoolIndex, coordMaxAgents, coordMaxTokens, setCoordMaxTokens, coordMaxDurationMinutes, setCoordMaxDurationMinutes, coordUseWorktrees, coordGateDraft, setCoordGateDraft, coordRequirePlanApproval, coordAutonomy, coordRequireReview, coordBusy }: {
+export function WorkflowForm({ docked = false, onDetach, focused, cwd, zIndex, accountId, coordModalOpen, width, height, coordError, provider, selectedSession, coordProviderOverride, coordTeammateProviderOverride, coordPlaybookName, coordPlaybooks, coordPlaybookArgsDraft, coordDraft, coordModalFocus, theme, coordTextareaRef, handleCoordContentChange, submitCoordinatedRun, composerBaseTextareaStyle, coordAcceptanceDraft, setCoordAcceptanceDraft, coordNonGoalsDraft, setCoordNonGoalsDraft, coordManualQaDraft, setCoordManualQaDraft, coordEscalationDraft, setCoordEscalationDraft, setCoordPlaybookArgsDraft, setCoordModalFocus, coordProviderPoolIndex, coordMaxAgents, coordMaxTokens, setCoordMaxTokens, coordMaxDurationMinutes, setCoordMaxDurationMinutes, coordUseWorktrees, coordGateDraft, setCoordGateDraft, coordRequirePlanApproval, coordAutonomy, coordRequireReview, coordBusy }: {
+  docked?: boolean
+  onDetach?: () => void
+  focused: boolean
+  zIndex: number
+  accountId?: string
+  cwd: string
   coordModalOpen: boolean
   width: number
   height: number
@@ -21,7 +26,6 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
   selectedSession: Session | null
   coordProviderOverride: 'claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp' | null
   coordTeammateProviderOverride: ('claude' | 'acp' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'lmstudio' | 'claude-acp' | 'codex-acp')[] | null
-  sessionDetail: TuiSessionDetail | null
   coordPlaybookName: string | null
   coordPlaybooks: PlaybookSummary[]
   coordPlaybookArgsDraft: string
@@ -58,8 +62,8 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
 }) {
   return (
     coordModalOpen ? (() => {
-        const overlayWidth = Math.max(20, Math.min(Math.max(width - 2, 20), Math.max(92, Math.min(160, Math.floor(width * 0.96)))))
-        const overlayHeight = Math.max(24, Math.min(Math.max(height - 2, 24), 44))
+        const overlayWidth = docked ? width : Math.max(20, Math.min(Math.max(width - 2, 20), Math.max(92, Math.min(160, Math.floor(width * 0.96)))))
+        const overlayHeight = docked ? height : Math.max(24, Math.min(Math.max(height - 2, 24), 44))
         const contentWidth = Math.max(overlayWidth - 4, 16)
         const compact = overlayHeight < 29
         const headerHeight = 3
@@ -77,7 +81,7 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
         const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
         const targetProvider = coordProviderOverride ?? suggestedProvider
         const teammateProviders = coordTeammateProviderOverride ?? [targetProvider]
-        const baseCwdLabel = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+        const baseCwdLabel = cwd
         const workspaceLabel = basename(baseCwdLabel) || baseCwdLabel
         const selectedPlaybook = coordPlaybookName
           ? coordPlaybooks.find((entry) => entry.name === coordPlaybookName) ?? null
@@ -98,21 +102,19 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
         const focusBackground = (focus: CoordModalFocus) => coordModalFocus === focus ? theme.surface3 : theme.surface2
         return (
           <box
-            position="absolute"
-            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
-            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            {...popoverRootProps(docked, { width: overlayWidth, height: overlayHeight, top: Math.max(1, Math.floor((height - overlayHeight) / 2)), left: Math.max(1, Math.floor((width - overlayWidth) / 2)) }, zIndex)}
             width={overlayWidth}
             height={overlayHeight}
-            border
+            border={!docked}
             borderStyle="heavy"
             borderColor={theme.cyan}
             backgroundColor={theme.surface2}
-            zIndex={70}
             flexDirection="column"
-            title="NEW WORKFLOW"
+            title={docked ? undefined : "NEW WORKFLOW"}
             titleColor={theme.cyan}
             titleAlignment="left"
           >
+            {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} inside /> : null}
             <box
               height={headerHeight}
               paddingX={1}
@@ -145,7 +147,7 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
               </box>
               <textarea
                 ref={coordTextareaRef}
-                focused={coordModalFocus === 'prompt'}
+                focused={focused && coordModalFocus === 'prompt'}
                 width={contentWidth}
                 height={briefTextareaHeight}
                 placeholder="Describe the outcome, constraints, paths in scope, and acceptance checks."
@@ -159,25 +161,25 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
               <box height={1} flexDirection="row" backgroundColor={focusBackground('acceptance')}>
                 <box width={20} flexShrink={0}><text fg={coordModalFocus === 'acceptance' ? theme.text : theme.dim} wrapMode="none">Acceptance checks</text></box>
                 <box flexGrow={1} backgroundColor={coordModalFocus === 'acceptance' ? theme.surface3 : theme.surface2}>
-                  <input width="100%" focused={coordModalFocus === 'acceptance'} value={coordAcceptanceDraft} placeholder="checks the team must satisfy" maxLength={300} onInput={(value: string) => setCoordAcceptanceDraft(value)} />
+                  <input width="100%" focused={focused && coordModalFocus === 'acceptance'} value={coordAcceptanceDraft} placeholder="checks the team must satisfy" maxLength={300} onInput={(value: string) => setCoordAcceptanceDraft(value)} />
                 </box>
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('nonGoals')}>
                 <box width={20} flexShrink={0}><text fg={coordModalFocus === 'nonGoals' ? theme.text : theme.dim} wrapMode="none">Non-goals</text></box>
                 <box flexGrow={1} backgroundColor={coordModalFocus === 'nonGoals' ? theme.surface3 : theme.surface2}>
-                  <input width="100%" focused={coordModalFocus === 'nonGoals'} value={coordNonGoalsDraft} placeholder="areas to leave unchanged" maxLength={240} onInput={(value: string) => setCoordNonGoalsDraft(value)} />
+                  <input width="100%" focused={focused && coordModalFocus === 'nonGoals'} value={coordNonGoalsDraft} placeholder="areas to leave unchanged" maxLength={240} onInput={(value: string) => setCoordNonGoalsDraft(value)} />
                 </box>
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('manualQa')}>
                 <box width={20} flexShrink={0}><text fg={coordModalFocus === 'manualQa' ? theme.text : theme.dim} wrapMode="none">Manual QA</text></box>
                 <box flexGrow={1} backgroundColor={coordModalFocus === 'manualQa' ? theme.surface3 : theme.surface2}>
-                  <input width="100%" focused={coordModalFocus === 'manualQa'} value={coordManualQaDraft} placeholder="manual checks before completion" maxLength={240} onInput={(value: string) => setCoordManualQaDraft(value)} />
+                  <input width="100%" focused={focused && coordModalFocus === 'manualQa'} value={coordManualQaDraft} placeholder="manual checks before completion" maxLength={240} onInput={(value: string) => setCoordManualQaDraft(value)} />
                 </box>
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('escalation')}>
                 <box width={20} flexShrink={0}><text fg={coordModalFocus === 'escalation' ? theme.text : theme.dim} wrapMode="none">Escalation</text></box>
                 <box flexGrow={1} backgroundColor={coordModalFocus === 'escalation' ? theme.surface3 : theme.surface2}>
-                  <input width="100%" focused={coordModalFocus === 'escalation'} value={coordEscalationDraft} placeholder="security, data loss, API risk" maxLength={240} onInput={(value: string) => setCoordEscalationDraft(value)} />
+                  <input width="100%" focused={focused && coordModalFocus === 'escalation'} value={coordEscalationDraft} placeholder="security, data loss, API risk" maxLength={240} onInput={(value: string) => setCoordEscalationDraft(value)} />
                 </box>
               </box>
             </box>
@@ -232,7 +234,7 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
               <text fg={theme.violet} wrapMode="none">TEAM</text>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('provider')}>
                 <text fg={coordModalFocus === 'provider' ? theme.text : theme.dim} wrapMode="none">{'Lead provider  '}</text>
-                <text fg={getProviderAccent(targetProvider)} wrapMode="none">{`‹ ${targetProvider.toUpperCase()} ›`}</text>
+                <text fg={getProviderAccent(targetProvider)} wrapMode="none">{`‹ ${`${targetProvider.toUpperCase()}${targetProvider === provider && accountId ? ` @${accountId}` : ''}`} ›`}</text>
                 <box flexGrow={1} />
                 <text fg={coordModalFocus === 'provider' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'provider' ? '←/→ choose' : 'coordinates the team'}</text>
               </box>
@@ -337,7 +339,7 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Workspace</text><box flexGrow={1} /><text fg={theme.text}>{fitText(workspaceLabel, Math.max(sidePaneWidth - 16, 12))}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Playbook</text><box flexGrow={1} /><text fg={selectedPlaybook ? theme.violet : theme.dim}>{fitText(selectedPlaybook?.name ?? 'Lead plans board', Math.max(sidePaneWidth - 16, 12))}</text></box>
                   {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">TEAM</text> : null}
-                  <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{targetProvider.toUpperCase()}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{`${targetProvider.toUpperCase()}${targetProvider === provider && accountId ? ` @${accountId}` : ''}`}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Teammate pool</text><box flexGrow={1} /><text fg={theme.violet}>{fitText(teammateProviders.map((entry) => entry.toUpperCase()).join(' + '), Math.max(sidePaneWidth - 20, 12))}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Agent limit</text><box flexGrow={1} /><text fg={theme.cyan}>{`${coordMaxAgents} total`}</text></box>
                   {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">EXECUTION</text> : null}
@@ -358,7 +360,7 @@ export function CoordRunModal({ coordModalOpen, width, height, coordError, provi
                       { text: '  ·  ', fg: theme.dim },
                       { text: selectedPlaybook?.name ?? 'lead-planned', fg: selectedPlaybook ? theme.violet : theme.dim },
                       { text: '  ·  ', fg: theme.dim },
-                      { text: targetProvider.toUpperCase(), fg: getProviderAccent(targetProvider) },
+                      { text: `${targetProvider.toUpperCase()}${targetProvider === provider && accountId ? ` @${accountId}` : ''}`, fg: getProviderAccent(targetProvider) },
                       { text: '  ·  ', fg: theme.dim },
                       { text: `pool ${teammateProviders.map((entry) => entry.toUpperCase()).join('+')}`, fg: theme.violet },
                       { text: '  ·  ', fg: theme.dim },

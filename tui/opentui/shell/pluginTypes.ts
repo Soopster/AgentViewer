@@ -23,6 +23,8 @@ export type TuiPluginCapture = boolean | 'input' | 'terminal'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
+  'run-launch'?: import('../../../lib/plugins/runLaunch').PluginRunLaunchService
+  playbooks?: import('../../../lib/plugins/playbooks').PluginPlaybookService
   messaging?: import('../../../lib/plugins/messaging').PluginMessagingService
   'subagent-transcript'?: { readonly label: string; readonly agentId: string; readonly load: (signal: AbortSignal) => Promise<import('../../../tui/format').TuiTranscriptCard[]> }
   'session-transcript'?: {
@@ -113,7 +115,7 @@ export type TuiPluginServices = {
     /** The run's lead in the reader with its teammates beside it. */
     readonly watchRun: (snapshot: ProtocolRunSnapshot) => void
     /** Open the host's new-run setup. */
-    readonly newRun: () => void
+    readonly revealRun?: (snapshot: ProtocolRunSnapshot) => void
     readonly copyJoinCommand: (runId: string) => void
   }
   'session-fleet'?: {

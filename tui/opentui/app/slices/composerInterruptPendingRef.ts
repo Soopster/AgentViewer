@@ -31,7 +31,6 @@ export type UseComposerInterruptPendingRefGroupContext = {
   windowBroadcastOpen: boolean
   handoffBriefOpen: boolean
   bookmarksOverlayOpen: boolean
-  coordModalOpen: boolean
   renameSessionKey: string | null
   surfacePanelFocused: boolean
   newSessionModalOpen: boolean
@@ -48,7 +47,7 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
     pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen, handoffBriefOpen,
-    bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
+    bookmarksOverlayOpen, renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
   } = ctx
@@ -118,7 +117,7 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     || windowBroadcastOpen
     || handoffBriefOpen
     || bookmarksOverlayOpen
-    || coordModalOpen
+    
     || teammatesModalOpen
     || remoteCoordinatorTarget
     || renameSessionKey

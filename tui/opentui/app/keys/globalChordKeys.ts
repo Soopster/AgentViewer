@@ -34,7 +34,7 @@ export function handleGlobalChordKeys({
   replySelectedMessage, openSelectedAsyncQuestionsOrFold, setThinkingMode, showToggleOutcome, openFocusedSplitPane, tabFromSplitPane,
   closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard, splitPaneRunningKeys,
   requestExit, setComposerActive, pasteSystemClipboardToComposer, showRail, focusedPane,
-  tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal, runPluginCommand,
+  tabFromRail, setFocusedPane, isCtrlShift, runPluginCommand,
   setAttentionOpen, jumpToNextAttention, fleetStripEnabled, setFleetStripEnabled, jumpToFleetEntry,
   setFleetPage, openHandoffBrief, setWorktreeDraft, setWorktreeModalOpen,
   taskPanelOpen, setTaskPanelOpen, setTaskPanelTab, taskPanelTab, resizeTaskPanel,
@@ -103,7 +103,6 @@ export function handleGlobalChordKeys({
   tabFromRail: () => void
   setFocusedPane: React.Dispatch<React.SetStateAction<PaneFocus>>
   isCtrlShift: (char: string) => boolean
-  openNewWorkflowModal: () => void
   runPluginCommand: (command: ResolvedPluginCommand, session?: Session | null) => void
   setAttentionOpen: React.Dispatch<React.SetStateAction<boolean>>
   jumpToNextAttention: () => void
@@ -299,13 +298,6 @@ export function handleGlobalChordKeys({
       return true
     }
 
-
-    // New coordinated workflow, reachable from anywhere — mirrors plain N
-    // (new single-agent session) without requiring a trip through the board.
-    if (isCtrlShift('n')) {
-      handled(openNewWorkflowModal)
-      return true
-    }
 
     // Plugin commands' own bindings (a manifest's `tuiKey`), at global precedence.
     // A shifted letter is matched as the host's own ⇧ bindings are (isShiftedKey), so

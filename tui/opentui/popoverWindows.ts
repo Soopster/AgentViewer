@@ -18,7 +18,7 @@ import { listPluginSurfaces, type PluginPopoverSurfaceId } from '../../lib/plugi
 type BuiltinPopoverWindowKind =
   | 'engineering-inspector'
   | 'daily-summary'
-  | 'attention' | 'playbooks' | 'handoff'
+  | 'attention' | 'handoff'
 
 /**
  * Built-in kinds plus every TUI plugin surface that is not also a side-panel
@@ -39,7 +39,6 @@ const BUILTIN_POPOVER_WINDOWS: Record<BuiltinPopoverWindowKind, PopoverWindowSpe
   'engineering-inspector': { title: '▤ Inspector', pin: null, single: true, keys: 'window', palette: 'Engineering inspector in a window' },
   'daily-summary': { title: '☰ Daily summary', pin: null, single: true, keys: 'window', palette: 'Daily summary in a window' },
   attention: { title: '! Attention', pin: null, single: true, keys: 'window', palette: 'Attention inbox in a window' },
-  playbooks: { title: '▦ Playbooks', pin: null, single: true, keys: 'window', palette: 'Playbook manager in a window' },
   handoff: { title: '⇢ Handoff brief', pin: 'session', single: false, keys: 'window', palette: 'Handoff brief in a window' },
 }
 

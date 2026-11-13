@@ -21,6 +21,10 @@ export async function POST(request: NextRequest) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : ''
   const baseCwd = typeof body.baseCwd === 'string' && body.baseCwd.trim() ? body.baseCwd.trim() : process.cwd()
   const provider = isAgentProvider(body.provider) ? body.provider : 'claude'
+  if (body.providerInstanceId !== undefined && (typeof body.providerInstanceId !== 'string' || !body.providerInstanceId.trim())) {
+    return NextResponse.json({ error: 'providerInstanceId must be a non-empty string' }, { status: 400 })
+  }
+  const providerInstanceId = typeof body.providerInstanceId === 'string' ? body.providerInstanceId.trim() : undefined
   const teammateProviders = Array.isArray(body.teammateProviders)
     ? [...new Set(body.teammateProviders.filter(isAgentProvider))]
     : undefined
@@ -46,7 +50,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await startProtocolRun({
-      prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort,
+      prompt, baseCwd, provider, providerInstanceId, teammateProviders, maxAgents, title, model, effort,
       gateCommand, requirePlanApproval, useWorktrees, playbookName, playbookArgs,
       autonomy, acceptanceContract, requireReview, budget,
     })

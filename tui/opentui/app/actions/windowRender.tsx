@@ -26,7 +26,7 @@ import { writeClipboard } from '../clipboard'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, PinnedSessionDetail } from '../SplitTranscriptPane'
 import { pluginSurfaceWants } from '../pluginCommands'
-import { DailySummaryPopover, PlaybookManagerPopover } from '../lazyOverlays'
+import { DailySummaryPopover } from '../lazyOverlays'
 import { type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import { type TuiTranscriptView } from '../../../theme'
 import { type MouseEvent } from '@opentui/core'
@@ -91,7 +91,6 @@ export type RenderSurfaceBodyInnerContext = {
   dismissAttentionItem: (item: AttentionItem) => void
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
   sessionDetail: TuiSessionDetail | null
-  handleCoordPlaybooksChanged: (playbooks: PlaybookSummary[], preferredName?: string) => void
   pinnedSessionOf: (surface: WindowSurfaceId) => Session | null
   bookmarkKeys: Set<string>
   renderer: CliRenderer
@@ -109,7 +108,7 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
     composerLiveTodos, selectedSession, visibleTranscriptCards, jumpToTranscriptIndex,
     liveSubagentText, attentionItems, attentionRespondingId, respondToAttentionItem,
     openAttentionSession, dismissAttentionItem,
-    showNotice, sessionDetail, handleCoordPlaybooksChanged, pinnedSessionOf, bookmarkKeys,
+    showNotice, sessionDetail, pinnedSessionOf, bookmarkKeys,
     renderer, appendDiffCommentPromptToComposer,
   } = ctx
   const surfaceCwd = slot ? windowSurfaceMeta[slot]?.cwd ?? gitRepoCwd : panelCwd ?? gitRepoCwd
@@ -189,13 +188,6 @@ export function runRenderSurfaceBodyInner(ctx: RenderSurfaceBodyInnerContext, ki
           onRespond={(item, response) => { void respondToAttentionItem(item, response) }}
           onOpenSession={openAttentionSession} onDismiss={dismissAttentionItem}
           onClose={leave} onKeyHandlerReady={keysReady({ current: null })} />
-      )
-    case 'playbooks':
-      return (
-        <PlaybookManagerPopover docked theme={theme} width={box.width} height={box.height}
-          cwd={selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()}
-          onClose={leave} onChanged={handleCoordPlaybooksChanged} onNotice={showNotice}
-          onKeyHandlerReady={keysReady({ current: null })} />
       )
     case 'handoff':
       return (

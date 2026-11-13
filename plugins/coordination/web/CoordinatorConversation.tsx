@@ -5,6 +5,7 @@ import { coordinatorAgentActivity, coordinatorAgentNote, coordinatorAgentWorkspa
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { COORDINATOR_ROSTER_FILTERS, COORDINATOR_ROSTER_LABELS, filterCoordinatorRoster, type CoordinatorRosterFilter } from '@/lib/coordinatorRosterFilter'
 import dynamic from 'next/dynamic'
+import type { PluginPlaybookService } from '@/lib/plugins/playbooks'
 import type { Session } from '@/lib/types'
 import type { ProtocolRunBudget, RunPlaybook, ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
@@ -39,7 +40,8 @@ type RequestBody = {
   requestedProviderInstanceId?: string; requestedModel?: string; requestedEffort?: string
 }
 
-export default function CoordinatorConversation({ session, onInspect, onReturnToChat, onAttentionChange }: {
+export default function CoordinatorConversation({ session, playbooksService, onInspect, onReturnToChat, onAttentionChange }: {
+  playbooksService?: PluginPlaybookService
   session: Session; onInspect: (agent: ProtocolAgent) => void; onReturnToChat: () => void; onAttentionChange: (count: number) => void
 }) {
   const id = useId()
@@ -241,7 +243,7 @@ export default function CoordinatorConversation({ session, onInspect, onReturnTo
     {state?.recoveries.map(agentId => <div key={agentId} className="flex flex-wrap items-center gap-2 rounded border p-2"><span>{snapshot?.agents.find(agent => agent.id === agentId)?.name}: {(dead => dead ? `turn ended with ${coordinatorDeathReason(dead)}; resuming starts a new turn` : 'execution needs reconciliation')(state.deadAgents?.find(entry => entry.agentId === agentId))}</span><Button variant="outline" size="sm" onClick={() => { const agent = snapshot?.agents.find(agent => agent.id === agentId); if (agent) inspect(agent) }}>Inspect</Button><Button size="sm" disabled={disabled} onClick={() => void send({ action: 'resume-agent', to: agentId, detail: 'Resume after inspecting the teammate transcript' })}>Resume after inspection</Button></div>)}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       {!terminal ? <>
-      <CoordinatorWorkflow key={`${session.providerInstanceId ?? session.provider}:${session.sessionId}`} cwd={session.cwd ?? ''} provider={session.provider ?? 'claude'} disabled={disabled} onStart={(playbook, workflowArgs) => void send({ action: 'start-workflow', detail: `Start workflow ${playbook.name}`, playbook, workflowArgs })} />
+      <CoordinatorWorkflow key={`${session.providerInstanceId ?? session.provider}:${session.sessionId}`} cwd={session.cwd ?? ''} service={playbooksService} provider={session.provider ?? 'claude'} disabled={disabled} onStart={(playbook, workflowArgs) => void send({ action: 'start-workflow', detail: `Start workflow ${playbook.name}`, playbook, workflowArgs })} />
       <label htmlFor={`${id}-target`}>Send to</label>
       <NativeSelect id={`${id}-target`} value={to} disabled={disabled} onChange={event => { setTo(event.target.value); setRequestedProviderInstanceId(''); setRequestedModel(''); setRequestedEffort('') }}>
         <option value="auto">Available teammate or a new one</option>

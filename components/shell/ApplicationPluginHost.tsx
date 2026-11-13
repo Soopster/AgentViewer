@@ -16,7 +16,7 @@ import { webPluginCommands } from './pluginCommands'
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
 export function ApplicationPluginHost({ sessions, selectedSession, cwd = null }: { sessions: readonly Session[]; selectedSession: Session | null; cwd?: string | null }) {
   const [notice, setNotice] = useState<{ text: string } | null>(null)
-  const [overlay, setOverlay] = useState<PluginSurfaceId | null>(null)
+  const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null } | null>(null)
   const context = useRef({ sessions, selectedSession })
   context.current = { sessions, selectedSession }
   const services = useMemo<PluginApplicationServices>(() => ({ notifications: {
@@ -65,14 +65,15 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null }:
       return true
     }
     if (command.webDashboard || command.webReader) return false
-    if (command.scope !== 'application') return false
+    if (command.scope !== 'application' && command.scope !== 'repository') return false
+    if (command.scope === 'repository' && !cwd) return false
     if (command.handler) {
       void executeCommand(id, { session: null, cwd: null }, { notices: { show: (_kind, text) => setNotice({ text }) } })
         .catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setNotice({ text: error instanceof Error ? error.message : 'Plugin command failed' }) })
       return true
     }
     if (!isPluginSurfaceId(command.opens)) return false
-    setOverlay(command.opens)
+    setOverlay({ surface: command.opens, cwd: command.scope === 'repository' ? cwd : null, session: selectedSession ? { ...selectedSession } : null })
     return true
   }), [executeCommand, executeRepositoryCommand, cwd, selectedSession])
   useEffect(() => {
@@ -83,6 +84,6 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null }:
   const close = useCallback(() => setOverlay(null), [])
   return <>
     {notice && <div role="status" style={{ position: 'fixed', bottom: 18, right: 18, zIndex: 80, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 }}>{notice.text}</div>}
-    {overlay && <PluginSurfaceHost surfaceId={overlay} placement="overlay" sessionKey={null} services={{}} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} services={{ session: { session: overlay.session }, ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

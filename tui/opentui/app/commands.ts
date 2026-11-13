@@ -124,7 +124,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-new', label: 'New worktree task', key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge', label: 'Merge worktree task into main', key: '', category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task', key: '', category: 'Worktree' },
-  { id: 'coord-start', label: 'Start coordinated run', key: '⌃K n / ⌃⇧N', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: '', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet', label: 'Toggle fleet strip', key: '⇧A', category: 'View' },

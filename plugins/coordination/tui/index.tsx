@@ -6,10 +6,12 @@ import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/
 import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 import { CoordinationPopover } from './CoordinationPopover'
 import { TeammatesPopover } from './TeammatesPopover'
+import { NewWorkflowSurface } from './NewWorkflowSurface'
+import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 
 const NO_NOTICES = () => {}
 
-function ControlCenterSurface({ services, theme, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
+function ControlCenterSurface({ services, theme, width, height, placement, registerKeys, close, detach, runCommand }: TuiPluginViewProps) {
   const coordination = services.coordination!
   const composer = services.composer
   return (
@@ -21,7 +23,7 @@ function ControlCenterSurface({ services, theme, width, height, placement, regis
       initialRunId={coordination.initialRunId}
       onOpenSession={coordination.openAgentSession}
       onWatchRun={coordination.watchRun}
-      onNewRun={coordination.newRun}
+      onNewRun={() => { runCommand('coord-start') }}
       onClose={close}
       onNotice={services.notices?.show ?? NO_NOTICES}
       onCopyJoinCommand={coordination.copyJoinCommand}
@@ -50,9 +52,24 @@ function TeammatesSurface({ services, theme, width, height, placement, registerK
   )
 }
 
+function PlaybooksSurface({ services, useState, theme, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
+  return <PlaybookManagerPopover
+    key={services.repository!.cwd}
+    service={services.playbooks!}
+    useState={useState}
+    cwd={services.repository!.cwd}
+    theme={theme} width={width} height={height}
+    docked={placement !== 'overlay'}
+    onClose={close}
+    onNotice={services.notices?.show ?? NO_NOTICES}
+    onKeyHandlerReady={registerKeys}
+    {...(detach ? { onDetach: detach } : {})}
+  />
+}
+
 export const module: PluginViewModule<TuiPluginView> = {
   apiVersion: PLUGIN_API_VERSION,
   pluginId: 'coordination',
-  views: { coordination: ControlCenterSurface, teammates: TeammatesSurface },
+  views: { coordination: ControlCenterSurface, teammates: TeammatesSurface, playbooks: PlaybooksSurface, 'new-workflow': NewWorkflowSurface },
 }
 

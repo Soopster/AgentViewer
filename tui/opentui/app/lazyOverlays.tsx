@@ -8,4 +8,3 @@ export const WindowBroadcastPopover = lazyComponent(() => import('../WindowBroad
 export const WindowLayoutPicker = lazyComponent(() => import('../WindowLayoutPicker').then((module) => module.WindowLayoutPicker))
 export const DailySummaryPopover = lazyComponent(() => import('../DailySummaryPopover').then((module) => module.DailySummaryPopover))
 export const RemoteCoordinatorPopover = lazyComponent(() => import('../RemoteCoordinatorPopover').then((module) => module.RemoteCoordinatorPopover))
-export const PlaybookManagerPopover = lazyComponent(() => import('../PlaybookManagerPopover').then((module) => module.PlaybookManagerPopover))

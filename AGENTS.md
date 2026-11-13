@@ -65,6 +65,11 @@ Web dashboard contributions use `lib/plugins/dashboard.ts` and manifest
 contributions instead of adding sidebar callbacks or dashboard rendering cases.
 Cross-session messaging uses `lib/plugins/messaging.ts`; deliver by qualified
 address, preserving provider-instance identity.
+Playbook management uses `lib/plugins/playbooks.ts`; repository-scoped plugin
+surfaces capture their opening cwd and own editor state and cancellation.
+Run setup uses `lib/plugins/runLaunch.ts` and the Coordination plugin
+`new-workflow` surface. Plugins own form state/keys; host adapters register
+accepted sessions and watchers without selection-changing late callbacks.
 
 ### Multi-provider session backend
 

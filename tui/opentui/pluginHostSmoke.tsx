@@ -17,6 +17,7 @@ import type { TuiPluginViewProps } from './shell/pluginTypes'
 import type { AddressableSession, SendCrossSessionMessageResult } from '../../lib/crossSessionMessagingTypes'
 import type { SessionGoal } from '../../lib/sessionGoals'
 import type { ThreadedMessage } from '../../lib/threading'
+import type { RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../../lib/agentProtocol'
 
 const CWD = mkdtempSync(path.join(tmpdir(), 'agent-viewer-plugin-host-'))
 process.env.SHELL = '/bin/sh'
@@ -62,8 +63,40 @@ let releaseMessage: ((result: SendCrossSessionMessageResult) => void) | null = n
 const diagnosticsActions: Array<{ sessionId: string; action: string }> = []
 let holdDiagnosticsRead = false
 let releaseDiagnosticsRead: ((value: Awaited<ReturnType<typeof service.readTuiSessionDiagnostics>>) => void) | null = null
+const fixturePlaybook: RunPlaybook = {
+  name: 'fixture-workflow', description: 'PLUGIN-PLAYBOOK-DESCRIPTION', maxAgents: 3,
+  phases: [{ title: 'Execute', tasks: [{ key: 'work', title: 'Fixture task', detail: 'Keep the complete editor available.', role: 'teammate' }] }],
+}
+const rootLaunches: StartProtocolRunParams[] = []
+const watchedAcceptedRuns: string[] = []
+let releaseRootLaunch: ((value: StartProtocolRunResult) => void) | null = null
+const acceptedRootRun = {
+  snapshot: { run: { id: 'late-native-run', status: 'running', prompt: 'Late fixture run' }, agents: [] },
+  sessions: [{ sessionId: 'late-native-session', provider: 'claude', providerInstanceId: 'work', cwd: CWD, summary: 'Late run', isPending: true }],
+} as unknown as StartProtocolRunResult
+let playbookLists = 0
+const playbookReads: Array<{ cwd: string; name: string }> = []
+const playbookWrites: RunPlaybook[] = []
+let holdPlaybookRead = false
+let releasePlaybookRead: ((value: RunPlaybook) => void) | null = null
 mock.module('../../lib/tui/service', () => ({
   ...service,
+  startTuiProtocolRun: async (params: StartProtocolRunParams) => { rootLaunches.push(params); return new Promise<StartProtocolRunResult>(resolve => { releaseRootLaunch = resolve }) },
+  readTuiProtocolRun: async (runId: string) => {
+    if (runId === 'late-native-run') { watchedAcceptedRuns.push(runId); return acceptedRootRun.snapshot }
+    return service.readTuiProtocolRun(runId)
+  },
+  listTuiRunPlaybooks: async () => {
+    playbookLists += 1
+    return { playbooks: [{ name: fixturePlaybook.name, path: path.join(CWD, '.agent-viewer/playbooks/fixture-workflow.json'), phaseCount: 1, taskCount: 1, expectsArgs: false }], invalid: [] }
+  },
+  readTuiRunPlaybook: async (cwd: string, name: string) => {
+    playbookReads.push({ cwd, name })
+    if (holdPlaybookRead) return new Promise<RunPlaybook>(resolve => { releasePlaybookRead = resolve })
+    return structuredClone(fixturePlaybook)
+  },
+  writeTuiRunPlaybook: async (_cwd: string, playbook: RunPlaybook) => { playbookWrites.push(structuredClone(playbook)); return { playbook, path: path.join(CWD, playbook.name + '.json') } },
+  deleteTuiRunPlaybook: async () => {},
   readTuiSessionGoal: async () => fixtureGoal,
   patchTuiSessionGoal: async (_session: Session, patch: Partial<SessionGoal>) => { goalMutations.push('patch'); fixtureGoal = fixtureGoal ? { ...fixtureGoal, ...patch } : null; return fixtureGoal },
   clearTuiSessionGoal: async () => { goalMutations.push('clear'); fixtureGoal = null },
@@ -160,6 +193,7 @@ const key = async (name: string, modifiers: { ctrl?: boolean; shift?: boolean } 
   await act(async () => {
     if (name === 'escape') setup.mockInput.pressEscape()
     else if (name === 'return') setup.mockInput.pressEnter()
+    else if (name === 'tab') setup.mockInput.pressTab()
     else setup.mockInput.pressKey(name, modifiers)
   })
   await settle(200)
@@ -578,10 +612,83 @@ const checkWindowRoundTrip = async (id: string, marker: string) => {
 }
 check(!tuiPluginViews.isLoaded('coordination'), 'the Coordination plugin loaded before a coordination view was opened')
 check(!tuiPluginViews.isLoaded('desk'), 'the Desk plugin loaded before the desk was opened')
+// The manager is a Coordination surface, registered and dispatched like every
+// plugin; native inputs and unsaved state stay with its instance when detached.
+check(playbookLists === 0, 'playbooks were read before any manager/workflow opened')
+await openPalette('Manage playboo')
+await waitFor('lazy playbook manager', () => tuiPluginViews.isLoaded('coordination') && screen().includes('REUSABLE COORDINATOR WORKFLOWS') && screen().includes('fixture-workflow'))
+await key('e')
+await waitFor('structured playbook editor', () => screen().includes('PLAYBOOK SETTINGS') && screen().includes('PLUGIN-PLAYBOOK-DESCRIPTION'))
+await act(async () => { await setup.mockInput.typeText('UNSAVED-PLAYBOOK-DRAFT') })
+await waitFor('playbook draft typed', () => screen().includes('UNSAVED-PLAYBOOK-DRAFT'))
+await checkWindowRoundTrip('playbooks', 'UNSAVED-PLAYBOOK-DRAFT')
+check(playbookWrites.length === 0, 'moving the manager saved its unsaved draft')
+await key('escape')
+await key('escape')
+await waitFor('playbook manager closed', () => !screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+
+// A native read deliberately ignores cancellation. Closing the view and opening
+// a new owner must still prevent the former read from replacing its editor.
+holdPlaybookRead = true
+await openPalette('Manage playboo')
+await waitFor('manager reopened for pending read', () => screen().includes('fixture-workflow') && screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+await key('e')
+await waitFor('playbook read pending', () => releasePlaybookRead !== null)
+await key('escape')
+await waitFor('pending manager closed', () => !screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+holdPlaybookRead = false
+await openPalette('Manage playboo')
+await waitFor('replacement manager', () => screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+await key('n')
+await act(async () => { await setup.mockInput.typeText('NEXT-PLAYBOOK-OWNER') })
+await waitFor('replacement draft', () => screen().includes('NEXT-PLAYBOOK-OWNER'))
+await act(async () => { releasePlaybookRead!({ ...fixturePlaybook, name: 'STALE-PLAYBOOK-OWNER' }) })
+await settle(300)
+check(screen().includes('NEXT-PLAYBOOK-OWNER') && !screen().includes('STALE-PLAYBOOK-OWNER'), 'a closed manager read replaced its successor draft')
+check(playbookReads.every(read => read.cwd === CWD && read.name === fixturePlaybook.name), 'manager read lost its captured repository or selected name')
+await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'coordination', false)) })
+await waitFor('coordination disable removes manager', () => !screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+await key('?')
+await act(async () => { await setup.mockInput.typeText('Manage playboo') })
+await settle(200)
+check(screen().includes('no matches'), 'disabled coordination still advertised its manager command')
+await key('return')
+check(!screen().includes('REUSABLE COORDINATOR WORKFLOWS'), 'disabled manager reopened from the palette')
+await key('escape')
+await act(async () => { applyPluginSettings(DEFAULT_PLUGIN_SETTINGS) })
+console.log('Playbooks open through the lazy Coordination plugin; native draft inputs survive window moves, closed reads cannot affect replacement editors, and disablement removes the manager and its command.')
+
 await portable('a')
 await waitFor('the control center', () => screen().includes('AGENT CONTROL CENTER'))
 check(tuiPluginViews.isLoaded('coordination'), 'the control center opened without its plugin module')
 await checkWindowRoundTrip('coordination', 'AGENT CONTROL CENTE')
+// Existing setup reaches the same plugin and resumes with its brief intact.
+await key('n')
+await waitFor('workflow setup from coordination', () => screen().includes('NEW WORKFLOW'))
+await act(async () => { await setup.mockInput.typeText('WORKFLOW-BRIEF-KEPT') })
+for (let index = 0; index < 5; index += 1) await key('tab')
+const listsBeforeManageReturn = playbookLists
+await key('m')
+await waitFor('workflow Manage opens plugin manager', () => screen().includes('REUSABLE COORDINATOR WORKFLOWS') && !screen().includes('NEW WORKFLOW'))
+await key('escape')
+await waitFor('manager returns to workflow setup', () => screen().includes('NEW WORKFLOW') && screen().includes('WORKFLOW-BRIEF-KEPT') && !screen().includes('REUSABLE COORDINATOR WORKFLOWS'))
+check(playbookLists > listsBeforeManageReturn + 1, 'returning from the manager did not refresh setup playbooks')
+// The root registers an accepted run even when its form closes and the plugin
+// turns off during submission, without selecting the late run or reopening UI.
+for (let index = 0; index < 13; index += 1) await key('tab')
+await key('return')
+await waitFor('root workflow submission pending', () => rootLaunches.length === 1 && releaseRootLaunch !== null)
+await key('return')
+check(rootLaunches.length === 1, 'native form submitted twice while start was pending')
+await key('escape')
+await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'coordination', false)) })
+await settle(100)
+await act(async () => { releaseRootLaunch!(acceptedRootRun) })
+await waitFor('accepted run registered as a background tab and watch', () => screen().includes('Late run') && watchedAcceptedRuns.includes('late-native-run'))
+check(screen().includes('PLUG-ALPHA-BODY') && !screen().includes('NEW WORKFLOW') && !screen().includes('AGENT CONTROL CENTER'), 'late accepted run changed selection or reopened its presentation')
+check(!screen().includes('Coordinated run started'), 'late accepted run showed a stale form success notice')
+await act(async () => { applyPluginSettings(DEFAULT_PLUGIN_SETTINGS) })
+await key('escape')
 await key('escape')
 await waitFor('the control center closed', () => !screen().includes('AGENT CONTROL CENTER'))
 await key('a', { ctrl: true, shift: true })

@@ -729,6 +729,8 @@ export type StartProtocolRunParams = {
   playbookArgs?: unknown
   /** Provider used by the lead that plans, coordinates, and synthesizes. */
   provider: AgentProvider
+  /** Account used by the lead and same-provider teammates. Other providers use their defaults. */
+  providerInstanceId?: string
   /** Provider pool assigned round-robin to teammates. Defaults to the lead provider. */
   teammateProviders?: AgentProvider[]
   maxAgents?: number
@@ -765,6 +767,7 @@ export type StartProtocolRunResult = {
   sessions: Array<{
     sessionId: string
     provider: AgentProvider
+    providerInstanceId?: string
     cwd: string
     summary: string
     isPending: boolean

@@ -8,6 +8,8 @@ import type { SendAttachment } from '@/lib/types'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
+  'run-launch'?: import('../../lib/plugins/runLaunch').PluginRunLaunchService
+  playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
   'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
   'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService

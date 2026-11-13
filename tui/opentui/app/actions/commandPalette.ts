@@ -65,7 +65,6 @@ export type ExecuteCommandPaletteContext = {
   selectedWorktreeTask: WorktreeTask | null
   setWorktreeConfirm: React.Dispatch<React.SetStateAction<'merge' | 'discard' | null>>
   showNotice: (tone: NoticeTone, text: string, durationMs?: number) => void
-  openNewWorkflowModal: () => void
   setDailySummaryOpen: React.Dispatch<React.SetStateAction<boolean>>
   toggleSurfacePanelPlacement: () => void
   setWindowPickerOpen: React.Dispatch<React.SetStateAction<boolean>>
@@ -209,7 +208,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
-    openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
+    setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
     stopActiveCoordinatedRun, fleetStripEnabled, setFleetStripEnabled, showToggleOutcome,
@@ -291,9 +290,6 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     case 'worktree-discard':
       if (selectedWorktreeTask) setWorktreeConfirm('discard')
       else showNotice('info', 'Selected session is not a worktree task', 3500)
-      break
-    case 'coord-start':
-      openNewWorkflowModal()
       break
     case 'daily-summary':
       setDailySummaryOpen(true)

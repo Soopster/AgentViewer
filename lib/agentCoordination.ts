@@ -10163,6 +10163,16 @@ async function spawnAdditionalTeammateReserved(
  * lead synthesizes when the board is done.
  */
 export async function startProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
+  // Validate before creating a provider session, worktree or durable run. Existing
+  // SDK callers may already be explicitly bound; otherwise use the provider default.
+  if (params.providerInstanceId !== undefined && !params.providerInstanceId.trim()) {
+    throw new Error('providerInstanceId must be a non-empty string')
+  }
+  const instance = await resolveProviderInstance(params.providerInstanceId ?? currentProviderInstanceId(params.provider), params.provider)
+  return withProviderInstance(instance.id, params.provider, () => startBoundProtocolRun(params, instance.id))
+}
+
+async function startBoundProtocolRun(params: StartProtocolRunParams, providerInstanceId: string): Promise<StartProtocolRunResult> {
   const playbook = params.playbookName ? await loadRunPlaybook(params.baseCwd, params.playbookName) : undefined
   if (playbook && params.playbookArgs === undefined && playbookExpectsArgs(playbook)) {
     throw new Error(
@@ -10199,7 +10209,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     title: params.title ?? playbook?.name,
     model: params.model,
     effort: params.effort,
-    modelSource: { provider: params.provider, providerInstanceId: currentProviderInstanceId(params.provider) },
+    modelSource: { provider: params.provider, providerInstanceId },
     gateCommand: (params.gateCommand ?? playbook?.gateCommand)?.trim() || undefined,
     requirePlanApproval: (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true,
     autonomy,
@@ -10223,8 +10233,6 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     sameProviderRetries: new Map(),
     claudeUsageCumulative: new Map(),
   }
-  controllers.set(runId, controller)
-
   // Claude/Pi/Copilot/Codex/OpenCode SDKs each support in-process (no
   // subprocess) custom tools — see lib/agentCoordinationSdkTools.ts.
   let leadToken: string | undefined
@@ -10257,14 +10265,14 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ts,
         ts,
       )
-      assertCoordinatorSessionInstanceSync(db, leadSession.sessionId, currentProviderInstanceId(params.provider))
+      assertCoordinatorSessionInstanceSync(db, leadSession.sessionId, providerInstanceId)
       saveExecutionSettings(db, runId, { teammateProviders, model: controller.model, effort: controller.effort, modelSource: controller.modelSource, executionStarted: false })
       db.prepare(`
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
-      db.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(currentProviderInstanceId(params.provider), runId, 'lead')
+      db.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(providerInstanceId, runId, 'lead')
       if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
       if (leadCanUseInProcessTools) leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
       db.exec('COMMIT')
@@ -10277,9 +10285,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     }
   })
 
+  controllers.set(runId, controller)
   if (leadToken) {
     const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken, role: 'lead' }
-    registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity, currentProviderInstanceId(leadSession.provider))
+    registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity, providerInstanceId)
     controller.sdkIdentities.set('lead', identity)
   }
 
@@ -10325,6 +10334,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     sessions: [{
       sessionId: leadSession.sessionId,
       provider: leadSession.provider,
+      providerInstanceId,
       cwd: leadSession.cwd,
       summary: 'Team lead',
       isPending: leadSession.isPending,

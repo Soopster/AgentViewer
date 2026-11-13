@@ -150,7 +150,7 @@ import {
   selectComposerQueueTarget,
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
-import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, listTuiRunPlaybooks, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
+import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
 import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory } from '../../lib/tui/service'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -281,7 +281,7 @@ import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle,
 import { cardDiffText, filePathFromDiffText, agentToolCardsFor, agentToolCardIsExpanded, nestedAgentToolDisplay, visibleCardsForTranscriptView, resolveExpandedCardKeys } from './app/transcriptRows'
 
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionLineLabel, transcriptDiffSelectionSpanFromRowRange, nextTranscriptDiffRowIndex } from './app/transcriptDiffSelection'
-import { type CoordModalFocus, sessionProviderLabel, filterModelPickerOptions, effortPickerOptions, PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL, QUESTION_PREVIEW_MAX_LINES, QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS, providerOptionIndex, providerSelectOptions, parseCoordContractLines, moveCoordModalFocus, cycleCoordProvider, coordRunProviders, cycleCoordAutonomy, TUI_PROVIDER_TAG } from './app/pickers'
+import { sessionProviderLabel, filterModelPickerOptions, effortPickerOptions, PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL, QUESTION_PREVIEW_MAX_LINES, QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS, providerOptionIndex, providerSelectOptions, TUI_PROVIDER_TAG } from './app/pickers'
 import { FLEET_PAGE_SIZE, TRANSCRIPT_VIEWS, COMMANDS, COMMAND_CATEGORY_ORDER, tuiCommandEquivalent, RUNNING_INSIDE_TMUX, TRANSCRIPT_VIEW_LABELS, TRANSCRIPT_VIEW_DESCRIPTIONS } from './app/commands'
 import { createLazyTranscriptIndexLookup } from './app/transcriptIndex'
 import { type TranscriptCardSelectionVariants, selectTranscriptCardVariants } from './app/TranscriptCard'
@@ -298,7 +298,9 @@ import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
-import { CoordRunModal } from './app/overlays/CoordRunModal'
+import { tuiPlaybooks } from './shell/playbooksService'
+import { createTuiRunLaunchService } from './shell/runLaunchService'
+import type { StartProtocolRunResult } from '../../lib/agentProtocol'
 import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 import { ComposerStatusMessage } from './app/overlays/ComposerStatusMessage'
@@ -315,7 +317,7 @@ import { TaskSidePanelFrame } from './app/overlays/TaskSidePanelFrame'
 import { cycleDensityValue, currentProjectName } from './app/viewHelpers'
 import { TUI_HANDOFF_COMMAND, CODEX_LIVE_ASSISTANT_UUID, CLAUDE_LIVE_ASSISTANT_UUID_PREFIX, TUI_SLASH_HINTS } from './app/composerConstants'
 import { pluginSurfaceWants, TUI_KEYED_PLUGIN_COMMANDS } from './app/pluginCommands'
-import { PluginManagerPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover, PlaybookManagerPopover } from './app/lazyOverlays'
+import { PluginManagerPopover, ContextMenu, WindowBroadcastPopover, WindowLayoutPicker, DailySummaryPopover, RemoteCoordinatorPopover } from './app/lazyOverlays'
 import { handleLetterShortcutKeys } from './app/keys/letterShortcuts'
 import { handleReaderKeys } from './app/keys/readerKeys'
 import { handleWindowAndTabKeys } from './app/keys/windowTabKeys'
@@ -339,7 +341,7 @@ import { sendTerminalPrompt, listComposerTerminals, readTerminalAgentState, term
 import { runExecuteCommandPalette, runRunTuiLocalCommand, runRunPluginCommand } from './app/actions/commandPalette'
 import { runRefreshSelectedSessionDetail, runRefreshSessionMetadata, runRefreshSessions, runReconcileSelectedRunningRegistry, runPersistReaderState, runStartFreshSession, runChooseProvider, runPrepareCreatedSessionForComposer, runForkIntoNewSession, runToggleSelectedSessionSettled } from './app/actions/sessionData'
 import { runPickWindowTarget, runApplySavedWindowLayout, runRunWindowControlAction, runOpenWindowControlMenu, runRestoreWindowSnapshot, runApplySplitPaneCount, runOpenSurfaceWindow, runCloseWindowSessionTab, runSplitFocusedWindow, runTabWindowOnto, runReopenClosedWindow, runDropSessionOnSurfaceWindow, runDragSplitDivider, runResizeSplitReader, runCancelPointerGesture, runNestedDropPlan, runMoveFloatGesture, runCycleSplitPaneSession, runOpenPopoverWindow, runResizeFocusedWindow, runCloseSplitPane, runBreakOutWindowTab, runRequestWindowPanes, runSwapWindowInDirection, runEndFloatGesture } from './app/actions/windows'
-import { runSubmitCoordinatedRun, runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
+import { runWatchCoordinationAgentSessions, runWatchCoordinatorRun, runOpenTeammatesPanel } from './app/actions/coordination'
 import { runSubmitTuiQuestion, runRespondToTuiPermission, runToggleExpansion, runCommitRename, runConfirmExit, runRewindConversationToPrompt, runHandoffToProvider, runToggleBookmarkForCursor, runCopySelectedMessage, runSubmitWorktreeTask, runSelectSidebarSession, runReplySelectedMessage, runMoveAgentToolCursor, runToggleVoice, runRespondToAttentionItem } from './app/actions/interaction'
 import { runBuildSidebarRow } from './app/actions/sidebarRow'
 import { runRenderSurfaceBodyInner, runRenderSplitPane, runRenderSurfaceWindow, runRenderSurfaceLayer, runRenderWindowTabs } from './app/actions/windowRender'
@@ -693,20 +695,8 @@ function OpenTuiWorkspace() {
     attentionRespondingId, setAttentionRespondingId, attentionNotifiedRef, worktreeModalOpen,
     setWorktreeModalOpen, worktreeDraft, setWorktreeDraft, worktreeBusy, setWorktreeBusy,
     selectedWorktreeTask, setSelectedWorktreeTask, selectedWorktreeTaskCacheRef, worktreeConfirm,
-    setWorktreeConfirm, worktreeSubmitInFlightRef, coordModalOpen, setCoordModalOpen, coordDraft,
-    setCoordDraft, coordAcceptanceDraft, setCoordAcceptanceDraft, coordNonGoalsDraft,
-    setCoordNonGoalsDraft, coordManualQaDraft, setCoordManualQaDraft, coordEscalationDraft,
-    setCoordEscalationDraft, coordPlaybooks, setCoordPlaybooks, coordPlaybookName,
-    setCoordPlaybookName, coordPlaybookArgsDraft, setCoordPlaybookArgsDraft, playbookManagerOpen,
-    setPlaybookManagerOpen, playbookManagerKeyHandlerRef, coordMaxAgents, setCoordMaxAgents,
-    coordGateDraft, setCoordGateDraft, coordRequirePlanApproval, setCoordRequirePlanApproval,
-    coordAutonomy, setCoordAutonomy, coordRequireReview, setCoordRequireReview, coordMaxTokens,
-    setCoordMaxTokens, coordMaxDurationMinutes, setCoordMaxDurationMinutes, coordUseWorktrees,
-    setCoordUseWorktrees, coordProviderOverride, setCoordProviderOverride,
-    coordTeammateProviderOverride, setCoordTeammateProviderOverride, coordProviderPoolIndex,
-    setCoordProviderPoolIndex, coordModalFocus, setCoordModalFocus, coordTextareaRef,
-    coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordBusy, setCoordBusy, coordBoardRunId,
-    setCoordBoardRunId, coordError, setCoordError, coordStartInFlightRef, fleetStripEnabled: globalFleetStripEnabled,
+    setWorktreeConfirm, worktreeSubmitInFlightRef, coordWatchIds, setCoordWatchIds, coordWatchStateRef, coordinationActionBusy, setCoordinationActionBusy, coordBoardRunId,
+    setCoordBoardRunId, fleetStripEnabled: globalFleetStripEnabled,
     setFleetStripEnabled, fleetPage, setFleetPage, checkpointFocusPrompt, setCheckpointFocusPrompt,
     fileHistoryPath, setFileHistoryPath, dailySummaryOpen, setDailySummaryOpen,
     dailySummaryKeyHandlerRef, fileHistoryKeyHandlerRef, taskPanelOpen, setTaskPanelOpen,
@@ -842,7 +832,7 @@ function OpenTuiWorkspace() {
     composerSessions, composerOwnerKey, windowSurfaces, popoverTabs, windowStacks, floatingWindow,
     spacesMenuOpen, exitConfirmOpen, searchMode, sessionSearchMode, pluginOverlay,
     pluginManagerOpen, windowSwitcherOpen, windowBroadcastOpen, handoffBriefOpen,
-    bookmarksOverlayOpen, coordModalOpen, renameSessionKey, surfacePanelFocused,
+    bookmarksOverlayOpen, renameSessionKey, surfacePanelFocused,
     newSessionModalOpen, providerMenuOpen, modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen,
     commandPaletteOpen, transcriptDiffDraft,
   })
@@ -3260,66 +3250,6 @@ function OpenTuiWorkspace() {
     showNotice, selectedSession,
   }))
 
-  const selectCoordPlaybook = useStableEvent((name: string | null, available = coordPlaybooks) => {
-    setCoordPlaybookName(name)
-    setCoordPlaybookArgsDraft('')
-    if (!name) return
-    const selected = available.find((entry) => entry.name === name)
-    if (!selected) return
-    if (selected.maxAgents) setCoordMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
-    if (selected.gateCommand !== undefined) setCoordGateDraft(selected.gateCommand)
-    if (selected.requirePlanApproval !== undefined) setCoordRequirePlanApproval(selected.requirePlanApproval)
-    if (selected.autonomy) setCoordAutonomy(selected.autonomy)
-    if (selected.requireReview !== undefined) setCoordRequireReview(selected.requireReview)
-    if (selected.budget?.maxTokens !== undefined) setCoordMaxTokens(String(selected.budget.maxTokens))
-    if (selected.budget?.maxDurationMinutes !== undefined) setCoordMaxDurationMinutes(String(selected.budget.maxDurationMinutes))
-  })
-
-  const loadCoordPlaybooks = useStableEvent(async (cwd: string, preferredName?: string) => {
-    try {
-      const listing = await listTuiRunPlaybooks(cwd)
-      setCoordPlaybooks(listing.playbooks)
-      if (preferredName && listing.playbooks.some((entry) => entry.name === preferredName)) {
-        selectCoordPlaybook(preferredName, listing.playbooks)
-      } else if (coordPlaybookName && !listing.playbooks.some((entry) => entry.name === coordPlaybookName)) {
-        selectCoordPlaybook(null, listing.playbooks)
-      }
-      if (listing.invalid.length > 0) setCoordError(`${listing.invalid.length} invalid playbook file${listing.invalid.length === 1 ? '' : 's'} — open Manage to inspect them`)
-    } catch (err) {
-      setCoordError(err instanceof Error ? err.message : 'Failed to load playbooks')
-    }
-  })
-
-  const handleCoordPlaybooksChanged = useStableEvent((playbooks: PlaybookSummary[], preferredName?: string) => {
-    setCoordPlaybooks(playbooks)
-    if (preferredName && playbooks.some((entry) => entry.name === preferredName)) {
-      selectCoordPlaybook(preferredName, playbooks)
-    } else if (coordPlaybookName && !playbooks.some((entry) => entry.name === coordPlaybookName)) {
-      selectCoordPlaybook(null, playbooks)
-    }
-  })
-
-  const openNewWorkflowModal = useStableEvent(() => {
-    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
-    setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
-    setCoordAcceptanceDraft('')
-    setCoordNonGoalsDraft('')
-    setCoordManualQaDraft('')
-    setCoordEscalationDraft('')
-    setCoordMaxTokens('')
-    setCoordMaxDurationMinutes('')
-    setCoordError(null)
-    setCoordPlaybookName(null)
-    setCoordPlaybookArgsDraft('')
-    setPlaybookManagerOpen(false)
-    setCoordProviderOverride(null)
-    setCoordTeammateProviderOverride(null)
-    setCoordProviderPoolIndex(0)
-    setCoordModalFocus('prompt')
-    setCoordModalOpen(true)
-    void loadCoordPlaybooks(baseCwd)
-  })
-
   // Turning the selected provider off in the plugin manager moves the list to all providers still on.
   useEffect(() => {
     if (provider !== 'all' && !isProviderEnabled(provider)) void chooseProvider('all')
@@ -3559,26 +3489,6 @@ function OpenTuiWorkspace() {
     mainContentHeight, readerAreaWidth, splitReaderShare,
   }, agents))
 
-  const handleCoordContentChange = useStableEvent(() => {
-    setCoordDraft(coordTextareaRef.current?.plainText ?? '')
-    if (coordError) setCoordError(null)
-  })
-
-  const submitCoordinatedRun = useStableEvent(async () => runSubmitCoordinatedRun({
-    coordTextareaRef, coordDraft, coordPlaybookName, coordPlaybooks, coordPlaybookArgsDraft,
-    coordStartInFlightRef, setCoordBusy, setCoordError, provider, selectedSession,
-    coordProviderOverride, coordTeammateProviderOverride, sessionDetail, coordMaxAgents,
-    tuiModelOverride, selectedSessionKey, tuiEffort, coordGateDraft, coordRequirePlanApproval,
-    coordAutonomy, coordRequireReview, coordAcceptanceDraft, coordNonGoalsDraft,
-    coordManualQaDraft, coordEscalationDraft, coordMaxTokens, coordMaxDurationMinutes,
-    coordUseWorktrees, setOpenTabSessions, setSelectedSessionKey, setCoordModalOpen,
-    setCoordBoardRunId, setPluginOverlay, showNotice, setCoordDraft, setCoordAcceptanceDraft,
-    setCoordNonGoalsDraft, setCoordManualQaDraft, setCoordEscalationDraft, setCoordPlaybookName,
-    setCoordPlaybookArgsDraft, setCoordGateDraft, setCoordMaxTokens, setCoordMaxDurationMinutes,
-    setCoordProviderOverride, setCoordTeammateProviderOverride, setCoordProviderPoolIndex,
-    setCoordModalFocus, coordWatchStateRef, setCoordWatchIds, refreshSessions,
-  }))
-
   // Desktop-notify a team event (run finished, teammate blocked) — the whole
   // point of a team is walking away while it works.
   const notifyTeamEvent = useStableEvent((title: string, body: string) => {
@@ -3625,8 +3535,8 @@ function OpenTuiWorkspace() {
   // Palette actions resolve the latest run on demand — the interactive board
   // (CoordinationPopover) has its own run-scoped stop/cleanup keys.
   const stopActiveCoordinatedRun = useStableEvent(async () => {
-    if (coordBusy) return
-    setCoordBusy(true)
+    if (coordinationActionBusy) return
+    setCoordinationActionBusy(true)
     try {
       const runs = await listTuiProtocolRuns(1)
       const runId = runs[0]?.id
@@ -3639,13 +3549,13 @@ function OpenTuiWorkspace() {
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to stop coordinated run')
     } finally {
-      setCoordBusy(false)
+      setCoordinationActionBusy(false)
     }
   })
 
   const cleanupCompletedCoordinatedRunWorktrees = useStableEvent(async () => {
-    if (coordBusy) return
-    setCoordBusy(true)
+    if (coordinationActionBusy) return
+    setCoordinationActionBusy(true)
     try {
       const runs = await listTuiProtocolRuns(1)
       const runId = runs[0]?.id
@@ -3661,7 +3571,7 @@ function OpenTuiWorkspace() {
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to clean up worktrees')
     } finally {
-      setCoordBusy(false)
+      setCoordinationActionBusy(false)
     }
   })
 
@@ -4959,7 +4869,6 @@ function OpenTuiWorkspace() {
     else if (isPluginSurfaceId(kind) && kind !== 'teammates') setPluginOverlay((current) => open ? kind : current === kind ? null : current)
     else if (kind === 'daily-summary') setDailySummaryOpen(open)
     else if (kind === 'attention') setAttentionOpen(open)
-    else if (kind === 'playbooks') setPlaybookManagerOpen(open)
     else if (kind === 'handoff') setHandoffBriefOpen(open)
     // Teammates and diagnostics stay open while windowed (their modal is
     // suppressed), so moving between the two forms changes nothing here.
@@ -4969,7 +4878,7 @@ function OpenTuiWorkspace() {
   const openPopoverKind = (): PopoverWindowKind | null => (
     fileHistoryPath && gitRepoCwd ? 'file-history'
     : pluginOverlay && isPopoverWindowKind(pluginOverlay) ? pluginOverlay : dailySummaryOpen ? 'daily-summary'
-    : playbookManagerOpen ? 'playbooks' : attentionOpen ? 'attention'
+    : attentionOpen ? 'attention'
     : handoffBriefOpen ? 'handoff'
     : teammatesModalOpen ? 'teammates' : null)
   const readerPin = () => ({ session: selectedSessionKey, path: fileHistoryPath })
@@ -5177,8 +5086,33 @@ function OpenTuiWorkspace() {
       return next
     })
   })
-  // Declared further down, with the render helpers; a plugin calls it on a key press.
-  const newCoordinationRun = useStableEvent(() => startCoordinationRun())
+  const registerAcceptedRun = useStableEvent((result: StartProtocolRunResult) => {
+    const now = Date.now()
+    const drafts: Session[] = result.sessions.map(session => ({ ...session, createdAt: now, lastModified: now }))
+    setOpenTabSessions(previous => {
+      const seen = new Set(previous.map(sessionKey))
+      return [...previous, ...drafts.filter(session => !seen.has(sessionKey(session)))]
+    })
+    coordWatchStateRef.current.set(result.snapshot.run.id, { status: result.snapshot.run.status, blockedAgents: new Set() })
+    setCoordWatchIds(previous => previous.includes(result.snapshot.run.id) ? previous : [...previous, result.snapshot.run.id])
+  })
+  const revealAcceptedRun = useStableEvent((snapshot: ProtocolRunSnapshot) => {
+    if (!isPluginEnabled('coordination')) return
+    setCoordBoardRunId(snapshot.run.id)
+    const lead = snapshot.agents.find(agent => agent.role === 'lead')
+    if (lead) openCoordinationAgentSession(lead)
+    setPluginOverlay('coordination')
+  })
+  const runLaunchService = useMemo(() => {
+    const suggestedProvider = provider === 'all' ? selectedSession?.provider ?? 'claude' : provider
+    return createTuiRunLaunchService(startTuiProtocolRun, registerAcceptedRun, {
+      provider: suggestedProvider,
+      providerInstanceId: selectedSession?.provider === suggestedProvider ? selectedSession.providerInstanceId : providerInstanceId ?? undefined,
+      model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
+      effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+      prompt: composerDraft.trim() || selectedSession?.firstPrompt || '',
+    })
+  }, [provider, providerInstanceId, selectedSession, selectedSessionKey, tuiModelOverride, tuiEffort, composerDraft, registerAcceptedRun])
   const choosePluginTheme = useStableEvent((mode: TuiThemeMode) => chooseTheme(mode))
   const jumpToTaskCard = useStableEvent((uuid: string) => {
     const idx = visibleTranscriptCards.findIndex((card) => card.key === uuid)
@@ -5221,13 +5155,15 @@ function OpenTuiWorkspace() {
     'scroll-preferences': { velocity: velocityScrollEnabled, toggleVelocity: toggleVelocityScroll },
     coordination: {
       initialRunId: coordBoardRunId,
+      revealRun: revealAcceptedRun,
       openAgentSession: openCoordinationAgentSession,
       watchAgentSessions: watchCoordinationAgentSessions,
       watchRun: watchCoordinatorRun,
-      newRun: newCoordinationRun,
       copyJoinCommand: copyCoordinationJoinCommand,
     },
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
+    playbooks: tuiPlaybooks,
+    'run-launch': runLaunchService,
     'task-control': {
       jumpTo: jumpToTaskCard,
       readOutput: (session: Session, taskId: string) => readTaskOutput(session, taskId),
@@ -5250,7 +5186,7 @@ function OpenTuiWorkspace() {
     ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode])
+  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode, runLaunchService, revealAcceptedRun])
   // The session fleet changes on every poll, so only a view that asks for it is
   // handed a bag holding it; the rest keep the stable one above.
   const fleetDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
@@ -5901,7 +5837,7 @@ function OpenTuiWorkspace() {
     if (tab) { setPopoverOpen(kind, false); showPopoverTab(tab); return }
     if (!findPopoverWindow([...windowSurfaces, ...parked], windowSurfaceMeta, kind, pin)) return
     openPopoverWindow(kind, pin)
-  }, [pluginOverlay, dailySummaryOpen, attentionOpen, playbookManagerOpen,
+  }, [pluginOverlay, dailySummaryOpen, attentionOpen,
     handoffBriefOpen, fileHistoryPath])
   // Closed from inside its window (D, ⌃C, the panel's own close): the window goes too.
   useEffect(() => {
@@ -6103,7 +6039,7 @@ function OpenTuiWorkspace() {
     runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
-    openNewWorkflowModal, setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
+    setDailySummaryOpen, toggleSurfacePanelPlacement, setWindowPickerOpen,
     openSurfaceWindow, gitRepoCwd, toggleFloatingFocused, floatNewShell,
     openSelectedTranscriptInPager, cleanupCompletedCoordinatedRunWorktrees,
     stopActiveCoordinatedRun, fleetStripEnabled, setFleetStripEnabled, showToggleOutcome,
@@ -6245,11 +6181,10 @@ function OpenTuiWorkspace() {
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen,
+    pluginOverlay, dailySummaryOpen, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
-    spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, coordModalOpen,
-    remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
+    spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
     modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
     composerHistoryOpen, composerStashOpen, searchMode, sessionSearchMode,
     folderPickerForNewSession, pluginManagerOpen, transcriptDiffDraft, chordHelp,
@@ -6400,17 +6335,8 @@ function OpenTuiWorkspace() {
     if (handleModalDialogKeys({
       exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm,
       mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen,
-      setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask, playbookManagerOpen,
-      playbookManagerKeyHandlerRef, coordModalOpen, setCoordModalOpen, setCoordDraft,
-      setCoordAcceptanceDraft, setCoordNonGoalsDraft, setCoordManualQaDraft,
-      setCoordEscalationDraft, setCoordPlaybookName, setCoordPlaybookArgsDraft, setCoordGateDraft,
-      setCoordMaxTokens, setCoordMaxDurationMinutes, setCoordProviderOverride,
-      setCoordTeammateProviderOverride, setCoordProviderPoolIndex, setCoordModalFocus,
-      setCoordError, isCtrl, setCoordMaxAgents, setCoordRequirePlanApproval, showToggleOutcome,
-      coordModalFocus, coordPlaybooks, coordPlaybookName, selectCoordPlaybook,
-      setPlaybookManagerOpen, provider, selectedSession, coordProviderPoolIndex,
-      coordProviderOverride, setCoordUseWorktrees, setCoordAutonomy, setCoordRequireReview,
-      submitCoordinatedRun, remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef,
+      setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask,
+      remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef,
       teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode,
       setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef,
       dailySummaryOpen, dailySummaryKeyHandlerRef, contextMenu, contextMenuKeyHandlerRef,
@@ -6490,7 +6416,7 @@ function OpenTuiWorkspace() {
       replySelectedMessage, setThinkingMode, showToggleOutcome, openFocusedSplitPane,
       tabFromSplitPane, closeWindowSessionTab, openSplitPaneOverlay, openCoordinationBoard,
       splitPaneRunningKeys, requestExit, setComposerActive, pasteSystemClipboardToComposer,
-      showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, openNewWorkflowModal,
+      showRail, focusedPane, tabFromRail, setFocusedPane, isCtrlShift, 
       runPluginCommand, setAttentionOpen, jumpToNextAttention, fleetStripEnabled,
       setFleetStripEnabled, jumpToFleetEntry, setFleetPage, openHandoffBrief, setWorktreeDraft,
       setWorktreeModalOpen, taskPanelOpen, setTaskPanelOpen, setTaskPanelTab,
@@ -6715,20 +6641,6 @@ function OpenTuiWorkspace() {
   }))
 
   // One surface's content, for the side panel or a window in the layout.
-  // The control center's "new run": the same setup from its popover and its window.
-  const startCoordinationRun = () => {
-    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
-    setCoordDraft('')
-    setCoordError(null)
-    setCoordPlaybookName(null)
-    setCoordPlaybookArgsDraft('')
-    setCoordProviderOverride(null)
-    setCoordTeammateProviderOverride(null)
-    setCoordProviderPoolIndex(0)
-    setCoordModalFocus('prompt')
-    setCoordModalOpen(true)
-    void loadCoordPlaybooks(baseCwd)
-  }
   // `slot` is the window id when the surface is a window: its key handler and
   // capture are then that window's own, not the side panel's.
   const renderSurfaceBodyInner = (kind: WindowSurfaceKind, box: { width: number; height: number }, close: () => void, focused: boolean, slot?: WindowSurfaceId, panelCwd?: string) => kind === 'engineering-inspector' ? <EngineeringInspectorWindow width={box.width} height={box.height} /> : runRenderSurfaceBodyInner({
@@ -6741,7 +6653,7 @@ function OpenTuiWorkspace() {
     composerLiveTodos, selectedSession, visibleTranscriptCards, jumpToTranscriptIndex,
     liveSubagentText, attentionItems, attentionRespondingId, respondToAttentionItem,
     openAttentionSession, dismissAttentionItem,
-    showNotice, sessionDetail, handleCoordPlaybooksChanged, pinnedSessionOf, bookmarkKeys,
+    showNotice, sessionDetail, pinnedSessionOf, bookmarkKeys,
     renderer, appendDiffCommentPromptToComposer,
   }, kind, box, close, focused, slot, panelCwd)
 
@@ -7667,7 +7579,7 @@ function OpenTuiWorkspace() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
 
-      {worktreeModalOpen || worktreeConfirm || coordModalOpen || pluginOverlay === 'coordination' || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
+      {worktreeModalOpen || worktreeConfirm  || pluginOverlay === 'coordination' || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || dailySummaryOpen || windowPickerOpen || pluginManagerOpen ? (
         <box
           position="absolute"
           top={0}
@@ -7695,24 +7607,6 @@ function OpenTuiWorkspace() {
 
       <WorktreeConfirmOverlay worktreeConfirm={worktreeConfirm} selectedWorktreeTask={selectedWorktreeTask} width={width} height={height} theme={theme} />
 
-      <CoordRunModal coordModalOpen={coordModalOpen} width={width} height={height} coordError={coordError} provider={provider} selectedSession={selectedSession} coordProviderOverride={coordProviderOverride} coordTeammateProviderOverride={coordTeammateProviderOverride} sessionDetail={sessionDetail} coordPlaybookName={coordPlaybookName} coordPlaybooks={coordPlaybooks} coordPlaybookArgsDraft={coordPlaybookArgsDraft} coordDraft={coordDraft} coordModalFocus={coordModalFocus} theme={theme} coordTextareaRef={coordTextareaRef} handleCoordContentChange={handleCoordContentChange} submitCoordinatedRun={submitCoordinatedRun} composerBaseTextareaStyle={composerBaseTextareaStyle} coordAcceptanceDraft={coordAcceptanceDraft} setCoordAcceptanceDraft={setCoordAcceptanceDraft} coordNonGoalsDraft={coordNonGoalsDraft} setCoordNonGoalsDraft={setCoordNonGoalsDraft} coordManualQaDraft={coordManualQaDraft} setCoordManualQaDraft={setCoordManualQaDraft} coordEscalationDraft={coordEscalationDraft} setCoordEscalationDraft={setCoordEscalationDraft} setCoordPlaybookArgsDraft={setCoordPlaybookArgsDraft} setCoordModalFocus={setCoordModalFocus} coordProviderPoolIndex={coordProviderPoolIndex} coordMaxAgents={coordMaxAgents} coordMaxTokens={coordMaxTokens} setCoordMaxTokens={setCoordMaxTokens} coordMaxDurationMinutes={coordMaxDurationMinutes} setCoordMaxDurationMinutes={setCoordMaxDurationMinutes} coordUseWorktrees={coordUseWorktrees} coordGateDraft={coordGateDraft} setCoordGateDraft={setCoordGateDraft} coordRequirePlanApproval={coordRequirePlanApproval} coordAutonomy={coordAutonomy} coordRequireReview={coordRequireReview} coordBusy={coordBusy} />
-
-      {playbookManagerOpen ? (
-        <PlaybookManagerPopover
-          theme={theme}
-          width={width}
-          height={height}
-          cwd={selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()}
-          onClose={() => {
-            setPlaybookManagerOpen(false)
-            setCoordModalFocus('playbook')
-          }}
-          onChanged={handleCoordPlaybooksChanged}
-          onNotice={showNotice}
-          onKeyHandlerReady={(handler) => { playbookManagerKeyHandlerRef.current = handler }}
-          onDetach={() => offerPopoverPlacement('playbooks')}
-        />
-      ) : null}
 
       {teammatesModalOpen ? (
         // Its state is the interactive coordinator store's: open while that is,

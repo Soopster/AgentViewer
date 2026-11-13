@@ -23,7 +23,8 @@ implicit interrupt or process kill.
 | Reuse last prompt | Migrated from TUI root/keys/palette into the headless `composer-tools` plugin. The same action is available on Web; no view is loaded | Shared command host checks identity/capabilities and cancels per invocation. Real TUI verifies ⇧R and typed-character precedence; real Web MessageView in StrictMode verifies account-switch cancellation, parked draft preservation and disable/re-enable |
 | Session alerts | Shared application observer and domain tracker in `plugins/session-alerts/`; separate Web and TUI settings/notification adapters. Root feature effect and host-owned mode/tracker modules removed | Shared contract smoke covers disable races, account isolation, private/coalesced snapshots and cleanup. Real TUI App emits an attention notification without loading the settings view. Browser host covers view-independent alerts, stopping disabled polling, permission and long-turn delivery with a mocked desktop sink. Native OS notification appearance remains untested |
 | Goals | `plugins/goals/{web,tui}` owns composer controls, polling, modal state and keys. Shared metadata, executable command and composer accessory contract; roots render generic hosts | Web interaction smoke checks StrictMode, account-switch cancellation, ordinary sending, pause/resume and disable polling. Real TUI checks palette, modal keys and disable/re-enable. Goal engine remains independent with the singular settled-turn trigger |
-| Playbooks / new coordinated run | TUI root and `CoordRunModal` own launch state; separate playbook manager | Add typed run-creation service and plugin-owned setup surface, retaining provider-instance targeting and validation |
+| Playbook management | Existing Coordination plugin now contributes the repository-scoped `playbooks` command and surface in Web and OpenTUI. Managers in `plugins/coordination/{web,tui}/` own selection, drafts, CRUD feedback and request lifetimes; `PluginPlaybookService` supplies HTTP/native storage adapters | Actual Web surface-host checks cover create/edit/rename/delete, error draft retention, pending repository switches, disable/close, placement remounts and embedded Coordination management. HTTP smoke covers payloads, invalid definitions, captured repository/signal, errors and cancellation. Real OpenTUI App checks cover lazy opening, draft retention through overlay/window relocation, stale reads, disablement and New Workflow → Manage → return with the brief retained and choices refreshed. Live filesystem/provider behavior is not established by these fixtures |
+| New coordinated run | Coordination plugin `new-workflow` surface in Web and OpenTUI (`NewWorkflow.tsx`, `NewWorkflowSurface.tsx`/`WorkflowForm.tsx`) over `PluginRunLaunchService`. The root `CoordRunModal`, its key branch, pickers and actions are removed. Backend launch accepts an explicit provider-instance ID, validated before side effects | `newWorkflowPluginSmoke.tsx`, `webRunLaunchPluginBrowserSmoke.mjs`, `pluginRunLaunchServiceSmoke.ts` and `coordRunLaunchIdentitySmoke.ts` pass. Cross-account native-ID collisions remain explicitly refused |
 | Diagnostics | Shared manifest and `PluginSessionDiagnosticsService`; Web presentation and MCP controls moved from the transcript into `plugins/diagnostics/web`. Both renderer views own reads, state and cancellation | Browser checks actual MessageView with configured-account targeting, controls, errors, disable/re-enable and stale reads. Real TUI checks read-on-open, relocation and stale response rejection. Web session command ownership now follows command scope independently of surface pinning |
 | Messaging | Web and TUI now use `plugins/messaging/` and `PluginMessagingService`. Web dashboard/tab/sidebar/palette derive from metadata; `/agents` uses `PluginPage`. Both views own scoped drafts and cancellation | Browser checks standalone/embedded route isolation, commands, real placement remounts, disable/re-enable and stale sends. Backend integration checks configured-instance discovery and qualified steering/idle delivery; ambiguous IDs refuse. Native checks retained drafts, qualified recipients and disabled delivery responses |
 | Tasks | Shared manifest, task registry domain and separate Web/OpenTUI adapters in `plugins/tasks/`. Web reader metadata replaces the direct task rail and root-owned registry/open state | Browser checks actual MessageView: automatic 360px rail, explicit empty open, close/toggle, read-only project feed, stop errors, account-switch cancellation and disable/re-enable. Domain smoke checks live/persisted reconciliation and provider task snapshots; native host smoke checks opening the task surface |
@@ -124,6 +125,36 @@ read/control contract, the Web shell adapts HTTP and the TUI shell adapts its
 service facade. Diagnostics selection is captured on open, independently of the
 current reader selection; the feature does not start another provider as the user
 browses. Disabled or closed presentation lifetimes reject late responses.
+
+Playbook management uses `lib/plugins/playbooks.ts` for repository-explicit list,
+read, write/rename and remove operations. The Web adapter preserves the existing
+playbooks HTTP payloads and forwards cancellation; the native adapter fences
+results before and after the TUI service call. The existing Coordination plugin
+owns both manager implementations and its repository-scoped overlay/window
+surface. Web application surface hosting captures repository context generically.
+Closing or disabling a manager cancels its presentation requests; draft state is
+scoped to its repository and survives placement remounts. These management
+capabilities do not themselves start coordinated runs.
+
+The run-launch backend separately accepts `StartProtocolRunParams.providerInstanceId`
+and validates its provider before session creation or coordinator storage writes.
+It binds launch to that account and persists the lead identity used by same-provider
+teammate creation, tools, turns and recovery reads. Other teammate providers retain
+their provider-default account semantics. Omitting the ID preserves an explicitly
+bound SDK caller's context; an unbound caller uses its provider default. An explicit
+ID overrides the caller's prior account context. Identical native session IDs
+across accounts are refused by the existing Coordinator collision guard; a rejected
+launch leaves no durable run or active controller. This is not a migration of all
+ledger lookups to permit colliding IDs.
+
+`coordRunLaunchIdentitySmoke.ts` covers these boundaries with mocked provider
+operations and real isolated ledger storage; `coordProviderInstanceSmoke.ts` also
+passes. The existing `coordModelInheritanceSmoke.ts` times out waiting for the
+`inherited` agent to change provider to `claude` after an authentication failure.
+An isolated copy using `HEAD`'s `lib/agentCoordination.ts` reproduces the timeout,
+separately from the passing launch checks. Automatic cross-provider recovery is
+therefore not claimed by this launch validation, and its policy remains unchanged.
+The UI run-setup migration is complete (Coordination plugin `new-workflow`).
 
 ## Dashboard contributions
 

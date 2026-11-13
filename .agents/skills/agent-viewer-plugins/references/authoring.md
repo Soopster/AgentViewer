@@ -358,3 +358,48 @@ Run `pluginBridgeCommandSmoke.ts`, `channelBridgeDurabilitySmoke.ts`,
 browser uses real MessageView/hooks and local HTTP/SSE; it does not exercise a
 live Claude process. The panel browser uses fake controllers and a stubbed diff
 renderer to exercise approvals, structured comments and presentation lifetimes.
+
+
+## Repository playbook management
+
+The Coordination plugin's `playbooks` surface is the Web/OpenTUI example for
+repository-owned CRUD. Declare `playbooks` and `repository` services, `pin: 'cwd'`
+and a repository-scoped command. `lib/plugins/playbooks.ts` supplies the shared
+list/read/write/remove contract; shell adapters offer HTTP or native storage.
+Capture cwd before opening or starting a request. Use scoped editor state for
+placement changes and abort pending reads on repository changes, close or
+disable. A completed save survives closing its presentation. The Web application
+host opens repository-scoped surfaces with captured cwd even without a session.
+Run launching uses the separate `run-launch` capability; playbook storage does
+not create sessions or own the accepted run lifetime.
+
+
+## Coordinated-run launch
+
+The Coordination plugin's `new-workflow` surface and stable `coord-start`
+command demonstrate repository-owned setup in both renderers. Form state,
+validation, policy controls, nested playbook management and keys live in the
+plugin. The shared `PluginRunLaunchService` in `lib/plugins/runLaunch.ts` offers
+captured defaults and `start(params, signal?)`. Native services register accepted
+sessions and runtime watchers independently of the presentation. UI-only reveal
+or navigation happens only while the opening view lifetime remains active.
+
+Capture provider, configured instance, repository and account-owned model/effort
+before submission. Switching lead provider drops incompatible account defaults.
+An already open form keeps its captured target; closing and opening a new form
+uses the current target. Preserve draft state during placement moves. Return
+providerInstanceId with each created session rather than rebuilding identity from
+native IDs. Same-provider teammates inherit the lead account; other provider pool
+entries use their defaults. The backend validates explicit instances before
+creating sessions or ledger entries and refuses conflicting native IDs across
+accounts instead of aliasing them.
+
+Abort can refuse a not-yet-dispatched launch. Once dispatched, creation is an
+independent runtime: closing or disabling the view must not abort its acceptance
+receipt, kill the run or navigate through a late callback. Register accepted
+runtime sessions/watchers without a selection-changing catalog refresh. Pass
+presentation signals to reads and fence local updates after awaits.
+
+Run `pluginRunLaunchServiceSmoke.ts`, `coordRunLaunchIdentitySmoke.ts`, the Web
+run-launch browser check and native `newWorkflowPluginSmoke.tsx`. These use
+mocked SDK/provider boundaries and local fixtures, not live agent execution.

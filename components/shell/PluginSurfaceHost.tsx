@@ -1,5 +1,8 @@
 'use client'
 
+import { webRunLaunch } from './runLaunchService'
+import { webPlaybooks } from './playbooksService'
+
 // Presents one plugin surface on the web. Loads the plugin's chunk on first
 // open, holds its scoped state, and contains its failures: a plugin that fails
 // to load or throws while rendering shows a local Retry/Close card, and the
@@ -57,7 +60,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, s
   const [attempt, setAttempt] = useState(0)
   const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
-  const resolved = useMemo(() => resolvePluginServices(surface, { messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
+  const resolved = useMemo(() => resolvePluginServices(surface, { 'run-launch': webRunLaunch, playbooks: webPlaybooks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
   useEffect(() => {

@@ -146,6 +146,8 @@ export type PluginManifest = {
  * provider's SessionCapabilities: these describe the host, not the session.
  */
 export type PluginServiceId =
+  | 'run-launch'
+  | 'playbooks'
   /** The target session's transcript, read for the target, not the selection. */
   | 'session-transcript'
   /** The target repository: its working directory, and the session scoping its turns. */

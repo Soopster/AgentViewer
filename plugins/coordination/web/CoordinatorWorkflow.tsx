@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useId, useState } from 'react'
+import type { PluginPlaybookService } from '@/lib/plugins/playbooks'
 import type { AgentProvider } from '@/lib/types'
 import type { PlaybookSummary, RunPlaybook } from '@/lib/agentProtocol'
 import type { InteractiveWorkflowPreview } from '@/lib/agentCoordination'
@@ -8,7 +9,8 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 
-export default function CoordinatorWorkflow({ cwd, provider, disabled, onStart }: {
+export default function CoordinatorWorkflow({ cwd, provider, service, disabled, onStart }: {
+  service?: PluginPlaybookService
   cwd: string; provider: AgentProvider; disabled: boolean
   onStart: (playbook: RunPlaybook, args: unknown) => void
 }) {
@@ -21,11 +23,12 @@ export default function CoordinatorWorkflow({ cwd, provider, disabled, onStart }
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
-    void fetch(`/api/agent-protocol/playbooks?${new URLSearchParams({ cwd })}`, { signal: controller.signal, cache: 'no-store' })
-      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error); if (controller.signal.aborted) return; setRecipes(data.playbooks); setName(data.playbooks[0]?.name ?? '') })
+    if (!service) return () => controller.abort()
+    void service.list(cwd, controller.signal)
+      .then(data => { if (controller.signal.aborted) return; setRecipes(data.playbooks); setName(data.playbooks[0]?.name ?? '') })
       .catch(error => { if (!controller.signal.aborted) setError(String(error)) })
     return () => controller.abort()
-  }, [cwd])
+  }, [cwd, service])
   async function inspect() {
     setBusy(true); setError(''); setPreview(null)
     try {

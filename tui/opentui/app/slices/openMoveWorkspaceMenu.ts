@@ -67,7 +67,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   treeDividerCheckpointedRef: React.RefObject<boolean>
   pluginOverlay: PluginSurfaceId | null
   dailySummaryOpen: boolean
-  playbookManagerOpen: boolean
   attentionOpen: boolean
   handoffBriefOpen: boolean
   fileHistoryPath: string | null
@@ -83,7 +82,6 @@ export type UseOpenMoveWorkspaceMenuGroupContext = {
   exitConfirmOpen: boolean
   worktreeConfirm: 'merge' | 'discard' | null
   worktreeModalOpen: boolean
-  coordModalOpen: boolean
   remoteCoordinatorTarget: RemoteCoordinatorTarget | null
   commandPaletteOpen: boolean
   newSessionModalOpen: boolean
@@ -116,10 +114,10 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
     setWindowOrder, splitPinnedSessions, splitPaneCount, setSplitPinnedKeys, setSplitPaneCount,
     setWindowSurfaces, pendingSurfaceFocusRef, setSurfacePanelFocused, setFocusedPane,
     setSplitFocusIndex, treeGeometry, treeDividerActivePathRef, treeDividerCheckpointedRef,
-    pluginOverlay, dailySummaryOpen, playbookManagerOpen, attentionOpen,
+    pluginOverlay, dailySummaryOpen, attentionOpen,
     handoffBriefOpen, fileHistoryPath, gitRepoCwd, teammatesModalOpen, windowedPopoverKinds,
     pendingPermissions, contextMenu, windowPickerOpen, windowSwitcherOpen, windowBroadcastOpen,
-    spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, coordModalOpen,
+    spacesMenuOpen, exitConfirmOpen, worktreeConfirm, worktreeModalOpen, 
     remoteCoordinatorTarget, commandPaletteOpen, newSessionModalOpen, providerMenuOpen,
     modelPickerOpen, themeMenuOpen, transcriptViewMenuOpen, renameSessionKey, bookmarksOverlayOpen,
     composerHistoryOpen, composerStashOpen, searchMode, sessionSearchMode,
@@ -186,14 +184,14 @@ export function useOpenMoveWorkspaceMenuGroup(ctx: UseOpenMoveWorkspaceMenuGroup
   const [controlMenuTarget, setControlMenuTarget] = useState<string | null>(null)
   const blockingWindowPopover = Object.entries({
     ...(pluginOverlay ? { [pluginOverlay]: true } : {}), 'daily-summary': dailySummaryOpen,
-    playbooks: playbookManagerOpen, attention: attentionOpen,
+    attention: attentionOpen,
     handoff: handoffBriefOpen,
     'file-history': Boolean(fileHistoryPath && gitRepoCwd),
     teammates: teammatesModalOpen,
   }).some(([kind, open]) => open && !windowedPopoverKinds.has(kind as PopoverWindowKind))
   const windowControlsBlocked = Boolean(
     pendingPermissions.length || blockingWindowPopover || contextMenu || windowPickerOpen || windowSwitcherOpen || windowBroadcastOpen
-    || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen || coordModalOpen || remoteCoordinatorTarget
+    || spacesMenuOpen || exitConfirmOpen || worktreeConfirm || worktreeModalOpen  || remoteCoordinatorTarget
     || commandPaletteOpen || newSessionModalOpen || providerMenuOpen || modelPickerOpen || themeMenuOpen || transcriptViewMenuOpen
     || renameSessionKey || bookmarksOverlayOpen || composerHistoryOpen || composerStashOpen || searchMode || sessionSearchMode
     || folderPickerForNewSession || pluginManagerOpen || transcriptDiffDraft || chordHelp?.dismissOnKey,
