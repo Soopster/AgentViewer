@@ -4,6 +4,7 @@
 // target it was opened on, holding its scoped state, routing its keys, and
 // containing its failures. A view that throws, or a module that fails to load,
 // leaves a local Retry/Close view; the transcript and composer keep working.
+import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useScopedNotifications } from '../../../lib/plugins/useScopedNotifications'
 import { RGBA } from '@opentui/core'
@@ -173,6 +174,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
 
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
+  useEffect(() => { if (failure) recordModDiagnostic(surface.pluginId, `surface:${surfaceId}`, failure) }, [failure, surface.pluginId, surfaceId])
   useEffect(() => {
     if (View || resolved.error) return undefined
     let live = true

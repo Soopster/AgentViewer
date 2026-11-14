@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useModAppHost } from '../../lib/plugins/useModAppHost'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
 import { registerWindowBridge } from './windowControlBridge'
@@ -5092,6 +5093,15 @@ function OpenTuiWorkspace() {
     if (command) { runPluginCommand(command); return true }
     return false
   })
+  const modOpenFile = useStableEvent((path: string, line?: number) => openEditorAt(path, line ?? null))
+  const modAppActions = useMemo(() => ({ runCommand: runCommandForPlugin, openSession: openSessionAtMessage, openFile: modOpenFile, readFocus: () => terminalFocusedRef.current }), [runCommandForPlugin, openSessionAtMessage, modOpenFile])
+  const modAppSnapshot = useMemo<Omit<import('../../lib/plugins/modApp').ModAppSnapshot, 'version' | 'instanceId' | 'commands'>>(() => ({ renderer: 'tui', cwd: gitRepoCwd || null, theme: themeMode, focused: terminalFocusedRef.current,
+    focusedSurface: pluginOverlay ?? (surfacePanelOpen && surfacePanelFocused ? activeSurface(surfacePanel)?.kind : null) ?? focusedWindowSurface ?? null,
+    surfaces: [...new Set([...windowSurfaces, ...popoverTabs, ...(pluginOverlay ? [pluginOverlay] : []), ...(surfacePanelOpen ? surfacePanel.surfaces.map(surface => surface.kind) : [])])].map(id => ({ id, placement: id === pluginOverlay ? 'overlay' : surfacePanelOpen && surfacePanel.surfaces.some(surface => surface.kind === id) ? 'panel' : popoverTabs.includes(id) ? 'tab' : 'window' })),
+    selectedKey: selectedSessionKey,
+    sessions: [...new Map([...sessions, ...openTabSessions].map(session => [sessionKey(session), session])).values()].map(session => ({ key: sessionKey(session), title: formatSessionTitle(session), cwd: session.cwd || null, activity: sidebarSessionActivity.get(sessionKey(session)) === 'needs-input' ? 'needs-input' : sidebarSessionActivity.get(sessionKey(session)) === 'running' ? 'running' : sidebarSessionActivity.get(sessionKey(session)) === 'waiting' ? 'waiting' : 'idle', target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
+  } as const), [gitRepoCwd, themeMode, pluginOverlay, surfacePanelOpen, surfacePanel, surfacePanelFocused, focusedWindowSurface, windowSurfaces, popoverTabs, selectedSessionKey, sessions, openTabSessions, sidebarSessionActivity])
+  useModAppHost(modAppSnapshot, modAppActions)
   const toggleVelocityScroll = useStableEvent(() => {
     setVelocityScrollEnabled((v) => {
       const next = !v

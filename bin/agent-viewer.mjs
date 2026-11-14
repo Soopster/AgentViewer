@@ -197,6 +197,8 @@ Modes:
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
   terminal   Drive the running TUI's terminals and windows: list, read, send, keys, run, wait, windows, window
+  mods       Check local mods or inspect their runtime status
+  app status Inspect running Web and OpenTUI instances
   session    Script ordinary chats: list, get, read, prompt --wait, wait --until, interrupt, report, explain
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
@@ -626,6 +628,21 @@ if (command === '-h' || command === '--help' || command === 'help') {
     env: callerProvider ? { ...process.env, [CALLER_PROVIDER_ENV]: callerProvider } : process.env,
   })
   child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
+} else if (command === 'mods' && args[1] === 'check') {
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) failMissingBun()
+  else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', fileURLToPath(new URL('./agent-viewer-mod-check.ts', import.meta.url)), ...args.slice(2)], { stdio: 'inherit' })
+    child.on('error', error => { throw error })
+    forwardSignals(child)
+    trackExit(child)
+  }
+} else if (command === 'mods' || command === 'app') {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-inspect.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args], { stdio: 'inherit' })
+  child.on('error', error => { throw error })
   forwardSignals(child)
   trackExit(child)
 } else if (command === 'session' && (args[1] === undefined || args[1] === '--help' || SESSION_CLI_VERBS.includes(args[1]))) {

@@ -123,6 +123,19 @@ The UI is capability-driven: an operation a provider cannot do is hidden or disa
 - **The terminal app** (`tui/opentui/`) runs under Bun, keeps heavy work (threading, formatting, metadata) in a worker isolate, and renders a bounded window of transcript cards so cost does not grow with conversation length. `tui/` still holds the legacy Ink UI.
 - **Protocols**: an MCP server for Claude/Codex/other CLIs (`agent-viewer mcp`), the Microsoft Agent Host Protocol for Coordinator runs (`agent-viewer ahp`), an optional A2A 1.0 facade, and an ACP agent endpoint so editors such as Zed can drive any provider through Agent Viewer (`agent-viewer acp`).
 
+### Local mods
+
+Local mods can read live app context and navigate sessions, files and plugin surfaces in Web and OpenTUI. Declare `appServices: ["data", "navigation"]` in the mod manifest. See [mod app services and inspection](docs/mod-app-services.md) and the [live sessions example](docs/examples/mods/live-sessions).
+
+```sh
+agent-viewer mods check /path/to/mod --json
+agent-viewer mods check /path/to/trusted-mod --render --json
+agent-viewer mods status --json
+agent-viewer app status --json
+```
+
+`--render` executes trusted mod code in bounded child processes. Status reports distinguish each Web tab and OpenTUI instance; `--instance <id>` selects one.
+
 ### Bundled plugins
 
 | Plugin | What it does |
@@ -339,6 +352,7 @@ npm run composer:smoke      # fast, no network
 npm run routes:smoke        # remote-access scope table covers every route
 npm run adapters:smoke      # every provider's read path against your local sessions
 npm run plugins:smoke       # plugin boundaries
+npm run mods:smoke          # mod app services, inspection routes and OpenTUI rendering
 npm run tui:smoke           # terminal app (slow)
 ```
 

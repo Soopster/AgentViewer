@@ -3,6 +3,7 @@
 // The plugin manager: every bundled feature plugin, what it adds, and a switch.
 // Host code, not a plugin. The choice is saved through /api/plugins into the
 // same file the TUI reads, so turning Git off here turns it off there too.
+import { useModDiagnostics } from '../../lib/plugins/useModDiagnostics'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, Search, X } from 'lucide-react'
 import { filterPluginManagerEntries, matchesPluginSearch, PLUGIN_ENABLEMENT_FILTERS, type PluginEnablementFilter } from '@/lib/plugins/managerSearch'
@@ -18,6 +19,7 @@ import { readJsonResponse } from '@/lib/httpResponse'
 const RENDERER_LABELS = { tui: 'TUI', web: 'Web' } as const
 
 export default function PluginManager({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const diagnostics = useModDiagnostics()
   const disabled = useDisabledPlugins()
   useSyncExternalStore(subscribeLocalPlugins, localPluginsVersion, localPluginsVersion)
   const localReport = webLocalPluginReport()
@@ -106,6 +108,7 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <label htmlFor={switchId} style={{ fontWeight: 600, color: enabled ? 'var(--text)' : 'var(--text-2)', cursor: 'pointer' }}>{manifest.title}</label>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{manifest.description}</div>
+                  {diagnostics.filter(entry => entry.pluginId === manifest.id).slice(-3).map(entry => <div key={`${entry.contribution}:${entry.message}`} role="status" style={{ fontSize: 12, color: 'var(--red, #e5484d)' }}>{entry.contribution}: {entry.message}</div>)}
                   <div style={{ fontSize: 11, color: 'var(--text-3, var(--text-2))', marginTop: 4 }}>
                     {'renderers' in manifest && isLocalManifest(manifest)
                       ? `Local mod · ${[manifest.behavior ? manifest.behavior.hooks.join(' + ') : null, ...manifest.commands.map(command => command.label)].filter(Boolean).join(', ')}`

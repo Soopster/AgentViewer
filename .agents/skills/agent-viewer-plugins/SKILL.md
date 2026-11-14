@@ -48,6 +48,15 @@ bundled plugin in the checkout.
 - For behavior that runs without an open view, declare an application observer.
   Web and TUI share the observer contract and event identity; notification sinks
   and settings remain platform adapters.
+- For local mods that need live app context, declare `appServices: ["data"]`.
+  Server views/actions/widgets/commands receive an immutable app snapshot;
+  components receive `app.getSnapshot()` and `app.subscribe()`. Use the host's
+  qualified session identities and activity rather than polling providers.
+- For local mod UI navigation, add `"navigation"` to `appServices`. Components
+  use `app.openSession`, `app.openFile` and `app.commands.list/run`; server
+  code returns `appEffects` for the originating renderer. Command access is
+  limited to supported surface-opening commands, not arbitrary handlers or
+  new send/interrupt operations. Preserve cancellation and captured targets.
 - A plugin can provide surfaces, server behavior and application observers
   together, or be headless.
 - To add an agent backend without touching the checkout, write a provider
@@ -84,3 +93,26 @@ re-enabling it, switching targets during async work, and moving its view between
 placements. Verify both application typechecks and relevant plugin smokes.
 Report which renderer interactions were actually exercised; typechecks alone
 do not prove focus, keyboard or layout behavior.
+
+## Check and inspect local mods
+
+Run `agent-viewer mods check <path> --json` after changing a mod. This parses
+manifests, checks entries/source syntax and reports renderer availability
+without importing the mod. For trusted code, also run
+`agent-viewer mods check <path> --render --json`: bounded child processes check
+exports and initial data/widget/component rendering. Import side effects do
+execute; this is not a sandbox or proof of later asynchronous UI behavior.
+Checks require Bun. Exercise the real app before claiming focus/layout parity.
+
+Use `agent-viewer app status --json` to inspect published Web/OpenTUI instances
+and `agent-viewer mods status --instance <id> --json` for mod enablement,
+refusals and recent failures. Each browser tab and TUI process has its own ID;
+select one explicitly when several exist. Snapshots heartbeat every five
+seconds and become stale after fifteen; unknown focus is null. Inspection does
+not run mods, load providers or resume sessions. The plugin managers show the
+same bounded diagnostics.
+
+For this host contract, run `npm run mods:smoke` and
+`node scripts/webModAppBrowserSmoke.mjs` alongside relevant plugin smokes and
+both typechecks. Full API details and a worked example live in
+`docs/mod-app-services.md` and `docs/examples/mods/live-sessions/` in a checkout.

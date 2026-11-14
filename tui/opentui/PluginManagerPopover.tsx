@@ -4,6 +4,7 @@
 // The choice is written to .agent-viewer-data/plugins.json, which the web daemon
 // reads too, and applied at once: a plugin turned off closes its overlay and
 // its commands stop being offered.
+import { useModDiagnostics } from '../../lib/plugins/useModDiagnostics'
 import { useEffect, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { allPluginManifests } from '../../lib/plugins/catalog'
@@ -43,6 +44,7 @@ function pluginSummary(manifest: PluginManifest | ProviderPlugin): string {
 }
 
 export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandlerReady, onNotice }: PluginManagerPopoverProps) {
+  const diagnostics = useModDiagnostics()
   const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...allPluginManifests(), ...PROVIDER_PLUGINS]
   const local = localPluginDiscovery()
   const disabled = useDisabledPlugins()
@@ -148,6 +150,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
               <span fg={on ? theme.green : theme.muted}>{on ? '  on' : '  off'}</span>
             </text>
             <text fg={theme.muted} width="100%" wrapMode="word" selectable={false}>{`  ${manifest.description}`}</text>
+            {diagnostics.filter(entry => entry.pluginId === manifest.id).slice(-3).map(entry => <text key={`${entry.contribution}:${entry.message}`} fg={theme.red} wrapMode="word">{`${entry.contribution}: ${entry.message}`}</text>)}
             <text fg={theme.dim} width="100%" wrapMode="word" selectable={false}>{`  ${pluginSummary(manifest)}`}</text>
           </box>
         )

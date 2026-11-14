@@ -546,6 +546,89 @@ export const commands = {
   its state across its own actions, and an error is caught at its boundary.
 - `scripts/localPluginSmoke.ts` is the worked example end to end.
 
+### Live app data and navigation
+
+Local mods opt in with `"appServices": ["data", "navigation"]` in `plugin.json`.
+The declarations are optional; existing mods retain their previous behavior.
+They describe supported host capabilities, not a sandbox for trusted mod code.
+The authoritative contracts are `lib/plugins/modApp.ts`, `localManifest.ts` and
+`modViews.ts`; transport/lifetime adapters belong to the shell in both apps.
+
+- Server `views`, `actions`, `widgets` and `commands` receive `app`: an immutable
+  version-1 snapshot captured for that invocation's originating renderer. It
+  includes `instanceId`, `renderer`, `cwd`, `theme`, `focused` (nullable),
+  `focusedSurface`, `surfaces`, `selectedKey`, `sessions` and `commands`.
+- Session summaries include a canonical `key`, title, cwd, activity and a
+  qualified `target` (`provider`, `providerInstanceId`, `sessionId`). Use the
+  supplied keys and targets; native session IDs overlap across accounts.
+  Transcript contents and credentials are not part of the app snapshot.
+- Components receive an `app` service. Subscribe with
+  `React.useSyncExternalStore(app.subscribe, app.getSnapshot, app.getSnapshot)`.
+  Components keep their state across app updates. Data views refresh on app
+  changes, coalesced by 50ms; opted-in widgets also react to app changes.
+  Use existing host activity rather than adding provider polling.
+- Components can `await app.openSession(target)`, `app.openFile(path, line?)`,
+  or `app.commands.run(id)`. `app.commands.list()` reports IDs, labels,
+  availability and refusal reasons. Commands are declarative surface opens;
+  executable handlers and dashboard/reader routing are excluded. Disabled
+  plugins and missing session/repository prerequisites are checked again.
+- Server actions/commands return `appEffects`, for example
+  `{ appEffects: [{ type: 'command', id: 'git' }] }`,
+  `{ appEffects: [{ type: 'session', target }] }`, or
+  `{ appEffects: [{ type: 'file', path, line }] }`. Effects require the
+  `navigation` declaration and are applied by the originating renderer.
+  Never call renderer state from server code or infer the active target after
+  an await. Disabled/closed/cancelled/retargeted invocations cannot navigate.
+- OpenTUI file navigation uses the editor. Web uses the Files preview and
+  refuses requests for a specific line. Handle unavailable capability errors.
+  New send/interrupt/session-management methods are outside this contract.
+- Keep item IDs stable when the session list reorders; do not address rows by
+  their current array index. `docs/examples/mods/live-sessions/` is a worked
+  data view with stable IDs, qualified session navigation and a Git action.
+
+### Mod checks and running-app inspection
+
+```sh
+agent-viewer mods check /path/to/mod --json
+agent-viewer mods check /path/to/trusted-mod --render --json
+agent-viewer app status --json
+agent-viewer mods status --instance <id> --json
+```
+
+Static checks do not import the mod: they validate manifests/API compatibility,
+reserved/duplicate IDs, entry files, syntax and component renderer availability.
+TypeScript syntax validation does not prove Node compatibility; `server.ts`
+requires Bun in the app runtime. The checker itself uses Bun.
+
+`--render` executes trusted code in child processes, with fixture app data and
+a ten-second timeout per child. It validates declared exports and initial
+views/widgets, and renders supplied Web and OpenTUI components. It does not
+invoke actions, behavior hooks or provider turns, but import side effects do
+execute. It is not a sandbox and does not prove later asynchronous states,
+keyboard behavior, focus or final layout. Verify these in the actual renderer.
+Exit codes: 0 passed, 1 failed, 2 invalid usage.
+
+App status selects published renderer instances, not an ambiguous global
+selection. Each Web tab and TUI process has its own ID. Reports include
+selection, focus, open plugin surfaces, mod enablement/refusals and up to fifty
+recent errors, with contribution names and repeat counts. Plugin managers show
+these diagnostics too. Heartbeats run every five seconds; fifteen seconds
+without an update means stale/disconnected. Background browser throttling may
+make an inactive tab stale. Unknown terminal focus is null. Inspection does not
+load providers, resume sessions or execute mods.
+
+The shared publisher writes private, atomic user-runtime snapshots; it rejects
+older publication revisions so late requests cannot replace newer state.
+`AGENT_VIEWER_INSPECTION_DIR` isolates storage in checks. A daemon without a
+connected renderer does not claim focus/layout state. `--instance <id>` selects
+one exact instance; a missing explicit ID exits 1.
+
+Run `npm run mods:smoke` for contract, CLI, route and rendered OpenTUI checks,
+`node scripts/webModAppBrowserSmoke.mjs` for rendered Web behavior, and relevant
+plugin smokes plus both typechecks. Report initial-render, browser-fixture,
+real-app and live-provider validation separately. The full guide is
+`docs/mod-app-services.md` in a checkout.
+
 ## Provider mods
 
 A mod can be an agent backend. Add `"provider": { "displayName": "Echo agent" }`

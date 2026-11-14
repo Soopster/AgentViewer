@@ -10,6 +10,9 @@
 // the composer, a follow-up turn. That keeps one mod working in both renderers
 // with no build step, and keeps the renderer's capability checks in charge of
 // what reaches the screen.
+import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapshot, type ModAppEffect } from './modApp'
+import { recordModDiagnostic } from './modDiagnostics'
+import { isPluginEnabled } from './enablement'
 import { PLUGIN_API_VERSION, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
@@ -20,6 +23,7 @@ const CATEGORIES = ['Session', 'View', 'Transcript', 'Coordination'] as const
 /** A validated local plugin manifest, as the catalog and both plugin managers list it. */
 export type LocalPluginManifest = PluginManifest & {
   readonly source: 'local'
+  readonly appServices?: readonly ('data' | 'navigation')[]
   /** A mod's widgets are content from its server module, drawn by the shell. */
   readonly localWidgets?: readonly { readonly id: string; readonly slot: 'corner'; readonly refreshMs: number }[]
   /** A mod that is an agent backend: its sessions appear under the `mod` provider (lib/modProvider.ts). */
@@ -74,6 +78,7 @@ export type LocalCommandEffects = {
   readonly notice?: { readonly kind: 'info' | 'error'; readonly text: string }
   readonly insertText?: string
   readonly replaceText?: string
+  readonly appEffects?: readonly ModAppEffect[]
 }
 
 /**
@@ -91,6 +96,8 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   const title = typeof value.title === 'string' && value.title.trim() ? value.title.trim().slice(0, 64) : id
   const description = typeof value.description === 'string' ? value.description.trim().slice(0, 240) : ''
 
+  const appServices = Array.isArray(value.appServices) ? value.appServices : []
+  if (value.appServices !== undefined && (!Array.isArray(value.appServices) || appServices.some(service => service !== 'data' && service !== 'navigation'))) problems.push('appServices must list data and/or navigation')
   let behavior: PluginManifest['behavior']
   if (value.behavior !== undefined) {
     const spec = value.behavior as { hooks?: unknown; order?: unknown }
@@ -149,6 +156,9 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     views.push({ id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id, ...(view.component === true ? { component: true } : {}) })
   }
   if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
+  for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views]] as const) {
+    if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
+  }
   if (problems.length) return { manifest: null, problems }
   // Each view is a surface like any built-in's, opened by its own command: it
   // takes the palette, a window, a tab and a saved layout through the same host.
@@ -160,10 +170,11 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     id: `${id}:view-${view.id}`, label: view.title, category: 'View' as const, opens: localViewSurfaceId(id, view.id),
     requires: null, scope: 'application' as const, renderers: ['web', 'tui'] as const, keywords: ['mod', title.toLowerCase()],
   }))
+  if (new Set([...commands, ...viewCommands].map(command => command.id)).size !== commands.length + viewCommands.length) return { manifest: null, problems: ['command id conflicts with a generated view command'] }
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local',
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }
@@ -174,6 +185,7 @@ export type LocalCommandRunner = (request: {
   readonly pluginId: string
   readonly commandId: string
   readonly target: PluginCommandTarget
+  readonly app?: ModAppSnapshot
 }, signal: AbortSignal) => Promise<LocalCommandEffects>
 
 let runner: LocalCommandRunner | null = null
@@ -184,8 +196,13 @@ export function setLocalCommandRunner(next: LocalCommandRunner): void { runner =
 export function localCommandModule(manifest: PluginManifest): PluginCommandModule {
   const handlers = Object.fromEntries(manifest.commands.filter(command => command.handler).map(command => [command.handler!, async ({ target, signal, services }: Parameters<PluginCommandModule['handlers'][string]>[0]) => {
     if (!runner) throw new Error('Local plugin commands are unavailable in this host')
-    const effects = await runner({ pluginId: manifest.id, commandId: command.handler!, target }, signal)
+    const captured = modAppStore.getSnapshot()
+    let effects: LocalCommandEffects
+    try { effects = await runner({ pluginId: manifest.id, commandId: command.handler!, target, app: captured }, signal) }
+    catch (error) { recordModDiagnostic(manifest.id, `command:${command.handler}`, error); throw error }
     signal.throwIfAborted()
+    if (!isPluginEnabled(manifest.id)) return
+    if (effects.appEffects?.length) await applyModAppEffects(manifest.id, effects.appEffects, captured)
     if (effects.replaceText !== undefined) services.composer?.replaceText(effects.replaceText)
     if (effects.insertText !== undefined) services.composer?.insertText(effects.insertText)
     if (effects.notice) services.notices?.show(effects.notice.kind, effects.notice.text)
@@ -201,6 +218,7 @@ export function decodeLocalCommandEffects(value: unknown): LocalCommandEffects {
   return {
     ...(typeof notice === 'string' ? { notice: { kind: 'info' as const, text: notice.slice(0, 500) } }
       : notice && typeof notice.text === 'string' ? { notice: { kind: notice.kind === 'error' ? 'error' as const : 'info' as const, text: notice.text.slice(0, 500) } } : {}),
+    ...(Array.isArray(raw.appEffects) ? { appEffects: raw.appEffects.slice(0, 16).flatMap(effect => { const decoded = decodeModAppEffect(effect); return decoded ? [decoded] : [] }) } : {}),
     ...(typeof raw.insertText === 'string' ? { insertText: raw.insertText } : {}),
     ...(typeof raw.replaceText === 'string' ? { replaceText: raw.replaceText } : {}),
   }

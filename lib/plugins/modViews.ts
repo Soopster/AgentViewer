@@ -33,6 +33,7 @@ export type ModViewRef = { readonly pluginId: string; readonly viewId: string; r
  * the component shares the app's React. Props are ModComponentProps.
  */
 export type ModComponentProps = {
+  readonly app?: import('./modApp').ModApp
   readonly view: ModViewRef
   /** Run one of the mod's server actions; resolves to its notice, if any. */
   readonly run: (action: string, item?: string) => Promise<{ kind: 'info' | 'error'; text: string } | null>

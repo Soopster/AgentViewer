@@ -1,0 +1,8 @@
+{
+  "id": "live-sessions",
+  "title": "Live sessions",
+  "description": "Live activity and navigation using the public mod app service.",
+  "apiVersion": 1,
+  "appServices": ["data", "navigation"],
+  "views": [{ "id": "sessions", "title": "Live sessions" }]
+}

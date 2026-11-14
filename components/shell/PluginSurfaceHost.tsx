@@ -1,5 +1,7 @@
 'use client'
 
+import { trackModSurface, focusModSurface } from '../../lib/plugins/modSurfaces'
+import { recordModDiagnostic } from '../../lib/plugins/modDiagnostics'
 import { useScopedNotifications } from '../../lib/plugins/useScopedNotifications'
 import { webRunLaunch } from './runLaunchService'
 import { webPlaybooks } from './playbooksService'
@@ -49,6 +51,7 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 
 export default function PluginSurfaceHost(props: Props) {
   const localOwner = useId()
+  useEffect(() => trackModSurface(localOwner, props.surfaceId, props.placement), [localOwner, props.surfaceId, props.placement])
   const surface = getPluginSurface(props.surfaceId)
   if (useDisabledPlugins().has(surface.pluginId)) {
     // A panel tab or layout can outlive the choice to turn its plugin off; it says so and loads nothing.
@@ -59,7 +62,7 @@ export default function PluginSurfaceHost(props: Props) {
       </div>
     )
   }
-  return <ActivePluginSurface key={props.surfaceId} {...props} ownerId={props.ownerId ?? localOwner} />
+  return <div style={{ display: 'contents' }} onFocusCapture={() => focusModSurface(props.surfaceId)} onPointerDownCapture={() => focusModSurface(props.surfaceId)}><ActivePluginSurface key={props.surfaceId} {...props} ownerId={props.ownerId ?? localOwner} /></div>
 }
 
 function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, path, services: offered, onClose, registry = webPluginViews, store = pluginState }: Props) {
@@ -73,6 +76,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, p
   const resolved = useMemo(() => resolvePluginServices(surface, { notifications, 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, handoff: webHandoff, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, 'subagent-transcript': webSubagentTranscripts, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered, notifications])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
+  useEffect(() => { if (failure) recordModDiagnostic(surface.pluginId, `surface:${surfaceId}`, failure) }, [failure, surface.pluginId, surfaceId])
   useEffect(() => {
     if (View || resolved.error) return undefined
     let live = true

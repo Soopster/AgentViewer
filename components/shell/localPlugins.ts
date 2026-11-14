@@ -2,6 +2,9 @@
 
 // The Web's half of local plugins: register the manifests the daemon found,
 // and run their commands there (their code is the daemon's, never the page's).
+import { setRemoteModDiagnostics } from '@/lib/plugins/modDiagnostics'
+import { modAppStore } from '@/lib/plugins/modApp'
+import { setModInspectionPublisher } from '@/lib/plugins/useModAppHost'
 import { registerLocalPluginManifests } from '@/lib/plugins/catalog'
 import { decodeLocalCommandEffects, decodeLocalWidgetContent, parseLocalPluginManifest, setLocalCommandRunner, setLocalWidgetReader, type LocalPluginManifest, type LocalWidgetContent } from '@/lib/plugins/localManifest'
 import { PLUGIN_MANIFESTS, listLocalPluginManifests } from '@/lib/plugins/catalog'
@@ -10,6 +13,12 @@ import { decodeModView, readModComponentViews, setModViewService } from '@/lib/p
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
+setModInspectionPublisher(async value => {
+  const response = await fetch('/api/plugins/inspection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value), keepalive: false })
+  if (!response.ok) return
+  const result = await response.json()
+  if (Array.isArray(result.diagnostics)) setRemoteModDiagnostics(result.diagnostics)
+})
 let report: WebLocalPluginReport | null = null
 export function webLocalPluginReport(): WebLocalPluginReport | null { return report }
 
@@ -23,7 +32,7 @@ setLocalCommandRunner(async (request, signal) => {
 })
 
 setLocalWidgetReader(async (signal) => {
-  const response = await fetch('/api/plugins/local', { signal })
+  const response = await fetch('/api/plugins/local', { signal, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation: 'widgets', app: modAppStore.getSnapshot() }) })
   const body = await response.json().catch(() => ({}))
   if (!response.ok || !Array.isArray(body?.widgets)) return []
   return (body.widgets as Array<Record<string, unknown>>).flatMap((entry): LocalWidgetContent[] => {
@@ -37,7 +46,7 @@ setModViewService({
   list: () => listLocalPluginManifests().filter(manifest => isPluginEnabled(manifest.id))
     .flatMap(manifest => (manifest.localViews ?? []).map(view => ({ pluginId: manifest.id, viewId: view.id, title: view.title, ...(view.component ? { component: true } : {}) }))),
   render: async (view, signal) => {
-    const response = await fetch(`/api/plugins/local/views?plugin=${encodeURIComponent(view.pluginId)}&view=${encodeURIComponent(view.viewId)}`, { signal })
+    const response = await fetch('/api/plugins/local/views', { signal, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ operation: 'render', plugin: view.pluginId, view: view.viewId, app: modAppStore.getSnapshot() }) })
     const body = await response.json().catch(() => ({}))
     if (!response.ok || body?.error) throw new Error(body?.error || `View failed (${response.status})`)
     return decodeModView(body.view, view.title)
@@ -45,7 +54,7 @@ setModViewService({
   act: async (view, action, item, signal) => {
     const response = await fetch('/api/plugins/local/views', {
       method: 'POST', signal, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ plugin: view.pluginId, view: view.viewId, action, ...(item ? { item } : {}) }),
+      body: JSON.stringify({ app: modAppStore.getSnapshot(), plugin: view.pluginId, view: view.viewId, action, ...(item ? { item } : {}) }),
     })
     const body = await response.json().catch(() => ({}))
     if (!response.ok || body?.error) throw new Error(body?.error || `Action failed (${response.status})`)
@@ -79,7 +88,7 @@ export function applyWebLocalPlugins(value: unknown): void {
     const entry = raw as LocalPluginManifest
     if (entry?.source !== 'local' || typeof entry.id !== 'string' || reserved.has(entry.id)) continue
     const reparsed = parseLocalPluginManifest({
-      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews, provider: entry.localProvider,
+      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews, provider: entry.localProvider, appServices: entry.appServices,
       // Only the mod's own commands: a view's command is derived from the view by the parse.
       commands: (entry.commands ?? []).filter(command => command.handler).map(command => ({ ...command, id: command.handler })),
     }, reserved)

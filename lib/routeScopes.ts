@@ -85,6 +85,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // The version handshake an attached client uses before relying on a route.
   '/api/version': { GET: 'read' },
   '/api/voice/transcribe': { POST: 'write' },
+  '/api/plugins/inspection': { GET: 'read', POST: 'write' },
   '/api/plugins': { GET: 'read', PATCH: 'write' },
   // Runs the user's own plugin code, so never something a read-only device may do.
   '/api/plugins/local': { GET: 'read', POST: 'write' },

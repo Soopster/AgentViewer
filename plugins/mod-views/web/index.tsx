@@ -1,6 +1,7 @@
 'use client'
 
 // Web entry for Mod views: its own chunk, loaded on first open.
+import { recordModDiagnostic } from '@/lib/plugins/modDiagnostics'
 import React, { useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '@/lib/plugins/types'
 import type { WebPluginView, WebPluginViewProps } from '@/components/shell/pluginTypes'
@@ -8,9 +9,10 @@ import { useModView } from '@/lib/plugins/useModView'
 
 const TONE: Record<string, string> = { default: 'var(--text)', muted: 'var(--text-2)', success: 'var(--green, #3fb950)', warning: 'var(--amber, #d29922)', error: 'var(--red, #f85149)' }
 
-class ComponentBoundary extends React.Component<{ name: string; children: React.ReactNode }, { failed: Error | null }> {
+class ComponentBoundary extends React.Component<{ pluginId?: string; name: string; children: React.ReactNode }, { failed: Error | null }> {
   state = { failed: null as Error | null }
   static getDerivedStateFromError(failed: Error) { return { failed } }
+  componentDidCatch(error: Error) { recordModDiagnostic(this.props.pluginId ?? this.props.name, 'component-render', error) }
   render() { return this.state.failed ? <div role="alert" style={{ color: TONE.error }}>{this.props.name} failed: {this.state.failed.message}</div> : this.props.children }
 }
 
@@ -49,7 +51,7 @@ function ModViewPanel({ placement, close, useState: useScopedState, fixedKey }: 
         {!view.views.length ? <div style={{ color: 'var(--text-2)' }}>No mod provides a view. A mod declares <code>views</code> in its plugin.json and returns each from its server module.</div>
           : view.error ? <div role="alert" style={{ color: TONE.error }}>{view.error}</div>
           : view.selected?.component ? (view.component
-            ? <ComponentBoundary key={view.key ?? ''} name={view.selected.title}>{React.createElement(view.component as React.ComponentType<Record<string, unknown>>, { view: view.selected, run: async (action: string, item?: string) => { const result = await view.run(action, item); setNotice(result); return result }, close, React })}</ComponentBoundary>
+            ? <ComponentBoundary key={view.key ?? ''} name={view.selected.title} pluginId={view.selected.pluginId}>{React.createElement(view.component as React.ComponentType<Record<string, unknown>>, { view: view.selected, app: view.app, run: async (action: string, item?: string) => { const result = await view.run(action, item); setNotice(result); return result }, close, React })}</ComponentBoundary>
             : <div style={{ color: 'var(--text-2)' }}>Loading…</div>)
           : !view.content ? <div style={{ color: 'var(--text-2)' }}>Loading…</div>
           : <>

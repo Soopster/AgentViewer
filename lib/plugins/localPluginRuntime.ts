@@ -8,6 +8,8 @@
 // for a session target, and `sendTurn(message)` to send a turn to that session
 // through the ordinary send path. It returns effects as data
 // (`{ notice, insertText, replaceText }`), which the renderer applies.
+import { freezeSnapshot, type ModAppSnapshot } from './modApp'
+import { recordModDiagnostic } from './modDiagnostics'
 import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -19,6 +21,13 @@ import type { PluginBehaviorModule } from './behavior'
 import type { PluginCommandTarget } from './commands'
 import type { SessionMessage } from '../types'
 
+type AppContext = { readonly app?: ModAppSnapshot }
+function appContext(plugin: LocalPlugin, app?: ModAppSnapshot): AppContext {
+  return app && plugin.manifest.appServices?.length ? { app: freezeSnapshot(app) } : {}
+}
+async function diagnosed<T>(pluginId: string, contribution: string, run: () => T | Promise<T>): Promise<T> {
+  try { return await run() } catch (error) { recordModDiagnostic(pluginId, contribution, error); throw error }
+}
 type LocalServerModule = {
   beforeTurn?: PluginBehaviorModule['beforeTurn']
   afterTurn?: PluginBehaviorModule['afterTurn']
@@ -27,12 +36,12 @@ type LocalServerModule = {
   toolCard?: PluginBehaviorModule['toolCard']
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
-  widgets?: Record<string, (context: { signal: AbortSignal }) => unknown>
-  views?: Record<string, (context: { signal: AbortSignal }) => unknown>
-  actions?: Record<string, (context: { signal: AbortSignal; view: string; item?: string }) => unknown>
+  widgets?: Record<string, (context: AppContext & { signal: AbortSignal }) => unknown>
+  views?: Record<string, (context: AppContext & { signal: AbortSignal }) => unknown>
+  actions?: Record<string, (context: AppContext & { signal: AbortSignal; view: string; item?: string }) => unknown>
 }
 
-export type LocalCommandContext = {
+export type LocalCommandContext = AppContext & {
   readonly target: PluginCommandTarget
   readonly signal: AbortSignal
   readonly readMessages: (limit?: number) => Promise<SessionMessage[]>
@@ -52,9 +61,10 @@ function loadServerModule(plugin: LocalPlugin): Promise<LocalServerModule> {
     pending = importAtRuntime(pathToFileURL(plugin.entry!).href).then((exported) => {
       const base = (exported.default && typeof exported.default === 'object' ? exported.default : exported) as LocalServerModule & { pluginId?: unknown }
       if (base.pluginId !== undefined && base.pluginId !== plugin.manifest.id) throw new Error(`Local plugin ${plugin.manifest.id} exports pluginId ${String(base.pluginId)}`)
+      for (const hook of plugin.manifest.behavior?.hooks ?? []) if (typeof base[hook] !== 'function') throw new Error(`Missing ${hook} export`)
       return base
     })
-    pending.catch(() => loaded.delete(plugin.manifest.id))
+    pending.catch(error => { loaded.delete(plugin.manifest.id); recordModDiagnostic(plugin.manifest.id, 'load', error) })
     loaded.set(plugin.manifest.id, pending)
   }
   return pending
@@ -74,11 +84,11 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
     return {
       apiVersion: PLUGIN_API_VERSION,
       pluginId: plugin.manifest.id,
-      ...(module.beforeTurn ? { beforeTurn: module.beforeTurn } : {}),
-      ...(module.afterTurn ? { afterTurn: module.afterTurn } : {}),
-      ...(module.beforeSteer ? { beforeSteer: module.beforeSteer } : {}),
-      ...(module.permission ? { permission: module.permission } : {}),
-      ...(module.toolCard ? { toolCard: module.toolCard } : {}),
+      ...(module.beforeTurn ? { beforeTurn: context => diagnosed(plugin.manifest.id, 'beforeTurn', () => module.beforeTurn!(context)) } : {}),
+      ...(module.afterTurn ? { afterTurn: context => diagnosed(plugin.manifest.id, 'afterTurn', () => module.afterTurn!(context)) } : {}),
+      ...(module.beforeSteer ? { beforeSteer: context => diagnosed(plugin.manifest.id, 'beforeSteer', () => module.beforeSteer!(context)) } : {}),
+      ...(module.permission ? { permission: context => diagnosed(plugin.manifest.id, 'permission', () => module.permission!(context)) } : {}),
+      ...(module.toolCard ? { toolCard: context => diagnosed(plugin.manifest.id, 'toolCard', () => module.toolCard!(context)) } : {}),
       ...(module.deactivate ? { deactivate: module.deactivate } : {}),
     } satisfies PluginBehaviorModule
   }]))
@@ -87,7 +97,7 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
 /** Evict a module so the next use re-imports it (a plugin turned off and on again keeps Node's module cache, by design). */
 export function forgetLocalPluginModule(id: string): void { loaded.delete(id) }
 
-export async function runLocalPluginCommand(request: { pluginId: string; commandId: string; target: PluginCommandTarget }, signal: AbortSignal): Promise<LocalCommandEffects> {
+export async function runLocalPluginCommand(request: { pluginId: string; commandId: string; target: PluginCommandTarget; app?: ModAppSnapshot }, signal: AbortSignal): Promise<LocalCommandEffects> {
   const plugin = localPluginDiscovery().plugins.find(entry => entry.manifest.id === request.pluginId)
   if (!plugin) throw new Error(`No local plugin "${request.pluginId}"`)
   if (!isPluginEnabled(plugin.manifest.id)) throw new Error(`${plugin.manifest.title} is turned off`)
@@ -98,7 +108,7 @@ export async function runLocalPluginCommand(request: { pluginId: string; command
   if (command.requires === 'repository' && !request.target.cwd) throw new Error(`${command.label} needs a repository`)
   const module = await loadServerModule(plugin)
   const handler = module.commands?.[request.commandId]
-  if (typeof handler !== 'function') throw new Error(`${plugin.manifest.title}'s server module has no commands.${request.commandId}`)
+  if (typeof handler !== 'function') { const error = new Error(`${plugin.manifest.title}'s server module has no commands.${request.commandId}`); recordModDiagnostic(plugin.manifest.id, `command:${request.commandId}`, error); throw error }
   signal.throwIfAborted()
   const target = Object.freeze({ session: session ? Object.freeze({ ...session }) : null, cwd: request.target.cwd })
   const scoped = async <T,>(run: () => Promise<T>): Promise<T> => {
@@ -106,7 +116,7 @@ export async function runLocalPluginCommand(request: { pluginId: string; command
     const { withProviderInstance } = await import('../providerInstances')
     return withProviderInstance(session.providerInstanceId, session.provider, run)
   }
-  const context: LocalCommandContext = {
+  const context: LocalCommandContext = { ...appContext(plugin, request.app),
     target,
     signal,
     readMessages: async (limit = 200) => {
@@ -128,7 +138,7 @@ export async function runLocalPluginCommand(request: { pluginId: string; command
       })
     },
   }
-  return decodeLocalCommandEffects(await handler(context))
+  return diagnosed(plugin.manifest.id, `command:${request.commandId}`, async () => decodeLocalCommandEffects(await handler(context)))
 }
 
 const WIDGET_TIMEOUT_MS = 2_000
@@ -137,20 +147,21 @@ const WIDGET_TIMEOUT_MS = 2_000
  * Every enabled mod's widget content. A widget function that throws, returns
  * nothing or takes longer than two seconds is simply not shown this round.
  */
-export async function readLocalPluginWidgets(signal: AbortSignal = new AbortController().signal): Promise<LocalWidgetContent[]> {
+export async function readLocalPluginWidgets(signal: AbortSignal = new AbortController().signal, app?: ModAppSnapshot): Promise<LocalWidgetContent[]> {
   const plugins = localPluginDiscovery().plugins.filter(plugin => plugin.manifest.localWidgets?.length && isPluginEnabled(plugin.manifest.id))
   const results = await Promise.all(plugins.flatMap(plugin => plugin.manifest.localWidgets!.map(async (widget) => {
     try {
       const module = await loadServerModule(plugin)
       const read = module.widgets?.[widget.id]
-      if (typeof read !== 'function') return null
+      if (typeof read !== 'function') throw new Error(`Missing widgets.${widget.id} export`)
       const widgetSignal = AbortSignal.any([signal, AbortSignal.timeout(WIDGET_TIMEOUT_MS)])
       const value = await Promise.race([
-        Promise.resolve(read({ signal: widgetSignal })),
+        Promise.resolve(read({ ...appContext(plugin, app), signal: widgetSignal })),
         new Promise((_, reject) => widgetSignal.addEventListener('abort', () => reject(widgetSignal.reason), { once: true })),
       ])
       return decodeLocalWidgetContent(plugin.manifest.id, widget.id, plugin.manifest.title, value)
     } catch (error) {
+      recordModDiagnostic(plugin.manifest.id, `widget:${widget.id}`, error)
       if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Local plugin ${plugin.manifest.id} widget ${widget.id} failed:`, error)
       return null
     }
@@ -182,19 +193,19 @@ function enabledViewPlugin(pluginId: string, viewId: string) {
 }
 
 /** One mod view, as data (decoded by lib/plugins/modViews.ts). */
-export async function renderLocalPluginView(pluginId: string, viewId: string, signal: AbortSignal = new AbortController().signal): Promise<unknown> {
+export async function renderLocalPluginView(pluginId: string, viewId: string, signal: AbortSignal = new AbortController().signal, app?: ModAppSnapshot): Promise<unknown> {
   const plugin = enabledViewPlugin(pluginId, viewId)
   const module = await loadServerModule(plugin)
   const render = module.views?.[viewId]
-  if (typeof render !== 'function') throw new Error(`${plugin.manifest.title}'s server module has no views.${viewId}`)
-  return await render({ signal })
+  if (typeof render !== 'function') { const error = new Error(`${plugin.manifest.title}'s server module has no views.${viewId}`); recordModDiagnostic(pluginId, `view:${viewId}`, error); throw error }
+  return diagnosed(pluginId, `view:${viewId}`, () => render({ ...appContext(plugin, app), signal }))
 }
 
 /** Run a view's action where the mod lives; answers with effects as data. */
-export async function runLocalPluginViewAction(pluginId: string, viewId: string, action: string, item: string | undefined, signal: AbortSignal = new AbortController().signal): Promise<LocalCommandEffects> {
+export async function runLocalPluginViewAction(pluginId: string, viewId: string, action: string, item: string | undefined, signal: AbortSignal = new AbortController().signal, app?: ModAppSnapshot): Promise<LocalCommandEffects> {
   const plugin = enabledViewPlugin(pluginId, viewId)
   const module = await loadServerModule(plugin)
   const run = module.actions?.[action]
-  if (typeof run !== 'function') throw new Error(`${plugin.manifest.title} has no action "${action}"`)
-  return decodeLocalCommandEffects(await run({ signal, view: viewId, ...(item ? { item } : {}) }))
+  if (typeof run !== 'function') { const error = new Error(`${plugin.manifest.title} has no action "${action}"`); recordModDiagnostic(pluginId, `action:${action}`, error); throw error }
+  return diagnosed(pluginId, `action:${action}`, async () => decodeLocalCommandEffects(await run({ ...appContext(plugin, app), signal, view: viewId, ...(item ? { item } : {}) })))
 }

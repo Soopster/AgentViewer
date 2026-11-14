@@ -1,5 +1,6 @@
 'use client'
 
+import { fileNavigationTarget } from '../domain/navigation'
 import dynamic from 'next/dynamic'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -67,6 +68,7 @@ type IconSpec = { icon: LucideIcon; tone: IconTone }
 
 type Props = {
   open: boolean
+  initialPath?: string
   cwd: string
   canInsert: boolean
   sessionId?: string
@@ -204,12 +206,14 @@ function FileRow({ entry, selected, onClick, onDoubleClick }: {
   )
 }
 
-export default function FileViewer({ open, cwd, canInsert, sessionId, provider, onOpenChange, onInsertPath, variant }: Props) {
+export default function FileViewer({ open, cwd, canInsert, sessionId, provider, onOpenChange, onInsertPath, variant, initialPath }: Props) {
   const dockedShellRef = useRef<HTMLDivElement | null>(null)
   // Docked, the shell is whatever the panel is dragged (or expanded) to, so the
   // three-column layout is chosen from the measured width rather than from the
   // variant: a narrow dock drops the parent listing, an expanded one keeps it.
   const [dockedShellWidth, setDockedShellWidth] = useState<number | null>(null)
+  const initialTarget = useMemo(() => fileNavigationTarget(cwd, initialPath), [cwd, initialPath])
+  const pendingInitialPath = useRef(initialTarget.path)
   const [directory, setDirectory] = useState(cwd)
   const [directoryData, setDirectoryData] = useState<DirectoryResponse | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
@@ -231,13 +235,15 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
 
   useEffect(() => {
     if (!open) return
-    setDirectory(cwd)
+    pendingInitialPath.current = initialTarget.path
+    setDirectory(initialTarget.directory)
+    if (initialTarget.path?.split('/').pop()?.startsWith('.')) setShowHidden(true)
     setFilter('')
     setCursor(0)
     setPreviewCursor(0)
     setFocusedPane('current')
     setPreviewExpanded(false)
-  }, [cwd, open])
+  }, [initialTarget, open])
 
   useEffect(() => {
     if (!open) return
@@ -262,6 +268,12 @@ export default function FileViewer({ open, cwd, canInsert, sessionId, provider, 
     const sorted = sortEntries(directoryData?.entries ?? [], sortMode)
     return deferredFilter ? sorted.filter((entry) => entry.name.toLowerCase().includes(deferredFilter)) : sorted
   }, [deferredFilter, directoryData?.entries, sortMode])
+  useEffect(() => {
+    if (!pendingInitialPath.current || !directoryData) return
+    const requested = pendingInitialPath.current.replace(/\\/g, '/')
+    const index = entries.findIndex(entry => entry.path.replace(/\\/g, '/') === requested)
+    if (index >= 0) { pendingInitialPath.current = null; setCursor(index) }
+  }, [entries, directoryData, initialTarget])
   const parentEntries = useMemo(() => sortEntries(directoryData?.parentEntries ?? [], sortMode), [directoryData?.parentEntries, sortMode])
   const selectedEntry = entries[Math.min(cursor, Math.max(0, entries.length - 1))] ?? null
 

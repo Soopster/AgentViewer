@@ -1,5 +1,10 @@
 'use client'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useModAppHost } from '../../lib/plugins/useModAppHost'
+import { useModSurfaces } from '../../lib/plugins/modSurfaces'
+import { getCurrentTheme, subscribeTheme } from '../../lib/themes'
+import { dispatchPluginCommand } from '../../lib/plugins/commandBus'
+import type { PluginSessionActivity } from '../../lib/plugins/application'
 import type { Session } from '../../lib/types'
 import { sessionIdentityKey } from '../../lib/sessionIdentity'
 import { useApplicationPlugins } from '../../lib/plugins/useApplicationPlugins'
@@ -50,12 +55,30 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
       }
     },
   } }), [showNotice])
-  const { publish, observesActivity } = useApplicationPlugins('web', webApplicationPlugins, services)
+  const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
+  const [modActivity, setModActivity] = useState<ReadonlyMap<string, PluginSessionActivity>>(new Map())
+  const [appFocused, setAppFocused] = useState<boolean | null>(null)
+  const { publish } = useApplicationPlugins('web', webApplicationPlugins, services)
+  useEffect(() => {
+    const update = () => setAppFocused(document.visibilityState !== 'hidden' && document.hasFocus())
+    update()
+    window.addEventListener('focus', update); window.addEventListener('blur', update); document.addEventListener('visibilitychange', update)
+    return () => { window.removeEventListener('focus', update); window.removeEventListener('blur', update); document.removeEventListener('visibilitychange', update) }
+  }, [])
   const executeCommand = usePluginCommands('web', webPluginCommands, 'application')
   const executeRepositoryCommand = usePluginCommands('web', webPluginCommands, cwd)
+  const acceptActivity = useCallback((activity: ReadonlyMap<string, PluginSessionActivity>) => {
+    setModActivity(previous => JSON.stringify([...previous]) === JSON.stringify([...activity]) ? previous : activity)
+    const current = context.current
+    publish({ activity, now: Date.now(),
+      sessions: current.sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
+      selectedKey: current.selectedSession ? sessionIdentityKey(current.selectedSession) : null,
+      focused: document.visibilityState !== 'hidden' && document.hasFocus(),
+    })
+  }, [publish])
   useEffect(() => {
-    if (!observesActivity) return
     const controller = new AbortController()
+    let cancelled = false
     let inFlight = false
     const read = async () => {
       if (inFlight || controller.signal.aborted) return
@@ -64,20 +87,15 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
         const response = await fetch('/api/sessions/running', { signal: controller.signal })
         if (!response.ok) return
         const activity = pluginRuntimeActivity(await response.json())
-        if (controller.signal.aborted) return
-        const current = context.current
-        publish({ activity, now: Date.now(),
-          sessions: current.sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
-          selectedKey: current.selectedSession ? sessionIdentityKey(current.selectedSession) : null,
-          focused: document.visibilityState !== 'hidden' && document.hasFocus(),
-        })
+        if (cancelled || controller.signal.aborted) return
+        acceptActivity(activity)
       } catch { /* retain observer baseline through transient failures */ }
       finally { inFlight = false }
     }
     void read()
     const timer = window.setInterval(() => { void read() }, 2500)
-    return () => { controller.abort(); window.clearInterval(timer) }
-  }, [publish, observesActivity])
+    return () => { cancelled = true; controller.abort(); window.clearInterval(timer) }
+  }, [acceptActivity])
   useEffect(() => subscribePluginCommands(id => {
     const command = getPluginCommand(id)
     if (!command || !command.renderers.includes('web') || !isPluginEnabled(command.pluginId)) return false
@@ -104,6 +122,21 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
     setOverlay(current => command.toggle && current?.surface === surface ? null : { surface, cwd, session: selectedSession ? { ...selectedSession } : null })
     return true
   }), [executeCommand, executeRepositoryCommand, cwd, selectedSession])
+  const modSurfaces = useModSurfaces()
+  const modActions = useMemo(() => ({
+    runCommand: (id: string) => dispatchPluginCommand(id),
+    openSession,
+    openFile: (path: string, line?: number) => {
+      if (line !== undefined) throw new Error('The Web Files preview does not support line positioning')
+      if (!cwd || !isPluginEnabled('files')) throw new Error('File navigation needs a repository and the Files plugin')
+      setOverlay({ surface: 'files', cwd, session: selectedSession, path })
+    },
+  }), [openSession, cwd, selectedSession])
+  const modAppSnapshot = useMemo<Omit<import('../../lib/plugins/modApp').ModAppSnapshot, 'version' | 'instanceId' | 'commands'>>(() => ({ renderer: 'web', cwd, theme, focused: appFocused, focusedSurface: modSurfaces.focused, surfaces: modSurfaces.surfaces,
+    selectedKey: selectedSession ? sessionIdentityKey(selectedSession) : null,
+    sessions: sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, cwd: session.cwd ?? null, activity: modActivity.get(sessionIdentityKey(session)) ?? 'idle', target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
+  } as const), [cwd, theme, appFocused, modSurfaces, selectedSession, sessions, modActivity])
+  useModAppHost(modAppSnapshot, modActions)
   const close = useCallback(() => setOverlay(null), [])
   // A view opens a file's history in its place, on the same repository.
   const openFileHistory = useCallback((path: string) => {

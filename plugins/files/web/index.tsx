@@ -5,7 +5,7 @@ import { PLUGIN_API_VERSION, type PluginViewModule } from '@/lib/plugins/types'
 import type { WebPluginView, WebPluginViewProps } from '@/components/shell/pluginTypes'
 import FileViewer from './FileViewer'
 
-function FilesSurface({ services, placement, close }: WebPluginViewProps) {
+function FilesSurface({ services, placement, close, target }: WebPluginViewProps) {
   const repository = services.repository!
   const composer = services.composer
   return (
@@ -13,6 +13,7 @@ function FilesSurface({ services, placement, close }: WebPluginViewProps) {
       open
       variant={placement === 'overlay' ? undefined : 'docked'}
       cwd={repository.cwd}
+      initialPath={target.path ?? undefined}
       canInsert={Boolean(composer?.insertPath)}
       sessionId={repository.sessionId ?? undefined}
       provider={repository.provider ?? undefined}
