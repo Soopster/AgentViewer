@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { allPluginManifests } from '../../lib/plugins/catalog'
+import { filterPluginManagerEntries, matchesPluginSearch, PLUGIN_ENABLEMENT_FILTERS, type PluginEnablementFilter } from '../../lib/plugins/managerSearch'
 import { isLocalManifest } from '../../lib/plugins/localManifest'
 import { localPluginDiscovery } from '../../lib/plugins/localPlugins'
 import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
@@ -45,12 +46,23 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
   const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...allPluginManifests(), ...PROVIDER_PLUGINS]
   const local = localPluginDiscovery()
   const disabled = useDisabledPlugins()
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<PluginEnablementFilter>('all')
+  const [searching, setSearching] = useState(false)
+  const matches = filterPluginManagerEntries(manifests, query, filter, disabled)
+  const refused = local.refused.filter(entry => filter === 'all' && matchesPluginSearch(query, [entry.id, entry.dir, 'local mod not loaded', ...entry.problems]))
+    .sort((a, b) => (a.id ?? a.dir).localeCompare(b.id ?? b.dir))
   const [cursor, setCursor] = useState(0)
+  const selectedIndex = Math.min(cursor, Math.max(0, matches.length - 1))
+  const selectedId = matches[selectedIndex]?.id
   const scroll = useRef<ScrollBoxRenderable>(null)
   useEffect(() => {
-    const timer = setTimeout(() => scroll.current?.scrollChildIntoView(`plugin-row:${manifests[cursor]?.id}`), 0)
+    const timer = setTimeout(() => {
+      if (selectedId) scroll.current?.scrollChildIntoView(`plugin-row:${selectedId}`)
+      else scroll.current?.scrollTo(0)
+    }, 0)
     return () => clearTimeout(timer)
-  }, [cursor, height, width])
+  }, [selectedId, query, filter, height, width])
   const toggle = (manifest: PluginManifest | ProviderPlugin) => {
     const enabled = disabled.has(manifest.id)
     const next = withPluginEnabled(readPluginSettings(), manifest.id, enabled)
@@ -69,21 +81,32 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
   }
   useEffect(() => {
     onKeyHandlerReady((key) => {
+      if (searching) {
+        if (key.name === 'escape' || key.name === 'return' || key.name === 'tab') { setSearching(false); return }
+        if (key.ctrl && key.name === 'u') { setQuery(''); setCursor(0); return }
+        if (key.name === 'backspace') { setQuery(value => Array.from(value).slice(0, -1).join('')); setCursor(0); return }
+        if (!key.ctrl && key.sequence && !/[\x00-\x1f\x7f]/.test(key.sequence)) { setQuery(value => value + key.sequence); setCursor(0) }
+        return
+      }
       if (key.name === 'escape' || key.sequence === 'q') { onClose(); return }
-      if (key.name === 'down' || key.sequence === 'j') setCursor(index => Math.min(manifests.length - 1, index + 1))
-      else if (key.name === 'up' || key.sequence === 'k') setCursor(index => Math.max(0, index - 1))
-      else if (key.name === 'pagedown') setCursor(index => Math.min(manifests.length - 1, index + Math.max(1, Math.floor((height - 6) / 3))))
-      else if (key.name === 'pageup') setCursor(index => Math.max(0, index - Math.max(1, Math.floor((height - 6) / 3))))
+      const option = PLUGIN_ENABLEMENT_FILTERS[Number(key.sequence) - 1]
+      if (option && /^[123]$/.test(key.sequence)) { setFilter(option.id); setCursor(0); return }
+      if (key.sequence === '/') { setSearching(true); return }
+      if (key.ctrl && key.name === 'u') { setQuery(''); setCursor(0); return }
+      if (key.name === 'down' || key.sequence === 'j') setCursor(Math.min(Math.max(0, matches.length - 1), selectedIndex + 1))
+      else if (key.name === 'up' || key.sequence === 'k') setCursor(Math.max(0, selectedIndex - 1))
+      else if (key.name === 'pagedown') setCursor(Math.min(Math.max(0, matches.length - 1), selectedIndex + Math.max(1, Math.floor((height - 9) / 3))))
+      else if (key.name === 'pageup') setCursor(Math.max(0, selectedIndex - Math.max(1, Math.floor((height - 9) / 3))))
       else if (key.name === 'home') setCursor(0)
-      else if (key.name === 'end') setCursor(manifests.length - 1)
-      else if (key.name === 'space' || key.sequence === ' ' || key.name === 'return') toggle(manifests[cursor]!)
+      else if (key.name === 'end') setCursor(Math.max(0, matches.length - 1))
+      else if (key.name === 'space' || key.sequence === ' ' || key.name === 'return') { const manifest = matches[selectedIndex]; if (manifest) toggle(manifest) }
     })
   })
 
   const panelWidth = Math.min(Math.max(width - 6, 40), 76)
   // Allow descriptions and command summaries to wrap inside the scroll area.
-  const panelHeight = Math.min(height - 2, (manifests.length + local.refused.length) * 3 + 5)
-  const footer = '↑↓ move · wheel scroll · space toggle · esc close'
+  const panelHeight = Math.min(height - 2, (manifests.length + local.refused.length) * 3 + 8)
+  const footer = searching ? 'Type to filter · enter browse · ctrl+u clear · esc done' : '/ search · ↑↓ move · space toggle · ctrl+u clear · esc close'
   const footerRows = Math.ceil(footer.length / Math.max(1, panelWidth - 4))
   return (
     <box
@@ -102,10 +125,21 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       flexDirection="column"
       paddingX={1}
     >
-      <scrollbox id="plugin-manager-scroll" ref={scroll} height={Math.max(1, panelHeight - 2 - footerRows)} flexShrink={0} scrollY viewportCulling>
-      {manifests.map((manifest, index) => {
+      <box height={1} flexShrink={0} backgroundColor={searching ? theme.surface2 : undefined} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setSearching(true) } }}>
+        <text fg={searching ? theme.cyan : theme.muted} wrapMode="none" selectable={false}>{`Search: ${query || (searching ? '│' : '/ to search plugins')}`}</text>
+      </box>
+      <box height={1} flexShrink={0} flexDirection="row">
+        {PLUGIN_ENABLEMENT_FILTERS.map((option, index) => <box key={option.id} id={`plugin-filter:${option.id}`} height={1} marginRight={1} backgroundColor={filter === option.id ? theme.surface2 : undefined}
+          onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setFilter(option.id); setCursor(0); setSearching(false) } }}>
+          <text fg={filter === option.id ? theme.cyan : theme.muted} wrapMode="none" selectable={false}>{`${index + 1} ${option.label}`}</text>
+        </box>)}
+      </box>
+      <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none" selectable={false}>{`${matches.length + refused.length} of ${manifests.length + local.refused.length} plugins`}</text>
+      <scrollbox id="plugin-manager-scroll" ref={scroll} height={Math.max(1, panelHeight - 5 - footerRows)} flexShrink={0} scrollY viewportCulling>
+      {matches.length === 0 && refused.length === 0 ? <text fg={theme.dim}>No matching plugins.</text> : null}
+      {matches.map((manifest, index) => {
         const on = !disabled.has(manifest.id)
-        const selected = index === cursor
+        const selected = index === selectedIndex
         return (
           <box key={manifest.id} id={`plugin-row:${manifest.id}`} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(index); toggle(manifest) } }}>
             <text width="100%" wrapMode="word" selectable={false}>
@@ -118,7 +152,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
           </box>
         )
       })}
-      {local.refused.map(entry => (
+      {refused.map(entry => (
         <box key={`refused:${entry.dir}`} flexDirection="column" flexShrink={0}>
           <text width="100%" wrapMode="word" selectable={false}><span fg={theme.red}>✕ </span><span fg={theme.text}>{entry.id ?? entry.dir}</span><span fg={theme.red}>  not loaded</span></text>
           <text fg={theme.muted} width="100%" wrapMode="word" selectable={false}>{`  ${entry.problems.join('; ')}`}</text>

@@ -3,8 +3,9 @@
 // The plugin manager: every bundled feature plugin, what it adds, and a switch.
 // Host code, not a plugin. The choice is saved through /api/plugins into the
 // same file the TUI reads, so turning Git off here turns it off there too.
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { Puzzle, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Puzzle, Search, X } from 'lucide-react'
+import { filterPluginManagerEntries, matchesPluginSearch, PLUGIN_ENABLEMENT_FILTERS, type PluginEnablementFilter } from '@/lib/plugins/managerSearch'
 import { allPluginManifests, localPluginsVersion, subscribeLocalPlugins } from '@/lib/plugins/catalog'
 import { isLocalManifest } from '@/lib/plugins/localManifest'
 import { webLocalPluginReport } from './localPlugins'
@@ -22,6 +23,20 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
   const localReport = webLocalPluginReport()
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<PluginEnablementFilter>('all')
+  const search = useRef<HTMLInputElement>(null)
+  const entries = [...allPluginManifests(), ...PROVIDER_PLUGINS]
+  const matches = filterPluginManagerEntries(entries, query, filter, disabled)
+  const refused = localReport?.refused.filter(entry => filter === 'all' && matchesPluginSearch(query, [entry.id, entry.dir, 'local mod not loaded', ...entry.problems]))
+    .sort((a, b) => (a.id ?? a.dir).localeCompare(b.id ?? b.dir)) ?? []
+
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement
+    search.current?.focus()
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus() }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -67,8 +82,23 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
           </div>
           <button type="button" aria-label="Close" onClick={onClose} style={{ color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}><X size={16} /></button>
         </div>
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Search size={15} aria-hidden="true" style={{ color: 'var(--text-2)', flexShrink: 0 }} />
+            <input ref={search} type="search" aria-label="Search plugins" placeholder="Search plugins, providers, commands…" value={query}
+              onChange={event => setQuery(event.target.value)}
+              style={{ flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '7px 8px', fontSize: 12 }} />
+            {query ? <button type="button" aria-label="Clear plugin search" onClick={() => setQuery('')} style={{ color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}><X size={14} /></button> : null}
+          </div>
+          <div role="group" aria-label="Filter plugins" style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            {PLUGIN_ENABLEMENT_FILTERS.map(option => <button key={option.id} type="button" aria-pressed={filter === option.id} onClick={() => setFilter(option.id)}
+              style={{ border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', background: filter === option.id ? 'var(--violet)' : 'transparent', color: filter === option.id ? 'var(--surface)' : 'var(--text-2)' }}>{option.label}</button>)}
+          </div>
+          <div role="status" style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>{matches.length + refused.length} of {entries.length + (localReport?.refused.length ?? 0)} plugins</div>
+        </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 8, overflowY: 'auto' }}>
-          {[...allPluginManifests(), ...PROVIDER_PLUGINS].map((manifest: PluginManifest | ProviderPlugin) => {
+          {matches.length === 0 && refused.length === 0 ? <li style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12 }}>No matching plugins.</li> : null}
+          {matches.map((manifest: PluginManifest | ProviderPlugin) => {
             const enabled = !disabled.has(manifest.id)
             const switchId = `plugin-switch-${manifest.id}`
             return (
@@ -98,7 +128,7 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
               </li>
             )
           })}
-          {localReport?.refused.map(entry => (
+          {refused.map(entry => (
             <li key={`refused:${entry.dir}`} data-plugin-refused={entry.id ?? entry.dir} style={{ padding: '10px 8px' }}>
               <div style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.id ?? entry.dir} <span style={{ color: 'var(--red, #e5484d)', fontWeight: 400 }}>not loaded</span></div>
               <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{entry.problems.join('; ')}</div>
