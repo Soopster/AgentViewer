@@ -12,8 +12,17 @@ import { PLUGIN_MANIFESTS } from '../../lib/plugins/catalog'
 import { applyPluginSettings, DEFAULT_PLUGIN_SETTINGS, withPluginEnabled } from '../../lib/plugins/enablement'
 import { beginPiActivity, completePiActivity, getPiActivitySnapshot } from '../../lib/piActivity'
 
-assert.deepEqual(listPluginWidgets('tui', PLUGIN_MANIFESTS, 'corner').map(spec => `${spec.pluginId}:${spec.id}`), ['pi-activity:pi-activity'])
-assert.equal(tuiPluginWidgets.isLoaded('pi-activity'), false, 'listing widgets loaded one')
+// The corner lists exactly the widgets the manifests declare for it — derived, not pinned, so a new
+// widget plugin does not break this check — and listing them loads none.
+const declared = PLUGIN_MANIFESTS.flatMap(manifest => (manifest.renderers as readonly string[]).includes('tui')
+  ? ((manifest as { widgets?: readonly { id: string; slot: string; renderers?: readonly string[] }[] }).widgets ?? [])
+      .filter(widget => widget.slot === 'corner' && (!widget.renderers || widget.renderers.includes('tui')))
+      .map(widget => `${manifest.id}:${widget.id}`)
+  : [])
+const listed = listPluginWidgets('tui', PLUGIN_MANIFESTS, 'corner').map(spec => `${spec.pluginId}:${spec.id}`)
+assert.deepEqual([...listed].sort(), [...declared].sort())
+assert(listed.includes('pi-activity:pi-activity'), 'the Pi activity widget is not in the corner')
+for (const id of new Set(listed.map(entry => entry.split(':')[0]!))) assert.equal(tuiPluginWidgets.isLoaded(id), false, `listing widgets loaded ${id}`)
 
 const setup = await testRender(<PluginWidgetHost slot="corner" theme={DARK_THEME} width={120} height={30} zIndex={48} />, { width: 120, height: 30 })
 const settle = async (ms = 80) => { await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)); await setup.flush() }) }
