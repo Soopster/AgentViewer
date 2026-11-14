@@ -1,0 +1,11 @@
+{
+  "eval_id": 2,
+  "eval_name": "troubleshoot-rejected-tool-call",
+  "prompt": "I called coord_complete_task and it came back rejected with something about 'judgment review pending' -- I've never seen that before. What does that mean and what should I do next? Also, a teammate on Copilot said coord_wait never returns a task handle for them even though I get one on Claude -- is that a bug I need to work around?",
+  "assertions": [
+    "Answer correctly identifies 'judgment review pending' as a completion gate (post-mechanical judgment review before synthesis), not a bug, and explains it blocks coord_complete_task until resolved -- not asking to bypass or force it",
+    "Answer does NOT claim coord_wait's task-handle behavior is a Copilot-specific bug -- it should identify it as an MCP Tasks capability check gated on the client declaring io.modelcontextprotocol/tasks, which is expected client-dependent behavior",
+    "Answer recommends coord_publish_finding to report the client-behavior discrepancy rather than silently working around it",
+    "Answer stays grounded in the skill's actual documented gates/tools rather than inventing an explanation"
+  ]
+}

@@ -1,0 +1,106 @@
+import type { PluginSessionDiagnosticsService } from '../../lib/plugins/diagnostics'
+import type { ComponentType } from 'react'
+import type { AnalyticsInput } from '@/lib/analytics'
+import type { ProtocolAgent } from '@/lib/agentProtocol'
+import type { ProviderSelection, Session } from '@/lib/types'
+import type { PluginPlacement, PluginTarget } from '@/lib/plugins/types'
+import type { SendAttachment } from '@/lib/types'
+
+/** Declared service values, resolved by the host for this view's target. */
+export type WebPluginServices = {
+  notifications?: import('../../lib/plugins/notifications').PluginNotifications
+  'run-launch'?: import('../../lib/plugins/runLaunch').PluginRunLaunchService
+  playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
+  'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
+  handoff?: import('../../lib/plugins/handoff').PluginHandoffService
+  checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
+  'session-insights'?: import('../../lib/plugins/sessionInsights').PluginSessionInsightsService
+  'session-tabs'?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
+  /** A session's captured subagents and their conversations (the TUI's is one transcript, opened from the rail). */
+  'subagent-transcript'?: import('./subagentsService').WebSubagentTranscriptService
+  /** Open a file's history across agent turns (the file-history plugin). */
+  'file-history'?: { readonly open: (path: string) => void }
+  bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
+  'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
+  /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */
+  'session-fleet'?: {
+    readonly sessions: Session[]
+    readonly selected: Session | null
+    readonly selectedMessages: import('@/lib/types').SessionMessage[]
+    readonly loading: boolean
+    readonly providerLabel: string
+    readonly scopeLabel: string | null
+    readonly select: (session: Session) => void
+  }
+  'channel-bridge'?: import('../../lib/plugins/bridges').ChannelBridgeViewService
+  'ide-bridge'?: import('../../lib/plugins/bridges').IdeBridgeViewService
+  'reader-slot'?: import('../../lib/plugins/reader').ReaderSlotService
+  'live-transcript'?: import('../../lib/plugins/tasks').PluginLiveTranscript
+  'task-control'?: import('../../lib/plugins/tasks').PluginTaskControl
+  messaging?: import('../../lib/plugins/messaging').PluginMessagingService
+  'page-location'?: {
+    readonly url: string
+    readonly replaceQuery: (name: string, value: string) => void
+  }
+  'session-diagnostics'?: PluginSessionDiagnosticsService
+  session?: { readonly session: Session | null }
+  'session-transcript'?: AnalyticsInput
+  repository?: {
+    readonly cwd: string
+    /** Scopes turn lists to one session; null means every turn in the repository. */
+    readonly sessionId: string | null
+    /** The provider of `sessionId`, which scopes reads made on its behalf. */
+    readonly provider?: string | null
+  }
+  composer?: {
+    /** Insert a file path into the composer the user is writing in; absent when no session composer is open. */
+    readonly insertPath?: (path: string) => void
+    /** Insert text (a question for the agent) into the composer the user is writing in. */
+    readonly insertText?: (text: string) => void
+    /** Attach a piece of context (a terminal selection, a page) to the message being written. */
+    readonly attachContext?: (attachment: SendAttachment) => void
+  }
+  'session-pull-request'?: {
+    /** The pull request already linked to the selected session, if any. */
+    readonly linkedNumber?: number
+    /** Link a pull request to the selected session; absent with no session selected. */
+    readonly link?: (pr: { repo: string; number: number; url: string; cwd: string }) => void
+  }
+  'browser-location'?: {
+    /** Where this browser tab is pointed, kept by the host with the panel layout. */
+    readonly url: string | null
+    readonly navigate: (url: string) => void
+  }
+  /** Coordinator runs and a conversation's team, as the page and the session view host them. */
+  coordination?: {
+    readonly provider: ProviderSelection
+    /** The conversation in view: the control center's context, the teammates panel's lead. */
+    readonly selectedSession: Session | null
+    readonly openSession: (session: Session) => void
+    readonly sessionsChanged?: () => void
+    /** The teammates panel: read a teammate's transcript beside the lead's. */
+    readonly inspectTeammate?: (agent: ProtocolAgent) => void
+    readonly returnToChat?: () => void
+    /** How many things the team needs from the user, for the host's tab badge. */
+    readonly attentionChanged?: (count: number) => void
+  }
+}
+
+/** Everything a Web plugin view receives. Never the page's state or setters. */
+export type WebPluginViewProps = {
+  readonly pluginId: string
+  readonly surfaceId: string
+  readonly instanceId: string
+  readonly placement: PluginPlacement
+  readonly target: PluginTarget
+  readonly services: WebPluginServices
+  readonly useState: <T>(name: string, initial: T) => [T, (next: T | ((previous: T) => T)) => void]
+  readonly onDispose: (cleanup: () => void) => () => void
+  readonly close: () => void
+}
+
+export type WebPluginView = ComponentType<WebPluginViewProps>
+
+/** What a Web widget receives: the slot it sits in. Widgets read their own state. */
+export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

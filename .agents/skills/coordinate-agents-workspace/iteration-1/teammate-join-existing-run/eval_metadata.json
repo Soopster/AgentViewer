@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "teammate-join-existing-run",
+  "prompt": "Someone already started a Coordinator run -- the run ID is run_8f2a1c. Join it as a teammate named 'codex-lane-2' and get to work on whatever's claimable. Tell me the exact sequence of coord_* calls you'd make from the moment you join through claiming and starting your first task.",
+  "assertions": [
+    "Plan calls coord_join_run with the given run_id (run_8f2a1c), a descriptive unique name, provider, and checkout path",
+    "Plan reads coord_status and coord_read_inbox immediately after joining, before claiming a task",
+    "Plan calls coord_claim_task to atomically claim one unblocked task rather than assuming work",
+    "Plan mentions calling coord_progress with status=working after claiming, before/while doing the work",
+    "Plan does not skip inbox drain / reply-required handling before starting new work"
+  ]
+}

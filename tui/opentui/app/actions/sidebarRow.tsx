@@ -1,0 +1,297 @@
+/** @jsxImportSource @opentui/react */
+import { sidebarQuietColor } from '../SidebarChrome'
+import { parseStoredSessionTags } from '../../../../lib/sessionTags'
+import { retitleCoordinatorSession } from '../../../../lib/coordinatorSessionTitle'
+import type { PluginSurfaceId } from '../../../../lib/plugins/catalog'
+import type { TuiThemePalette } from '../../../theme'
+import type { Dispatch } from 'react'
+import type { SetStateAction } from 'react'
+import type { TeamAttention } from '../../teamAttentionStore'
+import React from 'react'
+import { TextAttributes } from '@opentui/core'
+import { formatProviderLabel, formatSessionTitle } from '../../../format'
+import { getProviderAccent, type TuiDensity } from '../../../theme'
+import { type Session, type SubagentSummary } from '../../../../lib/types'
+import { fitText, joinMeta } from '../../textLayout'
+import { type MenuPoint, type SidebarEntry, type SidebarSubagentEntry } from '../types'
+import { fmtTokens } from '../contextMeter'
+import { timeAgo } from '../format'
+import { sessionKey, isSessionRecentlyTouched } from '../sessionList'
+import { mixHexColor } from '../transcriptStyle'
+import { SessionRailDetail, PR_STATE_GLYPH, pullRequestMark, pullRequestColor } from '../SessionRailDetail'
+import { sessionProviderLabel } from '../pickers'
+import { SidebarSessionRow } from '../SidebarTitlePreview'
+import { SidebarGroupHeading } from '../SidebarChrome'
+
+export type BuildSidebarRowContext = {
+  /** The Session insights plugin is on: PR glyph and the selected row's branch/PR detail. */
+  pinnedSessionKeys?: ReadonlySet<string>
+  toggleSessionPin?: (session: Session) => void
+  sessionInsightsOn: boolean
+  toggleDateGroup: (key: string) => void
+  coordinatorRunGoals: ReadonlyMap<string, string>
+  sidebarEntries: SidebarEntry[]
+  sidebarInnerWidth: number
+  firstSidebarEntryKey: string
+  theme: TuiThemePalette
+  sidebarSessionActivity: Map<string, 'needs-input' | 'running' | 'waiting'>
+  showProviderInSessionRows: boolean
+  selectSidebarSession: (session: Session) => void
+  setSidebarSubagentCursor: React.Dispatch<React.SetStateAction<string | null>>
+  setSubagentTranscriptSelection: React.Dispatch<React.SetStateAction<{ parent: Session; agent: SubagentSummary; } | null>>
+  setPluginOverlay: React.Dispatch<React.SetStateAction<PluginSurfaceId | null>>
+  recentlyWrittenKeys: ReadonlySet<string>
+  teamAttention: TeamAttention
+  density: TuiDensity
+  renameSessionKey: string | null
+  childrenByParentId: Map<string, SidebarSubagentEntry[]>
+  splitPaneActions: { close: (paneIndex: number) => void; promote: (session: Session) => void; openLayout: () => void; fullscreen: () => void; sessionMenu: (session: Session, source: 'rail' | 'tab' | 'pane', point: MenuPoint, paneIndex?: number) => void; }
+  sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }
+  renameDraft: string
+  setRenameDraft: React.Dispatch<React.SetStateAction<string>>
+  commitRename: () => Promise<void>
+  toggleSidebarSubagents: (parent: Session) => void
+  collapsedSubagentSet: Set<string>
+}
+
+export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEntry, selected: boolean) {
+  const {
+    sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
+    setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
+    renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
+    setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
+  } = ctx
+  if (entry.type === 'project') {
+    return <SidebarGroupHeading key={entry.key} id={`sidebar:${entry.key}`} label={entry.projectName} count={entry.count}
+      width={sidebarInnerWidth} dateGroup={entry.dateGroup} disclosure={entry.dateGroup || entry.collapsible ? entry.collapsed ? '▸ ' : '▾ ' : '◆ '}
+      first={entry.key === firstSidebarEntryKey} afterHeading={sidebarEntries[sidebarEntries.indexOf(entry) - 1]?.type === 'project'} selected={selected} density={density} theme={theme}
+      onPress={entry.dateGroup || entry.collapsible ? () => ctx.toggleDateGroup(entry.key) : undefined} />
+  }
+
+  if (entry.type === 'subagent') {
+    const subagentEntry = entry.entry
+    const accent = getProviderAccent(
+      subagentEntry.kind === 'session'
+        ? (subagentEntry.session.provider ?? 'claude')
+        : (subagentEntry.summary.provider ?? entry.parentSession.provider ?? 'claude'),
+    )
+    const label = subagentEntry.kind === 'session'
+      ? formatSessionTitle(subagentEntry.session) || subagentEntry.session.sessionId.slice(-8)
+      : (subagentEntry.summary.taskDescription?.trim() || subagentEntry.summary.agentId.slice(-8))
+    const summaryTokens = subagentEntry.kind === 'summary'
+      ? subagentEntry.summary.usage.totalTokens
+        ?? (subagentEntry.summary.usage.inputTokens + subagentEntry.summary.usage.outputTokens)
+      : 0
+    const detail = subagentEntry.kind === 'session'
+      ? (() => {
+          const activity = sidebarSessionActivity.get(sessionKey(subagentEntry.session))
+          const marker = activity === 'needs-input' ? '⚠'
+            : activity === 'running' ? '●'
+            : activity === 'waiting' ? '◌'
+            : isSessionRecentlyTouched(subagentEntry.session) ? '·'
+            : null
+          return joinMeta([
+            showProviderInSessionRows ? sessionProviderLabel(subagentEntry.session) : null,
+            `${timeAgo(subagentEntry.session.lastModified ?? subagentEntry.session.createdAt)}${marker ? ` ${marker}` : ''}`,
+          ])
+        })()
+      : joinMeta([
+          showProviderInSessionRows
+            ? formatProviderLabel(subagentEntry.summary.provider ?? entry.parentSession.provider)
+            : null,
+          `${subagentEntry.summary.messageCount} msgs`,
+          summaryTokens > 0 ? `${fmtTokens(summaryTokens)} tokens` : null,
+        ])
+    return (
+      <SidebarSessionRow preview={{ key: entry.key, title: label, width: sidebarInnerWidth - 6 }} selected={selected}
+        key={entry.key}
+        id={`sidebar:${entry.key}`}
+        flexDirection="column"
+        paddingLeft={Math.min(entry.depth + 1, 5)}
+        backgroundColor={selected ? theme.surface3 : theme.surface}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          event.stopPropagation()
+          if (subagentEntry.kind === 'session') selectSidebarSession(subagentEntry.session)
+          else {
+            setSidebarSubagentCursor(entry.key)
+            setSubagentTranscriptSelection({ parent: entry.parentSession, agent: subagentEntry.summary })
+            setPluginOverlay('subagents')
+          }
+        }}
+      >
+        <text fg={selected ? accent : theme.muted} wrapMode="none">
+          {fitText(`${selected ? '▎' : ' '} ${'↪'.repeat(Math.min(entry.depth, 3))} ${label}`, sidebarInnerWidth - 2)}
+        </text>
+        {detail && (
+          <text fg={selected ? accent : theme.muted} wrapMode="none">
+            {fitText(`${selected ? '▎' : ' '}   ${detail}`, sidebarInnerWidth - 2)}
+          </text>
+        )}
+      </SidebarSessionRow>
+    )
+  }
+
+  // Sessions under a date header sit one column in from it.
+  const innerWidth = sidebarInnerWidth - (entry.indented ? 1 : 0)
+  const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
+  const activityTime = entry.session.lastModified ?? entry.session.createdAt
+  const recentlyTouched = isSessionRecentlyTouched(entry.session)
+  const knownActivity = sidebarSessionActivity.get(sessionKey(entry.session))
+  // Written to in the last couple of minutes by something this host is not
+  // running — a native CLI in another terminal. Shown as working, in green
+  // rather than the provider accent, so the two sources stay tellable apart.
+  const activity = knownActivity ?? (recentlyWrittenKeys.has(sessionKey(entry.session)) ? 'active' : undefined)
+  const ago = activity === 'running' ? 'now' : timeAgo(activityTime)
+  const activityGlyph = activity === 'needs-input' ? '⚠'
+    : activity === 'running' || activity === 'active' ? '●'
+    : activity === 'waiting' ? '◌'
+    : recentlyTouched ? '·'
+    : null
+  const activityColor = activity === 'needs-input' ? theme.amber
+    : activity === 'running' ? sessionAccent
+    : activity === 'active' ? theme.green
+    : activity === 'waiting' ? theme.cyan
+    : theme.dim
+  // The selected row is tinted with its provider's accent across the full
+  // rail width; surface3 alone sits too close to the rail's own surface in
+  // most themes to find at a glance.
+  const selectedRowBg = mixHexColor(sessionAccent, theme.surface, 0.22) ?? theme.surface3
+  const rowBg = selected ? selectedRowBg : theme.surface
+
+  const title = formatSessionTitle(entry.session)
+  const prompt = (entry.session.firstPrompt ?? '').replace(/\s+/g, ' ').trim()
+  const tagText = parseStoredSessionTags(entry.session.tag).map((tag) => `#${tag}`).join(' ')
+  // Comfortable's second line: tags first (what the tag filter lists), then the opening prompt.
+  const prompted = prompt && !title.startsWith(prompt.slice(0, 24)) ? prompt : ''
+  const preview = density === 'comfortable' ? [tagText, prompted].filter(Boolean).join(' · ') : ''
+  const metaLine = joinMeta([
+    activity === 'needs-input' ? 'Needs input'
+      : activity === 'running' || activity === 'active' ? 'Working'
+      : activity === 'waiting' ? 'Waiting' : null,
+    showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
+    ago,
+  ])
+  // Waiting outranks a result, as on the web row: a question blocks a
+  // teammate, a result only waits to be read.
+  const team = teamAttention.get(sessionKey(entry.session))
+  const teamMark = team ? (team.waiting > 0 ? ` !${team.waiting}` : ` ✓${team.finished}`) : ''
+  // Comfortable keeps a separate metadata row; balanced and dense align
+  // activity and age alongside the title to fit more sessions.
+  const singleRow = density !== 'comfortable' && sessionKey(entry.session) !== renameSessionKey
+  const rowMeta = joinMeta([
+    showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
+    ago,
+  ])
+  // "Recently touched" is the age itself on this row; only a turn's state
+  // earns a glyph. Marks sit before the age so the ages stay one flush column.
+  const settled = Boolean(entry.session.inbox?.settledAt)
+  // Snoozed (the web's z): set aside for now, without being done.
+  const snoozed = !settled && (entry.session.inbox?.snoozedUntil ?? 0) > Date.now()
+  const rowGlyph = activity ? activityGlyph : settled ? '✓' : snoozed ? 'z' : null
+  const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
+  const pinned = ctx.pinnedSessionKeys?.has(sessionKey(entry.session)) ?? false
+  const showPin = Boolean(ctx.toggleSessionPin && (selected || pinned))
+  const pinWidth = showPin ? 3 : 0
+  const pr = ctx.sessionInsightsOn ? pullRequestMark(entry.session) : null
+  const rowTitleWidth = Math.max(
+    innerWidth - 3 - subagentDisclosureWidth - pinWidth - (rowMeta ? rowMeta.length + 1 : 0) - teamMark.length - (rowGlyph ? 2 : 0) - (pr ? 2 : 0),
+    4,
+  )
+
+  const metaWidth = innerWidth - 3 - (activityGlyph ? 2 : 0) - teamMark.length
+  return (
+    <SidebarSessionRow preview={{ key: entry.key, title: retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), width: singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth }} selected={selected}
+      key={entry.key}
+      id={`sidebar:${entry.key}`}
+      flexDirection="column"
+      paddingLeft={entry.indented ? 1 : 0}
+      backgroundColor={rowBg}
+      marginBottom={density === 'comfortable' ? 1 : 0}
+      flexShrink={0}
+      // Its text is not selectable: a press on selectable text starts a text
+      // selection, which takes the drag away from the row.
+      // Selects on release, not press: a press that moves is a drag onto the
+      // window area, and selecting on press would put the session in the
+      // reader before it could be dropped beside it.
+      onMouseDown={(event) => {
+        if (event.button === 2) {
+          event.stopPropagation()
+          splitPaneActions.sessionMenu(entry.session, 'rail', event)
+          return
+        }
+        if (event.button !== 0) return
+        event.stopPropagation()
+        if (sessionKey(entry.session) === renameSessionKey) return
+        sessionDragHandlers.press(entry.session, null, event, () => selectSidebarSession(entry.session))
+      }}
+      onMouseDrag={(event) => sessionDragHandlers.move(event)}
+      onMouseUp={(event) => {
+        if (event.button !== 0) return
+        sessionDragHandlers.release(event)
+      }}
+    >
+      {sessionKey(entry.session) === renameSessionKey ? (
+        <box paddingX={1} backgroundColor={theme.surface3}>
+          <input
+            focused
+            value={renameDraft}
+            maxLength={80}
+            onInput={(v: string) => setRenameDraft(v)}
+            onSubmit={commitRename}
+          />
+        </box>
+      ) : (
+        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+          <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+          {(childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? <text
+            id={`sidebar-subagents-toggle:${sessionKey(entry.session)}`} fg={sessionAccent} selectable={false}
+            onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); toggleSidebarSubagents(entry.session) } }}
+          >{collapsedSubagentSet.has(sessionKey(entry.session)) ? '▸ ' : '▾ '}</text> : null}
+          {/* Keep the title readable; provider identity belongs to the rail. */}
+          <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
+            {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth)}
+          </text>
+          {showPin ? <text id={`sidebar-pin:${sessionKey(entry.session)}`} width={3} fg={pinned ? sessionAccent : sidebarQuietColor(theme)} wrapMode="none" selectable={false}
+            onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); ctx.toggleSessionPin?.(entry.session) } }}
+            onMouseUp={event => event.stopPropagation()}>{pinned ? ' ★ ' : ' ☆ '}</text> : null}
+          {singleRow ? (
+            <>
+              {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+              {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}
+              {rowGlyph ? <text fg={activity ? activityColor : snoozed ? theme.dim : theme.green} wrapMode="none" selectable={false}>{` ${rowGlyph}`}</text> : null}
+              {rowMeta ? <text fg={activity === 'needs-input' ? theme.amber : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{` ${rowMeta}`}</text> : null}
+            </>
+          ) : null}
+        </box>
+      )}
+      {singleRow ? null : (
+      <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+        <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+        <text fg={activity === 'needs-input' ? theme.amber : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>
+          {/* The opening prompt, as the web row previews it, when it says more than the title.
+              fitText pads to its width, so the age is fitted only when nothing follows it. */}
+          {preview && metaLine.length + 6 < metaWidth ? metaLine : fitText(metaLine, metaWidth)}
+          {preview && metaLine.length + 6 < metaWidth
+            ? <span fg={theme.muted}>{fitText(` · ${preview}`, metaWidth - metaLine.length)}</span>
+            : null}
+        </text>
+        {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}
+        {pr ? <text fg={pullRequestColor(pr.state, theme)} wrapMode="none" selectable={false}>{` ${PR_STATE_GLYPH}`}</text> : null}
+        {activityGlyph ? <text fg={activityColor} wrapMode="none" selectable={false}>{` ${activityGlyph}`}</text> : null}
+      </box>
+      )}
+      {ctx.sessionInsightsOn && selected && sessionKey(entry.session) !== renameSessionKey
+        ? <SessionRailDetail session={entry.session} theme={theme} width={innerWidth} rowBg={rowBg} accent={sessionAccent} />
+        : null}
+      {/* Comfortable density retains the session recap below its compact row. */}
+      {density !== 'comfortable' || !entry.session.recap ? null : (
+        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+          <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
+          <text fg={theme.muted} wrapMode="none" selectable={false}>{fitText(entry.session.recap.text, innerWidth - 3)}</text>
+        </box>
+      )}
+    </SidebarSessionRow>
+  )
+}
