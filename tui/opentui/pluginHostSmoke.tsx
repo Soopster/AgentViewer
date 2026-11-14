@@ -171,6 +171,8 @@ const settle = async (ms = 150) => {
   for (let elapsed = 0; elapsed < ms; elapsed += 30) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
 }
 const screen = () => setup.captureCharFrame()
+// The workspace below the Omni Bar, whose top row names commands ("Files") that overlay checks look for.
+const workspace = () => setup.captureCharFrame().split('\n').slice(1).join('\n')
 const fail = (message: string): never => {
   console.error(`${message}\n${screen()}`)
   process.exit(1)
@@ -406,10 +408,10 @@ console.log('Git opens as a lazy plugin; the plugin manager turns it off (no com
 // Files is a plugin, and the new-session folder picker is its view in picker mode.
 check(!tuiPluginViews.isLoaded('files'), 'the Files plugin loaded before it was opened')
 await key('f', { ctrl: true })
-await waitFor('the Files overlay', () => screen().includes(' Files '))
+await waitFor('the Files overlay', () => workspace().includes(' Files '))
 check(tuiPluginViews.isLoaded('files'), 'Files opened without its plugin module')
 await key('escape')
-await waitFor('Files closed', () => !screen().includes(' Files '))
+await waitFor('Files closed', () => !workspace().includes(' Files '))
 await key('n', { shift: true })
 await waitFor('the new-session modal', () => screen().includes('Folder') || screen().includes('folder'))
 await key('b')

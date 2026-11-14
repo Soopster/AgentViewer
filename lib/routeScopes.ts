@@ -106,6 +106,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/git': { GET: 'read', POST: 'write' },
   '/api/proof': { GET: 'read', POST: 'write' },
   '/api/checkpoints': { GET: 'read', POST: 'write' },
+  '/api/editor/lsp': { POST: 'write' },
   '/api/git/workspace': { GET: 'read', POST: 'write' },
   '/api/review': { GET: 'read', POST: 'write' },
   // A read that needs a body (the caller's GitData), hence a POST declared

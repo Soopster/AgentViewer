@@ -7,16 +7,23 @@ export type EditorLspServerSpec = { command: string; args: string[]; name: strin
 
 const moduleRequire = createRequire(import.meta.url)
 
-function typescriptLspCommand(): EditorLspServerSpec[] {
+function typescriptLspCommand(root?: string): EditorLspServerSpec[] {
   const packagedCommand = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
   const native = (command: string): EditorLspServerSpec => ({ command, args: ['--lsp', '--stdio'], name: 'TypeScript 7' })
   if (packagedCommand) return [native(packagedCommand)]
   const specs: EditorLspServerSpec[] = []
-  try {
-    const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
-    const packagePath = moduleRequire.resolve(platformPackage)
-    specs.push(native(join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')))
-  } catch { /* the native server is not installed for this platform */ }
+  // The native server is resolved from this module, then from the workspace: a
+  // bundled host (the web server under Next) resolves this module's URL inside
+  // its build output, where no node_modules is, and would otherwise fall back to
+  // a server that cannot read a TypeScript 7 workspace at all.
+  const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
+  for (const resolver of [moduleRequire, ...(root ? [createRequire(join(resolve(root), 'package.json'))] : [])]) {
+    try {
+      const packagePath = resolver.resolve(platformPackage)
+      specs.push(native(join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')))
+      break
+    } catch { /* not installed where this resolver looks */ }
+  }
   // Bare `tsc` is not a fallback: TypeScript 5's compiler has no `--lsp`, so it
   // would spawn, reject the flags and die. The community server is the real
   // second choice, and it is what most machines already have.
@@ -217,8 +224,8 @@ export function clearEditorLspConfigCache(): void {
   configCache.clear()
 }
 
-function builtinSpecs(filetype: string): readonly EditorLspServerSpec[] {
-  if (TYPESCRIPT_FILETYPES.has(filetype)) return typescriptLspCommand()
+function builtinSpecs(filetype: string, root?: string): readonly EditorLspServerSpec[] {
+  if (TYPESCRIPT_FILETYPES.has(filetype)) return typescriptLspCommand(root)
   return SERVER_BY_FILETYPE[filetype] ?? []
 }
 
@@ -229,7 +236,7 @@ function builtinSpecs(filetype: string): readonly EditorLspServerSpec[] {
  * the defaults.
  */
 export function getEditorLspServerSpecs(filetype: string, root?: string): readonly EditorLspServerSpec[] {
-  const builtin = builtinSpecs(filetype)
+  const builtin = builtinSpecs(filetype, root)
   if (!root) return builtin
   const { config } = loadEditorLspConfig(root)
   if (config.disabled?.includes(filetype)) return []

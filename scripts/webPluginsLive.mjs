@@ -273,6 +273,39 @@ try {
       assert.match(asked, /Discard unsaved changes/)
     } finally { rmSync(fixture, { force: true }) }
   })
+  await check('editor language server: a type error in the gutter, completion on `.`, F8 to the error', async () => {
+    const fixture = 'e2e-editor-lsp-fixture.ts'
+    writeFileSync(fixture, 'const box = { width: 2, height: 3 }\nconst total: string = 1\nexport { box, total }\n')
+    try {
+      await page.waitForTimeout(5500) // the project file list is cached for 5s
+      await palette('Open project editor')
+      const view = page.locator('[data-plugin-view="editor"]')
+      await view.waitFor()
+      await view.getByLabel('Open file').fill('e2e-editor-lsp')
+      await view.locator(`[data-editor-result="${fixture}"]`).click()
+      const buffer = view.locator(`[data-editor-buffer="${fixture}"]`)
+      await buffer.waitFor()
+      await view.locator('[data-editor-lsp="ready"]').waitFor({ timeout: 45000 })
+      await view.locator('[data-editor-diagnostic-line="1"]').waitFor({ timeout: 30000 })
+      // Completion: a new line `box.` offers the object's members; Enter accepts the highlighted one.
+      await buffer.evaluate(element => { element.selectionStart = element.selectionEnd = element.value.length })
+      await buffer.type('box.')
+      await view.locator('[data-editor-completion="width"]').waitFor({ timeout: 20000 })
+      await view.locator('[data-editor-completion="height"]').waitFor()
+      await buffer.type('wi')
+      await page.waitForTimeout(150)
+      await view.locator('[data-editor-completion="width"]').click()
+      await page.waitForFunction(name => document.querySelector(`[data-editor-buffer="${name}"]`)?.value.endsWith('box.width'), fixture)
+      // F8 jumps to the error and says what it is.
+      await buffer.evaluate(element => { element.selectionStart = element.selectionEnd = 0 })
+      await buffer.press('F8')
+      await view.getByText(/2:\d+ .*not assignable to type 'string'/).waitFor()
+      await shot('editor-lsp')
+      page.once('dialog', dialog => { void dialog.accept() })
+      await view.getByRole('button', { name: 'Close', exact: true }).click()
+      await view.waitFor({ state: 'detached' })
+    } finally { rmSync(fixture, { force: true }) }
+  })
   await check('mod view: draw and run an action', async () => {
     await palette('Mod views')
     await page.locator('[data-plugin-view="mod-views"]').waitFor()
