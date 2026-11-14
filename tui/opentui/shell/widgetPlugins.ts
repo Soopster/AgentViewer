@@ -7,5 +7,6 @@ export const tuiPluginWidgets = createPluginWidgetRegistry<TuiPluginWidget>('tui
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).widgets,
   toasts: async () => (await import('../../../plugins/toasts/tui')).widgets,
   'dynamic-island': async () => (await import('../../../plugins/dynamic-island/tui')).widgets,
+  proof: async () => (await import('../../../plugins/proof/tui')).widgets,
   'pi-activity': async () => (await import('../../../plugins/pi-activity/tui')).widgets,
 })

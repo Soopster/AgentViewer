@@ -13,6 +13,7 @@ export type WebPluginServices = {
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
+  proof?: import('../../lib/plugins/proof').ProofService
   checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
@@ -102,5 +103,5 @@ export type WebPluginViewProps = {
 export type WebPluginView = ComponentType<WebPluginViewProps>
 
 /** What a Web widget receives: the slot it sits in. Widgets read their own state. */
-export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'repository'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
 export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

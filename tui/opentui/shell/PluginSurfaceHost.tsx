@@ -4,6 +4,7 @@
 // target it was opened on, holding its scoped state, routing its keys, and
 // containing its failures. A view that throws, or a module that fails to load,
 // leaves a local Retry/Close view; the transcript and composer keep working.
+import { tuiProof } from './proofService'
 import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useScopedNotifications } from '../../../lib/plugins/useScopedNotifications'
@@ -162,6 +163,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
       notifications,
+      proof: tuiProof,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),

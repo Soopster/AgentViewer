@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/react */
+import { modAppStore } from '../../../lib/plugins/modApp'
 // A TUI shell slot for plugin widgets. The corner is a column at the top-right
 // that sizes to what its widgets draw, so an empty slot covers no cells and
 // takes no clicks. Each widget has its own error boundary.
+import { tuiProof } from './proofService'
 import { tuiNotifications } from '../../../lib/plugins/notifications'
-import React, { memo } from 'react'
+import React, { memo, useSyncExternalStore } from 'react'
 import { usePluginWidgets } from '../../../lib/plugins/usePluginWidgets'
 import { useLocalPluginWidgets } from '../../../lib/plugins/useLocalPluginWidgets'
 import { fitText } from '../textLayout'
@@ -43,17 +45,19 @@ export const PluginWidgetHost = memo(function PluginWidgetHost({ slot, theme, wi
   zIndex: number
   runCommand?: (id: string) => void
 }) {
+  const app = useSyncExternalStore(modAppStore.subscribe, modAppStore.getSnapshot, modAppStore.getSnapshot)
+  const repository = app.cwd ? { cwd: app.cwd, sessionId: null } : undefined
   const widgets = usePluginWidgets('tui', tuiPluginWidgets, slot)
   // Mods' widgets are content from their server module; the shell draws them.
   const local = useLocalPluginWidgets(slot === 'corner')
   if (widgets.length === 0 && local.length === 0) return null
-  if (slot === 'viewport') return <>{widgets.map(({ pluginId, id, view: Widget }) => <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}><Widget services={{ notifications: tuiNotifications.service }} slot={slot} theme={theme} width={width} height={height} zIndex={zIndex} runCommand={runCommand} /></WidgetBoundary>)}</>
+  if (slot === 'viewport') return <>{widgets.map(({ pluginId, id, view: Widget }) => <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}><Widget services={{ notifications: tuiNotifications.service, proof: tuiProof, repository }} slot={slot} theme={theme} width={width} height={height} zIndex={zIndex} runCommand={runCommand} /></WidgetBoundary>)}</>
   const slotWidth = Math.max(1, Math.min(width - 4, slot === 'top-center' ? 56 : CORNER_WIDGET_MAX_WIDTH))
   return (
     <box id={`plugin-widget-slot:${slot}`} position="absolute" top={slot === 'top-center' ? 0 : 1} left={slot === 'top-center' ? Math.max(0, Math.floor((width - slotWidth) / 2)) : Math.max(0, width - slotWidth - 2)} width={slotWidth} zIndex={zIndex} flexDirection="column" alignItems={slot === 'top-center' ? 'center' : undefined}>
       {widgets.map(({ pluginId, id, view: Widget }) => (
         <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}>
-          <Widget services={{ notifications: tuiNotifications.service }} runCommand={runCommand} slot={slot} theme={theme} width={slotWidth} height={height} />
+          <Widget services={{ notifications: tuiNotifications.service, proof: tuiProof, repository }} runCommand={runCommand} slot={slot} theme={theme} width={slotWidth} height={height} />
         </WidgetBoundary>
       ))}
       {slot === 'corner' ? local.map(entry => {

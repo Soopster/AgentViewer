@@ -1,8 +1,11 @@
 'use client'
 
+import { modAppStore } from '../../lib/plugins/modApp'
+import { webProof } from './proofService'
+
 // A Web shell slot for plugin widgets. Each widget has its own error boundary:
 // a throwing widget disappears from the slot, the rest and the app stay up.
-import React from 'react'
+import React, { useSyncExternalStore } from 'react'
 import { webNotifications } from '@/lib/plugins/notifications'
 import { usePluginWidgets } from '@/lib/plugins/usePluginWidgets'
 import { useLocalPluginWidgets } from '@/lib/plugins/useLocalPluginWidgets'
@@ -22,6 +25,8 @@ const SLOT_STYLE: Record<Exclude<PluginWidgetSlot, 'top-bar' | 'viewport'>, Reac
 }
 
 export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'top-bar' | 'viewport'> }) {
+  const app = useSyncExternalStore(modAppStore.subscribe, modAppStore.getSnapshot, modAppStore.getSnapshot)
+  const repository = app.cwd ? { cwd: app.cwd, sessionId: null } : undefined
   const widgets = usePluginWidgets('web', webPluginWidgets, slot)
   // Mods' widgets are content from their server module; the shell draws them.
   const local = useLocalPluginWidgets(slot === 'corner')
@@ -30,7 +35,7 @@ export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'to
     <div data-plugin-widget-slot={slot} style={SLOT_STYLE[slot]}>
       {widgets.map(({ pluginId, id, view: Widget }) => (
         <div key={`${pluginId}:${id}`} data-plugin-widget={`${pluginId}:${id}`} style={{ pointerEvents: 'auto' }}>
-          <WidgetBoundary id={`${pluginId}:${id}`}><Widget slot={slot} services={{ notifications: webNotifications.service }} /></WidgetBoundary>
+          <WidgetBoundary id={`${pluginId}:${id}`}><Widget slot={slot} services={{ notifications: webNotifications.service, proof: webProof, repository }} /></WidgetBoundary>
         </div>
       ))}
       {slot === 'corner' ? local.map(entry => (

@@ -225,7 +225,7 @@ assert.equal(store.get('fixture', 'window-b:target', 'selection', 0), 9)
 assert.equal(store.get('fixture', 'window-c:target', 'selection', 0), 7)
 console.log('Plugin generation safety, per-view service validation and explicit ownership transfer passed')
 
-assert.deepEqual(RIGHT_PANEL_SURFACE_KINDS, ['browser', 'terminal', 'files', 'diff', 'tasks', 'pull-request', 'agents'], 'manifest registration includes tasks and preserves relative panel order')
+assert.deepEqual(RIGHT_PANEL_SURFACE_KINDS, ['browser', 'terminal', 'files', 'diff', 'proof', 'tasks', 'pull-request', 'agents'], 'manifest registration includes tasks and preserves relative panel order')
 store.set('other-plugin', 'window-a:target', 'private', 1)
 store.copyOwner('window-a', 'window-d', 'fixture')
 assert.equal(store.get('fixture', 'window-d:target', 'selection', 0), 7)

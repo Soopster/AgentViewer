@@ -176,6 +176,7 @@ export type PluginManifest = {
  * provider's SessionCapabilities: these describe the host, not the session.
  */
 export type PluginServiceId =
+  | 'proof'
   | 'notifications'
   | 'shell-overview'
   | 'run-launch'

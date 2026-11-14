@@ -32,6 +32,7 @@ export type TuiPluginServices = {
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
+  proof?: import('../../../lib/plugins/proof').ProofService
   checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../../lib/plugins/sessionTabs').PluginSessionTabs
@@ -227,7 +228,7 @@ export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
 export type TuiPluginWidgetProps = {
   readonly zIndex?: number
   readonly runCommand?: (id: string) => void
-  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications'>
+  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'repository'>
   readonly theme: TuiThemePalette
   readonly width: number
   readonly height: number

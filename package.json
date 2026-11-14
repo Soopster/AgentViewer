@@ -33,6 +33,7 @@
     "workers"
   ],
   "scripts": {
+    "proof:smoke": "node scripts/proofSmoke.mjs && bun run scripts/proofRulesSmoke.ts && bun run tui/opentui/proofSmoke.tsx && node --import tsx scripts/webProofBrowserSmoke.mjs",
     "tui:architecture:check": "node scripts/tuiArchitectureCheck.mjs",
     "dev": "node ./bin/agent-viewer.mjs web",
     "build": "tsc --noEmit && next build --webpack",

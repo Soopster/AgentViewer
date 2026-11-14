@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   // desktop sidecar); keep serverExternalPackages/node:sqlite indirection
   // working under standalone tracing — see CLAUDE.md's node:sqlite note.
   output: 'standalone',
+  outputFileTracingIncludes: { '/api/proof': ['./lib/proof/*.mjs'] },
   // Non-packaging directories the tracer otherwise sweeps into the
   // standalone output: .agent-viewer-data is gitignored runtime state
   // (search index, coord worktrees, tags) whose nested worktree symlinks
