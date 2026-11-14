@@ -54,10 +54,12 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
           if (!current.observer) {
             const notifications = declared.includes('notifications') ? offered.notifications : undefined
             // Late completions cannot deliver notifications after this activation ends.
-            const services: PluginApplicationServices = notifications ? { notifications: {
+            const services: PluginApplicationServices = { ...(declared.includes('activity') && offered.activity ? { activity: { publish: input => { if (!current.scope.signal.aborted) offered.activity!.publish(input) }, remove: offered.activity.remove, removeSource: offered.activity.removeSource } } : {}), ...(notifications ? { notifications: {
+              show: (kind, text, options) => current.scope.signal.aborted ? '' : notifications.show(kind, text, options),
+              dismiss: id => { if (!current.scope.signal.aborted) notifications.dismiss(id) },
               notice: text => { if (!current.scope.signal.aborted) notifications.notice(text) },
               desktop: (title, body) => { if (!current.scope.signal.aborted) notifications.desktop(title, body) },
-            } } : {}
+            } } : {}) }
             current.observer = module.activate({ signal: current.scope.signal, services, defer: current.scope.defer })
             assertSynchronous(current.observer, manifest.id)
             if (typeof current.observer?.onSessionActivity !== 'function') throw new Error(`Plugin ${manifest.id} has no sessionActivity observer`)
@@ -95,7 +97,7 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
 }
 
 function copySnapshot(snapshot: PluginActivitySnapshot): PluginActivitySnapshot {
-  return Object.freeze({ ...snapshot, activity: new Map(snapshot.activity), sessions: snapshot.sessions.map(session => Object.freeze({ ...session })) })
+  return Object.freeze({ ...snapshot, activity: new Map(snapshot.activity), sessions: snapshot.sessions.map(session => Object.freeze({ ...session, ...(session.target ? { target: Object.freeze({ ...session.target }) } : {}) })) })
 }
 
 function assertSynchronous(value: unknown, id: string): void {

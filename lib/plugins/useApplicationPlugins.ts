@@ -13,7 +13,7 @@ export function useApplicationPlugins(renderer: PluginRenderer, loaders: PluginA
     host.current = current
     return () => { host.current = null; current.dispose() }
   }, [renderer, loaders, services])
-  const publish = useCallback((snapshot: PluginActivitySnapshot) => { void host.current?.publish(snapshot) }, [])
+  const publish = useCallback((snapshot: PluginActivitySnapshot) => { void host.current?.publish(snapshot) }, [disabled])
   const observesActivity = (PLUGIN_MANIFESTS as readonly PluginManifest[]).some(m => !disabled.has(m.id) && m.renderers.includes(renderer) && m.application?.events.includes('sessionActivity'))
   return { publish, observesActivity }
 }

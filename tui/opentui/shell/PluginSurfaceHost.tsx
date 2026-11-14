@@ -5,6 +5,7 @@
 // containing its failures. A view that throws, or a module that fails to load,
 // leaves a local Retry/Close view; the transcript and composer keep working.
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useScopedNotifications } from '../../../lib/plugins/useScopedNotifications'
 import { RGBA } from '@opentui/core'
 import type { Session } from '../../../lib/types'
 import type { TuiSessionDetail } from '../../../lib/tui/service'
@@ -155,9 +156,11 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   // selection change does not re-render every other open view.
   const targetSession = wants('session') ? session : null
   const liveMessages = wants('live-transcript') && sessionKey && props.live?.key === sessionKey ? props.live.messages : NO_LIVE_MESSAGES
+  const notifications = useScopedNotifications('tui', instanceId)
   const resolved = useMemo(() => {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
+      notifications,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
@@ -166,7 +169,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     })
   // `wants` reads only the surface, which `surfaceId` names.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided, targetSession, liveMessages])
+  }, [surfaceId, wantsTranscript, transcript, transcriptStatus, repositoryCwd, repositorySessionId, repositoryLabel, provided, targetSession, liveMessages, notifications])
 
   const { services } = resolved
   const failure = loadFailure ?? resolved.error

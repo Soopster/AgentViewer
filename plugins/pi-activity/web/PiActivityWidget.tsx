@@ -1,5 +1,8 @@
 'use client'
 
+import { webActivityFeed } from '../../../lib/plugins/activityFeed'
+import { piStartupActivity } from '../../../lib/plugins/piStartupActivity'
+import { useActivitySource } from '../../../lib/plugins/useActivityFeed'
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, LoaderCircle, PackageOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -53,6 +56,9 @@ export function PiActivityWidget() {
     const timeout = window.setTimeout(() => setNow(Date.now()), remaining + 20)
     return () => window.clearTimeout(timeout)
   }, [snapshot.active, snapshot.stage, snapshot.updatedAt])
+
+  const island = useActivitySource(webActivityFeed, 'pi-startup', piStartupActivity(snapshot))
+  if (island) return null
 
   const visible = snapshot.active
     || snapshot.stage === 'error'

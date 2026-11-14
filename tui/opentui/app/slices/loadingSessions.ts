@@ -4,6 +4,8 @@ import { useDisabledPlugins } from '../../../../lib/plugins/useDisabledPlugins'
 import { useToasts } from '../../ToastOverlay'
 import { useMenuState } from '../state/menuState'
 
+const NO_TOASTS: ReturnType<typeof useToasts> = []
+
 export type UseLoadingSessionsGroupContext = {
   workspaceCwd: string
 }
@@ -17,7 +19,7 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
   const [refreshingSessions, setRefreshingSessions] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const toasts = useToasts()
+  const notificationToasts = useToasts()
   const {
     focusedPane, setFocusedPane, providerMenuOpen, setProviderMenuOpen, providerMenuIndex,
     setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen, themeMenuIndex, setThemeMenuIndex,
@@ -36,6 +38,7 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
     workspaceCwd,
   })
   const disabledPlugins = useDisabledPlugins()
+  const toasts = disabledPlugins.has('toasts') ? NO_TOASTS : notificationToasts
   const pluginOverlayKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   // The bridge panels are the bridges plugin's; the bridges and routing are the composer's.
   const channelBridgeOpen = pluginOverlay === 'channel-bridge'

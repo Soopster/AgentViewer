@@ -7,6 +7,7 @@ export type PluginCommandTarget = {
   readonly cwd: string | null
 }
 export type PluginCommandServices = {
+  readonly notifications?: import('./notifications').PluginNotifications
   readonly 'bridge-routing'?: import('./bridges').BridgeRoutingCommands
   readonly 'composer-accessories'?: { readonly open: (id: string) => void }
   /** The host binds this read to the captured source session. */

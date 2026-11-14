@@ -56,6 +56,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { getPluginCommand, getPluginSurface, isPluginSurfaceId, type PluginSurfaceId } from '@/lib/plugins/catalog'
+import { usePublishObservedTranscript } from '@/lib/plugins/observedTranscripts'
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
 import { usePluginCommands } from '@/lib/plugins/usePluginCommands'
 import { useReaderPlugins } from '@/lib/plugins/useReaderPlugins'
@@ -1735,6 +1736,8 @@ function MessageViewInner({
     rowLayoutRef, suppressFollowEvalUntilRef, markProgrammaticTimelineScroll,
     commitTimelineScrollTop, scrollMountedTimelineRowIntoView,
   }, messageId), [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+
+  usePublishObservedTranscript('web', session ? { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } : null, threadedFull, { messages: liveThreadedMessages, todos: openCodeTodos, plan: codexPlan?.plan })
 
   const sessionPluginServices = useMemo<WebPluginServices>(() => ({
     session: { session },

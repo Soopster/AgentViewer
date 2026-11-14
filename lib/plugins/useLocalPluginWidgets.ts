@@ -6,12 +6,12 @@ import { listLocalPluginManifests, localPluginsVersion, subscribeLocalPlugins } 
 import { useDisabledPlugins } from './useDisabledPlugins'
 import { LOCAL_WIDGET_REFRESH_MS, localWidgetReader, type LocalWidgetContent } from './localManifest'
 
-export function useLocalPluginWidgets(): LocalWidgetContent[] {
+export function useLocalPluginWidgets(enabled = true): LocalWidgetContent[] {
   const version = useSyncExternalStore(subscribeLocalPlugins, localPluginsVersion, localPluginsVersion)
   const disabled = useDisabledPlugins()
   const [content, setContent] = useState<LocalWidgetContent[]>([])
   const widgets = listLocalPluginManifests().filter(manifest => !disabled.has(manifest.id)).flatMap(manifest => manifest.localWidgets ?? [])
-  const interval = widgets.length ? Math.min(...widgets.map(widget => widget.refreshMs)) : 0
+  const interval = enabled && widgets.length ? Math.min(...widgets.map(widget => widget.refreshMs)) : 0
   useEffect(() => {
     const read = localWidgetReader()
     if (!interval || !read) { setContent([]); return undefined }

@@ -202,6 +202,36 @@ const key = async (name: string, modifiers: { ctrl?: boolean; shift?: boolean } 
 await waitFor('the app to render', () => screen().includes('SESSIONS') || screen().includes('New workspace'))
 if (screen().includes('New workspace')) await key('return')
 await waitFor('the transcript on alpha', () => screen().includes('PLUG-ALPHA-BODY'))
+// Focused full-shell route for the activity/notification plugins.
+if (process.argv.includes('--activity-island')) {
+  const { tuiNotifications } = await import('../../lib/plugins/notifications')
+  const { applyPluginSettings, DEFAULT_PLUGIN_SETTINGS, withPluginEnabled } = await import('../../lib/plugins/enablement')
+  const { tuiActivityFeed } = await import('../../lib/plugins/activityFeed')
+  const { tuiPluginWidgets } = await import('./shell/widgetPlugins')
+  await waitFor('island widget activation', () => tuiActivityFeed.isPresented())
+  await act(async () => { for (const item of tuiNotifications.getSnapshot()) tuiNotifications.service.dismiss(item.id) })
+  await act(async () => { tuiNotifications.service.show('info', 'FULL SHELL NOTICE', { durationMs: 0 }) })
+  await waitFor('both presentations in the full app', () => (screen().match(/FULL SHELL NOTICE/g) || []).length === 2)
+  const capsule = setup.renderer.root.findDescendantById('activity-island-compact')!
+  check(capsule.y === 0, `the island must be at terminal row zero, got ${capsule.y}`)
+  check(capsule.width < 56 && Math.abs(capsule.x - (230 - capsule.width) / 2) <= 1, 'compact island must size to its text and center on the screen')
+  await key('?')
+  await act(async () => { await setup.mockInput.typeText('Toggle activity island') })
+  await key('return')
+  await waitFor('island opened by the real palette', () => screen().includes('Activity') && screen().includes('d dismiss'))
+  await key('escape')
+  await waitFor('Escape closes the real overlay', () => !screen().includes('d dismiss'))
+  await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'toasts', false)) })
+  await waitFor('island alone', () => (screen().match(/FULL SHELL NOTICE/g) || []).length === 1 && !tuiPluginWidgets.isLoaded('toasts'))
+  await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'dynamic-island', false)) })
+  await waitFor('toasts alone', () => (screen().match(/FULL SHELL NOTICE/g) || []).length === 1 && !tuiActivityFeed.isPresented())
+  await act(async () => { applyPluginSettings(DEFAULT_PLUGIN_SETTINGS) })
+  await waitFor('both restored', () => (screen().match(/FULL SHELL NOTICE/g) || []).length === 2)
+  console.log('Full TUI shell activity: PASS (independent island/toast enablement, shared notification fan-out, real palette opening and Escape routing)')
+  await act(async () => { setup.renderer.destroy() })
+  process.exit(0)
+}
+
 // Browsing does not activate a plugin.
 await key('j')
 await key('k')

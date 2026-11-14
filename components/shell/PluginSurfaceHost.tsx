@@ -1,5 +1,6 @@
 'use client'
 
+import { useScopedNotifications } from '../../lib/plugins/useScopedNotifications'
 import { webRunLaunch } from './runLaunchService'
 import { webPlaybooks } from './playbooksService'
 import { webDailySummary } from './dailySummaryService'
@@ -68,7 +69,8 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, p
   const [attempt, setAttempt] = useState(0)
   const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
-  const resolved = useMemo(() => resolvePluginServices(surface, { 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, handoff: webHandoff, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, 'subagent-transcript': webSubagentTranscripts, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered])
+  const notifications = useScopedNotifications('web', instanceId)
+  const resolved = useMemo(() => resolvePluginServices(surface, { notifications, 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, handoff: webHandoff, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, 'subagent-transcript': webSubagentTranscripts, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered, notifications])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
   useEffect(() => {

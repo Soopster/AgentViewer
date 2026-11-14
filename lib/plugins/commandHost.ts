@@ -88,6 +88,13 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
           return structuredClone(messages)
         } } })
       }
+      if (command.services.includes('notifications') && context.services.notifications) {
+        const notifications = context.services.notifications
+        Object.assign(services, { notifications: {
+          show: (...args: Parameters<typeof notifications.show>) => active() ? notifications.show(...args) : '',
+          dismiss: (id: string) => { if (active()) notifications.dismiss(id) },
+        } })
+      }
       if (command.services.includes('notices') && context.services.notices) {
         const notices = context.services.notices
         Object.assign(services, { notices: { show: (kind: 'info' | 'error', text: string) => { if (active()) notices.show(kind, text) } } })

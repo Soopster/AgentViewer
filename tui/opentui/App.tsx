@@ -41,7 +41,10 @@ import {
   sendDurableChannelMessage,
 } from '../../lib/channelBridgeOutbox'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
-import { ToastOverlay, toastExtraRows, toastStackTop, useToasts } from './ToastOverlay'
+import { toastExtraRows, toastStackTop } from './ToastOverlay'
+import { usePublishObservedTranscript } from '../../lib/plugins/observedTranscripts'
+import { tuiNotifications } from '../../lib/plugins/notifications'
+import { tuiActivityFeed } from '../../lib/plugins/activityFeed'
 import { PluginWidgetHost, TopBarWidgetHost } from './shell/PluginWidgetHost'
 import { usePluginWidgets } from '../../lib/plugins/usePluginWidgets'
 import { tuiPluginWidgets } from './shell/widgetPlugins'
@@ -211,7 +214,7 @@ import { getTeamAttention, startTeamAttentionFeed, subscribeTeamAttention } from
 import type { CoordinatorPickerFilter } from '../../lib/coordinatorSignals'
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import type { RemoteCoordinatorTarget } from '../../lib/tui/remoteCoordinator'
-import { MODAL_CONTENT_Z_INDEX, MODAL_SCRIM_Z_INDEX, paintModalScrim } from './layers'
+import { MODAL_CONTENT_Z_INDEX, MODAL_SCRIM_Z_INDEX, NAVIGATION_Z_INDEX, paintModalScrim } from './layers'
 import { TeammatesAttention } from './TeammatesAttention'
 import { coordinatorAlertDelivery } from '../../lib/coordinatorSignals'
 import {
@@ -1306,6 +1309,8 @@ function OpenTuiWorkspace() {
     bridgeTranscriptEntries, selectedSessionTarget, liveTranscriptBaselineRef, transcriptView,
     viewSpec, isChatLikeView,
   })
+
+  usePublishObservedTranscript('tui', selectedSessionTarget ? { provider: selectedSessionTarget.provider ?? 'claude', providerInstanceId: selectedSessionTarget.providerInstanceId, sessionId: selectedSessionTarget.sessionId } : null, selectedSessionTarget && sessionDetail?.info && sessionKey(sessionDetail.info) === sessionKey(selectedSessionTarget) ? taskPanelMessages : liveTranscriptMessagesForSession, { messages: liveTranscriptMessagesForSession })
 
   useLayoutEffect(() => runLiveTranscriptOverlayEffect({
     selectedSessionTarget, sessionDetail, liveTranscriptBaselineRef, composerLiveText,
@@ -3520,7 +3525,8 @@ function OpenTuiWorkspace() {
   // focused so a terminal without focus reporting is not spammed.
   const terminalFocusedRef = useRef<boolean | null>(null)
   const applicationNotice = useStableEvent((text: string) => showNotice('info', text, 6000))
-  const applicationServices = useMemo<PluginApplicationServices>(() => ({ notifications: {
+  const applicationServices = useMemo<PluginApplicationServices>(() => ({ activity: tuiActivityFeed, notifications: {
+    ...tuiNotifications.service,
     notice: applicationNotice,
     desktop: notifyTeamEvent,
   } }), [applicationNotice, notifyTeamEvent])
@@ -3529,7 +3535,7 @@ function OpenTuiWorkspace() {
     if (!runningRegistryReady || !observesActivity) return
     publishApplicationActivity({
       now: Date.now(), activity: sidebarSessionActivity,
-      sessions: [...sessions, ...openTabSessions].map(session => ({ key: sessionKey(session), title: formatSessionTitle(session) })),
+      sessions: [...sessions, ...openTabSessions].map(session => ({ key: sessionKey(session), title: formatSessionTitle(session), target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
       selectedKey: selectedSessionKey, focused: terminalFocusedRef.current,
     })
   }, [runningRegistryReady, observesActivity, sidebarSessionActivity, sessions, openTabSessions, selectedSessionKey, publishApplicationActivity])
@@ -7626,7 +7632,7 @@ function OpenTuiWorkspace() {
           sat under the tab strip, the spaces bar and the window title buttons. */}
       <CommandPaletteOverlay commandPaletteOpen={commandPaletteOpen} width={width} height={height} filteredCommands={filteredCommands} paletteDisplayRows={paletteDisplayRows} commandPaletteIndex={commandPaletteIndex} commandPaletteBodyRows={commandPaletteBodyRows} commandPaletteTopOffset={commandPaletteTopOffset} theme={theme} commandPaletteQuery={commandPaletteQuery} mouse={commandPaletteMouse} />
       <ChordHelpOverlay chordHelp={chordHelp} width={width} height={height} areaHeight={height} composerDockHeight={0} composerStatusBlockHeight={0} toasts={toasts} theme={theme} mouse={chordHelpMouse} />
-      <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : undefined} />
+      <PluginWidgetHost slot="viewport" theme={theme} width={width} height={height} zIndex={remoteCoordinatorTarget || contextMenu || windowSwitcherOpen || windowControlMode ? MODAL_SCRIM_Z_INDEX - 3 : 80} />
 
       {worktreeModalOpen || worktreeConfirm  || (pluginOverlay && getPluginSurface(pluginOverlay).scrim) || teammatesModalOpen || remoteCoordinatorTarget || (fileHistoryPath && gitRepoCwd) || windowPickerOpen || pluginManagerOpen ? (
         <box
@@ -7705,6 +7711,7 @@ function OpenTuiWorkspace() {
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
     </box>
     </EngineeringFrame>
+    <PluginWidgetHost slot="top-center" theme={theme} width={terminalWidth} height={terminalHeight} zIndex={NAVIGATION_Z_INDEX} runCommand={runPaletteCommand} />
     </box>
     {paneResize.layer}
     </PaneResizeProvider>

@@ -56,11 +56,13 @@ export type PluginSurfaceSpec = {
  * bottom-right (Web) corner, stacked with the others there. 'top-bar': a
  * reserved one-row strip above the TUI workspace, hidden in fullscreen.
  */
-export type PluginWidgetSlot = 'corner' | 'top-bar'
+export type PluginWidgetSlot = 'corner' | 'top-bar' | 'top-center' | 'viewport'
 
 export type PluginKeyChord = { readonly name: string; readonly ctrl?: boolean; readonly shift?: boolean; readonly meta?: boolean }
 
 type PluginCommandCommon = {
+  /** Repeating an overlay command closes its already-open surface. */
+  readonly toggle?: boolean
   /** Stable: palettes, saved shortcuts and smokes address it. */
   readonly id: string
   readonly label: string
@@ -98,7 +100,7 @@ type PluginCommandCommon = {
   readonly keywords?: readonly string[]
 }
 
-export type PluginCommandServiceId = 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing'
+export type PluginCommandServiceId = 'notifications' | 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing'
 
 export type PluginCommandSpec = PluginCommandCommon & (
   | {
@@ -159,7 +161,7 @@ export type PluginManifest = {
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]
-    readonly services: readonly 'notifications'[]
+    readonly services: readonly ('notifications' | 'activity')[]
   }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number
@@ -170,6 +172,7 @@ export type PluginManifest = {
  * provider's SessionCapabilities: these describe the host, not the session.
  */
 export type PluginServiceId =
+  | 'notifications'
   | 'shell-overview'
   | 'run-launch'
   | 'playbooks'

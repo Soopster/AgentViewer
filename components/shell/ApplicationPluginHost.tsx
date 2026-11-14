@@ -10,6 +10,9 @@ import { isPluginEnabled } from '../../lib/plugins/enablement'
 import type { WebPluginServices } from './pluginTypes'
 import type { PluginApplicationServices } from '../../lib/plugins/application'
 import type { PluginSessionRef } from '../../lib/plugins/bookmarks'
+import { NotificationFallback } from './NotificationFallback'
+import { webNotifications } from '../../lib/plugins/notifications'
+import { webActivityFeed } from '../../lib/plugins/activityFeed'
 import { webApplicationPlugins } from './applicationPlugins'
 import PluginSurfaceHost from './PluginSurfaceHost'
 import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
@@ -29,18 +32,24 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   /** Every session in scope and the selected one's transcript, offered as `session-fleet` (the Desk). */
   sessionFleet?: WebPluginServices['session-fleet']
 }) {
-  const [notice, setNotice] = useState<{ text: string } | null>(null)
+  const showNotice = useCallback((text: string) => { webNotifications.service.show('info', text) }, [])
+  const showError = useCallback((error: unknown) => {
+    if (error instanceof Error && error.name === 'AbortError') return
+    const text = error instanceof Error ? error.message : 'Plugin command failed'
+    webNotifications.service.show('error', text)
+  }, [])
   const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null; path?: string } | null>(null)
   const context = useRef({ sessions, selectedSession })
   context.current = { sessions, selectedSession }
-  const services = useMemo<PluginApplicationServices>(() => ({ notifications: {
-    notice: text => setNotice({ text }),
+  const services = useMemo<PluginApplicationServices>(() => ({ activity: webActivityFeed, notifications: {
+    ...webNotifications.service,
+    notice: showNotice,
     desktop: (title, body) => {
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try { new Notification(`agent-viewer · ${title}`, { body }) } catch { /* host unavailable */ }
       }
     },
-  } }), [])
+  } }), [showNotice])
   const { publish, observesActivity } = useApplicationPlugins('web', webApplicationPlugins, services)
   const executeCommand = usePluginCommands('web', webPluginCommands, 'application')
   const executeRepositoryCommand = usePluginCommands('web', webPluginCommands, cwd)
@@ -58,7 +67,7 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
         if (controller.signal.aborted) return
         const current = context.current
         publish({ activity, now: Date.now(),
-          sessions: current.sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId })),
+          sessions: current.sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
           selectedKey: current.selectedSession ? sessionIdentityKey(current.selectedSession) : null,
           focused: document.visibilityState !== 'hidden' && document.hasFocus(),
         })
@@ -74,39 +83,35 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
     if (!command || !command.renderers.includes('web') || !isPluginEnabled(command.pluginId)) return false
     // A repository command with no repository says so, rather than doing nothing.
     if (command.scope === 'repository' && !cwd && !command.webDashboard && !command.webReader) {
-      setNotice({ text: `${command.label} needs a project: open a session first` })
+      showNotice(`${command.label} needs a project: open a session first`)
       return true
     }
     if (command.handler && command.scope === 'repository') {
-      void executeRepositoryCommand(id, { session: selectedSession, cwd }, { notices: { show: (_kind, text) => setNotice({ text }) } })
-        .catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setNotice({ text: error instanceof Error ? error.message : 'Plugin command failed' }) })
+      void executeRepositoryCommand(id, { session: selectedSession, cwd }, { notices: { show: (_kind, text) => showNotice(text) } })
+        .catch(showError)
       return true
     }
     if (command.webDashboard || command.webReader) return false
     if (command.scope !== 'application' && command.scope !== 'repository') return false
     if (command.handler) {
-      void executeCommand(id, { session: null, cwd: null }, { notices: { show: (_kind, text) => setNotice({ text }) } })
-        .catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setNotice({ text: error instanceof Error ? error.message : 'Plugin command failed' }) })
+      void executeCommand(id, { session: null, cwd: null }, { notices: { show: (_kind, text) => showNotice(text) } })
+        .catch(showError)
       return true
     }
     if (!isPluginSurfaceId(command.opens)) return false
     // The repository is captured for any app view that declares it; others never receive it.
-    setOverlay({ surface: command.opens, cwd, session: selectedSession ? { ...selectedSession } : null })
+    const surface = command.opens
+    setOverlay(current => command.toggle && current?.surface === surface ? null : { surface, cwd, session: selectedSession ? { ...selectedSession } : null })
     return true
   }), [executeCommand, executeRepositoryCommand, cwd, selectedSession])
-  useEffect(() => {
-    if (!notice) return
-    const timer = window.setTimeout(() => setNotice(null), 6000)
-    return () => window.clearTimeout(timer)
-  }, [notice])
   const close = useCallback(() => setOverlay(null), [])
   // A view opens a file's history in its place, on the same repository.
   const openFileHistory = useCallback((path: string) => {
-    if (!isPluginSurfaceId('file-history') || !isPluginEnabled('file-history')) { setNotice({ text: 'File history is off · turn its plugin on in Plugins' }); return }
+    if (!isPluginSurfaceId('file-history') || !isPluginEnabled('file-history')) { showNotice('File history is off · turn its plugin on in Plugins'); return }
     setOverlay(current => current ? { ...current, surface: 'file-history', path } : current)
-  }, [])
+  }, [showNotice])
   return <>
-    {notice && <div role="status" style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 }}>{notice.text}</div>}
+    <NotificationFallback />
     {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

@@ -559,6 +559,7 @@ export default function Home() {
           />
         ) : null}
         {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
+        <PluginWidgetHost slot="top-center" />
         {!isMessageViewMaximized ? <PluginWidgetHost slot="corner" /> : null}
       </div>
     </SidebarProvider>

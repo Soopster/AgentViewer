@@ -5,13 +5,14 @@ export type PluginActivitySnapshot = {
   readonly now: number
   /** Canonical host identities, including configured provider instances. */
   readonly activity: ReadonlyMap<string, PluginSessionActivity>
-  readonly sessions: readonly { readonly key: string; readonly title: string }[]
+  readonly sessions: readonly { readonly key: string; readonly title: string; readonly target?: import('./bookmarks').PluginSessionRef }[]
   readonly selectedKey: string | null
   readonly focused: boolean | null
 }
 
 export type PluginApplicationServices = {
-  readonly notifications?: {
+  readonly activity?: Pick<import('./activityFeed').PluginActivityFeed, 'publish' | 'remove' | 'removeSource'>
+  readonly notifications?: import('./notifications').PluginNotifications & {
     readonly notice: (text: string) => void
     /** The host decides availability. Calling this never asks for permission. */
     readonly desktop: (title: string, body: string) => void

@@ -1,4 +1,7 @@
 /** @jsxImportSource @opentui/react */
+import { tuiActivityFeed } from '../../../lib/plugins/activityFeed'
+import { piStartupActivity } from '../../../lib/plugins/piStartupActivity'
+import { useActivitySource } from '../../../lib/plugins/useActivityFeed'
 import { useSyncExternalStore } from 'react'
 import { getPiActivitySnapshot, subscribeToPiActivity } from '../../../lib/piActivity'
 import type { TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
@@ -6,6 +9,9 @@ import type { TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
 /** Pi's package/extension loading progress, while it runs or has failed. */
 export function PiActivityWidget({ theme, width, height }: TuiPluginWidgetProps) {
   const snapshot = useSyncExternalStore(subscribeToPiActivity, getPiActivitySnapshot, getPiActivitySnapshot)
+  const island = useActivitySource(tuiActivityFeed, 'pi-startup', piStartupActivity(snapshot))
+  if (island) return null
+
   if (!snapshot.active && snapshot.stage !== 'error') return null
 
   const events = snapshot.events.slice(-5)

@@ -1,3 +1,4 @@
+import { webNotifications, tuiNotifications } from './notifications'
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { allPluginManifests, listLocalPluginManifests, localPluginsVersion, subscribeLocalPlugins } from './catalog'
 import { createPluginCommandHost, type PluginCommandLoaders } from './commandHost'
@@ -31,6 +32,6 @@ export function usePluginCommands(renderer: PluginRenderer, loaders: PluginComma
     const current = host.current
     if (!current) return Promise.reject(new Error('Plugin command host is not mounted'))
     const captured = generation.current!
-    return current.run(id, { target, services, signal: captured.abort.signal, isCurrent: () => generation.current?.value === captured.value })
-  }, [])
+    return current.run(id, { target, services: { notifications: (renderer === 'web' ? webNotifications : tuiNotifications).service, ...services }, signal: captured.abort.signal, isCurrent: () => generation.current?.value === captured.value })
+  }, [renderer])
 }

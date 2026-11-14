@@ -23,6 +23,7 @@ export type TuiPluginCapture = boolean | 'input' | 'terminal'
 
 /** Declared service values, resolved by the host for this view's target. */
 export type TuiPluginServices = {
+  notifications?: import('../../../lib/plugins/notifications').PluginNotifications
   'shell-overview'?: import('../../../lib/plugins/shellOverview').PluginShellOverview
   'run-launch'?: import('../../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../../lib/plugins/playbooks').PluginPlaybookService
@@ -224,7 +225,9 @@ export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
 
 /** What a TUI widget receives: the width it may use in its slot, and the screen. */
 export type TuiPluginWidgetProps = {
-  readonly services?: Pick<TuiPluginServices, 'shell-overview'>
+  readonly zIndex?: number
+  readonly runCommand?: (id: string) => void
+  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications'>
   readonly theme: TuiThemePalette
   readonly width: number
   readonly height: number

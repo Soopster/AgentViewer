@@ -1121,5 +1121,5 @@ export function runRunPluginCommand(ctx: RunPluginCommandContext, command: Resol
   }
   const opens = command.opens
   setPluginOpenRequests((current) => ({ ...current, [opens]: { count: (current[opens]?.count ?? 0) + 1, session } }))
-  setPluginOverlay(opens)
+  setPluginOverlay(current => command.toggle && current === opens ? null : opens)
 }

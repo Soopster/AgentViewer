@@ -101,6 +101,7 @@ function main() {
       'tui/opentui/threadingWorker.ts',
       'tui/opentui/markdownBlocksWorker.ts',
       'plugins/analytics/tui/analyticsWorker.ts',
+      'plugins/dynamic-island/tui/taskWorker.ts',
       'plugins/editor/tui/editorProjectSearchWorker.ts',
       'plugins/editor/tui/editorHighlightWorker.ts',
       'tui/opentui/composerMentionWorker.ts',

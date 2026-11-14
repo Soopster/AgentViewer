@@ -4,6 +4,7 @@ import { PLUGIN_API_VERSION, type PluginManifest } from '../lib/plugins/types'
 import type { PluginActivitySnapshot, PluginApplicationModule } from '../lib/plugins/application'
 import { DEFAULT_PLUGIN_SETTINGS, applyPluginSettings } from '../lib/plugins/enablement'
 import { createAlertObserver } from '../plugins/session-alerts/domain/observer'
+import { createNotificationCenter } from '../lib/plugins/notifications'
 import { pluginRuntimeActivity } from '../lib/plugins/runtimeActivity'
 
 const manifest = (id: string): PluginManifest => ({ apiVersion: PLUGIN_API_VERSION, id, title: id, description: id,
@@ -16,7 +17,7 @@ const event = (activity: Record<string, 'running' | 'needs-input' | 'waiting'>, 
 })
 const notices: string[] = []
 const desktop: string[] = []
-const services = { notifications: { notice: (text: string) => notices.push(text), desktop: (title: string, body: string) => desktop.push(`${title}:${body}`) } }
+const services = { notifications: { ...createNotificationCenter().service, notice: (text: string) => notices.push(text), desktop: (title: string, body: string) => desktop.push(`${title}:${body}`) } }
 const alerts: PluginApplicationModule = { apiVersion: PLUGIN_API_VERSION, pluginId: 'alerts', activate: context => createAlertObserver(context, () => 'desktop') }
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 let loads = 0

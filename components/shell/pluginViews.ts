@@ -4,10 +4,11 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
+  'dynamic-island': async () => (await import('../../plugins/dynamic-island/web')).module,
   'prompt-library': async () => (await import('@/plugins/prompt-library/web')).module,
   bridges: async () => (await import('@/plugins/bridges/web')).module,
   tasks: async () => (await import('@/plugins/tasks/web')).module,

@@ -22,3 +22,6 @@ export type { TuiComposerAccessoryProps } from './composerPlugins'
 
 export { composerKeyBindings } from '../app/composerInput'
 export { renderInlineTextSegments } from '../app/inlineText'
+
+export { ToastOverlay, useToasts } from '../ToastOverlay'
+export { toBmpSafe } from '../bmp'
