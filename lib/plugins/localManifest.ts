@@ -118,6 +118,10 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
       ? command.services.filter((service): service is PluginCommandServiceId => LOCAL_COMMAND_SERVICES.includes(service as PluginCommandServiceId))
       : ['notices' as const]
     const chord = command.tuiChord as { key?: unknown; short?: unknown } | undefined
+    const slash = command.composerSlash as { name?: unknown; description?: unknown; argumentHint?: unknown } | undefined
+    if (slash && (scope !== 'session' || typeof slash.name !== 'string' || !/^[a-z][a-z0-9-]*$/.test(slash.name) || typeof slash.description !== 'string' || !slash.description.trim())) {
+      problems.push(`commands[${index}].composerSlash requires a session command, a lowercase name without / and a description`); continue
+    }
     commands.push({
       // Namespaced so a mod can never take over a bundled command's id.
       id: `${id}:${commandId}`,
@@ -128,6 +132,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
       requires: scope === 'session' ? 'session' : scope === 'repository' ? 'repository' : null,
       renderers: ['web', 'tui'],
       services,
+      ...(slash ? { composerSlash: { name: slash.name as string, description: (slash.description as string).slice(0, 200), ...(typeof slash.argumentHint === 'string' ? { argumentHint: slash.argumentHint.slice(0, 100) } : {}) } } : {}),
       ...(Array.isArray(command.keywords) ? { keywords: command.keywords.filter((word): word is string => typeof word === 'string').slice(0, 12) } : {}),
       ...(chord && typeof chord.key === 'string' && /^[a-z0-9]$/.test(chord.key) && typeof chord.short === 'string'
         ? { tuiChord: { key: chord.key, short: chord.short.slice(0, 8) } } : {}),
@@ -184,6 +189,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
 export type LocalCommandRunner = (request: {
   readonly pluginId: string
   readonly commandId: string
+  readonly input?: import('./commands').PluginCommandInput
   readonly target: PluginCommandTarget
   readonly app?: ModAppSnapshot
 }, signal: AbortSignal) => Promise<LocalCommandEffects>
@@ -194,11 +200,11 @@ export function setLocalCommandRunner(next: LocalCommandRunner): void { runner =
 
 /** The command module the shared command host loads for a local plugin. */
 export function localCommandModule(manifest: PluginManifest): PluginCommandModule {
-  const handlers = Object.fromEntries(manifest.commands.filter(command => command.handler).map(command => [command.handler!, async ({ target, signal, services }: Parameters<PluginCommandModule['handlers'][string]>[0]) => {
+  const handlers = Object.fromEntries(manifest.commands.filter(command => command.handler).map(command => [command.handler!, async ({ target, input, signal, services }: Parameters<PluginCommandModule['handlers'][string]>[0]) => {
     if (!runner) throw new Error('Local plugin commands are unavailable in this host')
     const captured = modAppStore.getSnapshot()
     let effects: LocalCommandEffects
-    try { effects = await runner({ pluginId: manifest.id, commandId: command.handler!, target, app: captured }, signal) }
+    try { effects = await runner({ pluginId: manifest.id, commandId: command.handler!, target, input, app: captured }, signal) }
     catch (error) { recordModDiagnostic(manifest.id, `command:${command.handler}`, error); throw error }
     signal.throwIfAborted()
     if (!isPluginEnabled(manifest.id)) return

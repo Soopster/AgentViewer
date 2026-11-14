@@ -1,3 +1,5 @@
+import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../../lib/plugins/composerSlash'
+import { dispatchPluginCommand } from '../../../lib/plugins/commandBus'
 import { prepareComposerTurnRequest } from '@/lib/composerSubmission'
 import { planComposerRetry } from '@/lib/composerRetry'
 import type { ComposerSessions } from '../../../lib/composerSessions'
@@ -141,6 +143,14 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
   } = ctx
   if (!session) return
   setSendError(null)
+  if (!retryOverride) {
+    const draft = textareaRef.current?.value ?? inputTextRef.current
+    const localCommand = matchPluginComposerSlashCommand(draft, 'web', session.provider ?? 'claude')
+    if (localCommand) {
+      if (!dispatchPluginCommand(localCommand.id, pluginComposerSlashInput(localCommand, draft), session)) setSendError(`The composer command /${localCommand.composerSlash!.name} is unavailable.`)
+      return
+    }
+  }
 
   // Custom-model providers (LM Studio, opencode/copilot custom endpoints) can
   // take a moment to enumerate their model list on a cold connection. Sending

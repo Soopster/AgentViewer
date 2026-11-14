@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { allPluginManifests, listLocalPluginManifests, localPluginsVersion, subscribeLocalPlugins } from './catalog'
 import { createPluginCommandHost, type PluginCommandLoaders } from './commandHost'
 import { localCommandModule } from './localManifest'
-import type { PluginCommandServices, PluginCommandTarget } from './commands'
+import type { PluginCommandInput, PluginCommandServices, PluginCommandTarget } from './commands'
 import type { PluginRenderer } from './types'
 
 /** One command host per shell owner. Renderers supply bound services at dispatch. */
@@ -28,10 +28,10 @@ export function usePluginCommands(renderer: PluginRenderer, loaders: PluginComma
     const controller = binding.abort
     return () => controller.abort()
   }, [binding])
-  return useCallback((id: string, target: PluginCommandTarget, services: PluginCommandServices): Promise<void> => {
+  return useCallback((id: string, target: PluginCommandTarget, services: PluginCommandServices, input?: PluginCommandInput): Promise<void> => {
     const current = host.current
     if (!current) return Promise.reject(new Error('Plugin command host is not mounted'))
     const captured = generation.current!
-    return current.run(id, { target, services: { notifications: (renderer === 'web' ? webNotifications : tuiNotifications).service, ...services }, signal: captured.abort.signal, isCurrent: () => generation.current?.value === captured.value })
+    return current.run(id, { target, input, services: { notifications: (renderer === 'web' ? webNotifications : tuiNotifications).service, ...services }, signal: captured.abort.signal, isCurrent: () => generation.current?.value === captured.value })
   }, [renderer])
 }

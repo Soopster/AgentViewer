@@ -1,3 +1,4 @@
+import { hasResearchToolPolicy, RESEARCH_FILE_TOOLS } from './sessionResearchPolicy'
 import { registerProviderDiagnostics } from './providerDiagnostics'
 import {
   CopilotClient,
@@ -562,6 +563,7 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
   const build = resumeCopilotSession(sessionId, {
     suppressResumeEvent: false,
     streaming: true,
+    ...(hasResearchToolPolicy('copilot', sessionId) ? { availableTools: [...RESEARCH_FILE_TOOLS] } : {}),
   }).then((session) => {
     const entry: CopilotPoolEntry = {
       session,

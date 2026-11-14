@@ -58,6 +58,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/sessions/[sessionId]/rewind': { POST: 'write' },
   '/api/sessions/[sessionId]/interrupt': { POST: 'write' },
   // Spends model tokens, so not a read however much it looks like one.
+  '/api/sessions/[sessionId]/better': { POST: 'write' },
   '/api/sessions/[sessionId]/insights': { POST: 'write' },
   '/api/sessions/[sessionId]/goal': { GET: 'read', POST: 'write', PATCH: 'write', DELETE: 'write' },
   // POST spends model tokens; DELETE only dismisses a stored recap.

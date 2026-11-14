@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../lib/plugins/composerSlash'
+import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import { useModAppHost } from '../../lib/plugins/useModAppHost'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
@@ -3747,6 +3749,11 @@ function OpenTuiWorkspace() {
   const composerTerminalTargetsRef = useRef(composerTerminalTargets)
   composerTerminalTargetsRef.current = composerTerminalTargets
   const sendComposerMessage = useStableEvent(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean, promptPartsOverride?: ComposerPromptPart[], retryTurnRequestId?: string) => {
+    if (!isRetry && composerTargetSession) {
+      const draft = draftOverride ?? composerTextareaRef.current?.plainText ?? composerDraftRef.current
+      const localCommand = matchPluginComposerSlashCommand(draft, 'tui', composerTargetSession.provider ?? 'claude')
+      if (localCommand) { runPluginCommand(localCommand, composerTargetSession, pluginComposerSlashInput(localCommand, draft)); return }
+    }
     let targets = composerTerminalTargetsRef.current
     let text = (draftOverride ?? composerDraft).trim()
     // Leading @handles address terminals for this prompt alone, whatever the composer targets.
@@ -5044,11 +5051,18 @@ function OpenTuiWorkspace() {
     setComposerDraft(''); setComposerMentionAttachments([]); setComposerPromptParts([])
     return sendComposerMessage(text)
   })
-  const composerAccessoryServices = useMemo(() => ({ composer: { sendDraft: sendAccessoryDraft } }), [sendAccessoryDraft])
+  const stageAccessoryDraft = useStableEvent((text: string, original: string) => {
+    const current = composerTextareaRef.current?.plainText ?? composerDraftRef.current
+    const next = mergeComposerRewrite(current, original, text)
+    composerTextareaRef.current?.setText(next)
+    setComposerDraft(next)
+    setComposerActive(true)
+  })
+  const composerAccessoryServices = useMemo(() => ({ composer: { sendDraft: sendAccessoryDraft, stageDraft: stageAccessoryDraft } }), [sendAccessoryDraft, stageAccessoryDraft])
   const executeSessionPluginAction = usePluginCommands('tui', tuiPluginCommands, composerOwnerKey)
   const executeApplicationPluginAction = usePluginCommands('tui', tuiPluginCommands, 'application')
   const executeRepositoryPluginAction = usePluginCommands('tui', tuiPluginCommands, gitRepoCwd)
-  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand, session: Session | null = selectedSession) => {
+  const runPluginCommand = useStableEvent((command: ResolvedPluginCommand, session: Session | null = selectedSession, input?: import('../../lib/plugins/commands').PluginCommandInput) => {
     if (command.handler) {
       if ((command.services.includes('composer-accessories') || command.services.includes('bridge-routing')) && session && sessionKey(session) !== (composerTargetSession ? sessionKey(composerTargetSession) : null)) {
         openSessionMenuDialog(session, command.id)
@@ -5064,14 +5078,14 @@ function OpenTuiWorkspace() {
           ...(canUseChannelBridge ? { channel: { toggle: toggleComposerBridgeRoute } } : {}),
           ...(canUseIdeBridge ? { ide: { toggle: toggleComposerIdeRoute } } : {}),
         } } : {}),
-        'composer-accessories': { open: id => { if (!composerAccessories.controller.open(id)) throw new Error(`Composer accessory unavailable: ${id}`) } },
+        'composer-accessories': { open: (id, request) => { if (!composerAccessories.controller.open(id, request)) throw new Error(`Composer accessory unavailable: ${id}`) } },
         transcript: { read: async () => source ?? (await readTuiSessionDetailAsync(session, density, showToolCalls)).threadedMessages },
         composer: {
           insertText: text => { insertComposerTextAtCursor(text); setComposerActive(true) },
           replaceText: text => { applyComposerSnapshot({ text, attachments: [], promptParts: [], cursorOffset: text.length }); setComposerActive(true) },
         },
         notices,
-      } : { notices }).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) showNotice('error', error instanceof Error ? error.message : 'Plugin command failed') })
+      } : { notices }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) showNotice('error', error instanceof Error ? error.message : 'Plugin command failed') })
       return
     }
     if (isPluginSurfaceId(command.opens) && pluginSurfaceWants(command.opens, 'composer')) rememberComposerCursor()
@@ -6381,7 +6395,7 @@ function OpenTuiWorkspace() {
       if (handleViewMenuKey(key.sequence)) { handled(() => {}); return }
     }
     if (key.name === 'escape' && paneResize.cancel()) { handled(() => {}); return }
-    const accessoryKey = composerAccessories.controller.handleKey(key)
+    const accessoryKey = composerAccessories.controller.handleKey(key, !pluginOverlay && !composerMention && !composerSlashOpen && !composerHistoryOpen && !composerStashOpen)
     if (accessoryKey === 'input') return
     if (accessoryKey) { handled(() => {}); return }
     if (!windowControlsBlocked) {

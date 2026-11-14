@@ -73,7 +73,10 @@ function ActiveAccessory<Props extends ComposerAccessoryProps>({ View, spec, con
   const services = React.useMemo(() => composer ? { composer: { sendDraft: (text: string) => {
     if (!active()) { const error = new Error('Composer accessory target changed'); error.name = 'AbortError'; throw error }
     return composer.sendDraft(text)
-  } } } : {}, [composer, active])
+  }, stageDraft: composer.stageDraft ? (text: string, original: string) => {
+    if (!active()) { const error = new Error('Composer accessory target changed'); error.name = 'AbortError'; throw error }
+    composer.stageDraft!(text, original)
+  } : undefined } } : {}, [composer, active])
   const identity = React.useMemo(() => Object.freeze({ sessionId: props.session.sessionId, provider: props.session.provider, providerInstanceId: props.session.providerInstanceId }), [props.session.sessionId, props.session.provider, props.session.providerInstanceId])
-  return React.createElement(View, { ...props, session: identity, pluginId: spec.pluginId, accessoryId: spec.id, signal: lifetime.signal, services, openRequest: request, report, registerKeys } as Props)
+  return React.createElement(View, { ...props, session: identity, pluginId: spec.pluginId, accessoryId: spec.id, signal: lifetime.signal, services, openRequest: request, invocation: controller.input(spec.id), report, registerKeys } as Props)
 }

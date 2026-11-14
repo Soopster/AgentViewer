@@ -1,3 +1,4 @@
+import { useComposerSlashCommands } from '../../../lib/plugins/useComposerSlashCommands'
 import type { RefObject } from 'react'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -80,9 +81,12 @@ export function useRemoveQueuedSendGroup(ctx: UseRemoveQueuedSendGroupContext) {
     }
   }, [mentionQuery, slashOpen])
 
+  const pluginSlashCommands = useComposerSlashCommands('web', session?.provider ?? 'claude')
   const slashCommands = useMemo(() => {
     const baseline = getSlashCommandSuggestions(session?.provider)
-    const merged = [...liveSlashCommands]
+    const merged = [...pluginSlashCommands]
+    const localNames = new Set(merged.map(entry => entry.command))
+    merged.push(...liveSlashCommands.filter(entry => !localNames.has(entry.command)))
     const seen = new Set(merged.map((entry) => entry.command))
     for (const entry of baseline) {
       if (!seen.has(entry.command)) {
@@ -92,7 +96,7 @@ export function useRemoveQueuedSendGroup(ctx: UseRemoveQueuedSendGroupContext) {
     }
     const firstLine = inputText.split('\n')[0] ?? ''
     return filterSlashCommands(merged, firstLine.slice(1))
-  }, [inputText, liveSlashCommands, session?.provider])
+  }, [inputText, liveSlashCommands, session?.provider, pluginSlashCommands])
 
   const commandSessionId = session?.sessionId
   const commandSessionProvider = session?.provider

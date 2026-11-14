@@ -4,6 +4,7 @@
 // tui/opentui/shell/pluginViews.ts); no root, palette or window-kind union
 // changes.
 import { manifest as subagents } from '../../plugins/subagents/manifest'
+import { manifest as better } from '../../plugins/better/manifest'
 import { manifest as goals } from '../../plugins/goals/manifest'
 import { manifest as composerTools } from '../../plugins/composer-tools/manifest'
 import { manifest as analytics } from '../../plugins/analytics/manifest'
@@ -42,7 +43,7 @@ import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, goals] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
@@ -62,12 +63,22 @@ export type ResolvedPluginCommand = PluginCommandSpec & { readonly pluginId: Plu
 
 const surfaces = new Map<string, ResolvedPluginSurface>()
 const commands = new Map<string, ResolvedPluginCommand>()
+const composerSlashNames = new Map<string, string>()
 for (const manifest of PLUGIN_MANIFESTS as readonly PluginManifest[]) {
   for (const surface of manifest.surfaces) {
     if (surfaces.has(surface.id)) throw new Error(`Duplicate plugin surface id: ${surface.id}`)
     surfaces.set(surface.id, { ...surface, pluginId: manifest.id as PluginId, stateVersion: manifest.stateVersion })
   }
   for (const command of manifest.commands) {
+    if (command.composerSlash) {
+      const { name, description } = command.composerSlash
+      if (!/^[a-z][a-z0-9-]*$/.test(name) || !description.trim() || !command.handler || command.requires !== 'session' || command.scope !== 'session') throw new Error(`Invalid plugin composer slash command: ${command.id}`)
+      for (const renderer of command.renderers) {
+        const key = `${renderer}:${name}`
+        if (composerSlashNames.has(key)) throw new Error(`Duplicate plugin composer slash command: /${name} (${renderer})`)
+        composerSlashNames.set(key, command.id)
+      }
+    }
     if (commands.has(command.id)) throw new Error(`Duplicate plugin command id: ${command.id}`)
     if (command.handler) {
       if (command.opens !== undefined || command.placement !== undefined || !command.handler.trim()) throw new Error(`Invalid plugin action: ${command.id}`)
@@ -118,17 +129,33 @@ const localListeners = new Set<() => void>()
 /** Replace the registered local plugins. A manifest naming a bundled id, a taken command or surface id, or a command that opens another plugin's surface is skipped. */
 export function registerLocalPluginManifests(manifests: readonly LocalPluginManifest[]): void {
   for (const manifest of localManifests) {
-    for (const command of manifest.commands) commands.delete(command.id)
+    for (const command of manifest.commands) {
+      commands.delete(command.id)
+      for (const [key, id] of composerSlashNames) if (id === command.id) composerSlashNames.delete(key)
+    }
     for (const surface of manifest.surfaces) surfaces.delete(surface.id)
   }
   const accepted: LocalPluginManifest[] = []
   const ids = new Set(PLUGIN_MANIFESTS.map(manifest => manifest.id as string))
   for (const manifest of manifests) {
     const own = new Set(manifest.surfaces.map(surface => surface.id))
-    if (ids.has(manifest.id)
+    const slashKeys = new Set<string>()
+    const validSlash = manifest.commands.every(command => {
+      if (!command.composerSlash) return true
+      const { name, description } = command.composerSlash
+      if (!/^[a-z][a-z0-9-]*$/.test(name) || !description.trim() || !command.handler || command.scope !== 'session' || command.requires !== 'session') return false
+      for (const renderer of command.renderers) {
+        const key = `${renderer}:${name}`
+        if (composerSlashNames.has(key) || slashKeys.has(key)) return false
+        slashKeys.add(key)
+      }
+      return true
+    })
+    if (!validSlash || ids.has(manifest.id)
       || manifest.surfaces.some(surface => surfaces.has(surface.id))
       || manifest.commands.some(command => commands.has(command.id) || (command.handler ? command.opens !== undefined : !own.has(command.opens as string)))) continue
     ids.add(manifest.id)
+    for (const command of manifest.commands) if (command.composerSlash) for (const renderer of command.renderers) composerSlashNames.set(`${renderer}:${command.composerSlash.name}`, command.id)
     accepted.push(manifest)
     for (const surface of manifest.surfaces) surfaces.set(surface.id, { ...surface, pluginId: manifest.id as PluginId, stateVersion: manifest.stateVersion } as ResolvedPluginSurface)
     for (const command of manifest.commands) commands.set(command.id, { ...command, pluginId: manifest.id as PluginId })

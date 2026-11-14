@@ -38,6 +38,7 @@ export function createComposerAccessoryController(specs: ReturnType<typeof listC
   const listeners = new Set<() => void>()
   const entries = new Map<string, ComposerAccessoryPresentation & { token: symbol; keys?: (key: ComposerAccessoryKey) => ComposerAccessoryKeyResult }>()
   const requests = new Map<string, number>()
+  const inputs = new Map<string, import('./commands').PluginCommandInput>()
   let snapshot = { rows: 0, modal: false, summary: null as string | null, version: 0 }
   let live = true
   const notify = () => {
@@ -56,9 +57,11 @@ export function createComposerAccessoryController(specs: ReturnType<typeof listC
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => snapshot,
     request: (id: string) => requests.get(id) ?? 0,
-    open(id: string): boolean {
+    input: (id: string) => inputs.get(id),
+    open(id: string, input?: import('./commands').PluginCommandInput): boolean {
       const spec = specs.find(spec => spec.id === id)
       if (!live || !spec || !isPluginEnabled(spec.pluginId)) return false
+      if (input) inputs.set(id, Object.freeze({ slash: Object.freeze({ ...input.slash }) })); else inputs.delete(id)
       requests.set(id, (requests.get(id) ?? 0) + 1); notify(); return true
     },
     report(id: string, token: symbol, presentation: ComposerAccessoryPresentation) {
@@ -67,8 +70,8 @@ export function createComposerAccessoryController(specs: ReturnType<typeof listC
       const rows = Math.max(0, Math.min(spec.maxRows, Number.isFinite(presentation.rows) ? Math.floor(presentation.rows) : 0))
       const previous = entries.get(id)
       if (previous && previous.token !== token) return
-      if (previous?.rows === rows && previous.modal === Boolean(presentation.modal) && previous.summary === (presentation.summary ?? null)) return
-      entries.set(id, { ...previous, token, rows, modal: Boolean(presentation.modal), summary: presentation.summary ?? null }); notify()
+      if (previous?.rows === rows && previous.modal === Boolean(presentation.modal) && previous.summary === (presentation.summary ?? null) && previous.backgroundKeys === Boolean(presentation.backgroundKeys)) return
+      entries.set(id, { ...previous, token, rows, modal: Boolean(presentation.modal), backgroundKeys: Boolean(presentation.backgroundKeys), summary: presentation.summary ?? null }); notify()
     },
     keys(id: string, token: symbol, handler: ((key: ComposerAccessoryKey) => ComposerAccessoryKeyResult) | null) {
       const previous = entries.get(id)
@@ -77,16 +80,21 @@ export function createComposerAccessoryController(specs: ReturnType<typeof listC
       else if (previous.token === token) previous.keys = handler ?? undefined
     },
     remove(id: string, token: symbol) { if (entries.get(id)?.token === token) { entries.delete(id); notify() } },
-    prune() { for (const spec of specs) if (!isPluginEnabled(spec.pluginId)) { entries.delete(spec.id); requests.delete(spec.id) }; notify() },
-    handleKey(key: ComposerAccessoryKey): ComposerAccessoryKeyResult {
+    prune() { for (const spec of specs) if (!isPluginEnabled(spec.pluginId)) { entries.delete(spec.id); requests.delete(spec.id); inputs.delete(spec.id) }; notify() },
+    handleKey(key: ComposerAccessoryKey, allowBackground = true): ComposerAccessoryKeyResult {
       if (!live) return false
       for (const spec of [...specs].reverse()) {
         const entry = entries.get(spec.id)
         if (isPluginEnabled(spec.pluginId) && entry?.modal) return entry.keys?.(key) || 'input'
       }
+      // Background handlers are opt-in and may only claim Escape; ordinary typing stays in the composer.
+      if (allowBackground && key.name === 'escape') for (const spec of [...specs].reverse()) {
+        const entry = entries.get(spec.id)
+        if (isPluginEnabled(spec.pluginId) && entry?.backgroundKeys && entry.keys?.(key) === true) return true
+      }
       return false
     },
-    dispose() { if (!live) return; live = false; entries.clear(); requests.clear(); notify(); listeners.clear() },
+    dispose() { if (!live) return; live = false; entries.clear(); requests.clear(); inputs.clear(); notify(); listeners.clear() },
   }
 }
 export type ComposerAccessoryController = ReturnType<typeof createComposerAccessoryController>

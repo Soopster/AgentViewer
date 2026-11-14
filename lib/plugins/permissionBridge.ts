@@ -1,6 +1,7 @@
 // The one call every provider's approval bridge makes before asking a person.
 // It fills in the provider instance from the running-turn registry, maps a
 // tool name to a coarse kind, and never throws: any failure means "ask".
+import { hasResearchToolPolicy, isResearchSession, RESEARCH_FILE_TOOLS } from '../sessionResearchPolicy'
 import type { AgentProvider } from '../types'
 import type { PluginPermissionRequest } from './behavior'
 
@@ -27,6 +28,13 @@ export async function askPluginsAboutPermission(
   try {
     const { getRunningSession } = await import('../sessionRuntime')
     const running = getRunningSession(sessionId)
+    if (hasResearchToolPolicy(provider, sessionId) || (running?.provider === provider && isResearchSession({ provider, sessionId, providerInstanceId: running.providerInstanceId }))) {
+      const tool = request.toolName?.toLowerCase() ?? ''
+      const read = (RESEARCH_FILE_TOOLS as readonly string[]).includes(tool)
+      // Codex runs these commands inside its enforced read-only, offline sandbox.
+      const sandboxedCommand = provider === 'codex' && (request.kind === 'command' || COMMAND_TOOLS.test(tool))
+      return { pluginId: 'research', decision: read || sandboxedCommand ? 'allow' : 'deny', reason: 'Research sessions may only read and search; implementation tools are disabled.' }
+    }
     const { decidePermissionByPlugins } = await import('./serverBehaviors')
     return await decidePermissionByPlugins(
       { provider: running?.provider ?? provider, sessionId, ...(running?.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) },

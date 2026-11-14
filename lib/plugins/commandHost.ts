@@ -2,7 +2,7 @@ import { createLazyRegistry } from '../extensions/lazyRegistry'
 import { createPluginResourceScope } from './lifecycle'
 import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginRenderer } from './types'
-import type { PluginCommandModule, PluginCommandServices, PluginCommandTarget } from './commands'
+import type { PluginCommandInput, PluginCommandModule, PluginCommandServices, PluginCommandTarget } from './commands'
 
 export type PluginCommandLoaders = Readonly<Record<string, () => Promise<PluginCommandModule>>>
 
@@ -31,6 +31,7 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
     dispose() { if (disposed) return; disposed = true; unsubscribe(); cancelAll(); for (const manifest of contributors) registry.evict(manifest.id) },
     async run(commandId: string, context: {
       target: PluginCommandTarget
+      input?: PluginCommandInput
       services: PluginCommandServices
       signal?: AbortSignal
       /** Synchronous ownership check also covers the render-to-effect cancellation gap. */
@@ -47,6 +48,7 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
       if (missing.length) throw new Error(`${command.label} needs command services: ${missing.join(', ')}`)
       const source = context.target.session
       const target = Object.freeze({ session: source ? Object.freeze({ sessionId: source.sessionId, provider: source.provider, providerInstanceId: source.providerInstanceId }) : null, cwd: context.target.cwd })
+      const input = context.input ? Object.freeze({ slash: Object.freeze({ ...context.input.slash }) }) : undefined
       const scope = createPluginResourceScope(manifest.id)
       const signal = context.signal ? AbortSignal.any([scope.signal, context.signal]) : scope.signal
       let set = scopes.get(manifest.id)
@@ -67,7 +69,7 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
       }
       if (command.services.includes('composer-accessories') && context.services['composer-accessories']) {
         const accessories = context.services['composer-accessories']
-        Object.assign(services, { 'composer-accessories': { open: (id: string) => { if (active()) accessories.open(id) } } })
+        Object.assign(services, { 'composer-accessories': { open: (id: string, request?: PluginCommandInput) => { if (active()) accessories.open(id, request) } } })
       }
       // Capabilities are copied and bound once, never looked up from the later selection.
       if (command.services.includes('composer') && context.services.composer) {
@@ -104,7 +106,7 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
           check()
           const module = await registry.get(manifest.id)
           check()
-          await module.handlers[command.handler!]!({ target, signal, services, defer: scope.defer })
+          await module.handlers[command.handler!]!({ target, input, signal, services, defer: scope.defer })
           check()
         })
       } catch (error) {

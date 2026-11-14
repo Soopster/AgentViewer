@@ -4,6 +4,7 @@
 // on the shared send path (lib/sessionBackend.ts), and afterTurn runs off the
 // runtime's turn-settled event, so every provider and every surface (Web, TUI,
 // a goal continuation, a plugin's own follow-up) reaches both.
+import { isResearchSession } from '../sessionResearchPolicy'
 import { PLUGIN_MANIFESTS } from './catalog'
 import { createPluginBehaviorHost } from './behaviorHost'
 import { applyPluginSettings } from './enablement'
@@ -79,6 +80,7 @@ function installSettledTurnObserver(): void {
   void import('../sessionRuntime').then(({ onTurnSettled }) => onTurnSettled((event) => {
     if (!host().observesSettledTurns()) return
     const target: PluginTurnTarget = { provider: event.provider, sessionId: event.sessionId, ...(event.providerInstanceId ? { providerInstanceId: event.providerInstanceId } : {}) }
+    if (isResearchSession(target)) return
     const key = targetKey(target)
     const existing = current.timers.get(key)
     if (existing) clearTimeout(existing)

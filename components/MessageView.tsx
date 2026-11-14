@@ -1196,7 +1196,8 @@ function MessageViewInner({
   const executePluginAction = usePluginCommands('web', webPluginCommands, session ? sessionIdentityKey(session) : null)
   // Plugin commands from the palette, the toolbar or a shortcut target the
   // session this view shows; a project feed has no session to give them.
-  useEffect(() => subscribePluginCommands((commandId) => {
+  useEffect(() => subscribePluginCommands((commandId, input, target) => {
+    if (target && (!session || sessionIdentityKey(target) !== sessionIdentityKey(session))) return false
     const command = getPluginCommand(commandId)
     if (!command || !command.renderers.includes('web') || !isPluginEnabled(command.pluginId)) return false
     if (command.webDashboard || command.webReader) return false
@@ -1208,8 +1209,8 @@ function MessageViewInner({
           ...(canUseChannelBridge ? { channel: { toggle: () => { const bridge = channelBridgeRef.current; bridge.setRouteComposer(!bridge.routeComposer) } } } : {}),
           ...(canUseIdeBridge ? { ide: { toggle: () => { const bridge = ideBridgeRef.current; bridge.setRouteComposer(!bridge.routeComposer) } } } : {}),
         } } : {}),
-        'composer-accessories': { open: id => {
-          if (!composerAccessories.controller.open(id)) throw new Error(`Composer accessory unavailable: ${id}`)
+        'composer-accessories': { open: (id, request) => {
+          if (!composerAccessories.controller.open(id, request)) throw new Error(`Composer accessory unavailable: ${id}`)
           setComposerCollapsed(false)
         } },
         transcript: { read: async () => threadedFull },
@@ -1221,7 +1222,7 @@ function MessageViewInner({
           },
         },
         notices: { show: (_kind, text) => setSessionActionNotice(text) },
-      }).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setSessionActionError(error instanceof Error ? error.message : 'Plugin command failed') })
+      }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setSessionActionError(error instanceof Error ? error.message : 'Plugin command failed') })
       return true
     }
     if (!isPluginSurfaceId(command.opens)) return false

@@ -1,3 +1,4 @@
+import { hasResearchToolPolicy } from '../../../sessionResearchPolicy';
 // Provider architecture extraction: SDK behavior preserved from the session backend.
 import { askPluginsAboutPermission } from '../../../plugins/permissionBridge';
 import { randomUUID } from 'node:crypto'
@@ -1245,6 +1246,7 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
                 }
                 const turnStartParams = {
                     threadId: sessionId,
+                    ...(hasResearchToolPolicy('codex', sessionId) ? { sandboxPolicy: { type: 'readOnly' as const, networkAccess: false } } : {}),
                     model: model ?? undefined,
                     effort: codexEffort,
                     // Override the app-server's approval policy only when the user picks one

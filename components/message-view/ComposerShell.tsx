@@ -1,3 +1,4 @@
+import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import type { AgentProvider } from '../../lib/types'
 import { useMemo } from 'react'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
@@ -270,7 +271,11 @@ export function ComposerShell(props: ComposerShellProps) {
     const capturedAttachments = attachments
     setInputText(''); inputTextRef.current = ''; setAttachments([]); resizeComposer()
     return sendMessage({ text, attachments: capturedAttachments })
-  } } }), [attachments, setInputText, inputTextRef, setAttachments, resizeComposer, sendMessage])
+  }, stageDraft: (text: string, original: string) => {
+    const current = inputTextRef.current
+    const next = mergeComposerRewrite(current, original, text)
+    setInputText(next); inputTextRef.current = next; resizeComposer(); textareaRef.current?.focus()
+  } } }), [attachments, setInputText, inputTextRef, setAttachments, resizeComposer, sendMessage, textareaRef])
   return (
     !isProject && !composerCollapsed && <div
         className="av-web-composer-shell"
@@ -1169,7 +1174,13 @@ export function ComposerShell(props: ComposerShellProps) {
                 onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
                 onCompositionStart={() => { isComposingRef.current = true }}
                 onCompositionEnd={() => { isComposingRef.current = false }}
-                onKeyDown={handleKeyDown}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && !mentionQuery && !slashOpen) {
+                    const handled = composerAccessories.controller.handleKey({ name: 'escape', ctrl: event.ctrlKey, shift: event.shiftKey, meta: event.metaKey, sequence: event.key })
+                    if (handled === true) { event.preventDefault(); event.stopPropagation(); return }
+                  }
+                  handleKeyDown(event)
+                }}
                 onPaste={handleComposerPaste}
                 placeholder={composerPlaceholder}
                 style={{

@@ -73,6 +73,10 @@ type PluginCommandCommon = {
   /** What the command must have before it can run: a selected session, or a repository to work in. */
   readonly requires: 'session' | 'repository' | null
   readonly renderers: readonly PluginRenderer[]
+  /** A local composer slash command, dispatched to this command before any provider send.
+   * Names omit `/`; the owning plugin reads arguments from the captured draft.
+   */
+  readonly composerSlash?: { readonly name: string; readonly description: string; readonly argumentHint?: string }
   /** TUI binding, matched by the host's key router at global precedence. */
   readonly tuiKey?: PluginKeyChord
   /** Display form of the TUI binding. */

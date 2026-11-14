@@ -43,6 +43,7 @@ type LocalServerModule = {
 
 export type LocalCommandContext = AppContext & {
   readonly target: PluginCommandTarget
+  readonly input?: import('./commands').PluginCommandInput
   readonly signal: AbortSignal
   readonly readMessages: (limit?: number) => Promise<SessionMessage[]>
   readonly sendTurn: (message: string) => Promise<void>
@@ -97,7 +98,7 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
 /** Evict a module so the next use re-imports it (a plugin turned off and on again keeps Node's module cache, by design). */
 export function forgetLocalPluginModule(id: string): void { loaded.delete(id) }
 
-export async function runLocalPluginCommand(request: { pluginId: string; commandId: string; target: PluginCommandTarget; app?: ModAppSnapshot }, signal: AbortSignal): Promise<LocalCommandEffects> {
+export async function runLocalPluginCommand(request: { pluginId: string; commandId: string; target: PluginCommandTarget; input?: import('./commands').PluginCommandInput; app?: ModAppSnapshot }, signal: AbortSignal): Promise<LocalCommandEffects> {
   const plugin = localPluginDiscovery().plugins.find(entry => entry.manifest.id === request.pluginId)
   if (!plugin) throw new Error(`No local plugin "${request.pluginId}"`)
   if (!isPluginEnabled(plugin.manifest.id)) throw new Error(`${plugin.manifest.title} is turned off`)
@@ -117,7 +118,7 @@ export async function runLocalPluginCommand(request: { pluginId: string; command
     return withProviderInstance(session.providerInstanceId, session.provider, run)
   }
   const context: LocalCommandContext = { ...appContext(plugin, request.app),
-    target,
+    target, input: request.input,
     signal,
     readMessages: async (limit = 200) => {
       if (!session) return []

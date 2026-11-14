@@ -1,3 +1,4 @@
+import { useComposerSlashCommands } from '../../../../lib/plugins/useComposerSlashCommands'
 /** @jsxImportSource @opentui/react */
 import { useMemo, useRef } from 'react'
 import { type Session } from '../../../../lib/types'
@@ -27,10 +28,13 @@ export function useComposerWaitingStatusSeedGroup(ctx: UseComposerWaitingStatusS
   const composerDraftFirstLine = composerDraft.slice(0, composerDraft.indexOf('\n') < 0 ? undefined : composerDraft.indexOf('\n'))
   const composerFirstLine = composerDraftFirstLine.startsWith('/') ? composerDraftFirstLine : ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
+  const pluginSlashCommands = useComposerSlashCommands('tui', composerTargetSession?.provider ?? selectedSession?.provider ?? 'claude')
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
     if (!composerSlashOpen) return []
     const baseline = [...getSlashCommandSuggestions(selectedSession?.provider ?? 'claude'), TUI_HANDOFF_COMMAND]
-    const merged: SlashCommandSuggestion[] = [...composerLiveSlashCommands]
+    const merged: SlashCommandSuggestion[] = [...pluginSlashCommands]
+    const localNames = new Set(merged.map(entry => entry.command))
+    merged.push(...composerLiveSlashCommands.filter(entry => !localNames.has(entry.command)))
     const seen = new Set(merged.map((entry) => entry.command))
     for (const entry of baseline) {
       if (!seen.has(entry.command)) {
@@ -39,7 +43,7 @@ export function useComposerWaitingStatusSeedGroup(ctx: UseComposerWaitingStatusS
       }
     }
     return filterSlashCommands(merged, composerFirstLine.slice(1))
-  }, [composerSlashOpen, composerFirstLine, selectedSession?.provider, composerLiveSlashCommands])
+  }, [composerSlashOpen, composerFirstLine, selectedSession?.provider, composerTargetSession?.provider, composerLiveSlashCommands, pluginSlashCommands])
 
   const composerAffordancesCacheRef = useRef(new Map<string, {
     commands: SlashCommandSuggestion[]

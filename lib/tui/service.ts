@@ -1640,3 +1640,14 @@ export async function readTuiWorktreePaths(cwd: string): Promise<string[]> {
   })
   return parseWorktreeList(raw).filter((record) => record.state !== 'prunable' && record.state !== 'bare').map((record) => record.path)
 }
+
+/** Composer research uses the daemon when attached, like ordinary turns. */
+export async function researchTuiPrompt(session: import('../sessionIdentity').SessionIdentity & { cwd?: string }, draft: string, signal: AbortSignal, onProgress?: (progress: import('../plugins/betterProgress').BetterProgress) => void): Promise<import('../promptResearch').BetterResult> {
+  if (isRemoteAttached()) {
+    const { remoteStream } = await import('./remote')
+    const { readBetterResponse } = await import('../plugins/betterTransport')
+    return readBetterResponse(await remoteStream(encodeSessionPath(session.sessionId, '/better'), { ...goalBody(session), provider: session.provider ?? 'claude', cwd: session.cwd, draft }, signal), signal, onProgress)
+  }
+  const { researchBetterPrompt } = await import('../promptResearch')
+  return researchBetterPrompt(session, draft, signal, onProgress)
+}

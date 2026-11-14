@@ -1,3 +1,4 @@
+import { hasResearchToolPolicy, RESEARCH_FILE_TOOLS } from '../../../sessionResearchPolicy';
 // Provider architecture extraction: SDK behavior preserved from the session backend.
 import { parseQuestionAnswers, commandResultEvent, createTurnUsageReporter, parseAttachments, parseEffort, parseTurnRequestId } from '../runtimeCore'
 import { steerViewSession } from '../../../sessionSteering'
@@ -247,6 +248,7 @@ export async function createPiStream(sessionId: string, signal: AbortSignal, bod
             let clearPiUiHandler: (() => void) | undefined;
             let piTurnTerminalError: string | undefined;
             let releasePiOperation: (() => void) | undefined;
+            let restoreToolPolicy: (() => void) | undefined;
             let interruptOnAbort: (() => void) | undefined;
             const onAbort = () => {
                 requestAborted = true;
@@ -278,6 +280,7 @@ export async function createPiStream(sessionId: string, signal: AbortSignal, bod
                 markPiAgentSessionUsed(targetSessionId);
                 cancelPendingPiUiRequests(targetSessionId, activePiUiIds);
                 clearPiUiHandler?.();
+                restoreToolPolicy?.();
                 releasePiOperation?.();
                 signal.removeEventListener('abort', onAbort);
                 flushPendingPiDelta();
@@ -388,6 +391,11 @@ export async function createPiStream(sessionId: string, signal: AbortSignal, bod
                 interruptOnAbort = () => { void interruptRunningSession(sessionId, turnRequestId).catch(() => { }); };
                 if (requestAborted && !detachOnClientAbort) {
                     throw new Error('Pi request aborted before the turn started.');
+                }
+                if (hasResearchToolPolicy('pi', sessionId)) {
+                    const originalTools = agentSession.getActiveToolNames();
+                    agentSession.setActiveToolsByName(originalTools.filter(name => (RESEARCH_FILE_TOOLS as readonly string[]).includes(name)));
+                    restoreToolPolicy = () => agentSession.setActiveToolsByName(originalTools);
                 }
                 if (selectedModel) {
                     const model = agentSession.modelRuntime.getModel(selectedModel.providerID, selectedModel.modelID);
