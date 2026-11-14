@@ -4,7 +4,7 @@ export const manifest = {
   apiVersion: PLUGIN_API_VERSION,
   id: 'omni-bar',
   title: 'Omni bar',
-  description: 'Workspace context, current activity and attention across the top of the terminal.',
+  description: 'Workspace and session context, attention, and shortcuts to files, terminal, search and new sessions.',
   renderers: ['tui'],
   stateVersion: 1,
   widgets: [{ id: 'overview', slot: 'top-bar' }],
@@ -16,6 +16,6 @@ export const manifest = {
   commands: [{
     id: 'omni-bar-actions', label: 'Omni bar actions', category: 'View',
     scope: 'application', requires: null, opens: 'omni-bar-actions',
-    renderers: ['tui'], keywords: ['omni', 'workspace', 'attention', 'activity'],
+    renderers: ['tui'], keywords: ['omni', 'workspace', 'attention', 'activity', 'files', 'terminal', 'search', 'new'],
   }],
 } as const satisfies PluginManifest

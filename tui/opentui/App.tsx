@@ -5171,6 +5171,7 @@ function OpenTuiWorkspace() {
         break
       case 'attention': setAttentionOpen(true); break
       case 'commands': setCommandPaletteQuery(''); setCommandPaletteIndex(0); setCommandPaletteOpen(true); break
+      case 'new-session': openNewSessionModal(); break
     }
   })
   const readOverviewGit = useStableEvent((cwd: string) => readGitSummaryCached(cwd))
@@ -5181,6 +5182,7 @@ function OpenTuiWorkspace() {
       cwd: gitRepoCwd || workspaceCwd || process.cwd(),
       sessionKey: selectedSessionKey,
       sessionTitle: selectedSession ? formatSessionTitle(selectedSession) : null,
+      provider: selectedSession?.provider,
       activity: overviewNeedsInput ? 'Needs input' : overviewRunning
         ? visibleLiveToolActivities.find(tool => tool.status === 'running')?.label || 'Working'
         : selectedSession ? 'Idle' : 'No session selected',
@@ -5191,7 +5193,13 @@ function OpenTuiWorkspace() {
     },
     readGit: readOverviewGit,
     run: runShellOverviewAction,
-  }), [gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction])
+    commands: {
+      ids: listPluginCommands('tui').filter(command => !disabledPlugins.has(command.pluginId)
+        && (command.requires !== 'session' || selectedSession)
+        && (command.requires !== 'repository' || gitRepoCwd || workspaceCwd)).map(command => command.id),
+      run: runPluginCommandId,
+    },
+  }), [gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction, runPluginCommandId, disabledPlugins])
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     ...(subagentTranscriptSelection ? { 'subagent-transcript': {
       label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,
