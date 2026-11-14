@@ -112,21 +112,37 @@ case, palette branch and host implementation. The contributor smoke adds both
 a panel and a headless action using only their packages and registration lists,
 then typechecks both applications.
 
-## Status, 13 November 2026
+## Status, 15 November 2026
 
-Every row in the table above is a plugin in both renderers, or a plugin that
-declares one renderer explicitly. What stays in the shell is deliberate: the
-attention inbox and approvals (core runtime control), marking bookmarks and the
-transcript's own navigation, the engineering inspector (a view mode of the
-reader), the coordinator rail, and the plugin manager itself.
+Every bundled plugin — 39 manifests — declares both renderers, and every row in
+the table above is a plugin in both. What stays in the shell is deliberate:
+session and provider-instance identity and runtimes, focus, layout, dispatch
+and capability routing, the attention inbox and approvals (core runtime
+control), marking bookmarks and the transcript's own navigation, the
+engineering inspector (a view mode of the reader), the coordinator rail, and the
+plugin manager itself. A renderer may still draw a feature differently (the
+Web editor is a buffer editor over the same language-server client, the desk's
+CN and DES read stories derived from the Web's raw transcript), but the plugin,
+its manifest, its commands and its services are one.
 
 Contribution points available to a plugin, each in both renderers unless noted:
 surfaces (overlay/window/panel), executable commands, ⌃K chords (`tuiChord`,
 TUI), composer accessories, application observers, Web dashboards and reader
-slots, **widgets** (`corner` slot), and server behavior (**`beforeTurn`** and
-**`afterTurn`** with plugin follow-ups). Shared services added in this pass:
-`daily-summary`, `handoff`, `bookmarks`, `session-navigation`, and a Web
-`session-fleet`.
+slots, **widgets** (`corner`, `top-center`, `top-bar` — a row above the
+workspace — and `viewport`, floating over it), and server behavior hooks (below).
+Shared services, each with a TUI and a Web implementation behind one contract:
+`daily-summary`, `handoff`, `bookmarks`, `session-navigation`, `session-fleet`,
+`provenance`, `remote-access`, `checkpoints`, `session-insights`, `session-tabs`,
+`shell-overview` and `subagent-transcript` (whose two renderers carry
+different shapes: one transcript opened from the TUI's rail, a session's list on
+the Web).
+
+Remaining follow-ups, none of which is a feature outside the plugin system:
+some plugins still receive domain state their host computes (the first table
+row); the Web editor has no project-wide search, rename or code actions
+(workspace edits from a server are refused on the Web, since they would change
+files behind the browser's buffers); and the Web's activity registry reports no
+turn start time, so its Omni bar shows no elapsed clock.
 
 **Local plugins (mods)** load from the user's config directory and contribute
 behavior hooks and commands without a build (see the authoring reference): a

@@ -52,6 +52,8 @@ process.chdir(workspace)
 const { installTuiLocalPlugins } = await import('./shell/localPlugins')
 installTuiLocalPlugins()
 const { default: OpenTuiApp } = await import('./App')
+const { tuiPluginViews } = await import('./shell/pluginViews')
+const { applyPluginSettings, DEFAULT_PLUGIN_SETTINGS, withPluginEnabled } = await import('../../lib/plugins/enablement')
 const setup = await testRender(<OpenTuiApp />, { width: 140, height: 40, kittyKeyboard: true })
 const settle = async (ms = 200) => { await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) }); await act(async () => { await setup.flush() }) }
 const screen = () => setup.captureCharFrame()
@@ -95,6 +97,8 @@ try {
   // Each view is also a surface of its own, opened from the palette by its own
   // command and placed in a window — the same host as a built-in's.
   await settle(300)
+  // The mod's surfaces load through the built-ins' view registry, and only when one is shown.
+  assert(!tuiPluginViews.isLoaded('counter'), 'the mod\'s surface module loaded before any of its surfaces was shown')
   for (let attempt = 0; attempt < 5 && !screen().includes('type to filter'); attempt++) {
     await act(async () => { setup.mockInput.pressKey('?') })
     await settle(400)
@@ -108,7 +112,13 @@ try {
   await act(async () => { setup.mockInput.pressKey('w', { ctrl: true, shift: true }) })
   await settle(600)
   await waitFor('⌃⇧W moves the view into a window', () => screen().includes('GAUGE') && setup.renderer.root.findDescendantById('surface-frame:counter.gauge') !== null)
-  console.log('Surfaces: a mod view opens from its own palette command and moves into a window like a built-in.')
+  assert(tuiPluginViews.isLoaded('counter'), 'the mod\'s surface did not load through the shared view registry')
+  // Turning the mod off is the built-ins' path too: its window closes and its module is evicted.
+  await act(async () => { applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'counter', false)) })
+  await waitFor('disabling the mod closes its surface', () => !screen().includes('GAUGE'))
+  assert(!tuiPluginViews.isLoaded('counter'), 'disabling the mod did not evict its surface module')
+  await act(async () => { applyPluginSettings(DEFAULT_PLUGIN_SETTINGS) })
+  console.log('Surfaces: a mod view opens from its own palette command, moves into a window, loads through the shared registry and is evicted when the mod is off — like a built-in.')
   console.log('Mod views smoke passed')
 } finally {
   act(() => setup.renderer.destroy())
