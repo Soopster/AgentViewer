@@ -31,6 +31,7 @@ import { panelSurfaceAvailability } from '@/lib/rightPanel'
 
 import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
 import type { PluginSessionTabs } from '@/lib/plugins/sessionTabs'
+import { WebTopBar } from '@/components/shell/WebTopBar'
 import { sessionSelectionKey } from '@/components/session-catalog/selectionKey'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
@@ -343,6 +344,8 @@ export default function Home() {
     if (isCurrent()) await selectSession(draft)
     else addNavigationTab(draft)
   }, [captureIntent, currentProviderTarget, currentSession, currentProjectDir, createSession, selectSession, addNavigationTab])
+  // The page's own actions, for the Omni bar's `shell-overview` service.
+  const shellActions = useMemo(() => ({ openPalette: openCommandPalette, newSession: () => { void handleNewSession() } }), [openCommandPalette, handleNewSession])
 
   const handleChangeProvider = useCallback(async (
     nextProvider: ProviderSelection,
@@ -411,7 +414,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} sessionTabs={sessionTabs} sessionFleet={dashboardServices['session-fleet']} />
+    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} sessionTabs={sessionTabs} sessionFleet={dashboardServices['session-fleet']} shellActions={shellActions} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">
@@ -452,6 +455,7 @@ export default function Home() {
         ) : (
           <ReaderPane>
               {!isMessageViewMaximized && <ReaderPaneCollapseButton onClick={toggleMessagePane} />}
+              {!isMessageViewMaximized && <WebTopBar {...shellActions} />}
               <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
                 {dashboardSelected ? (
                   <DashboardViews value={dashboardTab} onValueChange={setDashboardTab}>
@@ -560,6 +564,7 @@ export default function Home() {
         ) : null}
         {pluginManagerOpen ? <PluginManager open onClose={() => setPluginManagerOpen(false)} /> : null}
         <PluginWidgetHost slot="top-center" />
+        <PluginWidgetHost slot="viewport" />
         {!isMessageViewMaximized ? <PluginWidgetHost slot="corner" /> : null}
       </div>
     </SidebarProvider>

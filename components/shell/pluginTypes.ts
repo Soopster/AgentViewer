@@ -9,6 +9,8 @@ import type { SendAttachment } from '@/lib/types'
 /** Declared service values, resolved by the host for this view's target. */
 export type WebPluginServices = {
   notifications?: import('../../lib/plugins/notifications').PluginNotifications
+  /** Read-only shell context and actions back through the host (the Omni bar). */
+  'shell-overview'?: import('../../lib/plugins/shellOverview').PluginShellOverview
   'run-launch'?: import('../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
@@ -103,5 +105,5 @@ export type WebPluginViewProps = {
 export type WebPluginView = ComponentType<WebPluginViewProps>
 
 /** What a Web widget receives: the slot it sits in. Widgets read their own state. */
-export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'repository'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'repository' | 'shell-overview'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
 export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

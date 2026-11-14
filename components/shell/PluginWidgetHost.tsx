@@ -19,12 +19,14 @@ class WidgetBoundary extends React.Component<{ id: string; children: React.React
   render() { return this.state.failed ? null : this.props.children }
 }
 
-const SLOT_STYLE: Record<Exclude<PluginWidgetSlot, 'top-bar' | 'viewport'>, React.CSSProperties> = {
+const SLOT_STYLE: Record<Exclude<PluginWidgetSlot, 'top-bar'>, React.CSSProperties> = {
+  // Floating over the page at the top right: toasts.
+  viewport: { position: 'fixed', right: 16, top: 16, zIndex: 70, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'none' },
   'top-center': { position: 'fixed', left: '50%', top: 8, transform: 'translateX(-50%)', zIndex: 49, maxWidth: 'calc(100vw - 16px)', pointerEvents: 'none' },
   corner: { position: 'fixed', right: 20, bottom: 20, zIndex: 50, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'none' },
 }
 
-export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'top-bar' | 'viewport'> }) {
+export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'top-bar'> }) {
   const app = useSyncExternalStore(modAppStore.subscribe, modAppStore.getSnapshot, modAppStore.getSnapshot)
   const repository = app.cwd ? { cwd: app.cwd, sessionId: null } : undefined
   const widgets = usePluginWidgets('web', webPluginWidgets, slot)

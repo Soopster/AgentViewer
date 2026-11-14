@@ -40,6 +40,8 @@ export const modAppStore = {
     for (const listener of listeners) listener()
   },
   bind(next: NonNullable<typeof host>) { host = next; return () => { if (host === next) host = null } },
+  /** The bound host, for shell services that act through it (the Web's shell overview). */
+  host: () => host,
 }
 export function freezeSnapshot(value: ModAppSnapshot): ModAppSnapshot {
   const copy = structuredClone(value)

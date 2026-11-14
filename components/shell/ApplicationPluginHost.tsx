@@ -13,6 +13,9 @@ import { getPluginCommand, isPluginSurfaceId, type PluginSurfaceId } from '../..
 import { subscribePluginCommands } from '../../lib/plugins/commandBus'
 import { isPluginEnabled } from '../../lib/plugins/enablement'
 import type { WebPluginServices } from './pluginTypes'
+import { useWebShellOverview, type WebShellActions } from './shellOverviewService'
+
+const NO_SHELL_ACTIONS: WebShellActions = { openPalette: () => {}, newSession: () => {} }
 import type { PluginApplicationServices } from '../../lib/plugins/application'
 import type { PluginSessionRef } from '../../lib/plugins/bookmarks'
 import { NotificationFallback } from './NotificationFallback'
@@ -24,7 +27,7 @@ import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
 import { webPluginCommands } from './pluginCommands'
 
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
-export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet }: {
+export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet, shellActions }: {
   sessions: readonly Session[]
   selectedSession: Session | null
   cwd?: string | null
@@ -36,7 +39,10 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   sessionTabs?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
   /** Every session in scope and the selected one's transcript, offered as `session-fleet` (the Desk). */
   sessionFleet?: WebPluginServices['session-fleet']
+  /** The page's palette and new-session actions, for the `shell-overview` service (the Omni bar). */
+  shellActions?: WebShellActions
 }) {
+  const shellOverview = useWebShellOverview(shellActions ?? NO_SHELL_ACTIONS)
   const showNotice = useCallback((text: string) => { webNotifications.service.show('info', text) }, [])
   const showError = useCallback((error: unknown) => {
     if (error instanceof Error && error.name === 'AbortError') return
@@ -145,6 +151,6 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   }, [showNotice])
   return <>
     <NotificationFallback />
-    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), 'shell-overview': shellOverview, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

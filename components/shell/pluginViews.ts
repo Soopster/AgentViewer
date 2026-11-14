@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
@@ -37,6 +37,7 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'tab-manager': async () => (await import('@/plugins/tab-manager/web')).module,
   desk: async () => (await import('@/plugins/desk/web')).module,
   editor: async () => (await import('@/plugins/editor/web')).module,
+  'omni-bar': async () => (await import('@/plugins/omni-bar/web')).module,
   'remote-access': async () => (await import('@/plugins/remote-access/web')).module,
 }, WEB_PLUGIN_SERVICES, undefined,
 // A mod's views are its surfaces, drawn by the Mod views renderer pinned to each.

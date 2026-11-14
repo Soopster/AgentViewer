@@ -87,12 +87,35 @@ try {
   })
   await check('a repository command with no project says why', async () => {
     await palette('Checkpoints & review')
-    await page.getByText('Checkpoints & review needs a project').waitFor()
+    await page.getByText('Checkpoints & review needs a project').first().waitFor()
+    // The notice reaches the notification center, which the toasts plugin floats at the top right.
+    await page.locator('[data-plugin-widget-slot="viewport"] [data-toast]').filter({ hasText: 'needs a project' }).first().waitFor()
     assert.equal(await page.locator('[data-plugin-view="checkpoints"]').count(), 0)
+  })
+  await check('omni bar: context row above the reader, its segments act, its actions overlay', async () => {
+    const bar = page.locator('#omni-bar')
+    await bar.waitFor()
+    await bar.locator('[data-omni-segment="attention"]').waitFor()
+    await bar.locator('[data-omni-segment="commands"]').click()
+    await page.getByPlaceholder(/Search messages, sessions/).waitFor()
+    await page.keyboard.press('Escape')
+    await palette('Omni bar actions')
+    const actions = page.locator('[data-plugin-view="omni-bar-actions"]')
+    await actions.waitFor()
+    await actions.locator('[data-omni-action="commands"]').waitFor()
+    await page.keyboard.press('Escape')
+    await actions.waitFor({ state: 'detached' })
+  })
+  await check('toasts: a dismissed toast leaves', async () => {
+    const toast = page.locator('[data-plugin-widget-slot="viewport"] [data-toast]').first()
+    if (!(await toast.count())) { await palette('Checkpoints & review'); await toast.waitFor() }
+    const before = await page.locator('[data-plugin-widget-slot="viewport"] [data-toast]').count()
+    await toast.getByRole('button', { name: 'Dismiss' }).click()
+    await page.waitForFunction(count => document.querySelectorAll('[data-plugin-widget-slot="viewport"] [data-toast]').length < count, before)
   })
   await check('mod command from the palette', async () => {
     await palette('E2E mod says hello')
-    await page.getByText('hello from the e2e mod').waitFor()
+    await page.getByText('hello from the e2e mod').first().waitFor()
   })
   await check('plugin manager lists the mod', async () => {
     await palette('Plugins')
