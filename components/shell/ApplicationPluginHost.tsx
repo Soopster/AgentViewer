@@ -63,6 +63,8 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   } }), [showNotice])
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
   const [modActivity, setModActivity] = useState<ReadonlyMap<string, PluginSessionActivity>>(new Map())
+  // When each running turn began, from the same registry read.
+  const [runningSince, setRunningSince] = useState<ReadonlyMap<string, number>>(new Map())
   const [appFocused, setAppFocused] = useState<boolean | null>(null)
   const { publish } = useApplicationPlugins('web', webApplicationPlugins, services)
   useEffect(() => {
@@ -92,9 +94,13 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
       try {
         const response = await fetch('/api/sessions/running', { signal: controller.signal })
         if (!response.ok) return
-        const activity = pluginRuntimeActivity(await response.json())
+        const body = await response.json()
+        const activity = pluginRuntimeActivity(body)
         if (cancelled || controller.signal.aborted) return
         acceptActivity(activity)
+        const since = new Map<string, number>((Array.isArray(body?.running) ? body.running : []).flatMap((entry: { sessionId?: string; provider?: string; providerInstanceId?: string; startedAt?: number }) =>
+          typeof entry.sessionId === 'string' && typeof entry.startedAt === 'number' ? [[sessionIdentityKey({ sessionId: entry.sessionId, provider: entry.provider as Session['provider'], providerInstanceId: entry.providerInstanceId }), entry.startedAt] as const] : []))
+        setRunningSince(previous => JSON.stringify([...previous]) === JSON.stringify([...since]) ? previous : since)
       } catch { /* retain observer baseline through transient failures */ }
       finally { inFlight = false }
     }
@@ -140,8 +146,8 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   }), [openSession, cwd, selectedSession])
   const modAppSnapshot = useMemo<Omit<import('../../lib/plugins/modApp').ModAppSnapshot, 'version' | 'instanceId' | 'commands'>>(() => ({ renderer: 'web', cwd, theme, focused: appFocused, focusedSurface: modSurfaces.focused, surfaces: modSurfaces.surfaces,
     selectedKey: selectedSession ? sessionIdentityKey(selectedSession) : null,
-    sessions: sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, cwd: session.cwd ?? null, activity: modActivity.get(sessionIdentityKey(session)) ?? 'idle', target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
-  } as const), [cwd, theme, appFocused, modSurfaces, selectedSession, sessions, modActivity])
+    sessions: sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, cwd: session.cwd ?? null, activity: modActivity.get(sessionIdentityKey(session)) ?? 'idle', ...(runningSince.has(sessionIdentityKey(session)) ? { startedAt: runningSince.get(sessionIdentityKey(session)) } : {}), target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
+  } as const), [cwd, theme, appFocused, modSurfaces, selectedSession, sessions, modActivity, runningSince])
   useModAppHost(modAppSnapshot, modActions)
   const close = useCallback(() => setOverlay(null), [])
   // A view opens a file's history in its place, on the same repository.

@@ -42,8 +42,17 @@ function OmniBar({ services }: WebPluginWidgetProps) {
     void refresh()
     return () => { live = false; clearTimeout(timer) }
   }, [cwd, readGit])
+  // A running turn's clock ticks once a second, and only while it runs.
+  const [now, setNow] = useState(() => Date.now())
+  const running = overview?.snapshot.running ?? false
+  const startedAt = overview?.snapshot.startedAt ?? null
+  useEffect(() => {
+    if (!running || startedAt === null) return undefined
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [running, startedAt])
   if (!overview) return null
-  const segments = overviewSegments(overview.snapshot, git?.cwd === cwd ? git.summary : null, columns, Date.now(), overview.commands?.ids)
+  const segments = overviewSegments(overview.snapshot, git?.cwd === cwd ? git.summary : null, columns, now, overview.commands?.ids)
   return (
     <nav id="omni-bar" aria-label="Omni bar" style={{ display: 'flex', alignItems: 'center', gap: 2, height: 28, padding: '0 8px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden' }}>
       {segments.map(segment => {

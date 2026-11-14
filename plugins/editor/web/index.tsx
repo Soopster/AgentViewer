@@ -67,6 +67,17 @@ export function applyCompletion(text: string, caret: number, item: LspCompletion
   return { text: text.slice(0, start) + insert + text.slice(end), caret: start + insert.length }
 }
 
+type LspTextEdit = { range: { start: LspPosition; end: LspPosition }; newText: string }
+type BrowserWorkspaceEdit = { changes: { path: string; edits: LspTextEdit[] }[]; outside: string[] }
+/** A document's text with LSP edits applied: last first, since each shifts everything after it. */
+export function applyTextEdits(text: string, edits: readonly LspTextEdit[]): string {
+  const ranged = edits.map(edit => ({ start: offsetAt(text, edit.range.start), end: offsetAt(text, edit.range.end), newText: edit.newText }))
+    .sort((a, b) => b.start - a.start || b.end - a.end)
+  let out = text
+  for (const edit of ranged) out = out.slice(0, edit.start) + edit.newText + out.slice(edit.end)
+  return out
+}
+
 /** Every match of `needle` in `text`, case-insensitive. */
 export function findMatches(text: string, needle: string): number[] {
   if (!needle) return []
@@ -176,6 +187,9 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
   const [lspStatus, setLspStatus] = useState<LspStatus>(null)
   const [completion, setCompletion] = useState<{ items: LspCompletion[]; index: number } | null>(null)
   const [hover, setHover] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [codeActions, setCodeActions] = useState<{ items: { index: number; title: string; kind?: string }[]; selected: number } | null>(null)
+  const [projectSearch, setProjectSearch] = useState<{ query: string; results: { path: string; line: number; text: string }[]; truncated: boolean; busy: boolean } | null>(null)
   const lspOpen = useRef<string | null>(null)
   const area = useRef<HTMLTextAreaElement>(null)
   const active = activePath ? buffers[activePath] : undefined
@@ -238,17 +252,89 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
     const { locations } = await lsp<{ locations: Array<{ path: string; inside: boolean; range: { start: LspPosition } }> }>('definition', { cwd, path: active.path, position }).catch(() => ({ locations: [] as Array<{ path: string; inside: boolean; range: { start: LspPosition } }> }))
     const target = locations.find(location => location.inside)
     if (!target) { setStatus({ tone: 'info', text: locations[0] ? `Defined outside the project: ${locations[0].path}` : 'No definition found' }); return }
-    await open(target.path)
+    await jumpTo(target.path, target.range.start)
+  }
+  /** Open a file and put the caret at a position once its buffer is on screen. */
+  const jumpTo = async (path: string, position: LspPosition) => {
+    await open(path)
     let tries = 0
     const jump = () => {
       const buffer = area.current
-      if (!buffer || buffer.getAttribute('data-editor-buffer') !== target.path) { if (++tries < 60) window.setTimeout(jump, 50); return }
-      const offset = offsetAt(buffer.value, target.range.start)
+      if (!buffer || buffer.getAttribute('data-editor-buffer') !== path) { if (++tries < 60) window.setTimeout(jump, 50); return }
+      const offset = offsetAt(buffer.value, position)
       buffer.focus(); buffer.setSelectionRange(offset, offset)
-      buffer.scrollTop = Math.max(0, (target.range.start.line - 5) * 20)
+      buffer.scrollTop = Math.max(0, (position.line - 5) * 20)
       trackCursor(buffer)
     }
     jump()
+  }
+  /**
+   * A rename or code action's edits, applied to buffers as unsaved changes — files not open are
+   * opened — so they are reviewed and saved like typing, never written behind the user's back.
+   */
+  const applyWorkspaceEdit = async (edit: BrowserWorkspaceEdit, what: string) => {
+    const loaded: Record<string, Buffer> = {}
+    for (const change of edit.changes) {
+      if (buffers[change.path]) continue
+      try { loaded[change.path] = await readFile(cwd, change.path) } catch (cause) { setStatus({ tone: 'error', text: message(cause) }); return }
+    }
+    setBuffers(current => {
+      const next = { ...current, ...Object.fromEntries(Object.entries(loaded).filter(([path]) => !current[path])) }
+      for (const change of edit.changes) {
+        const buffer = next[change.path]
+        // The edit's positions name the text the server holds, which is the live buffer.
+        const text = change.path === activePath && area.current ? area.current.value : buffer!.content
+        next[change.path] = { ...buffer!, content: applyTextEdits(text, change.edits) }
+      }
+      return next
+    })
+    setOpenPaths(current => [...current, ...edit.changes.map(change => change.path).filter(path => !current.includes(path))])
+    const files = edit.changes.length
+    setStatus(files
+      ? { tone: 'info', text: `${what}: changed ${files} file${files === 1 ? '' : 's'}, unsaved — review and ⌘S${edit.outside.length ? ` · ${edit.outside.length} outside the project not changed` : ''}` }
+      : { tone: 'info', text: `${what}: nothing to change${edit.outside.length ? ` (${edit.outside.length} outside the project)` : ''}` })
+  }
+  const startRename = () => {
+    const target = area.current
+    if (!active || !target) return
+    // Seed with the identifier under the caret.
+    let start = target.selectionStart, end = target.selectionStart
+    while (start > 0 && /[\w$]/.test(target.value[start - 1]!)) start--
+    while (end < target.value.length && /[\w$]/.test(target.value[end]!)) end++
+    setCompletion(null); setHover(null); setCodeActions(null)
+    setRenaming(target.value.slice(start, end))
+  }
+  const commitRename = async (newName: string) => {
+    const position = caretPosition()
+    setRenaming(null)
+    if (!active || !position || !newName.trim()) return
+    await lsp('change', { cwd, path: active.path, text: area.current?.value ?? active.content }).catch(() => {})
+    try { const { edit } = await lsp<{ edit: BrowserWorkspaceEdit }>('rename', { cwd, path: active.path, position, newName }); await applyWorkspaceEdit(edit, `Renamed to ${newName}`) }
+    catch (cause) { setStatus({ tone: 'error', text: message(cause) }) }
+    area.current?.focus()
+  }
+  const showCodeActions = async () => {
+    const target = area.current
+    if (!active || !target) return
+    await lsp('change', { cwd, path: active.path, text: target.value }).catch(() => {})
+    const start = positionAt(target.value, target.selectionStart), end = positionAt(target.value, target.selectionEnd)
+    const { actions } = await lsp<{ actions: { index: number; title: string; kind?: string }[] }>('code-actions', { cwd, path: active.path, position: start, end }).catch(() => ({ actions: [] as { index: number; title: string; kind?: string }[] }))
+    setCompletion(null); setHover(null)
+    if (actions.length) setCodeActions({ items: actions, selected: 0 }); else setStatus({ tone: 'info', text: 'No code actions here' })
+  }
+  const applyCodeAction = async (index: number, title: string) => {
+    setCodeActions(null)
+    if (!active) return
+    try { const { edit } = await lsp<{ edit: BrowserWorkspaceEdit }>('apply-code-action', { cwd, path: active.path, index }); await applyWorkspaceEdit(edit, title) }
+    catch (cause) { setStatus({ tone: 'error', text: message(cause) }) }
+    area.current?.focus()
+  }
+  const runProjectSearch = async (query: string) => {
+    if (!query.trim()) { setProjectSearch({ query, results: [], truncated: false, busy: false }); return }
+    setProjectSearch({ query, results: [], truncated: false, busy: true })
+    const response = await fetch(`/api/editor/search?${new URLSearchParams({ cwd, q: query })}`).catch(() => null)
+    const body = response ? await response.json().catch(() => ({})) : {}
+    setProjectSearch(current => current && current.query === query ? { query, results: Array.isArray(body.results) ? body.results : [], truncated: Boolean(body.truncated), busy: false } : current)
   }
   const nextDiagnostic = () => {
     const position = caretPosition()
@@ -343,12 +429,13 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
       const mod = event.metaKey || event.ctrlKey
       if (mod && event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
       else if (mod && event.key.toLowerCase() === 'p') { event.preventDefault(); setFinding(true) }
+      else if (mod && event.shiftKey && event.key.toLowerCase() === 'f') { event.preventDefault(); setProjectSearch(current => current ?? { query: '', results: [], truncated: false, busy: false }) }
       else if (mod && event.key.toLowerCase() === 'f') { event.preventDefault(); setSearch(current => current ?? ''); window.setTimeout(() => findInput.current?.select(), 0) }
-      else if (event.key === 'Escape') { if (event.defaultPrevented) return; if (search !== null) { setSearch(null); area.current?.focus() } else if (finding) setFinding(false); else if (!docked) closeEditor() }
+      else if (event.key === 'Escape') { if (event.defaultPrevented) return; if (projectSearch) { setProjectSearch(null); return } if (search !== null) { setSearch(null); area.current?.focus() } else if (finding) setFinding(false); else if (!docked) closeEditor() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [save, finding, search, docked, closeEditor])
+  }, [save, finding, search, projectSearch, docked, closeEditor])
   useEffect(() => { if (!activePath && openPaths.length === 0) setFinding(true) }, [activePath, openPaths.length])
 
   const onEdit = (value: string) => { if (active) setBuffers(current => ({ ...current, [active.path]: { ...active, content: value } })) }
@@ -363,6 +450,14 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
     if (hover) setHover(null)
     if (event.ctrlKey && event.key === ' ') { event.preventDefault(); void requestCompletion(); return }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') { event.preventDefault(); void showHover(); return }
+    if (codeActions) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setCodeActions({ ...codeActions, selected: (codeActions.selected + (event.key === 'ArrowDown' ? 1 : -1) + codeActions.items.length) % codeActions.items.length }); return }
+      if (event.key === 'Enter') { event.preventDefault(); const item = codeActions.items[codeActions.selected]!; void applyCodeAction(item.index, item.title); return }
+      if (event.key === 'Escape') { event.preventDefault(); setCodeActions(null); return }
+      setCodeActions(null)
+    }
+    if (event.key === 'F2') { event.preventDefault(); startRename(); return }
+    if ((event.metaKey || event.ctrlKey) && event.key === '.') { event.preventDefault(); void showCodeActions(); return }
     if (event.key === 'F12') { event.preventDefault(); void goToDefinition(); return }
     if (event.key === 'F8') { event.preventDefault(); nextDiagnostic(); return }
     if (event.key === '.' && !event.metaKey && !event.ctrlKey) window.setTimeout(() => { void requestCompletion('.') }, 0)
@@ -394,9 +489,32 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
           </div>
         ))}
         <button type="button" onClick={() => setFinding(true)} style={{ border: 'none', background: 'transparent', color: 'var(--text-2)', padding: '0 10px', cursor: 'pointer', fontSize: 12 }}>+ Open file ⌘P</button>
+        {/* ⌘⇧F is Chrome's full screen on macOS and may never reach the page; the button always works. */}
+        <button type="button" aria-label="Search in project" onClick={() => setProjectSearch(current => current ?? { query: '', results: [], truncated: false, busy: false })} style={{ border: 'none', background: 'transparent', color: 'var(--text-2)', padding: '0 10px', cursor: 'pointer', fontSize: 12 }}>⌕ Search ⌘⇧F</button>
         <span style={{ flex: 1 }} />
         {!docked ? <button type="button" aria-label="Close" onClick={closeEditor} style={{ border: 'none', background: 'transparent', color: 'var(--text-2)', padding: '0 10px', cursor: 'pointer' }}>✕</button> : null}
       </div>
+      {projectSearch ? (
+        <div data-editor-project-search style={{ padding: 10, borderBottom: '1px solid var(--border)', maxHeight: '45%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input autoFocus aria-label="Search in project" placeholder="Search in project…" defaultValue={projectSearch.query}
+              onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void runProjectSearch(event.currentTarget.value) } }}
+              style={{ flex: 1, fontSize: 13, padding: '6px 8px', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6 }} />
+            <span data-editor-project-search-count style={{ fontSize: 12, color: 'var(--text-2)' }}>{projectSearch.busy ? 'searching…' : projectSearch.query ? `${projectSearch.results.length}${projectSearch.truncated ? '+' : ''} ${projectSearch.results.length === 1 && !projectSearch.truncated ? 'match' : 'matches'}` : 'Enter to search'}</span>
+            <button type="button" aria-label="Close search" onClick={() => setProjectSearch(null)} style={{ fontSize: 12 }}>×</button>
+          </div>
+          <div style={{ overflow: 'auto', marginTop: 6, minHeight: 0 }}>
+            {projectSearch.results.map((result, index) => (
+              <button key={`${result.path}:${result.line}:${index}`} type="button" data-editor-search-result={`${result.path}:${result.line}`}
+                onClick={() => { void jumpTo(result.path, { line: result.line - 1, character: 0 }) }}
+                style={{ display: 'flex', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: 'var(--text)', padding: '2px 6px', cursor: 'pointer', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>
+                <span style={{ color: 'var(--cyan, #39c5cf)', whiteSpace: 'nowrap' }}>{result.path}:{result.line}</span>
+                <span style={{ color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.text.trim()}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {finding ? (
         <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
           <input autoFocus aria-label="Open file" placeholder="Search files in the project…" value={query} onChange={event => setQuery(event.target.value)}
@@ -458,6 +576,19 @@ function Editor({ services, placement, close, useState: useScopedState }: WebPlu
                   <span style={{ color: 'var(--text)' }}>{item.label}</span>
                   <span style={{ color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.detail}</span>
                 </div>
+              ))}
+            </div>
+          ) : renaming !== null ? (
+            <input autoFocus aria-label="Rename symbol" data-editor-rename defaultValue={renaming} onFocus={event => event.currentTarget.select()}
+              onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void commitRename(event.currentTarget.value) } else if (event.key === 'Escape') { event.preventDefault(); setRenaming(null); area.current?.focus() } }}
+              onBlur={() => setRenaming(null)}
+              style={{ width: 240, fontFamily: 'var(--font-mono, monospace)', fontSize: 12, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--cyan, #39c5cf)', borderRadius: 6 }} />
+          ) : codeActions ? (
+            <div role="listbox" data-editor-code-actions style={{ minWidth: 260, maxWidth: 520, maxHeight: 240, overflow: 'auto', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 6, fontSize: 12 }}>
+              {codeActions.items.map((item, index) => (
+                <div key={item.index} role="option" aria-selected={index === codeActions.selected} data-editor-code-action={item.title}
+                  onMouseDown={event => { event.preventDefault(); void applyCodeAction(item.index, item.title) }}
+                  style={{ padding: '3px 10px', cursor: 'pointer', background: index === codeActions.selected ? 'var(--surface-3)' : 'transparent', color: 'var(--text)' }}>{item.title}</div>
               ))}
             </div>
           ) : hover ? (

@@ -50,6 +50,8 @@ export function listViewRunningSessions(): Array<{
   sessionId: string
   provider: AgentProvider
   providerInstanceId?: string
+  /** When the turn began. */
+  startedAt?: number
   pendingPrompts: Record<string, unknown>[]
   pendingPermissions: Record<string, unknown>[]
 }> {

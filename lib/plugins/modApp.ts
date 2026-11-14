@@ -16,7 +16,8 @@ export type ModAppSnapshot = {
   focusedSurface: string | null
   surfaces: readonly { id: string; placement: string }[]
   selectedKey: string | null
-  sessions: readonly { key: string; title: string; cwd: string | null; activity: 'needs-input' | 'running' | 'waiting' | 'idle'; target: PluginSessionRef }[]
+  /** `startedAt`: when a running session's turn began, where the host knows it. */
+  sessions: readonly { key: string; title: string; cwd: string | null; activity: 'needs-input' | 'running' | 'waiting' | 'idle'; startedAt?: number; target: PluginSessionRef }[]
   commands: readonly ModAppCommand[]
 }
 export type ModAppEffect = { type: 'command'; id: string } | { type: 'session'; target: PluginSessionRef } | { type: 'file'; path: string; line?: number }

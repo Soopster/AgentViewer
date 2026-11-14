@@ -26,6 +26,8 @@ export type WaitingSession = {
 
 type RunningSession = {
   provider: AgentProvider
+  /** When this turn began. Set by the registry; a turn re-registering keeps its first time. */
+  startedAt?: number
   providerInstanceId?: string
   interrupt: (cancelQueued?: boolean) => Promise<unknown>
   background?: () => Promise<unknown>
@@ -163,7 +165,8 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
   const instance = session.providerInstanceId ?? (active?.provider === session.provider ? active.id : undefined)
   const key = runtimeKey(sessionId, runningSessions, { ...session, providerInstanceId: instance })
   waitingSessions.delete(key)
-  runningSessions.set(key, instance && instance !== session.provider ? { ...session, providerInstanceId: instance } : session)
+  const startedAt = runningSessions.get(key)?.startedAt ?? session.startedAt ?? Date.now()
+  runningSessions.set(key, instance && instance !== session.provider ? { ...session, providerInstanceId: instance, startedAt } : { ...session, startedAt })
   const pendingKey = currentProviderInstance() ? key : pendingInterrupts.has(key) ? key : sessionId
   const pending = pendingInterrupts.get(pendingKey)
   if (pending && session.requestId === pending.requestId) {
@@ -365,9 +368,10 @@ export function getRunningSessionInfo(sessionId: string, target?: RuntimeSession
  * Every session with a turn currently running in this process, for surfaces
  * that track liveness across sessions (reattach, attention inbox, fleet view).
  */
-export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider; providerInstanceId?: string }> {
+export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider; providerInstanceId?: string; startedAt?: number }> {
   return Array.from(runningSessions, ([key, running]) => ({ sessionId: key.startsWith('[') ? JSON.parse(key)[2] as string : key, provider: running.provider,
-    ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) }))
+    ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}),
+    ...(running.startedAt ? { startedAt: running.startedAt } : {}) }))
 }
 
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {

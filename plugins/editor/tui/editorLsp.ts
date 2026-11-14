@@ -92,6 +92,13 @@ export type EditorDiagnostic = {
   severity: 1 | 2 | 3 | 4
   message: string
   source?: string
+  /**
+   * The server's own diagnostic, sent back unchanged as code-action context. A
+   * server keys its quick fixes on the diagnostic's range, `code` and `data`;
+   * the flattened fields above carry none of that, and a server handed them
+   * finds nothing to fix.
+   */
+  raw?: Record<string, unknown>
 }
 
 export type { EditorLspServerSpec } from './editorLspServers'
@@ -257,6 +264,7 @@ function editorDiagnostics(value: unknown): EditorDiagnostic[] {
       severity: item.severity === 1 || item.severity === 2 || item.severity === 3 || item.severity === 4 ? item.severity : 3,
       message: item.message,
       source: typeof item.source === 'string' ? item.source : undefined,
+      raw: item,
     })
   }
   return diagnostics
@@ -776,7 +784,11 @@ export class EditorLspClient {
     const raw = await this.request('textDocument/codeAction', {
       textDocument: { uri: this.openedUri },
       range,
-      context: { diagnostics },
+      // LSP Diagnostics, as the server sent them: our flattened shape has no range, code or data.
+      context: { diagnostics: diagnostics.map(diagnostic => diagnostic.raw ?? {
+        range: { start: { line: diagnostic.line, character: diagnostic.character }, end: { line: diagnostic.endLine, character: diagnostic.endCharacter } },
+        severity: diagnostic.severity, message: diagnostic.message, ...(diagnostic.source ? { source: diagnostic.source } : {}),
+      }) },
     }, 3_500).catch(() => null)
     return Array.isArray(raw) ? raw.flatMap((entry) => {
       const parsed = codeAction(entry)

@@ -47,8 +47,7 @@ export function useWebShellOverview(actions: WebShellActions): PluginShellOvervi
         provider: selected?.target.provider,
         activity: selected?.activity ?? 'idle',
         running: selected?.activity === 'running',
-        // The Web's activity registry reports state, not when a turn began.
-        startedAt: null,
+        startedAt: selected?.activity === 'running' ? selected.startedAt ?? null : null,
         runningCount: app.sessions.filter(session => session.activity === 'running').length,
         attentionCount: app.sessions.filter(session => session.activity === 'needs-input').length,
       },
