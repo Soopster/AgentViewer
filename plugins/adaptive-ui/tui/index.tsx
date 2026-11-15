@@ -7,7 +7,7 @@ import { popoverRootProps, PopoverDetachButton, fitText, type TuiPluginView, typ
 import { previewRule, useAdaptiveView, type AdaptiveItem } from '../useAdaptiveView'
 
 const STATUS_GLYPH = { active: '●', draft: '◐', disabled: '○' } as const
-const HINT = 'j/k move · a enable · d disable · x delete (twice) · g design · i dismiss · p preview · r refresh · esc'
+const HINT = 'j/k move · a enable · d disable · x delete (twice) · g design with an agent · h design here · i dismiss · p preview · r refresh · esc'
 
 function AdaptiveUi(props: TuiPluginViewProps) {
   const { services, theme, width, height, placement, focused, detach, registerKeys, useState: scoped } = props
@@ -32,6 +32,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
       if (key === 'x') { void state.remove(selected.rule.id); return true }
     }
     if (selected.kind === 'shape') {
+      if (key === 'h') { void state.designHere(selected.shape.key); return true }
       if (key === 'g' || key === 'return') { void state.design(selected.shape.key).then(ok => { if (ok && overlay) props.close() }); return true }
       if (key === 'i') { void state.dismiss(selected.shape.key); return true }
     }
@@ -60,7 +61,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
         return <box key={item.key} ref={active ? row : undefined} flexDirection="column" backgroundColor={active ? theme.surface2 : undefined} onMouseDown={() => { if (focused) setCursor(index) }}>
           <text fg={active ? theme.cyan : tone} wrapMode="none" selectable={false}>{fitText(`${active ? '›' : ' '} ${label}`, inner - 2)}</text>
           {active && item.kind === 'invalid' ? item.problems.map((problem, i) => <text key={i} fg={theme.red} wrapMode="word">{`    ${problem}`}</text>) : null}
-          {active && item.kind === 'shape' ? <text fg={theme.dim} wrapMode="word">{`    keys: ${item.shape.inputKeys.join(', ') || 'none'} · ${item.shape.samples.length} samples · g hands a design request to the composer`}</text> : null}
+          {active && item.kind === 'shape' ? <text fg={theme.dim} wrapMode="word">{`    keys: ${item.shape.inputKeys.join(', ') || 'none'} · ${item.shape.samples.length} samples · g hands a design request to the composer · h drafts it here`}</text> : null}
           {active && item.kind === 'rule' ? lines.length ? lines.map((text, i) => <text key={i} fg={theme.text} wrapMode="word">{`    ${text}`}</text>) : <text fg={theme.dim} wrapMode="word">{`    ${item.rule.samples?.length ? 'preview hidden (p)' : 'no samples saved: drawn on real calls once enabled'}`}</text> : null}
         </box>
       })}

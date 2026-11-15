@@ -47,6 +47,13 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
     remove: (id: string) => { if (armed !== id) { setArmed(id); setNotice(`Press delete again to remove ${id}`); return Promise.resolve() } setArmed(null); return act(() => service.remove(id), `${id} deleted`) },
     disarm: () => setArmed(null),
     dismiss: (key: string) => act(() => service.dismissShape(key, true), 'Dismissed'),
+    /** In place, through a tool-less model; the result is a draft to review. */
+    designHere: async (key: string) => {
+      setBusy(true); setNotice('Designing a card…')
+      try { const id = await service.designHere(key); if (alive.current) setNotice(`Drafted ${id}: review it below, then enable it`); await refresh() }
+      catch (error) { if (alive.current) setNotice(error instanceof Error ? error.message : String(error)) }
+      finally { if (alive.current) setBusy(false) }
+    },
     design: async (key: string) => {
       try {
         const prompt = await service.designPrompt(key)

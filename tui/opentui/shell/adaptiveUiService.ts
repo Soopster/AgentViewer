@@ -10,5 +10,6 @@ export const tuiAdaptiveUi: AdaptiveUiService = {
   setStatus: async (id, status) => { isRemoteAttached() ? await post({ action: 'set-status', id, status }) : await (await lazy()).setStatus(id, status) },
   remove: async id => { isRemoteAttached() ? await post({ action: 'remove', id }) : await (await lazy()).remove(id) },
   dismissShape: async (key, dismissed) => { isRemoteAttached() ? await post({ action: 'dismiss', key, dismissed }) : await (await lazy()).dismissShape(key, dismissed) },
+  designHere: async key => isRemoteAttached() ? post<string>({ action: 'design-here', key }) : (await lazy()).designHere(key),
   designPrompt: async key => isRemoteAttached() ? post<string>({ action: 'design-prompt', key }) : (await lazy()).designPrompt(key),
 }

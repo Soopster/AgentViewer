@@ -25,6 +25,7 @@ function RuleRow({ state, rule }: { state: AdaptiveViewState; rule: Extract<Adap
 function ShapeRow({ state, shape }: { state: AdaptiveViewState; shape: Extract<AdaptiveItem, { kind: 'shape' }>['shape'] }) {
   return <article data-adaptive-shape={shape.tool} className="flex flex-wrap items-center gap-2 rounded border p-2 text-xs">
     <span className="min-w-0 flex-1"><span className="font-semibold break-all">{shape.tool}</span><span className="block text-muted-foreground">{shape.count} calls · keys: {shape.inputKeys.join(', ') || 'none'} · {shape.samples.length} samples</span></span>
+    <Button size="sm" variant="outline" disabled={state.busy || !shape.samples.length} title={shape.samples.length ? 'Ask a model with no tools to draft a card' : 'No samples kept yet'} onClick={() => void state.designHere(shape.key)}>Design here</Button>
     <Button size="sm" disabled={state.busy || !state.insertAvailable} title={state.insertAvailable ? undefined : 'Open a session to hand this to an agent'} onClick={() => void state.design(shape.key)}>Design card</Button>
     <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.dismiss(shape.key)}>Dismiss</Button>
   </article>

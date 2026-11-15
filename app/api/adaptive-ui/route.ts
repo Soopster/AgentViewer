@@ -21,6 +21,7 @@ export async function POST(request: Request) {
     if (body.action === 'set-status') { if (!STATUSES.has(body.status)) throw new Error('invalid status'); await nativeAdaptiveUi.setStatus(text(body.id, 64), body.status) }
     else if (body.action === 'remove') await nativeAdaptiveUi.remove(text(body.id, 64))
     else if (body.action === 'dismiss') await nativeAdaptiveUi.dismissShape(text(body.key, 400), body.dismissed !== false)
+    else if (body.action === 'design-here') result = await nativeAdaptiveUi.designHere(text(body.key, 400))
     else if (body.action === 'design-prompt') result = await nativeAdaptiveUi.designPrompt(text(body.key, 400))
     else throw new Error('Unknown Adaptive UI operation')
     return NextResponse.json({ result }, { headers: { 'Cache-Control': 'no-store' } })

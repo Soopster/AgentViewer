@@ -6,12 +6,14 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path'
 import type { AdaptiveUiService, AdaptiveUiSnapshot } from '../plugins/adaptiveUi'
 import { buildDesignPrompt } from './prompt'
+import { DESIGN_DAILY_LIMIT, designCardWithModel } from './design'
+import type { ModelAsk } from '../plugins/modelService'
 import { ShapeBook, type ShapeRecord } from './shapes'
 import { deleteCardRule, loadCardRules, recipesDir, setCardRuleStatus } from './store'
 import { clearPluginToolCardCache } from '../plugins/toolCards'
 
 type Usage = { completed: number; failed: number }
-type State = { fileStamp: number; book: ShapeBook; usage: Map<string, Usage>; dirty: boolean; timer: ReturnType<typeof setTimeout> | null; loaded: boolean }
+type State = { model: { day: string; count: number }; fileStamp: number; book: ShapeBook; usage: Map<string, Usage>; dirty: boolean; timer: ReturnType<typeof setTimeout> | null; loaded: boolean }
 declare global {
   // eslint-disable-next-line no-var
   var __agentViewerAdaptiveUi: State | undefined
@@ -21,7 +23,7 @@ const USAGE_TOOLS_MAX = 300
 const AUTO_DRAFT_AFTER = 5
 
 function state(): State {
-  const s = globalThis.__agentViewerAdaptiveUi ??= { fileStamp: 0, book: new ShapeBook(), usage: new Map(), dirty: false, timer: null, loaded: false }
+  const s = globalThis.__agentViewerAdaptiveUi ??= { model: { day: '', count: 0 }, fileStamp: 0, book: new ShapeBook(), usage: new Map(), dirty: false, timer: null, loaded: false }
   if (!s.loaded) {
     s.loaded = true
     readShapesFromDisk(s)
@@ -31,7 +33,8 @@ function state(): State {
 
 function readShapesFromDisk(s: State): void {
   try {
-    const raw = JSON.parse(readFileSync(stateFile(), 'utf8')) as { shapes?: ShapeRecord[] }
+    const raw = JSON.parse(readFileSync(stateFile(), 'utf8')) as { shapes?: ShapeRecord[]; model?: { day?: string; count?: number } }
+    if (raw.model && typeof raw.model.day === 'string' && typeof raw.model.count === 'number' && (raw.model.day > s.model.day || (raw.model.day === s.model.day && raw.model.count > s.model.count))) s.model = { day: raw.model.day, count: raw.model.count }
     s.book.merge(Array.isArray(raw.shapes) ? raw.shapes.filter(shape => shape && typeof shape.key === 'string' && typeof shape.tool === 'string' && Array.isArray(shape.inputKeys)) : [])
     s.fileStamp = statSync(stateFile()).mtimeMs
   } catch { /* first run, or an unreadable file: start empty */ }
@@ -58,7 +61,7 @@ function schedulePersist(s: State): void {
       const file = stateFile()
       mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 })
       const temp = `${file}.${process.pid}.tmp`
-      writeFileSync(temp, JSON.stringify({ shapes: s.book.list() }), { mode: 0o600 })
+      writeFileSync(temp, JSON.stringify({ shapes: s.book.list(), model: s.model }), { mode: 0o600 })
       renameSync(temp, file)
       s.fileStamp = statSync(file).mtimeMs
     } catch { /* a shape book that cannot be saved is lost on restart, nothing else */ }
@@ -81,12 +84,35 @@ export function adaptiveUiSnapshot(): AdaptiveUiSnapshot {
   return { dir: loaded.dir, rules: loaded.rules, invalid: loaded.invalid, shapes: s.book.list(), usage: [...s.usage].map(([tool, u]) => ({ tool, ...u })).sort((a, b) => b.completed - a.completed).slice(0, 50), settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
 }
 
+/** Spend one of today's model questions, or refuse: a plugin may not spend without bound. */
+function spendModelQuestion(s: State, now = new Date()): void {
+  const day = now.toISOString().slice(0, 10)
+  if (s.model.day !== day) s.model = { day, count: 0 }
+  if (s.model.count >= DESIGN_DAILY_LIMIT) throw new Error(`today's limit of ${DESIGN_DAILY_LIMIT} designed cards is used; design one with an agent instead`)
+  s.model.count += 1
+  schedulePersist(s)
+}
+
+/** Ask a tool-less model to design a card for a shape; the result is always a draft. */
+export async function designHere(key: string, ask?: ModelAsk): Promise<string> {
+  const s = state(); refreshFromDisk(s)
+  const shape = s.book.get(key)
+  if (!shape) throw new Error('that shape is no longer tracked')
+  if (!shape.samples.length) throw new Error('no samples were kept for this tool yet: call it once more, or design it with an agent')
+  spendModelQuestion(s)
+  const model = ask ?? (await import('../plugins/modelService')).askModel
+  const rule = await designCardWithModel(shape, model)
+  clearPluginToolCardCache()
+  return rule.id
+}
+
 /** The native service: what a view calls where the read path runs (the web daemon, or the TUI itself). */
 export const nativeAdaptiveUi: AdaptiveUiService = {
   async scan() { return adaptiveUiSnapshot() },
   async setStatus(id, status) { setCardRuleStatus(id, status); clearPluginToolCardCache() },
   async remove(id) { deleteCardRule(id); clearPluginToolCardCache() },
   async dismissShape(key, dismissed) { const s = state(); s.book.dismiss(key, dismissed); schedulePersist(s) },
+  async designHere(key, ask) { return designHere(key, ask) },
   async designPrompt(key) {
     const s = state(); refreshFromDisk(s)
     const shape = s.book.get(key)

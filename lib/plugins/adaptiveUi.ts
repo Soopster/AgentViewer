@@ -15,6 +15,8 @@ export type AdaptiveUiService = {
   setStatus(id: string, status: CardRuleStatus): Promise<void>
   remove(id: string): Promise<void>
   dismissShape(key: string, dismissed: boolean): Promise<void>
+  /** Ask a tool-less model to design a card in place; it lands as a draft. Returns the rule id. Counted against a daily limit. */
+  designHere(key: string, ask?: import('./modelService').ModelAsk): Promise<string>
   /** The request to hand an agent (the composer's text) to design a card for a shape. */
   designPrompt(key: string): Promise<string>
 }
