@@ -436,11 +436,11 @@ export function handleOverlayAndMenuKeys({
         handled(closeCommandPalette)
         return true
       }
-      if (key.name === 'j' || key.name === 'down') {
+      if (key.name === 'down' || (key.ctrl && key.name === 'j')) {
         handled(() => setCommandPaletteIndex((i) => Math.min(i + 1, Math.max(0, filteredCommands.length - 1))))
         return true
       }
-      if (key.name === 'k' || key.name === 'up') {
+      if (key.name === 'up' || (key.ctrl && key.name === 'k')) {
         handled(() => setCommandPaletteIndex((i) => Math.max(i - 1, 0)))
         return true
       }
