@@ -39,6 +39,7 @@ type LocalServerModule = {
   beforeSteer?: (context: Parameters<NonNullable<PluginBehaviorModule['beforeSteer']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['beforeSteer']>>
   permission?: (context: Parameters<NonNullable<PluginBehaviorModule['permission']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['permission']>>
   runtimeEvent?: (context: Parameters<NonNullable<PluginBehaviorModule['runtimeEvent']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['runtimeEvent']>>
+  tools?: Record<string, (args: Record<string, string | number | boolean>, context: { signal: AbortSignal } & LocalModContext) => unknown>
   toolCard?: (context: Parameters<NonNullable<PluginBehaviorModule['toolCard']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['toolCard']>>
   transcriptCard?: (context: Parameters<NonNullable<PluginBehaviorModule['transcriptCard']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['transcriptCard']>>
   deactivate?: () => void
@@ -101,7 +102,7 @@ export async function loadLocalPluginModule(pluginId: string): Promise<Record<st
 
 /** Behavior loaders for the server's behavior host, keyed by plugin id. */
 export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehaviorModule>> {
-  return Object.fromEntries(localPluginDiscovery().plugins.filter(plugin => plugin.manifest.behavior).map(plugin => [plugin.manifest.id, async () => {
+  return Object.fromEntries(localPluginDiscovery().plugins.filter(plugin => plugin.manifest.behavior || plugin.manifest.tools?.length).map(plugin => [plugin.manifest.id, async () => {
     const module = await loadServerModule(plugin)
     deactivated.delete(module)
     return {
@@ -111,6 +112,7 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
       ...(module.afterTurn ? { afterTurn: context => diagnosed(plugin.manifest.id, 'afterTurn', () => module.afterTurn!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.beforeSteer ? { beforeSteer: context => diagnosed(plugin.manifest.id, 'beforeSteer', () => module.beforeSteer!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.permission ? { permission: context => diagnosed(plugin.manifest.id, 'permission', () => module.permission!({ ...context, ...appContext(plugin) })) } : {}),
+      ...(module.tools ? { tools: Object.fromEntries(Object.entries(module.tools).filter(([, handler]) => typeof handler === 'function').map(([name, handler]) => [name, (args: Record<string, string | number | boolean>, context: { signal: AbortSignal }) => diagnosed(plugin.manifest.id, `tool:${name}`, () => handler(args, { ...context, ...appContext(plugin) }))])) } : {}),
       ...(module.transcriptCard ? { transcriptCard: context => diagnosed(plugin.manifest.id, 'transcriptCard', () => module.transcriptCard!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.toolCard ? { toolCard: context => diagnosed(plugin.manifest.id, 'toolCard', () => module.toolCard!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.runtimeEvent ? { runtimeEvent: context => diagnosed(plugin.manifest.id, 'runtimeEvent', () => module.runtimeEvent!({ ...context, ...appContext(plugin) })) } : {}),

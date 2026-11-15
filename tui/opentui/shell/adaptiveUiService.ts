@@ -15,5 +15,7 @@ export const tuiAdaptiveUi: AdaptiveUiService = {
   designHere: async key => isRemoteAttached() ? post<string>({ action: 'design-here', key }) : (await lazy()).designHere(key),
   refineHere: async (id, instruction) => isRemoteAttached() ? post<string>({ action: 'refine-here', id, instruction }) : (await lazy()).refineHere(id, instruction),
   refinePrompt: async id => isRemoteAttached() ? post<string>({ action: 'refine-prompt', id }) : (await lazy()).refinePrompt(id),
+  setAutoDraft: async enabled => { isRemoteAttached() ? await post({ action: 'set-auto-draft', enabled }) : await (await lazy()).setAutoDraft(enabled) },
+  learnFromHistory: async () => isRemoteAttached() ? post<string>({ action: 'learn' }) : (await lazy()).learnFromHistory(),
   designPrompt: async key => isRemoteAttached() ? post<string>({ action: 'design-prompt', key }) : (await lazy()).designPrompt(key),
 }

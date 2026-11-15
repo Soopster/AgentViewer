@@ -1,3 +1,4 @@
+import { validatePluginToolSpecs } from './pluginTools'
 import { parseModConfigSchema, type ModConfigSchema } from './modConfig'
 import { parseModPackageMetadata, type ModPackageMetadata } from './modPackageMetadata'
 // Local plugins ("mods"): plugins the user installs in their own config
@@ -114,6 +115,8 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   if (value.config !== undefined) { try { config = parseModConfigSchema(value.config) } catch (error) { problems.push(error instanceof Error ? error.message : String(error)) } }
   const appServices = Array.isArray(value.appServices) ? value.appServices : []
   if (value.appServices !== undefined && (!Array.isArray(value.appServices) || appServices.some(service => service !== 'data' && service !== 'navigation'))) problems.push('appServices must list data and/or navigation')
+  const toolSpecs = value.tools === undefined ? { specs: [], problems: [] as string[] } : validatePluginToolSpecs(value.tools)
+  problems.push(...toolSpecs.problems)
   let behavior: PluginManifest['behavior']
   if (value.behavior !== undefined) {
     const spec = value.behavior as { hooks?: unknown; order?: unknown; permissionMode?: unknown }
@@ -187,7 +190,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
     else views.push({ id: 'mod-config', title: `${title} settings` })
   }
-  if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
+  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
   for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views]] as const) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
   }
@@ -206,7 +209,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }

@@ -8,7 +8,7 @@ export function ruleIdFor(tool: string): string {
   return tool.toLowerCase().replace(/^mcp__/, '').replace(/__/g, '.').replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 56) || 'card'
 }
 
-export function buildDesignPrompt(shape: Pick<ShapeRecord, 'tool' | 'mcpServer' | 'inputKeys' | 'samples'>, dir: string, preference?: string | null): string {
+export function buildDesignPrompt(shape: Pick<ShapeRecord, 'tool' | 'mcpServer' | 'inputKeys' | 'samples'>, dir: string, preference?: string | null, profile?: string | null): string {
   const id = ruleIdFor(shape.tool)
   const samples = shape.samples.map((sample, index) => `Sample ${index + 1}\ninput: ${JSON.stringify(sample.input)}${sample.result ? `\nresult${sample.result.isError ? ' (error)' : ''}: ${sample.result.text}` : ''}`).join('\n\n') || '(no samples were kept: ask me to run the tool once)'
   return [
@@ -20,6 +20,7 @@ export function buildDesignPrompt(shape: Pick<ShapeRecord, 'tool' | 'mcpServer' 
     vocabularyMarkdown(),
     'Add a short "rationale": { "intent", "choices": [{ "block", "reason" }], "alternatives": [], "assumptions": [] } saying why the card is the way it is. It is shown to the person beside the card, so keep it true to what you wrote.',
     ...(preference ? [preference] : []),
+    ...(profile ? [profile] : []),
     'While the call is running there is no result, so bindings to result.* are empty. A failed call is shown as an error whatever you write.',
     `Show what a person needs at a glance: the title says what was asked and what came back; blocks show the few fields that matter, not the whole payload. Input keys: ${shape.inputKeys.join(', ') || '(none)'}.`,
     `After writing the file, run \`agent-viewer cards check ${dir}/${id}.json\` and fix anything it reports, then \`agent-viewer cards preview ${id}\` to see what the samples will draw. Do not enable the rule: I do that after reviewing the preview.`,

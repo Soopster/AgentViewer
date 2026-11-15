@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { BoxRenderable, ScrollBoxRenderable } from '@opentui/core'
+import type { BoxRenderable, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import { cardBlockLines } from '../../../lib/plugins/cardBlocks'
 import { explainRule, explanationLines } from '../../../lib/adaptiveUi/explain'
@@ -20,9 +20,11 @@ type BodyLine = { readonly text: string; readonly tone?: BodyTone; /** Several c
 
 const HELP: readonly ShortcutHelpGroup[] = [
   { title: 'Move', rows: [['j / k, ↑ / ↓', 'Move in the list, or scroll the detail when it has focus'], ['Tab / Shift+Tab', 'Switch between the list and the detail'], ['← / →', 'Switch detail tabs (or go back to the list when narrow)'], ['Enter', 'Open the selected item'], ['[ / ]', 'Previous / next filter'], ['1 / 2', 'Focus the list / the detail']] },
-  { title: 'A card', rows: [['a', 'Enable a draft or disabled card'], ['d', 'Disable an active card'], ['x', 'Delete (press twice)'], ['f', 'Change it: hands an agent the request'], ['w', 'Open the Why tab']] },
+  { title: 'A card', rows: [['a', 'Enable a draft or disabled card'], ['d', 'Disable an active card'], ['x', 'Delete (press twice)'], ['c', 'Change it: type what you want; a model patches it into a draft'], ['f', 'Change it: hands an agent the request'], ['w', 'Open the Why tab']] },
   { title: 'A tool drawn generically', rows: [['h', 'Design a card here, with a model that has no tools'], ['g', 'Design a card with an agent'], ['i', 'Dismiss it']] },
   { title: 'A suggestion', rows: [['a', 'Apply it (adds a view, or drafts the card)'], ['i', 'Dismiss it']] },
+  { title: 'Automatic drafts', rows: [['u', 'Turn automatic drafting on or off. When on, a tool drawn generically 5+ times gets a draft card, unprompted, at most 3 a day. Drafts only: they show beside the real call and nothing is enabled for you.']] },
+  { title: 'History', rows: [['l', 'Read past sessions to learn how tools are used and what they return (run again to read more)']] },
   { title: 'Other', rows: [['r', 'Refresh'], ['?', 'This help'], ['Esc', 'Back one level, then close']] },
 ]
 
@@ -43,13 +45,16 @@ function sampleToneColor(theme: Theme, tone: SampleTone): string { return tone =
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
 function AdaptiveUi(props: TuiPluginViewProps) {
-  const { services, theme, width, height, placement, focused, detach, registerKeys, useState: scoped } = props
+  const { services, theme, width, height, placement, focused, detach, registerKeys, setCapture, useState: scoped } = props
   const state = useAdaptiveView(services['adaptive-ui']!, services.composer?.insertPrompt)
   const [filter, setFilter] = scoped<AdaptiveFilter>('filter', 'all')
   const [selectedKey, setSelectedKey] = scoped<string>('selected', '')
   const [tab, setTab] = scoped<RuleTab>('tab', 'preview')
   const [region, setRegion] = scoped<Region>('region', 'list')
   const [help, setHelp] = useState(false)
+  // "Change this card": a typed instruction that a model turns into a patch. The textarea owns the keyboard while it is open.
+  const [changing, setChanging] = useState(false)
+  const changeInput = useRef<TextareaRenderable>(null)
   const listScroll = useRef<ScrollBoxRenderable>(null), selectedRow = useRef<BoxRenderable>(null)
   const detailScroll = useRef<ScrollBoxRenderable>(null), helpScroll = useRef<ScrollBoxRenderable>(null)
 
@@ -70,6 +75,8 @@ function AdaptiveUi(props: TuiPluginViewProps) {
   const tabs = selected?.kind === 'rule' ? RULE_TABS : []
   const activeTab: RuleTab = selected?.kind === 'rule' && RULE_TABS.some(([id]) => id === tab) ? tab : 'preview'
 
+  useEffect(() => { setCapture(focused ? (changing ? 'input' : help) : false); return () => setCapture(false) }, [changing, help, focused, setCapture])
+  useEffect(() => { setChanging(false) }, [selected?.key])
   useEffect(() => { if (selectedRow.current) listScroll.current?.scrollChildIntoView(selectedRow.current) }, [selected?.key, filter, visible.length])
   useEffect(() => { detailScroll.current?.scrollTo(0) }, [selected?.key, activeTab])
 
@@ -95,6 +102,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
       selected.rule.status === 'active'
         ? { key: 'd', label: 'Disable', run: () => void state.setStatus(selected.rule.id, 'disabled'), enabled: true }
         : { key: 'a', label: 'Enable', run: () => void state.setStatus(selected.rule.id, 'active'), enabled: true },
+      { key: 'c', label: 'Change…', run: () => { setRegion('detail'); setChanging(true) }, enabled: true },
       { key: 'f', label: 'Change with an agent', run: () => void state.refineWithAgent(selected.rule.id).then(ok => { if (ok && overlay) props.close() }), enabled: state.insertAvailable },
       { key: 'x', label: state.armed === selected.rule.id ? 'Delete: press again' : 'Delete', run: () => void state.remove(selected.rule.id), enabled: true },
     ]
@@ -112,6 +120,16 @@ function AdaptiveUi(props: TuiPluginViewProps) {
         else if (key.name === 'pageup') helpScroll.current?.scrollBy(-10)
         return true
       }
+      if (changing) {
+        // Typing: only Escape and Enter are ours; everything else reaches the textarea.
+        if (key.name === 'escape') { setChanging(false); return true }
+        if (key.name === 'return') {
+          const text = (changeInput.current?.plainText ?? '').trim()
+          if (text && selected?.kind === 'rule') { setChanging(false); void state.refineHere(selected.rule.id, text) } else setChanging(false)
+          return true
+        }
+        return false
+      }
       if (key.ctrl || key.meta) return false
       if (key.sequence === '?') { setHelp(true); return true }
       if (key.name === 'escape') { if (state.armed) { state.disarm(); return true } return closeOrBack() }
@@ -128,6 +146,8 @@ function AdaptiveUi(props: TuiPluginViewProps) {
       if (key.name === 'pageup') { detailScroll.current?.scrollBy(-10); return true }
       if (key.name === 'return') { if (region === 'list') { openDetail(); return true } return false }
       if (key.name === 'r') { void state.refresh(); return true }
+      if (key.name === 'l') { if (!state.busy) void state.learn(); return true }
+      if (key.name === 'u') { if (!state.busy) void state.setAutoDraft(!state.snapshot?.settings.autoDraft); return true }
       if (key.name === 'w' && selected?.kind === 'rule') { setTab('why'); openDetail(); return true }
       const action = itemActions.find(entry => entry.key === key.name)
       if (action) { if (action.enabled && !state.busy) action.run(); return true }
@@ -148,7 +168,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     if (selected.kind === 'shape') {
       const { shape } = selected
       // The header already says "no card · N calls": the body adds what it does not.
-      const lines: BodyLine[] = [{ text: `${shape.mcpServer ? `MCP server ${shape.mcpServer} · ` : ''}input keys: ${shape.inputKeys.join(', ') || 'none'}`, tone: 'muted' }, { text: '' }]
+      const lines: BodyLine[] = [{ text: `${shape.mcpServer ? `MCP server ${shape.mcpServer} · ` : ''}input keys: ${shape.inputKeys.join(', ') || 'none'}`, tone: 'muted' }, ...(state.snapshot?.knowledge.tools[shape.tool] ? [{ text: `Past sessions: ${state.snapshot.knowledge.tools[shape.tool]}`, tone: 'muted' as const }] : []), { text: '' }]
       if (!shape.samples.length) return [...lines, { text: 'No samples yet: call this tool once and let it finish. "Design here" needs one; "Design with an agent" can ask for it.', tone: 'muted' }]
       shape.samples.forEach((sample, index) => { for (const line of sampleLines(sample, index, shape.samples.length, Math.max(24, detailWidth - 3))) lines.push({ text: line.parts.map(([text]) => text).join(''), parts: line.parts }); lines.push({ text: '' }) })
       return [...lines, { text: 'Samples are redacted: secret-looking keys are removed and long values cut. [h] drafts a card from them.', tone: 'dim' }]
@@ -165,6 +185,8 @@ function AdaptiveUi(props: TuiPluginViewProps) {
         out.push({ text: '' })
       })
       const warnings = coverageWarnings(rule)
+      const pastWarnings = state.snapshot?.knowledge.ruleWarnings[rule.id] ?? []
+      if (pastWarnings.length) out.push({ text: 'Check against past sessions', tone: 'warn' }, ...pastWarnings.map(warning => ({ text: `  ⚠ ${warning}`, tone: 'warn' as const })), { text: '' })
       if (warnings.length) out.push({ text: 'Check against its samples', tone: 'warn' }, ...warnings.map(warning => ({ text: `  ⚠ ${warning}`, tone: 'warn' as const })))
       else if (cards.length) out.push({ text: `Reads everything it reads in ${cards.length} sample${cards.length === 1 ? '' : 's'}.`, tone: 'dim' })
       return out
@@ -196,7 +218,9 @@ function AdaptiveUi(props: TuiPluginViewProps) {
   return <box {...popoverRootProps(!overlay, { top: 2, left: Math.max(0, Math.floor((width - w) / 2)), width: w, height: h }, props.zIndex ?? 50)} border={overlay} borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title={overlay ? ' Adaptive UI ' : undefined}>
     {overlay && detach ? <PopoverDetachButton theme={theme} onPress={detach} /> : null}
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1}>
-      <text fg={theme.cyan} wrapMode="none">{fitText(`Cards for tool calls · ${ruleCount} card${ruleCount === 1 ? '' : 's'} · ${genericCount} drawn generically${counts('suggested') ? ` · ★ ${counts('suggested')}` : ''}`, Math.max(1, inner - 12))}</text>
+      <text fg={theme.cyan} wrapMode="none">{fitText(`Cards for tool calls · ${ruleCount} card${ruleCount === 1 ? '' : 's'} · ${genericCount} drawn generically${counts('suggested') ? ` · ★ ${counts('suggested')}` : ''}`, Math.max(1, inner - 62))}</text>
+      {button(`[u] auto-draft: ${state.snapshot?.settings.autoDraft ? 'on' : 'off'}`, () => void state.setAutoDraft(!state.snapshot?.settings.autoDraft))}
+      {button('[l] learn from history', () => void state.learn())}
       {button('[?] help', () => setHelp(true))}
     </box>
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1} backgroundColor={theme.surface2}>
@@ -239,6 +263,10 @@ function AdaptiveUi(props: TuiPluginViewProps) {
               ? <text key={index} wrapMode="none">{line.parts.map(([text, tone], part) => <span key={part} fg={sampleToneColor(theme, tone)}>{text}</span>)}</text>
               : <text key={index} fg={toneColor(theme, line.tone ?? 'text')} wrapMode="word">{line.text || ' '}</text>)}
           </scrollbox>
+          {changing ? <box flexShrink={0} flexDirection="column" backgroundColor={theme.surface2} paddingX={1}>
+            <text fg={theme.cyan} wrapMode="none">{fitText('Change this card: say what you want · Enter applies as a draft · Esc cancels', Math.max(1, detailWidth - 2))}</text>
+            <box height={3} flexShrink={0}><textarea ref={changeInput} initialValue="" focused={focused} width="100%" /></box>
+          </box> : null}
           <box flexShrink={0} flexDirection="row" flexWrap="wrap" backgroundColor={theme.surface2}>
             {itemActions.map(entry => <box key={entry.key} flexShrink={0}>{button(`[${entry.key}] ${entry.label}`, entry.run, entry.enabled)}</box>)}
             {modRule ? <box paddingX={1}><text fg={theme.dim} wrapMode="none">{`shipped by mod ${state.origins[(selected as Extract<AdaptiveItem, { kind: 'rule' }>).rule.id]}: read-only here`}</text></box> : null}
@@ -250,7 +278,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
         </box>}
       </box> : null}
     </box>
-    <box height={1} flexShrink={0} paddingX={1}><text fg={state.busy ? theme.amber : theme.dim} wrapMode="none">{fitText(state.busy ? 'Working…' : wide ? 'Tab pane · ←/→ tabs · j/k move · [ ] filter · ? help · Esc close' : region === 'list' ? 'Enter open · [ ] filter · ? help · Esc close' : '← list · ←/→ tabs · j/k scroll · ? help', inner - 2)}</text></box>
+    <box height={1} flexShrink={0} paddingX={1}><text fg={state.busy ? theme.amber : theme.dim} wrapMode="none">{fitText(state.busy ? 'Working…' : changing ? 'Enter apply · Esc cancel' : wide ? 'Tab pane · ←/→ tabs · j/k move · [ ] filter · ? help · Esc close' : region === 'list' ? 'Enter open · [ ] filter · ? help · Esc close' : '← list · ←/→ tabs · j/k scroll · ? help', inner - 2)}</text></box>
     {help ? <ShortcutHelp title="Adaptive UI shortcuts" groups={HELP} theme={theme} width={inner} height={h - (overlay ? 2 : 0)} scrollRef={helpScroll} onClose={() => setHelp(false)} /> : null}
   </box>
 }

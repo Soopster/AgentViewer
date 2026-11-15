@@ -727,6 +727,55 @@ function providerFromClientName(name, env = process.env) {
   return callerAgentProvider(env) ?? null
 }
 
+// ── Tools that plugins and mods offer to agents ──────────────────────────────────────────────────────
+// The app lists them (GET /api/plugins/tools) and runs them (POST); this registers each as an MCP tool so an agent
+// in any CLI sees it beside the coord_* tools, and keeps the list current: a plugin turned off, or a mod reloaded,
+// changes the tools within PLUGIN_TOOL_SYNC_MS (the SDK sends `tools/list_changed` when one is added or removed).
+// The app not running is not an error here: the coordinator tools still work, and the next sync tries again.
+const PLUGIN_TOOL_SYNC_MS = Math.max(200, Number(process.env.AGENT_VIEWER_PLUGIN_TOOL_SYNC_MS) || 30_000)
+function pluginToolZod(field) {
+  const base = field.t === 'string' ? z.string().min(field.min ?? 0).max(field.max ?? 40_000)
+    : field.t === 'number' ? (field.int ? z.number().int() : z.number()).min(field.min ?? -Infinity).max(field.max ?? Infinity)
+    : field.t === 'boolean' ? z.boolean()
+    : z.enum(field.values)
+  const described = field.description ? base.describe(field.description) : base
+  return field.optional ? described.optional() : described
+}
+function syncPluginTools(serverInstance, taken) {
+  const registered = new Map() // full name -> { handle, signature }
+  const sync = async () => {
+    let listed
+    try { listed = (await requestJson('/api/plugins/tools', undefined, 5_000))?.tools } catch { return }
+    if (!Array.isArray(listed)) return
+    const live = new Set()
+    for (const tool of listed) {
+      if (typeof tool?.name !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(tool.name) || taken.has(tool.name) || tool.name.startsWith('coord_')) continue
+      live.add(tool.name)
+      const signature = JSON.stringify([tool.description, tool.scope, tool.fields])
+      if (registered.get(tool.name)?.signature === signature) continue
+      registered.get(tool.name)?.handle.remove()
+      const shape = Object.fromEntries(Object.entries(tool.fields ?? {}).map(([name, field]) => [name, pluginToolZod(field)]))
+      const handle = serverInstance.registerTool(tool.name, {
+        description: `${tool.description} (from the ${tool.pluginId} plugin)`,
+        inputSchema: shape,
+        annotations: tool.scope === 'read' ? { readOnlyHint: true } : { readOnlyHint: false, destructiveHint: false },
+      }, async (args) => {
+        try {
+          const result = await requestJson('/api/plugins/tools', { method: 'POST', body: JSON.stringify({ name: tool.name, args }) }, 20_000)
+          return { content: [{ type: 'text', text: String(result?.text ?? '') }], ...(result?.isError ? { isError: true } : {}) }
+        } catch (error) {
+          return { content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }], isError: true }
+        }
+      })
+      registered.set(tool.name, { handle, signature })
+    }
+    for (const [name, entry] of registered) if (!live.has(name)) { entry.handle.remove(); registered.delete(name) }
+  }
+  void sync()
+  const timer = setInterval(() => void sync(), PLUGIN_TOOL_SYNC_MS)
+  timer.unref?.()
+}
+
 function createMcpServer() {
 // 2026-07-28 clients name themselves per request (the `_meta` envelope);
 // 2025-era clients only in `initialize`.
@@ -1833,6 +1882,8 @@ registerCoordinatorTool('coord_finalize_run', {
   description: bridgeDescription('coord_finalize_run'),
   inputSchema: { summary: z.string().min(1).max(16000), request_id: requestIdField },
 }, async ({ summary, request_id }) => textResult(await coordinatorRequest('finalize_run', { summary, requestId: request_id })))
+
+syncPluginTools(server, coordinatorTools)
 
 return server
 }

@@ -22,11 +22,13 @@ recordShape({ tool: 'mcp__notion__search', mcpServer: 'notion', inputKeys: ['que
 
 let handler: TuiPluginKeyHandler | null = null
 const inserted: string[] = []
+const refined: [string, string][] = []
+const service = { ...nativeAdaptiveUi, refineHere: async (id: string, instruction: string) => { refined.push([id, instruction]); return `${id} changed` } }
 let resize: ((size: { width: number; height: number }) => void) | undefined
 const View = module.views['adaptive-ui']!
 function Harness() {
   const [size, setSize] = React.useState({ width: 120, height: 30 }); resize = setSize
-  const props: TuiPluginViewProps = { pluginId: 'adaptive-ui', surfaceId: 'adaptive-ui', instanceId: 'adaptive-smoke', placement: 'panel', target: { cwd: root, sessionKey: null }, services: { 'adaptive-ui': nativeAdaptiveUi, composer: { insertPrompt: (text: string) => { inserted.push(text) }, appendDiffNote: () => {} } }, theme: DARK_THEME, accent: DARK_THEME.cyan, syntaxStyle: null, ...size, focused: true, zIndex: 50, useState: ((_name: string, initial: unknown) => React.useState(initial)) as never, onDispose: () => () => {}, registerKeys: (value: TuiPluginKeyHandler | null) => { handler = value }, setCapture: () => {}, runCommand: () => false, close: () => {} } as never
+  const props: TuiPluginViewProps = { pluginId: 'adaptive-ui', surfaceId: 'adaptive-ui', instanceId: 'adaptive-smoke', placement: 'panel', target: { cwd: root, sessionKey: null }, services: { 'adaptive-ui': service, composer: { insertPrompt: (text: string) => { inserted.push(text) }, appendDiffNote: () => {} } }, theme: DARK_THEME, accent: DARK_THEME.cyan, syntaxStyle: null, ...size, focused: true, zIndex: 50, useState: ((_name: string, initial: unknown) => React.useState(initial)) as never, onDispose: () => () => {}, registerKeys: (value: TuiPluginKeyHandler | null) => { handler = value }, setCapture: () => {}, runCommand: () => false, close: () => {} } as never
   return <View {...props} />
 }
 const setup = await testRender(<Harness />, { width: 120, height: 30 })
@@ -52,6 +54,16 @@ try {
   // Help captures input: j scrolls the help and must not move the selection.
   await key('?'); await waitFor('help opens', () => frame().includes('Adaptive UI shortcuts'))
   await key('j'); await key('escape'); await waitFor('help closed by Escape first', () => !frame().includes('Adaptive UI shortcuts') && frame().includes('Preview'))
+  // Typing a change: the textarea owns the keyboard, Escape cancels, Enter hands the words to the model.
+  await key('c'); await waitFor('change input opens', () => frame().includes('Change this card: say what you want'))
+  await key('escape'); await waitFor('Escape cancels typing, not the gallery', () => !frame().includes('Change this card: say what you want') && frame().includes('Preview'))
+  assert.equal(refined.length, 0, 'cancelling applies nothing')
+  await key('c'); await waitFor('change input opens again', () => frame().includes('Change this card: say what you want'))
+  await act(async () => { setup.mockInput.typeText('show the owner'); await new Promise(resolve => setTimeout(resolve, 80)); await setup.flush() })
+  await key('return'); await waitFor('instruction sent', () => refined.length === 1)
+  assert.deepEqual(refined[0], ['linear.get_issue', 'show the owner'], 'the typed words reach the service for this card')
+  await waitFor('input closed', () => !frame().includes('Change this card: say what you want'))
+  await key('1') // back to the list: j/k scroll the detail while it has focus
   // Filters narrow the collection.
   await key(']'); await key(']'); await waitFor('Cards filter', () => !frame().includes('mcp__notion__search') && frame().includes('linear.get_issue'))
   await key(']'); await waitFor('Generic filter', () => frame().includes('mcp__notion__search') && !frame().includes('[a] Enable'))

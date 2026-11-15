@@ -10,13 +10,14 @@ import { explainRule, explanationLines } from '../lib/adaptiveUi/explain'
 import { readCardHistory } from '../lib/adaptiveUi/history'
 import { currentRevision, parseCardPatch } from '../lib/adaptiveUi/patch'
 import { ruleCoverage, sampleCalls } from '../lib/adaptiveUi/coverage'
+import { corpusProfileText, loadCorpus, profileCoverage } from '../lib/adaptiveUi/corpus'
 import { CARD_VOCABULARY, vocabularyMarkdown } from '../lib/adaptiveUi/vocabulary'
 
 const [verb, ...args] = process.argv.slice(2)
 const json = args.includes('--json')
 const rest = args.filter(arg => arg !== '--json')
 const out = (value: unknown, text: string) => console.log(json ? JSON.stringify(value) : text)
-function usage(): never { throw Object.assign(new Error('Usage: agent-viewer cards check [file…] | preview <file-or-id> | show <id> | explain <id> | patch <id> <patch.json|-> | refine <id> "<instruction>" | history [id] | schema | list | enable <id> | disable <id> [--json]'), { code: 2 }) }
+function usage(): never { throw Object.assign(new Error('Usage: agent-viewer cards check [file…] | preview <file-or-id> | show <id> | explain <id> | patch <id> <patch.json|-> | refine <id> "<instruction>" | history [id] | learn | profile <tool> | schema | list | enable <id> | disable <id> [--json]'), { code: 2 }) }
 
 function readRule(target: string) {
   const file = existsSync(target) ? target : path.join(recipesDir(), target.endsWith('.json') ? target : `${target}.json`)
@@ -37,7 +38,8 @@ try {
     else {
       const cards = (rule.samples ?? []).map(sample => renderCardRule(rule, { tool: { name: rule.match.tool.replace(/\*/g, 'x'), input: sample.input }, ...(sample.result ? { result: { text: sample.result.text, isError: sample.result.isError === true } } : {}) }))
       const coverage = ruleCoverage(rule, sampleCalls(rule))
-      out({ cards, coverage }, `${cards.length ? cards.map((card, i) => `sample ${i + 1}  [${card.tone}]  ${card.title}\n${cardBlockLines(card.blocks).map(line => `  ${line}`).join('\n')}`).join('\n\n') : `${rule.id} is valid but has no samples to preview`}${coverage.warnings.length ? `\n\n${coverage.warnings.map(warning => `warning: ${warning}`).join('\n')}` : ''}`)
+      const past = profileCoverage(rule, loadCorpus().tools[rule.match.tool])
+      out({ cards, coverage }, `${cards.length ? cards.map((card, i) => `sample ${i + 1}  [${card.tone}]  ${card.title}\n${cardBlockLines(card.blocks).map(line => `  ${line}`).join('\n')}`).join('\n\n') : `${rule.id} is valid but has no samples to preview`}${[...coverage.warnings, ...past.never, ...past.rare].length ? `\n\n${[...coverage.warnings, ...past.never, ...past.rare].map(warning => `warning: ${warning}`).join('\n')}` : ''}`)
     }
   } else if (verb === 'show') {
     if (rest.length !== 1) usage()
@@ -64,6 +66,15 @@ try {
     const { refineHere } = await import('../lib/adaptiveUi/runtime')
     const message = await refineHere(rest[0]!, rest[1]!)
     out({ message }, message)
+  } else if (verb === 'learn') {
+    const { learnFromHistory } = await import('../lib/adaptiveUi/runtime')
+    const message = await learnFromHistory()
+    out({ message }, message)
+  } else if (verb === 'profile') {
+    if (rest.length !== 1) usage()
+    const tool = loadCorpus().tools[rest[0]!]
+    if (!tool) throw new Error(`nothing is known about "${rest[0]!.slice(0, 80)}" yet: run \`agent-viewer cards learn\` first`)
+    out(tool, corpusProfileText(tool))
   } else if (verb === 'history') {
     const entries = readCardHistory(recipesDir(), { ...(rest[0] ? { id: rest[0] } : {}), limit: 30 })
     out(entries, entries.map(entry => `${entry.at.slice(0, 19)}  ${entry.actor.padEnd(5)} ${entry.action.padEnd(7)} ${entry.id}${entry.revision ? ` r${entry.revision}` : ''}  ${entry.summary}`).join('\n') || '(no history)')

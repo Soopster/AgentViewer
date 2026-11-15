@@ -16,5 +16,7 @@ export const webAdaptiveUi: AdaptiveUiService = {
   designHere: key => post<string>({ action: 'design-here', key }),
   refineHere: (id, instruction) => post<string>({ action: 'refine-here', id, instruction }),
   refinePrompt: id => post<string>({ action: 'refine-prompt', id }),
+  setAutoDraft: enabled => post({ action: 'set-auto-draft', enabled }),
+  learnFromHistory: () => post<string>({ action: 'learn' }),
   designPrompt: key => post<string>({ action: 'design-prompt', key }),
 }

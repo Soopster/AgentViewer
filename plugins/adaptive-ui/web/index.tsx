@@ -36,6 +36,7 @@ function Detail({ state, item, tab, setTab }: { state: AdaptiveViewState; item: 
       {item.kind === 'invalid' ? <div className="grid gap-1"><p className="text-amber-600">This file is not drawn:</p>{item.problems.map((problem, i) => <p key={i} className="break-words text-red-600">· {problem}</p>)}</div> : null}
       {item.kind === 'shape' ? <div className="grid gap-3">
         <p className="text-muted-foreground">{item.shape.mcpServer ? `MCP server ${item.shape.mcpServer} · ` : ''}input keys: {item.shape.inputKeys.join(', ') || 'none'}</p>
+        {state.snapshot?.knowledge.tools[item.shape.tool] ? <p className="text-muted-foreground">Past sessions: {state.snapshot.knowledge.tools[item.shape.tool]}</p> : null}
         {item.shape.samples.length ? item.shape.samples.map((sample, index) => {
           const rows = inputRows(sample.input), result = resultView(sample)
           return <article key={index} className="grid gap-1 rounded border p-2" aria-label={`Sample ${index + 1}`}>
@@ -50,6 +51,7 @@ function Detail({ state, item, tab, setTab }: { state: AdaptiveViewState; item: 
       </div> : null}
       {item.kind === 'rule' && tab === 'preview' ? <div className="grid gap-2">
         {previewRule(item.rule).length ? previewRule(item.rule).map((card, index) => <div key={index} className="rounded border p-2"><div className="font-semibold">{card.title || item.rule.match.tool}</div><PluginCardBlocks blocks={card.blocks} /></div>) : <p className="text-muted-foreground">No samples were kept with this rule, so there is nothing to preview here. It draws on real calls once enabled; while it is a draft it also shows beside them.</p>}
+        {(state.snapshot?.knowledge.ruleWarnings[item.rule.id] ?? []).length ? <div role="status" className="rounded border border-amber-600 p-2 text-amber-700"><p className="font-semibold">Check against past sessions</p>{(state.snapshot?.knowledge.ruleWarnings[item.rule.id] ?? []).map((warning, i) => <p key={i}>⚠ {warning}</p>)}</div> : null}
         {coverageWarnings(item.rule).length ? <div role="status" className="rounded border border-amber-600 p-2 text-amber-700">{coverageWarnings(item.rule).map((warning, i) => <p key={i}>⚠ {warning}</p>)}</div> : null}
       </div> : null}
       {item.kind === 'rule' && tab === 'why' ? <pre className="whitespace-pre-wrap text-[11px]">{explanationLines(explainRule(item.rule)).join('\n')}</pre> : null}
@@ -92,6 +94,8 @@ function AdaptiveUi({ services, placement, close, useState: scoped }: WebPluginV
     <style>{SPACING}</style>
     <header className="flex flex-wrap items-center gap-2">
       <h2 className="mr-auto font-semibold">Adaptive UI <span className="text-xs font-normal text-muted-foreground">cards for tool calls · {ruleCount} card{ruleCount === 1 ? '' : 's'} · {countAdaptive(state.items, 'generic')} drawn generically</span></h2>
+      <label className="flex items-center gap-1 text-xs" title={`Draft a card for a tool drawn generically ${state.snapshot?.settings.autoDraftAfter ?? 5}+ times, unprompted, at most ${state.snapshot?.settings.autoDraftDaily ?? 3} a day. Drafts only: nothing is enabled for you.`}><input type="checkbox" checked={state.snapshot?.settings.autoDraft ?? false} disabled={state.busy || !state.snapshot} onChange={event => void state.setAutoDraft(event.target.checked)} />Draft cards automatically</label>
+      <Button size="sm" variant="outline" disabled={state.busy} title="Read past sessions to learn how tools are used and what they return; run again to read more" onClick={() => void state.learn()}>Learn from past sessions</Button>
       <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.refresh()}>Refresh</Button>
       {placement === 'overlay' ? <Button size="sm" variant="outline" onClick={close}>Close</Button> : null}
     </header>

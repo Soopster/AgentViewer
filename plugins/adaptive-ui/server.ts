@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { PLUGIN_API_VERSION } from '../../lib/plugins/types'
+import { adaptiveUiToolHandlers } from './tools'
 import type { PluginBehaviorModule } from '../../lib/plugins/behavior'
 import { hasNativeToolCard } from '../../lib/plugins/nativeTools'
 import { cardRuleMatches, cardRuleSpecificity, mcpServerOf, renderCardRule } from '../../lib/plugins/cardTemplates'
@@ -77,6 +78,7 @@ export const behavior: PluginBehaviorModule = {
     }
     return draft && preview ? { title: preview.title, blocks: preview.blocks, tone: preview.tone, draft: true, ref: draft.id } : null
   },
+  tools: adaptiveUiToolHandlers,
   deactivate: closeRecipeWatcher,
   transcriptCard({ block }) {
     ensureWatching()

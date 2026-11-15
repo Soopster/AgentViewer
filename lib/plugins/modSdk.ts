@@ -20,6 +20,8 @@ export type ModServerModule = {
   readonly runtimeEvent?: Hook<'runtimeEvent'>
   readonly toolCard?: Hook<'toolCard'>
   readonly transcriptCard?: Hook<'transcriptCard'>
+  /** Handlers for the `tools` plugin.json declares: operations an agent can call through the agent-viewer MCP bridge. */
+  readonly tools?: Record<string, (args: Record<string, string | number | boolean>, context: { signal: AbortSignal }) => unknown>
   readonly deactivate?: () => void
   readonly commands?: Readonly<Record<string, (context: LocalCommandContext) => LocalCommandEffects | Promise<LocalCommandEffects>>>
   readonly widgets?: Readonly<Record<string, (context: LocalModContext & { signal: AbortSignal }) => { title?: string; text?: string; lines?: readonly string[]; tone?: 'info' | 'success' | 'warning' | 'error' } | null | Promise<{ title?: string; text?: string; lines?: readonly string[]; tone?: 'info' | 'success' | 'warning' | 'error' } | null>>>

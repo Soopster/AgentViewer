@@ -9,6 +9,7 @@ import { ruleIdFor } from './prompt'
 import type { ShapeRecord } from './shapes'
 import { patchCardRule, writeCardRule } from './store'
 import { currentRevision, parseCardPatch } from './patch'
+import { profileCoverage, type ToolCorpus } from './corpus'
 
 export const DESIGN_MAX_ATTEMPTS = 3
 export const DESIGN_DAILY_LIMIT = 20
@@ -39,9 +40,9 @@ export function extractRuleJson(reply: string): unknown {
   throw new Error('the reply is not valid JSON')
 }
 
-export async function designCardWithModel(shape: ShapeRecord, ask: ModelAsk, options: { dir?: string; signal?: AbortSignal; now?: () => Date; preference?: string | null } = {}): Promise<CardRule> {
+export async function designCardWithModel(shape: ShapeRecord, ask: ModelAsk, options: { dir?: string; signal?: AbortSignal; now?: () => Date; preference?: string | null; /** What past transcripts say about this tool: told to the model, and the rule is checked against it. */ history?: ToolCorpus | null; profile?: string | null } = {}): Promise<CardRule> {
   const samples = shape.samples.map((sample, index) => `Sample ${index + 1}\ninput: ${JSON.stringify(sample.input)}${sample.result ? `\nresult${sample.result.isError ? ' (error)' : ''}: ${sample.result.text}` : ''}`).join('\n\n') || '(no samples were kept)'
-  const base = `${options.preference ? `${options.preference}\n\n` : ''}Design a card for the tool "${shape.tool}"${shape.mcpServer ? ` (MCP server "${shape.mcpServer}")` : ''}. Input keys: ${shape.inputKeys.join(', ') || 'none'}.\n\n${samples}`
+  const base = `${options.preference ? `${options.preference}\n\n` : ''}${options.profile ? `${options.profile}\n\n` : ''}Design a card for the tool "${shape.tool}"${shape.mcpServer ? ` (MCP server "${shape.mcpServer}")` : ''}. Input keys: ${shape.inputKeys.join(', ') || 'none'}.\n\n${samples}`
   let feedback = ''
   let last = 'no attempt was made'
   for (let attempt = 0; attempt < DESIGN_MAX_ATTEMPTS; attempt++) {
@@ -53,6 +54,9 @@ export async function designCardWithModel(shape: ShapeRecord, ask: ModelAsk, opt
       const candidate = { ...raw, id: typeof raw.id === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.id) ? raw.id : ruleIdFor(shape.tool), status: 'draft', tone: raw.tone === 'default' || raw.tone === 'neutral' || raw.tone === 'muted' ? 'info' : raw.tone, match: { tool: shape.tool, ...(shape.mcpServer ? { mcpServer: shape.mcpServer } : {}) }, overridesNative: undefined, samples: shape.samples, provenance: { by: 'model', at: (options.now?.() ?? new Date()).toISOString() } }
       const parsed = parseCardRule(candidate)
       if (!parsed.rule) { last = parsed.problems.join('; '); feedback = `\n\nYour previous reply was refused: ${last}. Reply again with a corrected JSON object.`; continue }
+      // Checked against real history, not just the reply's own syntax: a binding no past result had is always empty.
+      const against = profileCoverage(parsed.rule, options.history ?? undefined)
+      if (against.never.length) { last = against.never.join('; '); feedback = `\n\nYour previous reply was refused: ${last}. Use only fields listed in the profile of past results, and reply again.`; continue }
       return writeCardRule(parsed.rule, options.dir, { actor: 'model', action: 'design', summary: `designed ${parsed.rule.id} from ${shape.samples.length} samples` })
     } catch (error) { last = error instanceof Error ? error.message : String(error); feedback = `\n\nYour previous reply could not be used: ${last}. Reply with ONE JSON object only.` }
   }

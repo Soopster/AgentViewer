@@ -56,6 +56,14 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
       await act(async () => { setNotice(await service.applySuggestion(suggestion.id)) }, '')
     },
     dismissSuggestion: (id: string) => act(() => service.dismissSuggestion(id), 'Dismissed'),
+    setAutoDraft: (enabled: boolean) => act(() => service.setAutoDraft(enabled), enabled ? 'Cards will be drafted automatically (drafts only; you keep or discard them)' : 'Automatic drafting is off'),
+    /** Read a batch of past sessions to learn how tools are used; run again to read more. */
+    learn: async () => {
+      setBusy(true); setNotice('Reading past sessions…')
+      try { const message = await service.learnFromHistory(); if (alive.current) setNotice(message); await refresh() }
+      catch (error) { if (alive.current) setNotice(error instanceof Error ? error.message : String(error)) }
+      finally { if (alive.current) setBusy(false) }
+    },
     /** Change a rule from a plain-language instruction, in place; it comes back a draft. */
     refineHere: async (id: string, instruction: string) => {
       setBusy(true); setNotice('Changing the card…')

@@ -55,7 +55,7 @@ function host() {
   const current = state()
   if (!current.host) {
     // Local plugins (the user's mods) join the bundled behaviors in one ordered pipeline.
-    const local = localPluginDiscovery().plugins.map(plugin => plugin.manifest).filter(manifest => manifest.behavior)
+    const local = localPluginDiscovery().plugins.map(plugin => plugin.manifest).filter(manifest => manifest.behavior || manifest.tools?.length)
     current.host = createPluginBehaviorHost([...(PLUGIN_MANIFESTS as readonly PluginManifest[]), ...local], { ...BUNDLED_BEHAVIORS, ...localBehaviorLoaders() })
   }
   return current.host

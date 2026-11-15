@@ -160,6 +160,8 @@ export type PluginManifest = {
    * slot host loads it at boot, so a widget module must stay small.
    */
   readonly widgets?: readonly { readonly id: string; readonly slot: PluginWidgetSlot; readonly order?: number }[]
+  /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
+  readonly tools?: readonly import('./pluginTools').PluginToolSpec[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
   readonly behavior?: { readonly hooks: readonly ('beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'transcriptCard' | 'runtimeEvent')[]; readonly order?: number; readonly permissionMode?: 'policy' | 'automation' }
   /** App-lifetime observers, independent of whether any surface is open. */

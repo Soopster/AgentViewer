@@ -23,6 +23,8 @@ export async function POST(request: Request) {
     else if (body.action === 'dismiss') await nativeAdaptiveUi.dismissShape(text(body.key, 400), body.dismissed !== false)
     else if (body.action === 'apply-suggestion') result = await nativeAdaptiveUi.applySuggestion(text(body.id, 300))
     else if (body.action === 'dismiss-suggestion') await nativeAdaptiveUi.dismissSuggestion(text(body.id, 300))
+    else if (body.action === 'set-auto-draft') await nativeAdaptiveUi.setAutoDraft(body.enabled === true)
+    else if (body.action === 'learn') result = await nativeAdaptiveUi.learnFromHistory()
     else if (body.action === 'refine-here') result = await nativeAdaptiveUi.refineHere(text(body.id, 64), text(body.instruction, 500))
     else if (body.action === 'refine-prompt') result = await nativeAdaptiveUi.refinePrompt(text(body.id, 64))
     else if (body.action === 'design-here') result = await nativeAdaptiveUi.designHere(text(body.key, 400))

@@ -87,6 +87,17 @@ export class ShapeBook {
     }
     while (this.shapes.size > SHAPE_LIMITS.shapes) this.shapes.delete(this.shapes.keys().next().value!)
   }
+  /** A tool known from history: raises its count to what history saw and tops its samples up, never lowering either. */
+  seed(input: { tool: string; mcpServer?: string; inputKeys: readonly string[]; count: number; firstSeen: number; lastSeen: number; samples: readonly ShapeSample[] }): void {
+    const key = shapeKey(input.tool, input.inputKeys)
+    const prev = this.shapes.get(key)
+    const have = prev?.samples ?? []
+    const merged = [...have]
+    for (const sample of input.samples) if (merged.length < SHAPE_LIMITS.samples && !merged.some(entry => JSON.stringify(entry.input) === JSON.stringify(sample.input))) merged.push(sample)
+    this.shapes.delete(key)
+    this.shapes.set(key, { key, tool: input.tool, ...(input.mcpServer ? { mcpServer: input.mcpServer } : {}), inputKeys: [...input.inputKeys].sort(), count: Math.max(prev?.count ?? 0, input.count), firstSeen: Math.min(prev?.firstSeen ?? input.firstSeen, input.firstSeen), lastSeen: Math.max(prev?.lastSeen ?? 0, input.lastSeen), samples: merged, ...(prev?.dismissed ? { dismissed: true } : {}) })
+    while (this.shapes.size > SHAPE_LIMITS.shapes) this.shapes.delete(this.shapes.keys().next().value!)
+  }
   dismiss(key: string, dismissed = true): void { const prev = this.shapes.get(key); if (prev) this.shapes.set(key, { ...prev, ...(dismissed ? { dismissed: true } : { dismissed: undefined }) }) }
   forget(key: string): void { this.shapes.delete(key) }
   list(): ShapeRecord[] { return [...this.shapes.values()].sort((a, b) => b.count - a.count || b.lastSeen - a.lastSeen) }

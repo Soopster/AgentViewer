@@ -1,4 +1,5 @@
 import { cardBlockLines, decodeCardBlocks, type CardBlock } from './cardBlocks'
+import { boundPluginToolResult, PLUGIN_TOOL_TIMEOUT_MS, pluginToolFullName, validatePluginToolArgs, type PluginToolSpec } from './pluginTools'
 import { onPluginRuntimeEvent } from './runtimeEvents'
 import { recordModDiagnostic } from './modDiagnostics'
 import { recordPluginPermissionReceipt, type PluginPermissionTrace } from './permissionHistory'
@@ -26,15 +27,15 @@ export function createPluginBehaviorHost(
   manifests: readonly PluginManifest[],
   loaders: Readonly<Record<string, () => Promise<PluginBehaviorModule>>>,
 ) {
-  const contributors = manifests.filter(m => (m.behavior?.hooks.length ?? 0) > 0).sort(order)
-  const hooked = (hook: PluginBehaviorHook) => contributors.filter(m => m.behavior!.hooks.includes(hook))
+  const contributors = manifests.filter(m => (m.behavior?.hooks.length ?? 0) > 0 || (m.tools?.length ?? 0) > 0).sort(order)
+  const hooked = (hook: PluginBehaviorHook) => contributors.filter(m => m.behavior?.hooks.includes(hook))
   for (const manifest of contributors) {
     if (!Object.hasOwn(loaders, manifest.id)) throw new Error(`Plugin ${manifest.id} has no behavior loader`)
   }
   const scopes = new Map<string, ReturnType<typeof createPluginResourceScope>>()
   const registry = createLazyRegistry(loaders, (id, module) => {
     const manifest = contributors.find(m => m.id === id && m.apiVersion === PLUGIN_API_VERSION)
-    const declaredMissing = manifest?.behavior?.hooks.some(hook => typeof module?.[hook] !== 'function')
+    const declaredMissing = manifest?.behavior?.hooks.some(hook => typeof module?.[hook] !== 'function') || manifest?.tools?.some(tool => typeof module?.tools?.[tool.name] !== 'function')
     if (!manifest || module?.apiVersion !== PLUGIN_API_VERSION || module.pluginId !== id || declaredMissing
       || (module.deactivate !== undefined && typeof module.deactivate !== 'function')) {
       throw new Error(`Plugin ${id} behavior API or identity mismatch`)
@@ -176,6 +177,31 @@ export function createPluginBehaviorHost(
         }
       }
       return null
+    },
+    /** The tools enabled plugins offer agents, as an agent will see them. */
+    listTools(): { pluginId: string; name: string; spec: PluginToolSpec }[] {
+      return contributors.filter(m => isPluginEnabled(m.id)).flatMap(m => (m.tools ?? []).map(spec => ({ pluginId: m.id, name: pluginToolFullName(m.id, spec.name), spec })))
+    },
+    /**
+     * Run one tool for an agent. Arguments are checked against the declaration, the handler is given a deadline, and
+     * whatever happens comes back as text for the model: a failure is a result to read, never an exception to the bridge.
+     */
+    async callTool(fullName: string, rawArgs: unknown, outerSignal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
+      if (disposed) return { text: 'plugins are reloading: try again in a moment', isError: true }
+      const entry = this.listTools().find(tool => tool.name === fullName)
+      if (!entry) return { text: `no tool "${fullName.slice(0, 80)}" (plugin tools: ${this.listTools().map(tool => tool.name).join(', ') || 'none are enabled'})`, isError: true }
+      const checked = validatePluginToolArgs(entry.spec, rawArgs)
+      if ('error' in checked) return { text: checked.error, isError: true }
+      const signal = AbortSignal.any([scopeFor(entry.pluginId).signal, AbortSignal.timeout(PLUGIN_TOOL_TIMEOUT_MS), ...(outerSignal ? [outerSignal] : [])])
+      try {
+        const module = await abortable(signal, async () => registry.get(entry.pluginId))
+        const result = await abortable(signal, async () => module.tools![entry.spec.name]!(checked.args, { signal }))
+        return { text: boundPluginToolResult(result), isError: false }
+      } catch (error) {
+        if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return { text: `${fullName} did not finish within ${PLUGIN_TOOL_TIMEOUT_MS / 1000}s`, isError: true }
+        recordModDiagnostic(entry.pluginId, `tool:${entry.spec.name}`, error)
+        return { text: `${fullName} failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`, isError: true }
+      }
     },
     observesSteering: () => hooked('beforeSteer').some(m => isPluginEnabled(m.id)),
     decidesPermissions: () => hooked('permission').some(m => isPluginEnabled(m.id)),

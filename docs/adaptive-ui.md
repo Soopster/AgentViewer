@@ -102,6 +102,52 @@ palette (**Adaptive UI cards**), from the side-panel launcher, or from the butto
   cascade layer, which beats every Tailwind padding utility, so plugin views built from `p-4`/`px-2` otherwise draw flush
   against their edges. Moving that reset into `@layer base` would fix every plugin view at once.
 
+## Learning from past sessions
+The live read path sees a call once and keeps three samples. **Learn from past sessions** (the gallery's button, `l` in the
+TUI, `agent-viewer cards learn`) reads the sessions already on this machine and keeps *statistics*, in
+`.agent-viewer-data/adaptive-ui/corpus.json`:
+- per tool: calls, failures, how often results are JSON, typical and largest size, which argument sets it is called with,
+  and a few representative redacted samples (one failure among them);
+- per result field: the share of results it is present in, its types, list lengths, and for a field whose values *repeat*
+  (a status) the values themselves. A field that is distinct per call (an id, a path) keeps no value list, and a field
+  named like a secret is not recorded at all.
+
+It is local, opt-in, incremental (a session is read once, newest first, 40 at a time or 25 s per run: run it again to read
+more) and reads sessions raw through the provider adapters, so a backfill does not count itself as live use. Built-in
+tools are not tracked. What it feeds:
+- **Design.** A model or an agent designing a card is told what real results look like (`result.json.task.status  100%
+  string one of: completed (80%), failed (10%), blocked (10%)`, `checkout.diff  12% (usually empty)`), and a tool known only
+  from history appears in the gallery with its samples.
+- **Validation.** A designed rule is checked against *all* past calls, not three samples: a binding no past result had
+  (`result.json.owner was never present in 213 past JSON results`) is refused and the model is told why; one present in
+  under half the results is a warning in the gallery's Preview, `cards preview` and the Why view. Under 8 calls it says
+  nothing: a handful is not evidence.
+- `agent-viewer cards profile <tool>` prints the profile.
+Only the default provider instance of each provider is read.
+
+## Automatic drafts (opt-in)
+Off by default. Turn it on in the gallery (**Draft cards automatically**, `u` in the TUI) and a tool drawn generically five
+or more times, with a sample, gets a draft card unprompted: at most three a day, one at a time, never for a tool that has a
+card or was dismissed, and a tool whose design failed is left alone for an hour. It only ever makes **drafts**, which show
+beside the real call with Keep and Discard; nothing is enabled for you. The choice is kept with the rest of the gallery's
+state.
+
+## Tools for agents
+Plugins and mods can give agents operations of their own (`lib/plugins/pluginTools.ts`). A manifest or `plugin.json` declares
+`tools: [{ name, description, scope: "read" | "write", fields }]`, with flat string / number / boolean / enum fields, and
+the plugin's server module exports `tools: { name: handler }`. The agent-viewer MCP bridge lists them at start-up and
+every 30 s (so a plugin turned off or a mod reloaded changes the list, and the SDK sends `tools/list_changed`) and runs a
+call through `POST /api/plugins/tools`. An agent sees `<plugin_id>_<tool>`, typed from the declaration. Arguments are
+checked there too and an argument the declaration lacks is refused, never dropped; a result is bounded to 16,000 characters;
+a handler gets 10 s; a failure comes back as text to read; a `write` tool is annotated as one, so the agent's own host
+asks you as for any MCP tool. A plugin cannot shadow a `coord_*` tool. Only the stdio bridge (external CLIs) carries them:
+sessions hosted inside the app get the coordinator tools only.
+
+The adaptive-ui plugin offers `adaptive_ui_list_shapes`, `_profile`, `_schema`, `_show_rule`, `_propose_rule`,
+`_patch_rule` and `_preview_rule`. `propose_rule` checks a rule against the grammar and against past calls and hands back
+the reasons at once; whatever an agent writes is a draft, it cannot enable a card or replace a built-in one, and a patch
+against an old revision is refused.
+
 ## Suggestions
 The gallery lists what the app could change about itself, from how it is used: a card for a tool called often or opened
 often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.
@@ -127,8 +173,8 @@ A rule file edited on disk clears cached cards. Bundled plugins' own code reload
 - **`transcriptCard`** presents a block that is not a tool call. Today that is a system message: the hook gets `{ target, block: { kind: 'system', id, subtype, payload } }` (payload bounded to 8,000 characters) and answers like `toolCard`; the card rides on the payload through threading, so both renderers draw it, and the Web keeps a *show original* toggle. A rule with `match: { kind: 'system', tool: '<subtype>' }` does the same declaratively (`input.*` is the message's fields); a failed system message (`level: error`, or an `error` field) is an error card whatever the rule says. A tool rule never draws a system message or the reverse. System messages are not designed from observed shapes (the host cannot tell which are drawn generically), so these rules are written by hand, by an agent, or by a mod.
 
 ## Not done
-A general mechanism for plugins to contribute agent tools (the `agent-viewer cards` CLI and the skill cover what an agent needs here), and
-`transcriptCard` for blocks other than system messages (text, thinking, slash commands).
+`transcriptCard` for blocks other than system messages (text, thinking, slash commands), and plugin tools for sessions hosted inside
+the app (only the stdio MCP bridge carries them; the `agent-viewer cards` CLI and the skill cover those).
 
 Project-scoped recipes (`<repo>/.agent-viewer/ui-recipes`) are deliberately not loaded: a cloned repository would decide how
 your tool calls look. If they are added they should arrive as drafts to adopt, like a design from an agent.
