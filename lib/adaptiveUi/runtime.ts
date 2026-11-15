@@ -11,7 +11,9 @@ import type { ModelAsk } from '../plugins/modelService'
 import { suggest, type InteractionCounts, type Suggestion, type ViewSuggestionSpec } from './suggest'
 import { getConfiguredTuiCustomViews, setConfiguredTuiCustomViews } from '../tuiState'
 import { ShapeBook, type ShapeRecord } from './shapes'
-import { deleteCardRule, loadCardRules, recipesDir, setCardRuleStatus } from './store'
+import { deleteCardRule, loadEffectiveCardRules, recipesDir, setCardRuleStatus } from './store'
+import { localPluginDiscovery } from '../plugins/localPlugins'
+import { isPluginEnabled } from '../plugins/enablement'
 import { clearPluginToolCardCache } from '../plugins/toolCards'
 
 type Usage = { completed: number; failed: number }
@@ -90,12 +92,19 @@ export function noteToolCompleted(tool: string, failed: boolean): void {
   while (s.usage.size > USAGE_TOOLS_MAX) s.usage.delete(s.usage.keys().next().value!)
 }
 
+/** The rules in force: the person's, plus those of enabled mods that ship a `ui-recipes/` folder. */
+export function effectiveRules() {
+  let mods: { id: string; dir: string }[] = []
+  try { mods = localPluginDiscovery().plugins.filter(plugin => isPluginEnabled(plugin.manifest.id)).map(plugin => ({ id: plugin.manifest.id, dir: plugin.dir })) } catch { /* discovery unavailable: the person's own rules still apply */ }
+  return loadEffectiveCardRules(mods)
+}
+
 export function adaptiveUiSnapshot(existingViewIds: ReadonlySet<string> = new Set()): AdaptiveUiSnapshot {
   const s = state(); refreshFromDisk(s)
-  const loaded = loadCardRules()
+  const loaded = effectiveRules()
   const usage = [...s.usage].map(([tool, u]) => ({ tool, ...u })).sort((a, b) => b.completed - a.completed).slice(0, 50)
   const suggestions = suggest({ shapes: s.book.list(), usage, interactions: Object.fromEntries(s.interactions), ruledTools: new Set(loaded.rules.map(rule => rule.match.tool)), dismissed: s.dismissed, existingViewIds })
-  return { dir: loaded.dir, rules: loaded.rules, invalid: loaded.invalid, shapes: s.book.list(), usage, suggestions, settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
+  return { dir: loaded.dir, rules: loaded.rules, origins: loaded.origins, invalid: loaded.invalid, shapes: s.book.list(), usage, suggestions, settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
 }
 
 /** A suggested view becomes a new custom view, never the selected one, and never replaces one with its id. */

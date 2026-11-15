@@ -57,6 +57,11 @@ A view suggestion adds a new custom view (never selected for you). Counts come f
 `ui.interaction` event, which the Web reports in batches (30s) when a generic, MCP or plugin card is opened or folded.
 `ui.interaction` is not reported from the TUI yet.
 
+## Rules shipped by a mod
+A mod may keep card rules in a `ui-recipes/` folder beside its `plugin.json`. They apply while the mod is enabled,
+reload with it, show in the gallery marked "from mod …" and are read-only there (the mod owns the files). A rule of
+your own with the same id wins. Every mod needs a server module, so a rules-only mod ships an empty `server.mjs`.
+
 ## Reload
 Mods reload when their files change (`lib/plugins/modWatch.ts`: source-like files only, at most one reload every
 3s, `AGENT_VIEWER_MODS_WATCH=0` turns it off), on **Reload mods** in the palette, or with `agent-viewer mods reload`.
@@ -69,6 +74,8 @@ A rule file edited on disk clears cached cards. Bundled plugins' own code reload
 - `runtimeEvent` hooks receive `block.unrendered` and `ui.interaction`.
 
 ## Not done
-`transcriptCard` for non-tool blocks, project-scoped recipes (the hook has no cwd), `ui.interaction` from the TUI,
-card rules shipped in a mod's own folder, and a general mechanism for plugins to contribute agent tools (the
+`transcriptCard` for non-tool blocks, `ui.interaction` from the TUI, and a general mechanism for plugins to contribute agent tools (the
 `agent-viewer cards` CLI and the skill cover what an agent needs here).
+
+Project-scoped recipes (`<repo>/.agent-viewer/ui-recipes`) are deliberately not loaded: a cloned repository would decide how
+your tool calls look. If they are added they should arrive as drafts to adopt, like a design from an agent.

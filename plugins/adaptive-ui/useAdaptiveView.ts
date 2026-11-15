@@ -42,7 +42,7 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
     ]
   }, [snapshot])
   return {
-    snapshot, items, notice, busy, armed, insertAvailable: !!insertText,
+    snapshot, items, origins: snapshot?.origins ?? {}, notice, busy, armed, insertAvailable: !!insertText,
     refresh: () => refresh(),
     setStatus: (id: string, status: CardRuleStatus) => act(() => service.setStatus(id, status), `${id} is now ${status}`),
     /** Two presses: the first arms, the second deletes. */

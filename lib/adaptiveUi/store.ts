@@ -13,6 +13,28 @@ export type LoadedCardRules = { readonly dir: string; readonly rules: readonly C
 const MAX_FILES = 500
 const MAX_FILE_BYTES = 64 * 1024
 
+export type EffectiveCardRules = { readonly dir: string; readonly rules: readonly CardRule[]; readonly invalid: readonly InvalidRuleFile[]; /** Rule id to the mod it came from; absent for the person's own rules. */ readonly origins: Readonly<Record<string, string>> }
+
+/**
+ * The rules in force: the person's own, and those a mod ships in its `ui-recipes/` folder (read-only
+ * here, since the mod owns the files). A mod is already trusted code, so its rules are as trusted as
+ * its hooks. The person's rule wins over a mod's with the same id, and a mod's rule file may name any
+ * status: a mod that ships `active` rules is choosing what its own tools look like.
+ */
+export function loadEffectiveCardRules(modDirs: readonly { readonly id: string; readonly dir: string }[] = []): EffectiveCardRules {
+  const own = loadCardRules()
+  const rules: CardRule[] = [...own.rules]
+  const invalid: InvalidRuleFile[] = [...own.invalid]
+  const origins: Record<string, string> = {}
+  const taken = new Set(rules.map(rule => rule.id))
+  for (const mod of modDirs) {
+    const loaded = loadCardRules(join(mod.dir, 'ui-recipes'))
+    for (const rule of loaded.rules) { if (taken.has(rule.id)) continue; taken.add(rule.id); origins[rule.id] = mod.id; rules.push(rule) }
+    for (const entry of loaded.invalid) invalid.push({ file: `${mod.id}/${entry.file}`, problems: entry.problems })
+  }
+  return { dir: own.dir, rules, invalid, origins }
+}
+
 export function recipesDir(): string {
   return process.env.AGENT_VIEWER_UI_RECIPES_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'agent-viewer', 'ui-recipes')
 }

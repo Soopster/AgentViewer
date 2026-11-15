@@ -4,8 +4,8 @@ import type { PluginBehaviorModule } from '../../lib/plugins/behavior'
 import { hasNativeToolCard } from '../../lib/plugins/nativeTools'
 import { cardRuleMatches, cardRuleSpecificity, mcpServerOf, renderCardRule } from '../../lib/plugins/cardTemplates'
 import { clearPluginToolCardCache } from '../../lib/plugins/toolCards'
-import { loadCardRules, recipesDir } from '../../lib/adaptiveUi/store'
-import { noteInteraction, noteToolCompleted, recordShape } from '../../lib/adaptiveUi/runtime'
+import { recipesDir } from '../../lib/adaptiveUi/store'
+import { effectiveRules, noteInteraction, noteToolCompleted, recordShape } from '../../lib/adaptiveUi/runtime'
 import { redactForSample, redactResultText } from '../../lib/adaptiveUi/shapes'
 
 // A rule edited on disk (by an agent, by hand) must reach cards already cached,
@@ -37,8 +37,8 @@ export const behavior: PluginBehaviorModule = {
     ensureWatching()
     const context = { tool: { name: tool.name, input: tool.input }, ...(result ? { result: { text: result.text, isError: result.isError } } : {}) }
     const native = hasNativeToolCard(tool.name)
-    let best: ReturnType<typeof loadCardRules>['rules'][number] | null = null
-    for (const rule of loadCardRules().rules) {
+    let best: ReturnType<typeof effectiveRules>['rules'][number] | null = null
+    for (const rule of effectiveRules().rules) {
       if (rule.status !== 'active' || (native && !rule.overridesNative) || !cardRuleMatches(rule, context)) continue
       if (!best || cardRuleSpecificity(rule) > cardRuleSpecificity(best)) best = rule
     }

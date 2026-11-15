@@ -13,8 +13,8 @@ function RuleRow({ state, rule }: { state: AdaptiveViewState; rule: Extract<Adap
   return <article data-adaptive-rule={rule.id} className="rounded border p-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" aria-expanded={open} className="min-w-0 flex-1 text-left" onClick={() => setOpen(value => !value)}><span className="font-semibold">{rule.id}</span> <span className={STATUS_STYLE[rule.status]}>{rule.status}</span><span className="block break-all text-muted-foreground">{rule.match.tool}{rule.overridesNative ? ' · replaces the built-in card' : ''}{rule.provenance?.by ? ` · by ${rule.provenance.by}` : ''}</span></button>
-      {rule.status !== 'active' ? <Button size="sm" disabled={state.busy} onClick={() => void state.setStatus(rule.id, 'active')}>Enable</Button> : <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.setStatus(rule.id, 'disabled')}>Disable</Button>}
-      <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.remove(rule.id)}>{state.armed === rule.id ? 'Confirm delete' : 'Delete'}</Button>
+      {state.origins[rule.id] ? <span className="text-muted-foreground">from mod {state.origins[rule.id]}</span> : <>{rule.status !== 'active' ? <Button size="sm" disabled={state.busy} onClick={() => void state.setStatus(rule.id, 'active')}>Enable</Button> : <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.setStatus(rule.id, 'disabled')}>Disable</Button>}
+      <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.remove(rule.id)}>{state.armed === rule.id ? 'Confirm delete' : 'Delete'}</Button></>}
     </div>
     {open ? <div className="mt-2 grid gap-2">
       {previews.length ? previews.map((card, index) => <div key={index} className="rounded border p-2"><div className="font-semibold">{card.title || rule.match.tool}</div><PluginCardBlocks blocks={card.blocks} /></div>) : <p className="text-muted-foreground">No samples were saved with this rule, so there is no preview. It is drawn on real calls once enabled.</p>}

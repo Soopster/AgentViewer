@@ -30,6 +30,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
       if (key === 'a' || key === 'return') { void state.applySuggestion(selected.suggestion); return true }
       if (key === 'i') { void state.dismissSuggestion(selected.suggestion.id); return true }
     }
+    if (selected.kind === 'rule' && state.origins[selected.rule.id]) return false
     if (selected.kind === 'rule') {
       if (key === 'a' || key === 'return') { if (selected.rule.status !== 'active') void state.setStatus(selected.rule.id, 'active'); return true }
       if (key === 'd') { if (selected.rule.status === 'active') void state.setStatus(selected.rule.id, 'disabled'); return true }
@@ -60,7 +61,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     <scrollbox ref={scroll} flexGrow={1} minHeight={1} paddingX={1}>
       {items.map((item, index) => {
         const active = index === at
-        const label = item.kind === 'suggestion' ? `★ ${item.suggestion.title}` : item.kind === 'rule' ? `${STATUS_GLYPH[item.rule.status]} ${item.rule.id}  ${item.rule.match.tool}` : item.kind === 'shape' ? `+ ${item.shape.tool}  ${item.shape.count} calls, no card` : `! ${item.file}  refused`
+        const label = item.kind === 'suggestion' ? `★ ${item.suggestion.title}` : item.kind === 'rule' ? `${STATUS_GLYPH[item.rule.status]} ${item.rule.id}  ${item.rule.match.tool}${state.origins[item.rule.id] ? `  (mod ${state.origins[item.rule.id]})` : ''}` : item.kind === 'shape' ? `+ ${item.shape.tool}  ${item.shape.count} calls, no card` : `! ${item.file}  refused`
         const tone = item.kind === 'suggestion' ? theme.cyan : item.kind === 'rule' ? item.rule.status === 'active' ? theme.green : item.rule.status === 'draft' ? theme.amber : theme.dim : item.kind === 'shape' ? theme.text : theme.red
         return <box key={item.key} ref={active ? row : undefined} flexDirection="column" backgroundColor={active ? theme.surface2 : undefined} onMouseDown={() => { if (focused) setCursor(index) }}>
           <text fg={active ? theme.cyan : tone} wrapMode="none" selectable={false}>{fitText(`${active ? '›' : ' '} ${label}`, inner - 2)}</text>

@@ -4,6 +4,8 @@ import type { ShapeRecord } from '../adaptiveUi/shapes'
 export type AdaptiveUiSnapshot = {
   readonly dir: string
   readonly rules: readonly CardRule[]
+  /** Rule id to the mod that ships it; those rules are read-only here. */
+  readonly origins: Readonly<Record<string, string>>
   readonly invalid: readonly { readonly file: string; readonly problems: readonly string[] }[]
   readonly shapes: readonly ShapeRecord[]
   /** Calls by tool since the process started, for suggestions. */
