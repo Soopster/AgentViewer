@@ -23,6 +23,8 @@ export type PluginCommandServices = {
     readonly insertText: (text: string) => void
   }
   readonly notices?: { readonly show: (kind: 'info' | 'error', text: string) => void }
+  /** Create a recurring prompt; the host owns where schedules live and which process fires them. */
+  readonly schedules?: { readonly create: (input: import('../schedules/service').ScheduleInput) => Promise<void> }
 }
 export type PluginCommandContext = {
   readonly target: PluginCommandTarget

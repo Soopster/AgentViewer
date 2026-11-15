@@ -2732,6 +2732,33 @@ Taken from herdr (November 2026), after the Coordinator overlap in `docs/coordin
 
 - **Windows terminals are ConPTY behind the shim's interface** (`lib/ptyBridge.ts`). POSIX keeps the python3 `pty.fork` shim; on `win32` `spawnPty` returns a `ConPtyProcess` over `@lydell/node-pty` (an *optional* dependency with prebuilt binaries — no provenance, so it was added deliberately; `PTY_SUPPORTED` is true on Windows exactly when it installed). It quacks like the shim's child (`stdin`, Buffer `stdout`, `pid`, `kill`, one `exit`/`close`; `stderr` is null because a pseudoconsole has one stream), so `shellStore` and `terminalSession` do not know which they got. A bare program name is searched along PATH×PATHEXT first (`resolveWindowsExecutable`) because the pseudoconsole will not. The shell is `hostShell` (pwsh → Windows PowerShell → cmd), and **quoting is per shell** (`lib/shellQuote.ts`: posix/powershell/cmd; cmd refuses a word holding `"` or `%` rather than quote it wrong) — `terminal run` and keys.json commands pick the dialect from the shell. `windowsPtySmoke.ts` drives the real adapter from any OS against a fake ConPTY module (two mutations verified). **Not verified on a real Windows machine**: the ConPTY module itself, PowerShell startup, and the named-pipe control channel.
 
+### Schedules (`lib/schedules/`, `plugins/schedules`) (load-bearing)
+
+Recurring prompts: a trigger (own 5-field cron with time zone, or `every <n><m|h|d>`) and an action
+(prompt a session, start a new one, start a playbook run). `agent-viewer schedule list|add|rm|run|pause|resume`,
+`/schedule every 1h <prompt>` or `/schedule "0 9 * * 1-5" <prompt>` (targets the typing session), and a list view in both UIs.
+
+- **One process fires, chosen by a lease file** (`schedules.lease.json`, pid + heartbeat, stale after 45s). A
+  daemon plus a TUI would otherwise double-fire. An attached TUI never boots the engine; `agent-viewer web` starts it
+  from `instrumentation.ts` and the AHP sidecar is spawned with `AGENT_VIEWER_SCHEDULES=0`. `AGENT_VIEWER_SCHEDULES=0`
+  turns it off anywhere. `lib/schedules/boot.ts` defers startup so it is never on a boot path.
+- **`nextRunAt` advances before the turn starts**, so a crash mid-turn cannot replay it. A run missed by more than two
+  ticks follows `catchUp` (`once` fires once, `skip` records a skip); `overlap: skip` records a skipped run when the target
+  session has a live turn (`queue` retries each tick). Resuming a paused schedule plans from now, never a catch-up burst.
+- **The store is not debounced or cached** (`store.ts`): three processes read and write it, so each operation is a
+  read-modify-write on disk, temp-and-rename, 0600. It is *not* `createJsonListStore`, whose debounce and cache would
+  make processes disagree.
+- **Cron is evaluated on the wall clock in the zone**: a DST gap skips the nonexistent local time and a fall-back
+  repeat fires once, at its first occurrence (`scheduleCronSmoke.ts` pins both, plus Sydney).
+- **The send path loads only when something fires** (`engine.ts` imports it lazily); browsing never loads it.
+- **A plugin may declare `schedules[]`**, which `syncDeclaredSchedules` registers *disabled* and never rewrites once the
+  user has touched them; one the plugin stops declaring is removed. A plugin must not start recurring spend by itself.
+- Failed runs raise a viewer-attention note on the target session. `plugin-command` actions are not runnable
+  unattended yet and record a failed run saying so.
+
+`npm run schedules:smoke` (cron, engine incl. a real second process contending for the lease, declared, slash, CLI) and
+`tui/opentui/schedulesViewSmoke.tsx`. Not verified live: a real turn fired by the daemon, and mutation checks on the new smokes.
+
 ### Remote access
 
 Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two

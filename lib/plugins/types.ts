@@ -104,7 +104,7 @@ type PluginCommandCommon = {
   readonly keywords?: readonly string[]
 }
 
-export type PluginCommandServiceId = 'notifications' | 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing'
+export type PluginCommandServiceId = 'notifications' | 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing' | 'schedules'
 
 export type PluginCommandSpec = PluginCommandCommon & (
   | {
@@ -122,6 +122,15 @@ export type PluginCommandSpec = PluginCommandCommon & (
     readonly services: readonly PluginCommandServiceId[]
   }
 )
+
+export type PluginScheduleSpec = {
+  /** Stable within the plugin; the schedule's id is `<plugin>:<id>`. */
+  readonly id: string
+  readonly name: string
+  readonly trigger: import('../schedules/types').ScheduleTrigger
+  readonly action: import('../schedules/types').ScheduleAction
+  readonly prompt: string
+}
 
 export type PluginManifest = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
@@ -164,6 +173,11 @@ export type PluginManifest = {
   readonly tools?: readonly import('./pluginTools').PluginToolSpec[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
   readonly behavior?: { readonly hooks: readonly ('beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'transcriptCard' | 'runtimeEvent')[]; readonly order?: number; readonly permissionMode?: 'policy' | 'automation' }
+  /**
+   * Standing schedules this plugin offers. They are listed in Schedules but never run
+   * until the user turns them on: a plugin must not start recurring model spend by itself.
+   */
+  readonly schedules?: readonly PluginScheduleSpec[]
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]
@@ -196,6 +210,8 @@ export type PluginServiceId =
   | 'handoff'
   /** Every saved bookmark, and unsaving one. */
   | 'bookmarks'
+  /** Recurring prompts: list, pause, run now, delete. */
+  | 'schedules'
   /** Open a session in the reader, optionally at a message. */
   | 'session-navigation'
   /** What a session wrote, and which sessions wrote a file's current lines. */

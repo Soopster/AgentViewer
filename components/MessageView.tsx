@@ -130,6 +130,7 @@ import { AskUserQuestionPicker } from './message-view/AskUserQuestionPicker'
 import { normalizeSelectValue, gitSummariesMatch, detectMentionAtCursor, LiveSpinner, ComposerStatusBanner, effortLabel, composerPopoverStyle, composerPopoverHintStyle, composerPopoverItemStyle, ComposerContextUsageRing } from './message-view/composerUi'
 import { getWebComposerQueueStore, composerDraftStorageKey, readComposerDraft, writeComposerDraft, permissionDenialReason, attachmentImagePreviewSrc, attachmentDisplayName } from './message-view/composerStorage'
 import { WEB_TOOLBAR_PLUGIN_COMMANDS, DiffReviewMode, compactNativeSelectClassName, PierrePatchDiffView, PluginSurfaceHost } from './message-view/lazyPanels'
+import { webSchedules } from './shell/schedulesService'
 import { ComposerShell } from './message-view/ComposerShell'
 import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
@@ -1221,6 +1222,7 @@ function MessageViewInner({
             setComposerCollapsed(false); resizeComposer(); textareaRef.current?.focus()
           },
         },
+        schedules: webSchedules,
         notices: { show: (_kind, text) => setSessionActionNotice(text) },
       }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setSessionActionError(error instanceof Error ? error.message : 'Plugin command failed') })
       return true

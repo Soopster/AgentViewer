@@ -31,6 +31,7 @@ export type TuiPluginServices = {
   'whats-new'?: import('../../../lib/plugins/whatsNew').PluginWhatsNewService
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
+  schedules?: import('../../../lib/plugins/schedules').PluginSchedulesService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
   'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService

@@ -314,6 +314,7 @@ import { tuiPlaybooks } from './shell/playbooksService'
 import { createTuiRunLaunchService } from './shell/runLaunchService'
 import { tuiHandoff } from './shell/handoffService'
 import { tuiBookmarks } from './shell/bookmarksService'
+import { tuiSchedules } from './shell/schedulesService'
 import { tuiProvenance } from './shell/provenanceService'
 import { tuiCheckpoints } from './shell/checkpointsService'
 import { tuiSessionInsights } from './shell/sessionInsightsService'
@@ -5084,6 +5085,7 @@ function OpenTuiWorkspace() {
           insertText: text => { insertComposerTextAtCursor(text); setComposerActive(true) },
           replaceText: text => { applyComposerSnapshot({ text, attachments: [], promptParts: [], cursorOffset: text.length }); setComposerActive(true) },
         },
+        schedules: tuiSchedules,
         notices,
       } : { notices }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) showNotice('error', error instanceof Error ? error.message : 'Plugin command failed') })
       return
@@ -5248,6 +5250,7 @@ function OpenTuiWorkspace() {
     themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
     playbooks: tuiPlaybooks,
     bookmarks: tuiBookmarks,
+    schedules: tuiSchedules,
     'session-navigation': { open: openSessionAtMessage },
     provenance: tuiProvenance,
     checkpoints: tuiCheckpoints,

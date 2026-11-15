@@ -13,6 +13,8 @@ const COORD_CLI_VERBS = ['run', 'join', 'runs', 'whoami', 'status', 'delegate', 
 // Mirrors TERMINAL_CLI_VERBS in agent-viewer-terminal-cli.mjs (terminalControlSmoke pins it).
 const TERMINAL_CLI_VERBS = ['list', 'read', 'send', 'keys', 'run', 'wait', 'windows', 'window']
 const SESSION_CLI_VERBS = ['list', 'get', 'read', 'prompt', 'wait', 'interrupt', 'report', 'explain']
+// Mirrors SCHEDULE_CLI_VERBS in agent-viewer-schedule-cli.mjs (scheduleCliSmoke pins it).
+const SCHEDULE_CLI_VERBS = ['list', 'add', 'rm', 'run', 'pause', 'resume']
 
 // Agent Viewer is not the agent session it was launched from, and nothing it
 // spawns is either — see lib/inheritedIdentityEnv.mjs.
@@ -669,6 +671,12 @@ if (command === '-h' || command === '--help' || command === 'help') {
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)
+} else if (command === 'schedule' && (args[1] === undefined || args[1] === '--help' || SCHEDULE_CLI_VERBS.includes(args[1]))) {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-schedule-cli.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
+  child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
 } else if (command === 'terminal' && (args[1] === undefined || args[1] === '--help' || TERMINAL_CLI_VERBS.includes(args[1]))) {
   const entrypoint = fileURLToPath(new URL('./agent-viewer-terminal-cli.mjs', import.meta.url))
   const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
@@ -756,7 +764,8 @@ Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`
         const ahp = spawn(
           bunLauncher.command,
           [...bunLauncher.args, 'run', ahpEntrypoint, '--ws', `127.0.0.1:${resolvedAhpPort}`],
-          { stdio: 'inherit' },
+          // The sidecar never fires schedules: the web server it runs beside does.
+          { stdio: 'inherit', env: { ...process.env, AGENT_VIEWER_SCHEDULES: '0' } },
         )
         ahp.on('error', (error) => {
           child.kill('SIGTERM')

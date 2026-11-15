@@ -10,6 +10,8 @@ import { installProcessWarningRouting } from '../../lib/processWarnings'
 import { installUserKeys, readUserKeyConfig, resolveChords } from './userKeys'
 import { COMMANDS } from './app/commands'
 import { installTuiUiInteractionSink } from './uiInteractionSink'
+import { isRemoteAttached } from '../../lib/tui/remote'
+import { bootSchedules } from '../../lib/schedules/boot'
 
 // A runtime warning prints straight onto the alternate screen; send it to
 // OpenTUI's captured console instead.
@@ -23,6 +25,10 @@ const mouseDisabled = process.env.AGENT_VIEWER_DISABLE_MOUSE === '1'
 // The user's own ⌃K chords (keys.json), installed before the first render.
 installTuiUiInteractionSink()
 installUserKeys(resolveChords(readUserKeyConfig(), new Map(COMMANDS.map((command) => [command.id, command.label]))))
+
+// Attached, the daemon fires schedules; otherwise this process does (under the lease).
+// Two seconds in: well after the first frame, and off the boot path.
+if (!isRemoteAttached()) bootSchedules({ delayMs: 2000 })
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,

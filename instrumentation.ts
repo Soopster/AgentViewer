@@ -11,6 +11,13 @@ export async function register() {
     console.warn('[instrumentation] parent watchdog failed to start:', err)
   }
   try {
+    // Fires due schedules; a lease file keeps a TUI in the same checkout from double-firing.
+    const { bootSchedules } = await import('./lib/schedules/boot')
+    bootSchedules()
+  } catch (err) {
+    console.warn('[instrumentation] schedule engine failed to start:', err)
+  }
+  try {
     // Opt-in RSS/heap + cache-size logger (AGENT_VIEWER_MEM_LOG=1). No-op otherwise.
     const { startMemoryLogger } = await import('./lib/memoryLogger')
     startMemoryLogger()

@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).module,
@@ -42,6 +42,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'whats-new': async () => (await import('../../../plugins/whats-new/tui')).module,
   handoff: async () => (await import('../../../plugins/handoff/tui')).module,
   bookmarks: async () => (await import('../../../plugins/bookmarks/tui')).module,
+  schedules: async () => (await import('../../../plugins/schedules/tui')).module,
   'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,
   provenance: async () => (await import('../../../plugins/provenance/tui')).module,
   'remote-access': async () => (await import('../../../plugins/remote-access/tui')).module,

@@ -18,6 +18,7 @@ import { webCheckpoints } from './checkpointsService'
 import { webSessionInsights } from './sessionInsightsService'
 import { webSubagentTranscripts } from './subagentsService'
 import { webBookmarks } from './bookmarksService'
+import { webSchedules } from './schedulesService'
 
 // Presents one plugin surface on the web. Loads the plugin's chunk on first
 // open, holds its scoped state, and contains its failures: a plugin that fails
@@ -80,7 +81,7 @@ function ActivePluginSurface({ ownerId, surfaceId, placement, sessionKey, cwd, p
   const [loadFailure, setFailure] = useState<Error | null>(null)
   const [View, setView] = useState<WebPluginView | null>(() => registry.peek(surface.pluginId)?.views[surfaceId] ?? null)
   const notifications = useScopedNotifications('web', instanceId)
-  const resolved = useMemo(() => resolvePluginServices(surface, { notifications, 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, 'whats-new': webWhatsNew, handoff: webHandoff, 'instructions-manager': webInstructionsManager, 'project-memory': webProjectMemory, 'skills-manager': webSkillsManager, 'adaptive-ui': webAdaptiveUi, 'plan-review': webPlanReview, proof: webProof, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, 'subagent-transcript': webSubagentTranscripts, bookmarks: webBookmarks, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered, notifications])
+  const resolved = useMemo(() => resolvePluginServices(surface, { notifications, 'run-launch': webRunLaunch, playbooks: webPlaybooks, 'daily-summary': webDailySummary, 'whats-new': webWhatsNew, handoff: webHandoff, 'instructions-manager': webInstructionsManager, 'project-memory': webProjectMemory, 'skills-manager': webSkillsManager, 'adaptive-ui': webAdaptiveUi, 'plan-review': webPlanReview, proof: webProof, checkpoints: webCheckpoints, 'session-insights': webSessionInsights, 'subagent-transcript': webSubagentTranscripts, bookmarks: webBookmarks, schedules: webSchedules, messaging: webMessaging, 'session-diagnostics': webSessionDiagnostics, ...offered }), [surface, offered, notifications])
   const { services } = resolved
   const failure = loadFailure ?? resolved.error
   useEffect(() => { if (failure) recordModDiagnostic(surface.pluginId, `surface:${surfaceId}`, failure) }, [failure, surface.pluginId, surfaceId])
