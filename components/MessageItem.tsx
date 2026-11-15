@@ -1,5 +1,6 @@
 'use client'
 
+import { PluginCardBlocks } from './shell/PluginCardBlocks'
 import { TOOL_COLORS, toolColor, useColorTreatment, washBg } from './message-item/appearance'
 import { formatStableMessageTime, formatLocalMessageTime, formatClockShort, formatDurationShort, fmtTokens, safeJson } from './message-item/format'
 import { canonicalToolName, parseMcpToolName, isMcpToolName, resultToString, summarizeAgentsTool, streamToolOutputSummary, lineCount, agentsToolMetaBadges, normalizeToolThreadForNativeCard } from './message-item/toolModel'
@@ -3683,7 +3684,7 @@ function PluginToolCard({ thread }: { thread: ToolThread }) {
         <span style={{ fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.title}</span>
         <button type="button" onClick={() => setShowRaw(value => !value)} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'hide input' : thread.toolUse.name}</button>
       </div>
-      {card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? PLUGIN_CARD_TONE.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
+      {card.blocks?.length ? <PluginCardBlocks blocks={card.blocks} /> : card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? PLUGIN_CARD_TONE.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
       {failed ? <div style={{ color: PLUGIN_CARD_TONE.error }}>tool call failed</div> : null}
       {showRaw ? <pre style={{ marginTop: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', color: 'var(--text-2)' }}>{JSON.stringify(thread.toolUse.input, null, 2)}</pre> : null}
     </div>

@@ -179,6 +179,7 @@ export type PluginServiceId =
   | 'instructions-manager'
   | 'project-memory'
   | 'skills-manager'
+  | 'adaptive-ui'
   | 'plan-review'
   | 'proof'
   | 'notifications'

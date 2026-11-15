@@ -1,6 +1,7 @@
 // Renderer-independent behavior contract. Implementations live in server entries;
 // importing these types never loads a provider SDK or a plugin implementation.
 import type { PluginRuntimeEventContext } from './runtimeEvents'
+import type { CardBlock } from './cardBlocks'
 import type { AgentProvider, SessionMessage } from '../types'
 import type { PLUGIN_API_VERSION } from './types'
 
@@ -91,11 +92,15 @@ export const PLUGIN_PERMISSION_TIMEOUT_MS = 5_000
 export type PluginToolCardContext = {
   readonly target: PluginTurnTarget
   readonly tool: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
+  /** The call's result once it has one (text only, at most PLUGIN_TOOL_RESULT_MAX_CHARS); absent while the call is running. */
+  readonly result?: { readonly text: string; readonly isError: boolean; readonly truncated: boolean }
 }
+
+export const PLUGIN_TOOL_RESULT_MAX_CHARS = 8_000
 
 /** How a tool call should read in the transcript: a title, a few lines, a tone. Nothing keeps the built-in card. */
 export type PluginToolCardResult =
-  | { readonly title?: string; readonly lines?: readonly string[]; readonly text?: string; readonly tone?: 'info' | 'success' | 'warning' | 'error' }
+  | { readonly title?: string; readonly lines?: readonly string[]; readonly text?: string; readonly blocks?: readonly CardBlock[]; readonly tone?: 'info' | 'success' | 'warning' | 'error' }
   | void
   | null
 

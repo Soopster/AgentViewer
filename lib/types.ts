@@ -1,4 +1,5 @@
 import type { SessionRecap } from './sessionRecap'
+import type { CardBlock } from './plugins/cardBlocks'
 export type McpResourceLink = {
   type: 'resource_link'
   uri: string
@@ -25,7 +26,7 @@ export type ToolUseBlock = {
   /** A plugin's presentation of this call (lib/plugins/toolCards.ts), drawn instead of the generic card. */
   pluginCard?: PluginToolCard
 }
-export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error' }
+export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error'; /** Rich content (lib/plugins/cardBlocks.ts); `lines` stays the collapsed form and the fallback. */ blocks?: CardBlock[] }
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string

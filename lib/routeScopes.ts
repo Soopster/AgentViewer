@@ -107,6 +107,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/instructions-manager': { GET: 'read', POST: 'write' },
   '/api/project-memory': { GET: 'read', POST: 'write' },
   '/api/skills-manager': { GET: 'read', POST: 'write' },
+  // Tool samples (redacted, but still what a person's tools were called with): a read-only paired device does not get them.
+  '/api/adaptive-ui': { GET: 'write', POST: 'write' },
   '/api/plan-review': { GET: 'read', POST: 'write' },
   '/api/proof': { GET: 'read', POST: 'write' },
   '/api/checkpoints': { GET: 'read', POST: 'write' },

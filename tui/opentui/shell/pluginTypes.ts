@@ -35,6 +35,7 @@ export type TuiPluginServices = {
   'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService
   'project-memory'?: import('../../../lib/plugins/projectMemory').ProjectMemoryService
   'skills-manager'?: import('../../../lib/plugins/skillsManager').SkillsManagerService
+  'adaptive-ui'?: import('../../../lib/plugins/adaptiveUi').AdaptiveUiService
   'plan-review'?: import('../../../lib/plugins/planReview').PlanReviewService
   proof?: import('../../../lib/plugins/proof').ProofService
   checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService

@@ -54,6 +54,7 @@ export {
 export { textNeedsTuiMermaid, ensureTuiMermaidRenderer } from './format/mermaid'
 export { blocksNeedTuiAnsi, ensureTuiAnsiHighlighter } from './format/ansi'
 import { attachTuiAnsiRuns } from './format/ansi'
+import { cardBlockLines } from '../lib/plugins/cardBlocks'
 
 function countNonBlankLines(value: string): number {
   let count = 0
@@ -1635,7 +1636,8 @@ export function formatSessionMeta(session: Session, info: SessionInfo | null): s
 function pluginToolCardLines(block: Extract<ThreadedBlock, { type: 'tool_thread' }>, expanded: boolean): TuiTranscriptCardLine[] {
   const card = block.toolUse.pluginCard!
   const bodyTone: TuiTranscriptLineTone = card.tone === 'error' ? 'result_error' : card.tone === 'success' ? 'result_ok' : 'dim'
-  const body = (expanded ? card.lines : card.lines.slice(0, 1)).map(text => line(truncateLine(sanitizeLine(text)), bodyTone))
+  const source = expanded && card.blocks?.length ? cardBlockLines(card.blocks) : card.lines
+  const body = (expanded ? source : card.lines.slice(0, 1)).map(text => line(truncateLine(sanitizeLine(text)), bodyTone))
   const failed = block.result?.is_error ? [line('tool call failed', 'result_error')] : []
   return [line(`tool ${truncateLine(card.title)}`, 'tool'), ...body, ...failed]
 }

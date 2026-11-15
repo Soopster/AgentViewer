@@ -7,6 +7,7 @@ import { tuiInstructionsManager } from './instructionsManagerService'
 // leaves a local Retry/Close view; the transcript and composer keep working.
 import { tuiProjectMemory } from './projectMemoryService'
 import { tuiSkillsManager } from './skillsManagerService'
+import { tuiAdaptiveUi } from './adaptiveUiService'
 import { tuiPlanReview } from './planReviewService'
 import { tuiProof } from './proofService'
 import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
@@ -167,7 +168,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
       notifications,
-      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'plan-review': tuiPlanReview, proof: tuiProof,
+      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'adaptive-ui': tuiAdaptiveUi, 'plan-review': tuiPlanReview, proof: tuiProof,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
