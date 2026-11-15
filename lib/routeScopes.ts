@@ -104,6 +104,10 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // the raw allowlisted-command escape hatch and stays write: the allowlist
   // includes `branch`, which creates and deletes branches.
   '/api/git': { GET: 'read', POST: 'write' },
+  '/api/instructions-manager': { GET: 'read', POST: 'write' },
+  '/api/project-memory': { GET: 'read', POST: 'write' },
+  '/api/skills-manager': { GET: 'read', POST: 'write' },
+  '/api/plan-review': { GET: 'read', POST: 'write' },
   '/api/proof': { GET: 'read', POST: 'write' },
   '/api/checkpoints': { GET: 'read', POST: 'write' },
   '/api/editor/lsp': { POST: 'write' },

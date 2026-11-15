@@ -33,6 +33,16 @@
     "workers"
   ],
   "scripts": {
+    "instructions-manager:smoke": "bun scripts/instructionsManagerSmoke.ts && bun tui/opentui/instructionsManagerSmoke.tsx",
+    "instructions-manager:web:smoke": "bun scripts/webInstructionsManagerBrowserSmoke.mjs",
+    "project-memory:smoke": "bun scripts/projectMemorySmoke.ts",
+    "workflow-packs:smoke": "bun scripts/workflowPacksSmoke.ts",
+    "knowledge-plugins:tui:smoke": "bun tui/opentui/knowledgePluginsSmoke.tsx",
+    "knowledge-plugins:web:smoke": "bun scripts/webKnowledgePluginsBrowserSmoke.mjs",
+    "skills-manager:smoke": "bun scripts/skillsManagerSmoke.ts && bun tui/opentui/skillsManagerSmoke.tsx",
+    "skills-manager:web:smoke": "bun scripts/webSkillsManagerBrowserSmoke.mjs",
+    "plan-review:smoke": "bun scripts/planReviewSmoke.ts && bun tui/opentui/planReviewSmoke.tsx",
+    "plan-review:web:smoke": "bun scripts/webPlanReviewBrowserSmoke.mjs",
     "proof:smoke": "node scripts/proofSmoke.mjs && bun run scripts/proofRulesSmoke.ts && bun run tui/opentui/proofSmoke.tsx && node --import tsx scripts/webProofBrowserSmoke.mjs",
     "tui:architecture:check": "node scripts/tuiArchitectureCheck.mjs",
     "dev": "node ./bin/agent-viewer.mjs web",

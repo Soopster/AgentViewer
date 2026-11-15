@@ -18,5 +18,10 @@ assert.equal((plain as { updatedPermissions?: unknown }).updatedPermissions, und
 const rejected = claudePermissionDecision('reject', pending, 'acceptEdits')
 assert.equal(rejected.behavior, 'deny', 'a rejected plan never switches mode')
 
+const withFeedback = claudePermissionDecision('reject', pending, undefined, 'Revise the plan: add failure-case tests.')
+assert.equal(withFeedback.behavior, 'deny')
+assert.equal((withFeedback as { message: string }).message, 'Revise the plan: add failure-case tests.', 'Plan Review feedback reaches the native denial message')
+assert.equal((rejected as { message: string }).message, 'User denied permission', 'ordinary rejection retains its existing message')
+
 console.log('Claude plan approval smoke passed')
 process.exit(0)

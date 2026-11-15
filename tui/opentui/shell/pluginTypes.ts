@@ -32,6 +32,10 @@ export type TuiPluginServices = {
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
+  'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService
+  'project-memory'?: import('../../../lib/plugins/projectMemory').ProjectMemoryService
+  'skills-manager'?: import('../../../lib/plugins/skillsManager').SkillsManagerService
+  'plan-review'?: import('../../../lib/plugins/planReview').PlanReviewService
   proof?: import('../../../lib/plugins/proof').ProofService
   checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../../lib/plugins/sessionInsights').PluginSessionInsightsService
@@ -228,7 +232,7 @@ export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
 export type TuiPluginWidgetProps = {
   readonly zIndex?: number
   readonly runCommand?: (id: string) => void
-  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'repository'>
+  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'plan-review' | 'repository'>
   readonly theme: TuiThemePalette
   readonly width: number
   readonly height: number

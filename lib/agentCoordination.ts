@@ -22,7 +22,7 @@ import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { EventEmitter } from 'node:events'
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { link, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { hostname } from 'node:os'
 import {
@@ -5658,7 +5658,8 @@ export async function writeRunPlaybook(
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
     await writeFile(temporary, `${JSON.stringify(playbook, null, 2)}\n`, 'utf8')
-    await rename(temporary, file)
+    if (!previousName) { await link(temporary, file); await rm(temporary, { force: true }) }
+    else await rename(temporary, file)
     if (previousFile && previousFile !== file) await rm(previousFile, { force: true })
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {})

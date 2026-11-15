@@ -206,7 +206,7 @@ function mapItemToMessages(
       return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'plan':
-      return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp)] : []
+      return item.text ? [{ ...makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp), planArtifact: true }] : []
     case 'reasoning': {
       const thinking = (item.summary.some(Boolean) ? item.summary : item.content).filter(Boolean).join('\n\n').trim()
       const reasoningText = item.summary.some(Boolean) ? item.content.filter(Boolean).join('\n\n').trim() || undefined : undefined

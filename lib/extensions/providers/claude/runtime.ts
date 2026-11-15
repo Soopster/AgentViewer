@@ -678,7 +678,7 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
                 : undefined;
             pending.resolve(response === 'reject' && pending.requestData?.toolName === 'AskUserQuestion' && pending.supportsQuestionOutcomes
                 ? claudeQuestionDecision(pending, { answers: {}, unanswered: 'skipped' })
-                : claudePermissionDecision(response, pending, permissionMode));
+                : claudePermissionDecision(response, pending, permissionMode, typeof body.rejectionMessage === 'string' ? body.rejectionMessage : undefined));
             return { ok: true };
         }
         // Answer an AskUserQuestion prompt: allow the tool with the user's selected

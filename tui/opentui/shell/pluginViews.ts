@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).module,
@@ -16,6 +16,11 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   files: async () => (await import('../../../plugins/files/tui')).module,
   editor: async () => (await import('../../../plugins/editor/tui')).module,
   'pull-requests': async () => (await import('../../../plugins/pull-requests/tui')).module,
+  'instructions-manager': async () => (await import('../../../plugins/instructions-manager/tui')).module,
+  'project-memory': async () => (await import('../../../plugins/project-memory/tui')).module,
+  'workflow-packs': async () => (await import('../../../plugins/workflow-packs/tui')).module,
+  'skills-manager': async () => (await import('../../../plugins/skills-manager/tui')).module,
+  'plan-review': async () => (await import('../../../plugins/plan-review/tui')).module,
   proof: async () => (await import('../../../plugins/proof/tui')).module,
   checkpoints: async () => (await import('../../../plugins/checkpoints/tui')).module,
   'file-history': async () => (await import('../../../plugins/file-history/tui')).module,

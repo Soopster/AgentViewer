@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'plan-review', 'proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
@@ -29,6 +29,11 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   provenance: async () => (await import('@/plugins/provenance/web')).module,
   'run-dashboard': async () => (await import('@/plugins/run-dashboard/web')).module,
   'mod-views': async () => (await import('@/plugins/mod-views/web')).module,
+  'instructions-manager': async () => (await import('../../plugins/instructions-manager/web')).module,
+  'project-memory': async () => (await import('../../plugins/project-memory/web')).module,
+  'workflow-packs': async () => (await import('../../plugins/workflow-packs/web')).module,
+  'skills-manager': async () => (await import('../../plugins/skills-manager/web')).module,
+  'plan-review': async () => (await import('../../plugins/plan-review/web')).module,
   proof: async () => (await import('../../plugins/proof/web')).module,
   checkpoints: async () => (await import('@/plugins/checkpoints/web')).module,
   'file-history': async () => (await import('@/plugins/file-history/web')).module,

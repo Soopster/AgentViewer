@@ -157,6 +157,8 @@ export type SessionCapabilities = {
  * living at the top level. Claude history can also include `system` entries.
  */
 export type SessionMessage = {
+  /** Explicit provider-native plan artifact, preserved for review discovery. */
+  planArtifact?: true
   type: 'user' | 'assistant' | 'system'
   uuid: string
   session_id: string

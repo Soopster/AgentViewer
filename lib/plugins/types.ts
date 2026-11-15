@@ -176,6 +176,10 @@ export type PluginManifest = {
  * provider's SessionCapabilities: these describe the host, not the session.
  */
 export type PluginServiceId =
+  | 'instructions-manager'
+  | 'project-memory'
+  | 'skills-manager'
+  | 'plan-review'
   | 'proof'
   | 'notifications'
   | 'shell-overview'

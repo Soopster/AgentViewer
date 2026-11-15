@@ -73,7 +73,7 @@ export function listPendingClaudeElicitations(sessionId: string): Record<string,
 export function pendingClaudePermissionKey(sessionId: string, permissionId: string): string {
     return `${sessionId}:${permissionId}`;
 }
-export function claudePermissionDecision(response: string, pending: Pick<PendingClaudePermission, 'suggestions' | 'input'>, permissionMode?: ClaudePermissionModeValue): PermissionResult {
+export function claudePermissionDecision(response: string, pending: Pick<PendingClaudePermission, 'suggestions' | 'input'>, permissionMode?: ClaudePermissionModeValue, rejectionMessage?: string): PermissionResult {
     // The SDK always injects toolUseID into the control response itself, so we
     // omit it here. decisionClassification is in the TypeScript types but the
     // CLI's Zod schema does not accept it — including it causes a validation
@@ -81,7 +81,7 @@ export function claudePermissionDecision(response: string, pending: Pick<Pending
     if (response === 'reject') {
         return {
             behavior: 'deny',
-            message: 'User denied permission',
+            message: rejectionMessage?.slice(0, 600_000) || 'User denied permission',
         };
     }
     // A plan approval carries the mode to continue in. It has to ride the

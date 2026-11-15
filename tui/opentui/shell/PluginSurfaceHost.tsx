@@ -1,9 +1,13 @@
 /** @jsxImportSource @opentui/react */
+import { tuiInstructionsManager } from './instructionsManagerService'
 // Presents one plugin surface in an overlay or a window. The host owns what a
 // plugin must not: loading its module, resolving its declared services for the
 // target it was opened on, holding its scoped state, routing its keys, and
 // containing its failures. A view that throws, or a module that fails to load,
 // leaves a local Retry/Close view; the transcript and composer keep working.
+import { tuiProjectMemory } from './projectMemoryService'
+import { tuiSkillsManager } from './skillsManagerService'
+import { tuiPlanReview } from './planReviewService'
 import { tuiProof } from './proofService'
 import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -163,7 +167,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
       notifications,
-      proof: tuiProof,
+      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'plan-review': tuiPlanReview, proof: tuiProof,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),

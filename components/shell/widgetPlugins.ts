@@ -5,6 +5,7 @@ import type { WebPluginWidget } from './pluginTypes'
 
 export const webPluginWidgets = createPluginWidgetRegistry<WebPluginWidget>('web', PLUGIN_MANIFESTS, {
   'dynamic-island': async () => (await import('../../plugins/dynamic-island/web')).widgets,
+  'plan-review': async () => (await import('../../plugins/plan-review/web/widget')).widgets,
   proof: async () => (await import('../../plugins/proof/web')).widgets,
   'pi-activity': async () => (await import('../../plugins/pi-activity/web')).widgets,
   'omni-bar': async () => (await import('../../plugins/omni-bar/web')).widgets,

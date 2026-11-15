@@ -34,6 +34,8 @@ declare global {
 }
 
 const BUNDLED_BEHAVIORS: Record<string, () => Promise<PluginBehaviorModule>> = {
+  'project-memory': async () => (await import('../../plugins/project-memory/server')).behavior,
+  'plan-review': async () => (await import('../../plugins/plan-review/server')).behavior,
   'composer-context': async () => (await import('../../plugins/composer-context/server')).behavior,
 }
 
