@@ -188,6 +188,8 @@ export type PluginServiceId =
   | 'playbooks'
   /** Read what every agent did over a day or week, with the host's attention inbox filed in. */
   | 'daily-summary'
+  /** The repository's highlights, revision by revision. */
+  | 'whats-new'
   /** Git state and bookmarks for a session's handoff brief. */
   | 'handoff'
   /** Every saved bookmark, and unsaving one. */

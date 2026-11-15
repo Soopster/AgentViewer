@@ -51,6 +51,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/sessions/project/messages': { POST: 'read' },
   '/api/sessions/running': { GET: 'read', POST: 'write', DELETE: 'write' },
   '/api/daily-summary': { GET: 'read' },
+  '/api/whats-new': { GET: 'read' },
   '/api/sessions/reports': { GET: 'read', POST: 'write', DELETE: 'write' },
   '/api/sessions/new': { POST: 'write' },
   '/api/sessions/[sessionId]/actions': { POST: 'write' },

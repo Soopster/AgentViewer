@@ -958,6 +958,11 @@ export async function searchTuiSessionIndex(params: import('../session-index/typ
  * demand: it opens the search index and spawns git and `gh` per repository,
  * which nothing on the browse path should pay for.
  */
+export async function readTuiWhatsNew(options: import('../whatsNewReader').WhatsNewReadOptions = {}): Promise<import('../whatsNew').WhatsNew> {
+  const { readWhatsNew } = await import('../whatsNewReader')
+  return readWhatsNew(options)
+}
+
 export async function readTuiDailySummary(options: import('../dailySummaryReader').DailySummaryReadOptions): Promise<import('../dailySummary').DailySummary> {
   const { readDailySummary } = await import('../dailySummaryReader')
   return readDailySummary(options)

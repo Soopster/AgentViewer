@@ -159,7 +159,7 @@ import {
 } from '../../lib/composerAttachments'
 import { getProviderAccent, getThemePalette, setTerminalPaletteTheme, terminalPaletteTheme, type TerminalReportedColors, setActiveTheme, type TuiDensity, type TuiThemeMode, type TuiTranscriptView } from '../theme'
 import { patchTuiSession, readTuiDensity, readTuiDiffLayout, readTuiFocusMode, readTuiStickyHeaders, readTuiLightweightWindows, readTuiProvider, readTuiProviderInstances, readTuiRailVisible, readTuiSessionDiagnostics, readTuiSessionReaderState, readTuiSessionMetadata, readTuiSidebarSort, readTuiHideScratchSessions, readTuiShowSettledSessions, writeTuiShowSettledSessions, updateTuiSessionInbox, readTuiSidebarWidth, readTuiShowToolCalls, readTuiTabsEnabled, readTuiTabOrientation, readTuiSplitPanes, readTuiSplitOrientation, readTuiSplitReaderShare, readTuiDaemonWarning, readTuiTheme, readTuiThemeFollow, readTuiBorders, readTuiTranscriptView, readTuiWorktreePaths, readTuiCustomViews, writeTuiCustomViews, readTuiTranscriptWidth, readTuiVelocityScroll, readTuiSurfacePanelPlacement, readTuiWindowArrangement, readTuiSessionBookmarkIds, readTuiAllBookmarks, toggleTuiSessionBookmark, runTuiSessionAction, streamTuiSessionTurn, sendTuiCrossSessionMessage, interruptTuiSessionTurn, listTuiRunningSessions, listTuiAddressableSessions, readTuiRuntimeActivity, dismissTuiViewerAttention, createTuiSession, forkTuiSession, rewindTuiSession, listTuiCheckpoints, restoreTuiCheckpoint, readTuiComposerOptions, listTuiProtocolRuns, readTuiProtocolRun, startTuiProtocolRun, stopTuiProtocolRun, cleanupTuiProtocolRunWorktrees, createTuiWorktreeTask, findTuiWorktreeTask, mergeTuiWorktreeTask, removeTuiWorktreeTask, type WorktreeTask, prewarmTuiSession, writeTuiDensity, writeTuiDiffLayout, writeTuiFocusMode, writeTuiStickyHeaders, writeTuiLightweightWindows, writeTuiProvider, writeTuiRailVisible, writeTuiSessionReaderState, writeTuiShowToolCalls, writeTuiSidebarSort, writeTuiHideScratchSessions, writeTuiSidebarWidth, writeTuiTabsEnabled, writeTuiTabOrientation, writeTuiSplitPanes, writeTuiSplitOrientation, writeTuiSplitReaderShare, writeTuiTheme, writeTuiThemeFollow, writeTuiBorders, writeTuiRoundedBorders, writeTuiThemeSync, writeTuiTranscriptView, writeTuiTranscriptWidth, writeTuiVelocityScroll, writeTuiSurfacePanelPlacement, writeTuiWindowArrangement, type TuiSessionDetail, type TuiProviderInstanceChoice, type TuiDiffLayout, type TuiSidebarSort, type TuiTranscriptWidth } from '../../lib/tui/service'
-import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory, readTuiDailySummary } from '../../lib/tui/service'
+import { peekTuiClaudePlanLimits, readTuiClaudePlanLimits, readTuiLineHistory, readTuiDailySummary, readTuiWhatsNew } from '../../lib/tui/service'
 import type { DailySummaryRange } from '../../lib/dailySummary'
 import { buildSelectionAskPrompt, type SelectionAskInput } from '../../lib/selectionAsk'
 import { type ClaudePlanLimits } from '../../lib/claudePlanLimits'
@@ -5157,6 +5157,10 @@ function OpenTuiWorkspace() {
     signal?.throwIfAborted()
     return readTuiDailySummary({ range, waiting: attentionItems.map((item) => ({ provider: item.provider, sessionId: item.sessionId, kind: item.kind, text: item.title })) })
   })
+  const readPluginWhatsNew = useStableEvent((options?: { cwd?: string; limit?: number }, signal?: AbortSignal) => {
+    signal?.throwIfAborted()
+    return readTuiWhatsNew({ cwd: options?.cwd ?? selectedSession?.cwd ?? undefined, limit: options?.limit })
+  })
   const jumpToTaskCard = useStableEvent((uuid: string) => {
     const idx = visibleTranscriptCards.findIndex((card) => card.key === uuid)
     if (idx >= 0) jumpToTranscriptIndex(idx)
@@ -5250,6 +5254,7 @@ function OpenTuiWorkspace() {
     'session-insights': tuiSessionInsights,
     'remote-access': tuiRemoteAccess,
     'daily-summary': { read: readPluginDailySummary },
+    'whats-new': { read: readPluginWhatsNew },
     handoff: tuiHandoff,
     'run-launch': runLaunchService,
     'task-control': {

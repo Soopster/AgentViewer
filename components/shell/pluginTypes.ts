@@ -14,6 +14,7 @@ export type WebPluginServices = {
   'run-launch'?: import('../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../lib/plugins/dailySummary').PluginDailySummaryService
+  'whats-new'?: import('../../lib/plugins/whatsNew').PluginWhatsNewService
   handoff?: import('../../lib/plugins/handoff').PluginHandoffService
   'instructions-manager'?: import('../../lib/plugins/instructionsManager').InstructionsManagerService
   'project-memory'?: import('../../lib/plugins/projectMemory').ProjectMemoryService

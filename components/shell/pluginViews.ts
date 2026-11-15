@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'session-navigation', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
@@ -24,6 +24,7 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   github: async () => (await import('@/plugins/github/web')).module,
   recaps: async () => (await import('@/plugins/recaps/web')).module,
   'daily-summary': async () => (await import('@/plugins/daily-summary/web')).module,
+  'whats-new': async () => (await import('@/plugins/whats-new/web')).module,
   handoff: async () => (await import('@/plugins/handoff/web')).module,
   bookmarks: async () => (await import('@/plugins/bookmarks/web')).module,
   provenance: async () => (await import('@/plugins/provenance/web')).module,

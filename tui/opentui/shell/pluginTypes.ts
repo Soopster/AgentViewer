@@ -28,6 +28,7 @@ export type TuiPluginServices = {
   'run-launch'?: import('../../../lib/plugins/runLaunch').PluginRunLaunchService
   playbooks?: import('../../../lib/plugins/playbooks').PluginPlaybookService
   'daily-summary'?: import('../../../lib/plugins/dailySummary').PluginDailySummaryService
+  'whats-new'?: import('../../../lib/plugins/whatsNew').PluginWhatsNewService
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation

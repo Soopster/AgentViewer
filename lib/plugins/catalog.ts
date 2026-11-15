@@ -37,6 +37,7 @@ import { manifest as composerContext } from '../../plugins/composer-context/mani
 import { manifest as recaps } from '../../plugins/recaps/manifest'
 import { manifest as github } from '../../plugins/github/manifest'
 import { manifest as dailySummary } from '../../plugins/daily-summary/manifest'
+import { manifest as whatsNew } from '../../plugins/whats-new/manifest'
 import { manifest as handoff } from '../../plugins/handoff/manifest'
 import { manifest as bookmarks } from '../../plugins/bookmarks/manifest'
 import { manifest as provenance } from '../../plugins/provenance/manifest'
@@ -50,7 +51,7 @@ import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']
