@@ -17,6 +17,14 @@ from a project or workspace directory. For a user who wants to change how the
 app behaves on their machine, write a mod; for a feature of the app, write a
 bundled plugin in the checkout.
 
+## Design plugin surfaces
+
+For new or redesigned Web/OpenTUI UI, read
+[references/design-guidelines.md](references/design-guidelines.md). It covers
+Agent Viewer's workspace metaphors, pane and tab hierarchy, contextual actions,
+responsive navigation, theme usage and bounded help. Keep behavior and terminology
+aligned across renderers while using their native controls.
+
 ## Choose the contribution
 
 - For a feature UI, declare a surface with overlay, window and/or panel
