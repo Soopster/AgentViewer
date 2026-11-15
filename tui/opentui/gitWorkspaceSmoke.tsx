@@ -40,7 +40,7 @@ try {
     await act(async () => key('c')); await settle(); expect('Commit message')
     if (!capture) throw new Error('Composer must capture global shortcuts')
     await act(async () => { setup.mockInput.typeText('Workspace UI commit') }); await settle()
-    await act(async () => key('return', '\r', true)); await waitText('Enter confirms'); expect('staged preview')
+    await act(async () => key('return', '\r', true)); await waitText('[Confirm commit]'); expect('staged preview')
     await act(async () => key('return', '\r')); for (let i = 0; i < 30 && capture; i++) await settle();
     if (capture) throw new Error(`Commit did not finish:\n${setup.captureCharFrame()}`)
     const subject = (await exec('git', ['log', '-1', '--format=%s'], { cwd: root })).stdout.trim()

@@ -25,3 +25,5 @@ export { renderInlineTextSegments } from '../app/inlineText'
 
 export { ToastOverlay, useToasts } from '../ToastOverlay'
 export { toBmpSafe } from '../bmp'
+
+export { ShortcutHelp, type ShortcutHelpGroup } from './ShortcutHelp'

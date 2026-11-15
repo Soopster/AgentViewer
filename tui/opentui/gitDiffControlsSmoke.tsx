@@ -15,9 +15,10 @@ const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'u
 let key: ((event: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => void) | null = null
 let resize: (width: number) => void = () => {}
 let closed = false
+let capturing = false
 function Harness() {
   const [width, setWidth] = useState(120); resize = setWidth
-  return <GitPopover cwd={cwd} theme={DARK_THEME} width={width} height={40} onClose={() => { closed = true }} onKeyHandlerReady={handler => { key = handler }} />
+  return <GitPopover cwd={cwd} theme={DARK_THEME} width={width} height={40} onAskAgent={() => {}} onClose={() => { closed = true }} onKeyCaptureChange={value => { capturing = value }} onKeyHandlerReady={handler => { key = handler }} />
 }
 try {
   git('init', '-q')
@@ -38,6 +39,25 @@ try {
     const scroll = setup.renderer.root.findDescendantById('git-diff-scroll') as ScrollBoxRenderable
     assert(frame().includes('auto:unified'))
     const initial = scroll.scrollHeight
+    assert(!frame().includes('⇧j/k range'), 'full shortcut reference stays out of the header')
+    await press('?')
+    assert(frame().includes('Git review shortcuts') && capturing, 'help opens and captures input')
+    await press('z'); await press('j')
+    assert.equal(scroll.scrollHeight, initial, 'help consumes background shortcuts')
+    await press('escape')
+    assert(!closed && !capturing && !frame().includes('Git review shortcuts'), 'Escape dismisses help before closing Git')
+    const helpRow = frame().split('\n').findIndex(line => line.includes('[? Help]'))
+    assert(helpRow >= 0)
+    const helpColumn = frame().split('\n')[helpRow]!.indexOf('[? Help]')
+    await act(async () => { await setup.mockMouse.click(helpColumn + 2, helpRow) }); await flush()
+    assert(frame().includes('Git review shortcuts'), 'help is mouse accessible')
+    await press('?')
+    assert(!frame().includes('Git review shortcuts'), '? dismisses help')
+    await press('tab')
+    for (let index = 0; index < 6; index++) await press('j')
+    await act(async () => { key?.({ name: 'a', sequence: '\u0001', ctrl: true, shift: false }) }); await flush()
+    assert(frame().includes('e explain'), 'Ctrl+A opens the ask-agent menu')
+    await press('escape')
     await press('z'); assert(scroll.scrollHeight > initial * 1.5, 'wrapping expands measured rows')
     assert(frame().includes('TAIL'), 'wrapped tail paints on continuation row')
     await press('z'); assert.equal(scroll.scrollHeight, initial)

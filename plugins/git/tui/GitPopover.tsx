@@ -2,7 +2,7 @@
 import { useWindowVisible } from '../../../tui/opentui/shell/sdkDiff'
 import { GitDivider } from './GitDivider'
 import { GitBrowser } from './GitBrowser'
-import { PopoverDetachButton, popoverRootProps, popoverFrameCells } from '../../../tui/opentui/shell/sdk'
+import { PopoverDetachButton, popoverRootProps, popoverFrameCells, ShortcutHelp, type ShortcutHelpGroup } from '../../../tui/opentui/shell/sdk'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useReview } from '../../../lib/review/useReview'
 import { localReviewTransport } from '../../../lib/review/localTransport'
@@ -53,6 +53,13 @@ import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewStat
 // ---------------------------------------------------------------------------
 
 type PaneId = 0 | 1 | 2 | 3 | 4
+
+const REVIEW_HELP: readonly ShortcutHelpGroup[] = [
+  { title: 'Navigation', rows: [['Tab / Shift+Tab', 'Move focus between files and diff'], ['j/k or ↑/↓', 'Move in the focused pane'], ['h/l or ←/→', 'Fold folders or pan the diff'], ['Enter', 'Toggle folder'], ['t', 'Choose comparison source'], ['W', 'Toggle watching'], ['r', 'Refresh'], ['Esc', 'Back / close']] },
+  { title: 'Diff display', rows: [['v', 'Toggle plain / parsed diff'], ['s / S', 'Cycle layout / restore automatic layout'], ['z', 'Toggle line wrapping'], ['T', 'Cycle tab width'], ['n', 'Toggle line numbers'], ['m', 'Toggle hunk headers'], ['{ / }', 'Previous / next hunk'], ['e / c', 'Expand / collapse context'], ['/', 'Filter files'], ['Ctrl+F', 'Find in diff'], ['Ctrl+R / Ctrl+G', 'Previous / next match'], ['y / Y', 'Copy new / old selection']] },
+  { title: 'Review', rows: [['Shift+j/k', 'Extend selected range'], ['a', 'Add note'], ['x', 'Delete note'], ['R', 'Open checklist'], ['A', 'Send note to composer'], ['Ctrl+A', 'Ask agent about selection (when available)']] },
+  { title: 'File pane', rows: [['[ / ]', 'Resize file pane'], ['w', 'Toggle wide pane'], ['-', 'Hide file pane'], ['1–4', 'Select section (standalone view)'], ['p', 'Open pull requests']] },
+]
 
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Unstaged changes',
@@ -500,6 +507,8 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   const [mouseCellSelection, setMouseCellSelection] = useState<DiffCellSelection | null>(null)
   const mouseCellSelectionRef = useRef<DiffCellSelection | null>(null)
   const [reviewBoardOpen, setReviewBoardOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const helpScroll = useRef<ScrollBoxRenderable>(null)
   const boardKeyRef = useRef<(key: ReviewBoardKey) => void>(() => {})
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null)
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
@@ -883,6 +892,14 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
   }
 
   const handleKey = useCallback((key: GitKeyEvent) => {
+    if (helpOpen) {
+      if (key.name === 'escape' || key.sequence === '?') setHelpOpen(false)
+      else if (key.name === 'down' || key.sequence === 'j') helpScroll.current?.scrollBy(1)
+      else if (key.name === 'up' || key.sequence === 'k') helpScroll.current?.scrollBy(-1)
+      else if (key.name === 'pagedown') helpScroll.current?.scrollBy(10)
+      else if (key.name === 'pageup') helpScroll.current?.scrollBy(-10)
+      return
+    }
     if (reviewBoardOpen) { boardKeyRef.current(key); return }
     if (askSpan) {
       const choice = SELECTION_ASK_INTENTS.find((entry) => entry.key === key.sequence)
@@ -925,6 +942,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       return
     }
     if (!sourceMenuOpenRef.current && reviewSearchEditingRef.current && reviewActionKeyRef.current(key)) return
+    if (key.sequence === '?') { setHelpOpen(true); return }
     if (key.sequence === '/' && pane === 2) { openFileFilter(); return }
     if (pane === 2) {
       if (key.sequence === 'z') { setWrapDiffLines(value => !value); return }
@@ -1240,7 +1258,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       }
       return
     }
-    if (key.sequence === '?' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onAskAgent) {
+    if (key.ctrl && key.name === 'a' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onAskAgent) {
       const isSplit = diffLayout === 'split'
       const rows = isSplit ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
       if (!rows || rows.length === 0) return
@@ -1277,7 +1295,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       }))
       return
     }
-  }, [askSpan, onAskAgent, sourceLabel, reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
+  }, [helpOpen, askSpan, onAskAgent, sourceLabel, reviewBoardOpen, setDiffNotes, commitIndex, commitRangeAnchorIndex, data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
       height, embedded, initialSource?.kind, leftPaneMode, onClose, onWorkspace, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes, sourceKey, diffSource, refreshGitData, sessionId, sourceMenuItems, sourceSelection, setDiffNotes, contextExpansions, changeContext, fileFilter, openFileFilter, closeFileFilter])
 
   // Register key handler with parent
@@ -1289,7 +1307,6 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
     if (leftPaneMode === 'hidden' && focusSide === 'left') setFocusSide('right')
   }, [focusSide, leftPaneMode])
 
-  const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   // Diff controls render with the same key-cyan / label-muted convention as the
   // keybinding groups beside them (and the transcript diff strip), instead of a
   // flat muted wall. `syntax` is a status chip (● = highlights loaded), not a
@@ -1482,7 +1499,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       setMouseCellSelection(null)
     }, wrap: wrapDiffLines, columns: diffLayout === 'split' ? Math.min(splitLeftTextW, splitRightTextW) : rightDiffTextWidth, tabWidth: diffTabWidth })
   useLayoutEffect(() => { reviewSearchEditingRef.current = reviewActions.editing }, [reviewActions.editing])
-  const captureReviewKeys = Boolean(askSpan || reviewBoardOpen || draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
+  const captureReviewKeys = Boolean(helpOpen || askSpan || reviewBoardOpen || draftNote || filterEditing || fileFilter || reviewActions.editing || reviewActions.query || sourceMenuOpen)
   useLayoutEffect(() => {
     onKeyCaptureChange?.(captureReviewKeys)
     return () => onKeyCaptureChange?.(false)
@@ -1510,33 +1527,6 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
     // Scroll-follow is passive: only explicit tree navigation changes the diff's jump target.
     setTreeCursor(index)
   }, [visible, pane, fileDiffMode, loadedContentKey, contentKey, diffProgress?.filePath, normalizedFilter, data, expandedDirs])
-  const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
-    ? (() => {
-        const controls: Array<[string, string]> = [
-          ['v', 'plain'],
-          ['n', showLineNumbers ? '#' : 'no#'],
-          ['m', showHunkHeaders ? '@@' : 'no@@'],
-          ['{}', 'hunk'],
-          ['e/c', 'context'],
-          ['⇧j/k', 'range'],
-          ['a', 'note'], ['R', 'checklist'],
-          ['A', 'composer'],
-          ...(onAskAgent ? [['?', 'ask agent'] as [string, string]] : []),
-          ['x', 'del'],
-        ]
-        const nodes: React.ReactNode[] = []
-        controls.forEach(([k, l], i) => {
-          if (i > 0) nodes.push(<span key={`fd-sep${i}`} fg={theme.dim}>{'  '}</span>)
-          nodes.push(<span key={`fd-k${i}`} fg={theme.cyan}>{k}</span>)
-          nodes.push(<span key={`fd-l${i}`} fg={theme.muted}>{` ${l}`}</span>)
-        })
-        return nodes
-      })()
-    : [
-        <span key="fd-parsed-k" fg={theme.cyan}>v</span>,
-        <span key="fd-parsed-l" fg={theme.muted}> parsed</span>,
-      ]
-
   function clampLeftPaneWidth(nextWidth: number): number {
     return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
   }
@@ -1627,6 +1617,7 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
       titleColor={theme.cyan}
       titleAlignment="left"
     >
+      {helpOpen ? <ShortcutHelp title="Git review shortcuts" groups={REVIEW_HELP} theme={theme} width={popW - frame} height={popH - frame} scrollRef={helpScroll} onClose={() => setHelpOpen(false)} /> : null}
       {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - frame} height={popH - frame} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       {onWorkspace && !embedded ? <box position="absolute" top={0} right={3} zIndex={1} onMouseDown={(event) => { event.stopPropagation(); onWorkspace() }}><text fg={theme.cyan}>[g Git workspace]</text></box> : null}
@@ -1815,24 +1806,11 @@ export function GitReviewPopover({ embedded = false, initialSource, initialFileP
 
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
-        <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
-          {(() => {
-            const groups: Array<[string, string]> = [
-              ...(embedded ? [] : [['1-4', 'sections']] as Array<[string, string]>), ...(embedded && initialSource?.kind === 'commit-range' ? [] : [['t', 'source']] as Array<[string, string]>), ['W', watching ? 'pause watch' : 'watch'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide'],
-              ['j/k', 'move'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
-            ]
-            const segs: React.ReactNode[] = [
-              <span key="focus" fg={theme.cyan}>{focusLabel}</span>,
-              <span key="pane" fg={theme.dim}>{`  ${PANE_TITLES[pane]}  `}</span>,
-              ...fileDiffSegs,
-            ]
-            groups.forEach(([k, l], i) => {
-              segs.push(<span key={`d${i}`} fg={theme.dim}>{i === 0 ? '  │  ' : '  '}</span>)
-              segs.push(<span key={`k${i}`} fg={theme.cyan}>{k}</span>)
-              segs.push(<span key={`l${i}`} fg={theme.muted}>{` ${l}`}</span>)
-            })
-            return <text wrapMode="none">{segs}</text>
-          })()}
+        <box height={1} flexShrink={0} paddingX={1} flexDirection="row" width={rightW} backgroundColor={theme.surface2}>
+          <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.muted} wrapMode="none">{`${PANE_TITLES[pane]} · ${focusSide === 'right' ? 'diff focused' : 'files focused'}`}</text></box>
+          {pane === 2 && rightW >= 30 ? <box flexShrink={0} onMouseUp={event => { if (event.button === 0) { event.stopPropagation(); setFileDiffMode(value => value === 'viewer' ? 'text' : 'viewer') } }}><text fg={theme.cyan} wrapMode="none">{`[v ${fileDiffMode === 'viewer' ? 'Plain' : 'Parsed'}] `}</text></box> : null}
+          {rightW >= 58 && pane === 2 ? <box flexShrink={0} onMouseUp={event => { if (event.button === 0) { event.stopPropagation(); setReviewBoardOpen(true) } }}><text fg={theme.cyan} wrapMode="none">[R Checklist] </text></box> : null}
+          <box flexShrink={0} onMouseUp={event => { if (event.button === 0) { event.stopPropagation(); setHelpOpen(true) } }}><text fg={theme.cyan} wrapMode="none">[? Help]</text></box>
         </box>
         <box flexDirection={diffBarsShareRow ? 'row' : 'column'} flexShrink={0} width={rightW}>
         {pane === 2 ? <DiffViewControls width={diffBarsShareRow ? DIFF_CONTROLS_WIDTH : rightW} theme={theme} mode={diffLayoutMode} layout={diffLayout} wrap={wrapDiffLines} tabWidth={diffTabWidth} offset={visibleHorizontalOffset}

@@ -70,8 +70,8 @@ try {
     for (let attempt = 0; attempt < 50 && !predicate(); attempt++) await flush()
     assert(predicate(), `${label}:\n${setup.captureCharFrame()}`)
   }
-  const press = async (sequence: string) => {
-    await act(async () => { key?.({ name: sequence, sequence, ctrl: false, shift: false }) })
+  const press = async (sequence: string, ctrl = false) => {
+    await act(async () => { key?.({ name: sequence, sequence: ctrl ? String.fromCharCode(sequence.charCodeAt(0) - 96) : sequence, ctrl, shift: false }) })
     await flush()
   }
   try {
@@ -97,9 +97,9 @@ try {
     await press('j'); await press('a'); await press('N'); await press('return'); await press('A')
     assert(composed.includes('File: context.ts') && composed.includes('Range: L27'), composed)
     assert(composed.includes('original-line-27'), 'expanded context reaches composer')
-    // ? arms a one-key ask on the same lines; it owns the next key, then lets go.
-    await press('?')
-    assert(setup.captureCharFrame().includes('e explain'), `? did not offer the ask menu:\n${setup.captureCharFrame()}`)
+    // Ctrl+A arms a one-key ask on the same lines; it owns the next key, then lets go.
+    await press('a', true)
+    assert(setup.captureCharFrame().includes('e explain'), `Ctrl+A did not offer the ask menu:\n${setup.captureCharFrame()}`)
     await press('e')
     const request = asked as SelectionAskInput | null
     assert(request && request.intent === 'explain' && request.filePath === 'context.ts' && request.isDiff, JSON.stringify(request))
