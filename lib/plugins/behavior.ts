@@ -100,7 +100,7 @@ export const PLUGIN_TOOL_RESULT_MAX_CHARS = 8_000
 
 /** How a tool call should read in the transcript: a title, a few lines, a tone. Nothing keeps the built-in card. */
 export type PluginToolCardResult =
-  | { readonly title?: string; readonly lines?: readonly string[]; readonly text?: string; readonly blocks?: readonly CardBlock[]; readonly tone?: 'info' | 'success' | 'warning' | 'error' }
+  | { readonly title?: string; readonly lines?: readonly string[]; readonly text?: string; readonly blocks?: readonly CardBlock[]; /** Present as a labelled preview BESIDE the built-in card, not instead of it. */ readonly draft?: boolean; readonly ref?: string; readonly tone?: 'info' | 'success' | 'warning' | 'error' }
   | void
   | null
 

@@ -87,6 +87,21 @@ Found by running it live against a real coordinator session and a real model:
 - **A call is counted once**, however many windows or instance keys present it, and a model question that never got an
   answer (quota, network) is not charged to the day.
 
+## The gallery
+Laid out like the other workspace plugins: filters with counts (All, Suggested, Cards, Generic, Refused) over a two-line
+item list, and the selected item beside it with its tabs (Preview, Why, History, Rule for a card) and its actions. A narrow
+panel shows the list or the detail, with a way back; Esc goes back a level before it closes. Open it from the command
+palette (**Adaptive UI cards**), from the side-panel launcher, or from the buttons below.
+- A **sample** is laid out, not dumped: the input as aligned key/value rows, the result pretty-printed (or wrapped behind a
+  gutter if it is text), long values hanging under their value, long results cut with a count (`lib/adaptiveUi/sampleView.ts`).
+- **A draft shows on real calls.** While a rule is a draft, a matching call shows a labelled *Draft card · preview* beside its
+  built-in card with **Keep** and **Discard** (the TUI notes it under the call). The built-in card stays; only **Keep** makes it
+  draw instead.
+- **Design a card for this tool** sits on any call a generic card draws (Web), so the gallery is not the only way in.
+- The Web view restores the few spacing utilities it uses itself: `app/globals.css` resets `*` to `padding: 0` outside any
+  cascade layer, which beats every Tailwind padding utility, so plugin views built from `p-4`/`px-2` otherwise draw flush
+  against their edges. Moving that reset into `@layer base` would fix every plugin view at once.
+
 ## Suggestions
 The gallery lists what the app could change about itself, from how it is used: a card for a tool called often or opened
 often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.

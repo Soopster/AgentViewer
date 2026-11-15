@@ -1,6 +1,7 @@
 'use client'
 
 import { PluginCardBlocks } from './shell/PluginCardBlocks'
+import { DesignCardButton, PluginDraftCard } from './shell/AdaptiveCardActions'
 import { reportUiInteraction } from '@/lib/plugins/uiInteractions'
 import '@/lib/plugins/uiInteractionsWeb'
 import { TOOL_COLORS, toolColor, useColorTreatment, washBg } from './message-item/appearance'
@@ -3695,7 +3696,18 @@ function PluginToolCard({ thread }: { thread: ToolThread }) {
   )
 }
 
+/** The call's own card, then — for a call a generic card draws — a draft card to judge or a way to make one. */
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
+  const { pluginCardDraft } = thread.toolUse
+  return (
+    <>
+      <ToolThreadCardBase thread={thread} />
+      {pluginCardDraft ? <PluginDraftCard card={pluginCardDraft} /> : <DesignCardButton toolUse={thread.toolUse} hasResult={!!thread.result} />}
+    </>
+  )
+}
+
+function ToolThreadCardBase({ thread }: { thread: ToolThread }) {
   if (thread.toolUse.pluginCard) return <PluginToolCard thread={thread} />
   if (thread.toolUse.input.asyncUserInput === true && thread.toolUse.name === 'AskUserQuestion') return <AsyncQuestionCard toolUse={thread.toolUse} />
   if (thread.toolUse.mcp) return <McpToolCard thread={thread} />

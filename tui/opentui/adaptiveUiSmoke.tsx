@@ -22,9 +22,11 @@ recordShape({ tool: 'mcp__notion__search', mcpServer: 'notion', inputKeys: ['que
 
 let handler: TuiPluginKeyHandler | null = null
 const inserted: string[] = []
+let resize: ((size: { width: number; height: number }) => void) | undefined
 const View = module.views['adaptive-ui']!
 function Harness() {
-  const props: TuiPluginViewProps = { pluginId: 'adaptive-ui', surfaceId: 'adaptive-ui', instanceId: 'adaptive-smoke', placement: 'panel', target: { cwd: root, sessionKey: null }, services: { 'adaptive-ui': nativeAdaptiveUi, composer: { insertPrompt: (text: string) => { inserted.push(text) }, appendDiffNote: () => {} } }, theme: DARK_THEME, accent: DARK_THEME.cyan, syntaxStyle: null, width: 120, height: 30, focused: true, zIndex: 50, useState: ((_name: string, initial: unknown) => React.useState(initial)) as never, onDispose: () => () => {}, registerKeys: (value: TuiPluginKeyHandler | null) => { handler = value }, setCapture: () => {}, runCommand: () => false, close: () => {} } as never
+  const [size, setSize] = React.useState({ width: 120, height: 30 }); resize = setSize
+  const props: TuiPluginViewProps = { pluginId: 'adaptive-ui', surfaceId: 'adaptive-ui', instanceId: 'adaptive-smoke', placement: 'panel', target: { cwd: root, sessionKey: null }, services: { 'adaptive-ui': nativeAdaptiveUi, composer: { insertPrompt: (text: string) => { inserted.push(text) }, appendDiffNote: () => {} } }, theme: DARK_THEME, accent: DARK_THEME.cyan, syntaxStyle: null, ...size, focused: true, zIndex: 50, useState: ((_name: string, initial: unknown) => React.useState(initial)) as never, onDispose: () => () => {}, registerKeys: (value: TuiPluginKeyHandler | null) => { handler = value }, setCapture: () => {}, runCommand: () => false, close: () => {} } as never
   return <View {...props} />
 }
 const setup = await testRender(<Harness />, { width: 120, height: 30 })
@@ -34,8 +36,33 @@ async function key(name: string) { await act(async () => { handler?.({ name, seq
 const status = () => (JSON.parse(readFileSync(join(root, 'recipes', 'linear.get_issue.json'), 'utf8')) as { status: string }).status
 try {
   await waitFor('draft and generic tool listed', () => frame().includes('linear.get_issue') && frame().includes('mcp__notion__search'))
+  if (process.env.DUMP) console.log(frame())
+  // The workspace hierarchy: filters with counts over a list, the selected card's detail with its tabs and actions.
+  for (const chip of ['All 2', 'Suggested 0', 'Cards 1', 'Generic 1', 'Refused 0']) assert(frame().includes(chip), `filter chip ${chip}\n${frame()}`)
+  for (const label of ['CARDS', 'DRAWN GENERICALLY', 'Preview', 'Why', 'History', 'Rule', '[a] Enable', '[f] Change with an agent', '[x] Delete']) assert(frame().includes(label), `${label} is on screen\n${frame()}`)
+  assert(!frame().includes(root), 'the header does not carry an absolute path')
+  assert(frame().includes('draft: review it') && frame().includes('no card · 1 call'), 'each row says what state it is in, in words')
   assert(frame().includes('◐'), 'a draft is marked as one')
   assert(frame().includes('ENG-1 · Fix login') && frame().includes('[Done]'), `the draft is previewed against its sample\n${frame()}`)
+  // Tabs are real views of the selected card; the selection stays when they change.
+  await key('right'); await waitFor('Why tab', () => frame().includes('Derived from the rule') && frame().includes('cannot'))
+  await key('right'); await waitFor('History tab', () => frame().includes('create'))
+  await key('right'); await waitFor('Rule tab', () => frame().includes('"status": "draft"'))
+  await key('left'); await key('left'); await key('left'); await waitFor('back on Preview', () => frame().includes('ENG-1 · Fix login'))
+  // Help captures input: j scrolls the help and must not move the selection.
+  await key('?'); await waitFor('help opens', () => frame().includes('Adaptive UI shortcuts'))
+  await key('j'); await key('escape'); await waitFor('help closed by Escape first', () => !frame().includes('Adaptive UI shortcuts') && frame().includes('Preview'))
+  // Filters narrow the collection.
+  await key(']'); await key(']'); await waitFor('Cards filter', () => !frame().includes('mcp__notion__search') && frame().includes('linear.get_issue'))
+  await key(']'); await waitFor('Generic filter', () => frame().includes('mcp__notion__search') && !frame().includes('[a] Enable'))
+  assert(!frame().includes('Nothing under'), 'a filter with items does not claim to be empty')
+  if (process.env.DUMP) console.log(frame())
+  // A sample is laid out, not dumped: input as aligned rows, the result behind a gutter, nothing repeated from the header.
+  for (const text of ['Sample', 'Input', 'query', 'roadmap', 'Result', '│ ']) assert(frame().includes(text), `${text} in the sample view\n${frame()}`)
+  assert(!frame().includes('{"query":"roadmap"}'), 'the input is not shown as compact JSON')
+  assert(frame().split('\n').filter(row => row.includes('1 call')).length === 1, 'the call count is said once')
+  await key(']'); await waitFor('Refused filter is empty', () => frame().includes('Nothing under Refused'))
+  await key('['); await key('['); await key('['); await key('['); await waitFor('All again', () => frame().includes('CARDS') && frame().includes('DRAWN GENERICALLY'))
   await key('a'); await waitFor('enabled', () => status() === 'active' && frame().includes('●'))
   await key('j'); await key('g')
   await waitFor('design request handed to the composer', () => inserted.length === 1)
@@ -44,6 +71,14 @@ try {
   assert(existsSync(join(root, 'recipes', 'linear.get_issue.json')), 'one press does not delete')
   await key('x'); await waitFor('second press deletes', () => !existsSync(join(root, 'recipes', 'linear.get_issue.json')))
   // Any other key disarms: a stray x later does not delete.
+  // A narrow panel shows the list or the detail, with a way back; Escape goes back before it would close.
+  await act(async () => resize?.({ width: 70, height: 24 })); await act(async () => { await setup.flush() })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); await setup.flush() })
+  await key('escape')
+  assert(!frame().includes('[h] Design here') || frame().includes('[‹ list]'), 'narrow starts on one pane')
+  await waitFor('narrow shows the list only', () => frame().includes('mcp__notion__search') && !frame().includes('[h] Design here'))
+  await key('return'); await waitFor('narrow opens the detail', () => frame().includes('[h] Design here') && frame().includes('[‹ list]'))
+  await key('escape'); await waitFor('Escape returns to the list', () => !frame().includes('[h] Design here') && frame().includes('mcp__notion__search'))
   console.log('adaptiveUiSmoke(tui): ok')
 } finally { setup.renderer.destroy() }
 process.exit(0)

@@ -516,7 +516,7 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
         : []
     case 'tool_thread':
       if (block.toolUse.pluginCard) return pluginToolCardLines(block, false)
-      return previewTool(block, activeForms, taskRegistry)
+      return withDraftCardLine(previewTool(block, activeForms, taskRegistry), block)
     case 'task_notification':
       return [line(`task ${block.status}: ${truncateLine(tidyTaskSummary(block.summary || block.taskId))}`, 'thinking')]
     case 'system_reminder':
@@ -1643,6 +1643,12 @@ function toolNamesOf(blocks: readonly ThreadedBlock[]): string[] | undefined {
  * as the tool row, its lines under it (all of them when expanded, the first
  * otherwise), and the call's error if it failed — a plugin cannot hide that.
  */
+/** A draft card for a call is mentioned under the call's own lines, so it can be found and judged. */
+function withDraftCardLine(lines: TuiTranscriptCardLine[], block: Extract<ThreadedBlock, { type: 'tool_thread' }>): TuiTranscriptCardLine[] {
+  const draft = block.toolUse.pluginCardDraft
+  return draft ? [...lines, line(`▸ draft card: ${truncateLine(sanitizeLine(draft.title))} · Adaptive UI keeps or discards it`, 'muted')] : lines
+}
+
 /** A plugin's presentation of a system message: its title, its lines (all when expanded, the first otherwise). */
 function pluginSystemCardLines(card: PluginToolCard, expanded: boolean): TuiTranscriptCardLine[] {
   const bodyTone: TuiTranscriptLineTone = card.tone === 'error' ? 'result_error' : card.tone === 'success' ? 'result_ok' : 'dim'

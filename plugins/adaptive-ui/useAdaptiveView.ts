@@ -99,3 +99,26 @@ export function coverageWarnings(rule: CardRule): string[] { return ruleCoverage
 export function previewRule(rule: CardRule): RenderedCard[] {
   return (rule.samples ?? []).map(sample => renderCardRule(rule, { tool: { name: rule.match.tool.includes('*') ? rule.match.tool.replace(/\*/g, 'x') : rule.match.tool, input: sample.input }, ...(sample.result ? { result: { text: sample.result.text, isError: sample.result.isError === true } } : {}) }))
 }
+
+// ── What both renderers show about an item, from one place ─────────────────────────────────────────────
+
+export type AdaptiveFilter = 'all' | 'suggested' | 'cards' | 'generic' | 'refused'
+export const ADAPTIVE_FILTERS: readonly { readonly id: AdaptiveFilter; readonly label: string }[] = [
+  { id: 'all', label: 'All' }, { id: 'suggested', label: 'Suggested' }, { id: 'cards', label: 'Cards' }, { id: 'generic', label: 'Generic' }, { id: 'refused', label: 'Refused' },
+]
+const FILTER_OF: Record<AdaptiveItem['kind'], AdaptiveFilter> = { suggestion: 'suggested', rule: 'cards', shape: 'generic', invalid: 'refused' }
+export const filterAdaptiveItems = (items: readonly AdaptiveItem[], filter: AdaptiveFilter): AdaptiveItem[] => items.filter(item => filter === 'all' || FILTER_OF[item.kind] === filter)
+export const countAdaptive = (items: readonly AdaptiveItem[], filter: AdaptiveFilter): number => filterAdaptiveItems(items, filter).length
+
+export type AdaptiveSection = 'Suggested' | 'Cards' | 'Drawn generically' | 'Refused files'
+export type AdaptiveRowTone = 'accent' | 'good' | 'warn' | 'muted' | 'bad'
+export type AdaptiveRow = { readonly title: string; readonly sub: string; readonly glyph: string; readonly tone: AdaptiveRowTone; readonly section: AdaptiveSection }
+/** One item as a list row: a name, and a muted line that says what state it is in. Status is a word and a glyph, never colour alone. */
+export function describeAdaptiveItem(item: AdaptiveItem, origins: Readonly<Record<string, string>>): AdaptiveRow {
+  if (item.kind === 'suggestion') return { title: item.suggestion.title, sub: item.suggestion.detail, glyph: '★', tone: 'accent', section: 'Suggested' }
+  if (item.kind === 'invalid') return { title: item.file, sub: `refused · ${item.problems.length} problem${item.problems.length === 1 ? '' : 's'}`, glyph: '!', tone: 'bad', section: 'Refused files' }
+  if (item.kind === 'shape') return { title: item.shape.tool, sub: `no card · ${item.shape.count} call${item.shape.count === 1 ? '' : 's'}${item.shape.inputKeys.length ? ` · ${item.shape.inputKeys.slice(0, 3).join(', ')}${item.shape.inputKeys.length > 3 ? '…' : ''}` : ' · no input'}${item.shape.samples.length ? '' : ' · no samples yet'}`, glyph: '+', tone: 'muted', section: 'Drawn generically' }
+  const { rule } = item
+  const status = rule.status === 'active' ? 'active' : rule.status === 'draft' ? 'draft: review it' : 'disabled'
+  return { title: rule.id, sub: `${status} · ${rule.match.tool}${origins[rule.id] ? ` · mod ${origins[rule.id]}` : rule.provenance?.by ? ` · by ${rule.provenance.by}` : ''}`, glyph: rule.status === 'active' ? '●' : rule.status === 'draft' ? '◐' : '○', tone: rule.status === 'active' ? 'good' : rule.status === 'draft' ? 'warn' : 'muted', section: 'Cards' }
+}

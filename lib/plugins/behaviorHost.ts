@@ -133,7 +133,7 @@ export function createPluginBehaviorHost(
     /** Whether any enabled plugin answers approvals: bridges skip the call otherwise. */
     presentsToolCards: () => hooked('toolCard').some(m => isPluginEnabled(m.id)),
     /** The first plugin presentation of a tool call, or null for the built-in card. Failures and slow hooks count as none. */
-    async toolCard(context: PluginToolCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; blocks?: CardBlock[]; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
+    async toolCard(context: PluginToolCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; blocks?: CardBlock[]; draft?: true; ref?: string; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
       if (disposed) return null
       for (const manifest of hooked('toolCard')) {
         if (!isPluginEnabled(manifest.id)) continue
@@ -147,7 +147,7 @@ export function createPluginBehaviorHost(
           const blocks = decodeCardBlocks(result.blocks)
           if (!title && !lines.length && !blocks.length) continue
           const tone = result.tone === 'success' || result.tone === 'warning' || result.tone === 'error' ? result.tone : 'info'
-          return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), tone }
+          return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), ...(result.draft === true ? { draft: true as const } : {}), ...(typeof result.ref === 'string' ? { ref: result.ref.slice(0, 80) } : {}), tone }
         } catch (error) {
           if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} toolCard failed:`, error)
         }

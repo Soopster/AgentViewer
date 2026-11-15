@@ -130,14 +130,14 @@ export async function annotatePluginToolCards(provider: AgentProvider, providerI
       let card: PluginToolCard | null | undefined = cache.get(key)
       if (card === undefined) {
         const answered = await host.toolCard({ target, tool: { id: tool.id, name: tool.name, input: tool.input ?? {} }, ...(result ? { result: presentResult(result) } : {}) })
-        const fresh: PluginToolCard | null = answered ? { pluginId: answered.pluginId, title: answered.title ?? tool.name, lines: answered.lines, tone: answered.tone, ...(answered.blocks ? { blocks: answered.blocks } : {}) } : null
+        const fresh: PluginToolCard | null = answered ? { pluginId: answered.pluginId, title: answered.title ?? tool.name, lines: answered.lines, tone: answered.tone, ...(answered.blocks ? { blocks: answered.blocks } : {}), ...(answered.draft ? { draft: true as const } : {}), ...(answered.ref ? { ref: answered.ref } : {}) } : null
         card = fresh
         cache.set(key, fresh)
         if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
       }
       if (!card) { noteUnrendered(target, tool, result); return block }
       changed = true
-      return { ...tool, pluginCard: card }
+      return card.draft ? { ...tool, pluginCardDraft: card } : { ...tool, pluginCard: card }
     }))
     out.push(changed ? { ...message, message: { ...(message.message as object), content: next } } as SessionMessage : message)
   }

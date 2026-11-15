@@ -74,7 +74,13 @@ const rule = { id: 'linear.get_issue', status: 'draft', match: { tool: TOOL }, t
   samples: [{ input: { id: 'ENG-1' }, result: { text: issue } }] }
 writeCardRule(rule); clearPluginToolCardCache()
 assert.equal(await card(call('t3', TOOL, { id: 'ENG-3' }, { text: issue })), undefined, 'a draft is never drawn')
+{ // ...but it is offered beside the built-in card, labelled, so it can be judged on a real call.
+  const out = await annotatePluginToolCards('claude', undefined, 's', call('t3d', TOOL, { id: 'ENG-3' }, { text: issue }) as never) as unknown as { message: { content: { pluginCard?: unknown; pluginCardDraft?: { draft?: boolean; ref?: string; title: string } }[] } }[]
+  const use = out[0]!.message.content[0]!
+  assert.equal(use.pluginCard, undefined); assert.equal(use.pluginCardDraft?.draft, true); assert.equal(use.pluginCardDraft?.ref, 'linear.get_issue'); assert.equal(use.pluginCardDraft?.title, 'ENG-3 · Fix login')
+}
 await nativeAdaptiveUi.setStatus('linear.get_issue', 'active')
+{ const out = await annotatePluginToolCards('claude', undefined, 's', call('t4d', TOOL, { id: 'ENG-4' }, { text: issue }) as never) as unknown as { message: { content: { pluginCard?: unknown; pluginCardDraft?: unknown }[] } }[]; assert.ok(out[0]!.message.content[0]!.pluginCard); assert.equal(out[0]!.message.content[0]!.pluginCardDraft, undefined, 'an enabled card replaces the preview') }
 const drawn = await card(call('t4', TOOL, { id: 'ENG-4' }, { text: issue }))
 assert.ok(drawn); assert.equal(drawn!.title, 'ENG-4 · Fix login'); assert.equal(drawn!.tone, 'success')
 assert.deepEqual(cardBlockLines(drawn!.blocks as never), ['[Done]', 'Assignee  Ada'])

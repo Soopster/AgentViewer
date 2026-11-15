@@ -62,13 +62,20 @@ export const behavior: PluginBehaviorModule = {
       const card = renderCardRule(best, context)
       return { title: card.title, blocks: card.blocks, tone: card.tone }
     }
+    // No active rule. A draft that matches is offered as a labelled preview beside the built-in card, so a person can judge it on a real call.
+    let draft: ReturnType<typeof effectiveRules>['rules'][number] | null = null
+    for (const rule of effectiveRules().rules) {
+      if (rule.status !== 'draft' || rule.match.kind === 'system' || (native && !rule.overridesNative) || !cardRuleMatches(rule, context)) continue
+      if (!draft || cardRuleSpecificity(rule) > cardRuleSpecificity(draft)) draft = rule
+    }
+    const preview = draft ? renderCardRule(draft, context) : null
     // Nothing draws this specially: remember its shape, and a redacted sample once the call has finished.
     if (!native && result && firstSighting(target.sessionId, tool.id)) {
       const inputKeys = Object.keys(tool.input ?? {}).filter(key => /^[A-Za-z0-9_-]{1,64}$/.test(key)).sort().slice(0, 24)
       const server = mcpServerOf(tool.name)
       recordShape({ tool: tool.name, ...(server ? { mcpServer: server } : {}), inputKeys, sample: { input: redactForSample(tool.input) as Record<string, unknown>, result: { text: result.json !== undefined ? redactResultJson(result.json) : redactResultText(result.text), isError: result.isError } } })
     }
-    return null
+    return draft && preview ? { title: preview.title, blocks: preview.blocks, tone: preview.tone, draft: true, ref: draft.id } : null
   },
   deactivate: closeRecipeWatcher,
   transcriptCard({ block }) {

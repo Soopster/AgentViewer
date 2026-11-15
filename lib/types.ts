@@ -25,8 +25,10 @@ export type ToolUseBlock = {
   type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; mcp?: McpInvocation
   /** A plugin's presentation of this call (lib/plugins/toolCards.ts), drawn instead of the generic card. */
   pluginCard?: PluginToolCard
+  /** A draft card for this call, shown beside the built-in one, labelled, for its owner to keep or discard. */
+  pluginCardDraft?: PluginToolCard
 }
-export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error'; /** Rich content (lib/plugins/cardBlocks.ts); `lines` stays the collapsed form and the fallback. */ blocks?: CardBlock[] }
+export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error'; /** Set on a draft preview (ToolUseBlock.pluginCardDraft). */ draft?: true; /** What a draft preview refers to (a rule id), so a button can act on it. */ ref?: string; /** Rich content (lib/plugins/cardBlocks.ts); `lines` stays the collapsed form and the fallback. */ blocks?: CardBlock[] }
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string
