@@ -1,6 +1,7 @@
 // What's new: grouping, scoring and the git-log parser, plus the reader against this repository.
 import assert from 'node:assert/strict'
 import { buildWhatsNew, classifyCommit, formatWhatsNewMarkdown, scoreCommit, whatsNewLineTone, type WhatsNewCommit } from '../lib/whatsNew'
+import { changeBarCells, reconcileWhatsNewSelection, splitWhatsNewPath, whatsNewDetail, whatsNewRows } from '../lib/whatsNewView'
 import { parseWhatsNewLog, readWhatsNew } from '../lib/whatsNewReader'
 
 const at = (day: number, hour = 12) => new Date(2026, 10, day, hour).getTime()
@@ -55,6 +56,34 @@ assert.equal(classifyCommit('Adaptive UI: patches and history'), 'improvement')
   assert.equal(buildWhatsNew(commits, { limit: 3 }).truncated, false)
   assert.equal(buildWhatsNew([]).revisions.length, 0)
   assert.match(formatWhatsNewMarkdown(buildWhatsNew([])), /No commits/)
+}
+
+// The view model: rows, per-change files, and a selection that survives a refresh.
+{
+  const files = Array.from({ length: 200 }, (_, i) => ({ path: `plugins/p/f${i}.ts`, added: i + 1, removed: 0 }))
+  const big = commit('a', 'Add the gallery', at(15), { files: [...files, { path: 'package-lock.json', added: 5000, removed: 5000 }, { path: 'lib/x.ts', added: 3, removed: 1 }, { path: 'lib/x.ts', added: 2, removed: 0 }] })
+  const summary = buildWhatsNew([big, commit('b', 'Fix a thing', at(15, 9))])
+  const rows = whatsNewRows(summary)
+  assert.deepEqual(rows.map(r => r.type), ['revision', 'highlight', 'highlight'])
+  const item = whatsNewDetail(summary, rows[1]!.key)!
+  assert.equal(item.files.length, 150, 'files are capped')
+  assert.equal(item.hiddenFiles, 51, 'the cap is reported, not silent: 201 distinct files minus 150 (lockfile excluded, a path edited twice counted once)')
+  assert.equal(item.files[0]!.path, 'plugins/p/f199.ts', 'the largest change is first')
+  assert.ok(!item.files.some(f => f.path.endsWith('package-lock.json')), 'lockfiles are not files changed')
+  const revision = whatsNewDetail(summary, rows[0]!.key)!
+  assert.match(revision.markdown, /### Files changed/)
+  assert.match(item.markdown, /plugins\/p\/f199\.ts \(\+200 −0\)/)
+  assert.equal(whatsNewDetail(summary, 'h:gone:zzz'), null)
+  assert.equal(reconcileWhatsNewSelection(rows, rows[2]!.key), rows[2]!.key, 'a surviving selection is kept')
+  assert.equal(reconcileWhatsNewSelection(rows, 'h:gone:zzz'), rows[0]!.key, 'a vanished one falls back to the first row')
+  assert.equal(reconcileWhatsNewSelection([], 'x'), null)
+  assert.deepEqual(splitWhatsNewPath('a/b/c.ts'), { dir: 'a/b/', name: 'c.ts' })
+  assert.deepEqual(splitWhatsNewPath('c.ts'), { dir: '', name: 'c.ts' })
+  assert.deepEqual(changeBarCells({ path: 'x', added: 10, removed: 0 }, 10, 10), { add: 10, remove: 0 })
+  const mixed = changeBarCells({ path: 'x', added: 5, removed: 5 }, 10, 10)
+  assert.equal(mixed.add + mixed.remove, 10)
+  assert.ok(mixed.add > 0 && mixed.remove > 0)
+  assert.deepEqual(changeBarCells({ path: 'x', added: 0, removed: 0 }, 10, 10), { add: 0, remove: 0 })
 }
 
 // The parser: tags from decorations, numstat with renames and binaries, bodies with newlines.

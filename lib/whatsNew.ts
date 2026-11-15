@@ -24,6 +24,12 @@ export type WhatsNewCommit = {
 
 export type WhatsNewKind = 'feature' | 'fix' | 'improvement' | 'chore'
 
+/** A file a change touched, with how many lines it added and removed there. */
+export type WhatsNewFile = { path: string; added: number; removed: number }
+
+/** Files kept per change; the rest are counted, never silently dropped. */
+export const WHATS_NEW_FILE_LIMIT = 150
+
 export type WhatsNewHighlight = {
   sha: string
   subject: string
@@ -37,6 +43,8 @@ export type WhatsNewHighlight = {
   added: number
   removed: number
   score: number
+  /** Largest changes first, at most `WHATS_NEW_FILE_LIMIT`. */
+  fileList: WhatsNewFile[]
 }
 
 export type WhatsNewRevision = {
@@ -53,8 +61,10 @@ export type WhatsNewRevision = {
   authors: string[]
   counts: Record<WhatsNewKind, number>
   highlights: WhatsNewHighlight[]
-  /** Commits that did not make the highlights, as their subjects. */
+  /** Commits that did not make the highlights. */
   others: number
+  /** Every file the revision touched, summed over its commits, largest first, at most `WHATS_NEW_FILE_LIMIT`. */
+  fileList: WhatsNewFile[]
 }
 
 export type WhatsNew = {
@@ -110,17 +120,34 @@ function dominantArea(files: WhatsNewCommit['files']): string | null {
 
 const LOCKFILES = /(^|\/)(package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock)$/
 
+function topFiles(files: Iterable<WhatsNewFile>): WhatsNewFile[] {
+  return [...files].sort((a, b) => (b.added + b.removed) - (a.added + a.removed) || a.path.localeCompare(b.path)).slice(0, WHATS_NEW_FILE_LIMIT)
+}
+
+/** One entry per path: a rename shows its destination, and a file edited twice is summed. */
+function mergeFiles(commits: readonly WhatsNewCommit[]): Map<string, WhatsNewFile> {
+  const merged = new Map<string, WhatsNewFile>()
+  for (const commit of commits) {
+    for (const file of commit.files) {
+      if (LOCKFILES.test(file.path)) continue
+      const known = merged.get(file.path)
+      if (known) { known.added += file.added; known.removed += file.removed } else merged.set(file.path, { ...file })
+    }
+  }
+  return merged
+}
+
 function measure(commit: WhatsNewCommit) {
-  let files = 0
+  const paths = new Set<string>()
   let added = 0
   let removed = 0
   for (const file of commit.files) {
     if (LOCKFILES.test(file.path)) continue
-    files++
+    paths.add(file.path)
     added += file.added
     removed += file.removed
   }
-  return { files, added, removed }
+  return { files: paths.size, added, removed }
 }
 
 /** Size, a feature verb and a body that explains why all raise a commit; chores sink. */
@@ -174,6 +201,7 @@ function summarize(id: string, title: string, kind: WhatsNewRevision['kind'], co
       added: size.added,
       removed: size.removed,
       score: scoreCommit(commit, commitKind),
+      fileList: topFiles(mergeFiles([commit]).values()),
     })
   }
   // A chore never headlines a revision, even one with nothing else in it.
@@ -189,6 +217,7 @@ function summarize(id: string, title: string, kind: WhatsNewRevision['kind'], co
     counts,
     highlights,
     others: commits.length - highlights.length,
+    fileList: topFiles(mergeFiles(commits).values()),
   }
 }
 
