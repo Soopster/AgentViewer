@@ -8,6 +8,7 @@ export type AdaptiveUiSnapshot = {
   readonly shapes: readonly ShapeRecord[]
   /** Calls by tool since the process started, for suggestions. */
   readonly usage: readonly { readonly tool: string; readonly completed: number; readonly failed: number }[]
+  readonly suggestions: readonly import('../adaptiveUi/suggest').Suggestion[]
   readonly settings: { readonly autoDraft: boolean; readonly autoDraftAfter: number }
 }
 export type AdaptiveUiService = {
@@ -15,6 +16,9 @@ export type AdaptiveUiService = {
   setStatus(id: string, status: CardRuleStatus): Promise<void>
   remove(id: string): Promise<void>
   dismissShape(key: string, dismissed: boolean): Promise<void>
+  /** Add a suggested view as a new, unselected custom view (or acknowledge a card suggestion). */
+  applySuggestion(id: string): Promise<string>
+  dismissSuggestion(id: string): Promise<void>
   /** Ask a tool-less model to design a card in place; it lands as a draft. Returns the rule id. Counted against a daily limit. */
   designHere(key: string, ask?: import('./modelService').ModelAsk): Promise<string>
   /** The request to hand an agent (the composer's text) to design a card for a shape. */

@@ -22,6 +22,13 @@ function RuleRow({ state, rule }: { state: AdaptiveViewState; rule: Extract<Adap
     </div> : null}
   </article>
 }
+function SuggestionRow({ state, suggestion }: { state: AdaptiveViewState; suggestion: Extract<AdaptiveItem, { kind: 'suggestion' }>['suggestion'] }) {
+  return <article data-adaptive-suggestion={suggestion.id} className="flex flex-wrap items-center gap-2 rounded border p-2 text-xs">
+    <span className="min-w-0 flex-1"><span className="font-semibold">{suggestion.title}</span><span className="block text-muted-foreground">{suggestion.detail}</span></span>
+    <Button size="sm" disabled={state.busy} onClick={() => void state.applySuggestion(suggestion)}>{suggestion.kind === 'view' ? 'Add view' : 'Design here'}</Button>
+    <Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.dismissSuggestion(suggestion.id)}>Dismiss</Button>
+  </article>
+}
 function ShapeRow({ state, shape }: { state: AdaptiveViewState; shape: Extract<AdaptiveItem, { kind: 'shape' }>['shape'] }) {
   return <article data-adaptive-shape={shape.tool} className="flex flex-wrap items-center gap-2 rounded border p-2 text-xs">
     <span className="min-w-0 flex-1"><span className="font-semibold break-all">{shape.tool}</span><span className="block text-muted-foreground">{shape.count} calls · keys: {shape.inputKeys.join(', ') || 'none'} · {shape.samples.length} samples</span></span>
@@ -37,11 +44,12 @@ function AdaptiveUi({ services, placement, close }: WebPluginViewProps) {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) close() }
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
   }, [placement, close])
-  const rules = state.items.flatMap(item => item.kind === 'rule' ? [item] : []), shapes = state.items.flatMap(item => item.kind === 'shape' ? [item] : []), invalid = state.items.flatMap(item => item.kind === 'invalid' ? [item] : [])
+  const suggestions = state.items.flatMap(item => item.kind === 'suggestion' ? [item] : []), rules = state.items.flatMap(item => item.kind === 'rule' ? [item] : []), shapes = state.items.flatMap(item => item.kind === 'shape' ? [item] : []), invalid = state.items.flatMap(item => item.kind === 'invalid' ? [item] : [])
   const body = <section data-plugin-view="adaptive-ui" aria-label="Adaptive UI" className="flex h-full min-h-0 flex-col gap-3 overflow-auto bg-background p-4 text-foreground">
     <header className="flex flex-wrap items-center gap-2"><h2 className="mr-auto font-semibold">Adaptive UI</h2><Button size="sm" variant="outline" disabled={state.busy} onClick={() => void state.refresh()}>Refresh</Button>{placement === 'overlay' ? <Button size="sm" variant="outline" onClick={close}>Close</Button> : null}</header>
     <p className="text-xs text-muted-foreground">Cards are data in {state.snapshot?.dir ?? 'the recipes folder'}. A new card starts as a draft: review its preview, then enable it. A failed call always shows as an error.</p>
     {state.notice ? <p role="status" className="text-sm">{state.notice}</p> : null}
+    {suggestions.length ? <><h3 className="text-sm font-semibold">Suggested · {suggestions.length}</h3><div className="grid gap-2">{suggestions.map(item => <SuggestionRow key={item.key} state={state} suggestion={item.suggestion} />)}</div></> : null}
     <h3 className="text-sm font-semibold">Cards · {rules.length}</h3>
     <div className="grid gap-2">{rules.map(item => <RuleRow key={item.key} state={state} rule={item.rule} />)}{!rules.length ? <p className="text-xs text-muted-foreground">No cards yet. Design one for a tool listed below.</p> : null}</div>
     <h3 className="text-sm font-semibold">Drawn generically · {shapes.length}</h3>

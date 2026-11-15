@@ -5,7 +5,7 @@ import { hasNativeToolCard } from '../../lib/plugins/nativeTools'
 import { cardRuleMatches, cardRuleSpecificity, mcpServerOf, renderCardRule } from '../../lib/plugins/cardTemplates'
 import { clearPluginToolCardCache } from '../../lib/plugins/toolCards'
 import { loadCardRules, recipesDir } from '../../lib/adaptiveUi/store'
-import { noteToolCompleted, recordShape } from '../../lib/adaptiveUi/runtime'
+import { noteInteraction, noteToolCompleted, recordShape } from '../../lib/adaptiveUi/runtime'
 import { redactForSample, redactResultText } from '../../lib/adaptiveUi/shapes'
 
 // A rule edited on disk (by an agent, by hand) must reach cards already cached,
@@ -57,5 +57,6 @@ export const behavior: PluginBehaviorModule = {
   deactivate: closeRecipeWatcher,
   runtimeEvent({ event }) {
     if (event.type === 'tool.completed' && event.tool?.name) noteToolCompleted(event.tool.name, event.tool.failed === true)
+    else if (event.type === 'ui.interaction' && event.interaction) noteInteraction(event.interaction.subject, event.interaction.action, event.interaction.count)
   },
 }

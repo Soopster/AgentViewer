@@ -11,6 +11,8 @@ export const webAdaptiveUi: AdaptiveUiService = {
   setStatus: (id, status) => post({ action: 'set-status', id, status }),
   remove: id => post({ action: 'remove', id }),
   dismissShape: (key, dismissed) => post({ action: 'dismiss', key, dismissed }),
+  applySuggestion: id => post<string>({ action: 'apply-suggestion', id }),
+  dismissSuggestion: id => post({ action: 'dismiss-suggestion', id }),
   designHere: key => post<string>({ action: 'design-here', key }),
   designPrompt: key => post<string>({ action: 'design-prompt', key }),
 }

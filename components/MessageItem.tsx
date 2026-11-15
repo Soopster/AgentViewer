@@ -1,6 +1,8 @@
 'use client'
 
 import { PluginCardBlocks } from './shell/PluginCardBlocks'
+import { reportUiInteraction } from '@/lib/plugins/uiInteractions'
+import '@/lib/plugins/uiInteractionsWeb'
 import { TOOL_COLORS, toolColor, useColorTreatment, washBg } from './message-item/appearance'
 import { formatStableMessageTime, formatLocalMessageTime, formatClockShort, formatDurationShort, fmtTokens, safeJson } from './message-item/format'
 import { canonicalToolName, parseMcpToolName, isMcpToolName, resultToString, summarizeAgentsTool, streamToolOutputSummary, lineCount, agentsToolMetaBadges, normalizeToolThreadForNativeCard } from './message-item/toolModel'
@@ -1033,6 +1035,7 @@ function FileChangeDiffRegion({
 
 function GenericToolCard({ thread }: { thread: ToolThread }) {
   const [open, setOpen] = useState(false)
+  const sessionTarget = use(ArtifactSessionContext)
   const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const c = toolColor(toolUse.name)
@@ -1048,7 +1051,7 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
     <CardShell color={c} result={result} toolName={toolUse.name}
       header={
         <div
-          onClick={() => setOpen(v => !v)}
+          onClick={() => { reportUiInteraction(open ? 'fold' : 'expand', toolUse.name, sessionTarget); setOpen(v => !v) }}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           className="av-tool-header"
@@ -1155,7 +1158,7 @@ function McpToolCard({ thread }: { thread: ToolThread }) {
       }}
     >
       <div
-        onClick={() => setOpen(v => !v)}
+        onClick={() => { reportUiInteraction(open ? 'fold' : 'expand', toolUse.name, sessionTarget); setOpen(v => !v) }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         className="av-tool-header"
@@ -3676,13 +3679,14 @@ function McpCard({ thread }: { thread: ToolThread }) {
 const PLUGIN_CARD_TONE = { info: 'var(--border-2)', success: 'var(--green, #3fb950)', warning: 'var(--amber, #d29922)', error: 'var(--red, #f85149)' } as const
 function PluginToolCard({ thread }: { thread: ToolThread }) {
   const card = thread.toolUse.pluginCard!
+  const sessionTarget = use(ArtifactSessionContext)
   const [showRaw, setShowRaw] = useState(false)
   const failed = thread.result?.is_error === true
   return (
     <div data-plugin-tool-card={card.pluginId} style={{ border: `1px solid ${failed ? PLUGIN_CARD_TONE.error : PLUGIN_CARD_TONE[card.tone]}`, borderRadius: 8, padding: '6px 10px', fontSize: 12.5, background: 'var(--surface)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.title}</span>
-        <button type="button" onClick={() => setShowRaw(value => !value)} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'hide input' : thread.toolUse.name}</button>
+        <button type="button" onClick={() => { reportUiInteraction('toggle', thread.toolUse.name, sessionTarget); setShowRaw(value => !value) }} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'hide input' : thread.toolUse.name}</button>
       </div>
       {card.blocks?.length ? <PluginCardBlocks blocks={card.blocks} /> : card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? PLUGIN_CARD_TONE.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
       {failed ? <div style={{ color: PLUGIN_CARD_TONE.error }}>tool call failed</div> : null}

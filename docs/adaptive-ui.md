@@ -40,13 +40,35 @@ lower count default`. There is no code and no expression language.
 - Events never carry values; samples are redacted, process-local, and served only by the `write`-scoped
   `/api/adaptive-ui` route.
 
+## Designing a card
+- **With an agent:** *Design card* (`g` in the TUI) puts the request in the composer. The agent writes the file,
+  runs `agent-viewer cards check <file>` (exit 1 and the reasons if it is not usable) and `agent-viewer cards preview <id>`,
+  and leaves it a draft. `agent-viewer cards list|enable|disable` flip rules from a shell. The `adaptive-ui` skill
+  (`.agents/skills/adaptive-ui`) teaches the format.
+- **In place:** *Design here* (`h`) asks a model with no tools, no persistence and no setting sources (the one-shot
+  `lib/plugins/modelService.ts`), validates the reply as a rule, feeds refusals back for up to three tries and writes a
+  draft for that tool only. It cannot activate a rule, retarget it or ask to replace a built-in card, and is limited to
+  20 designs a day.
+
+## Suggestions
+The gallery lists what the app could change about itself, from how it is used: a card for a tool called often or opened
+often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.
+A view suggestion adds a new custom view (never selected for you). Counts come from `tool.completed` events and the
+`ui.interaction` event, which the Web reports in batches (30s) when a generic, MCP or plugin card is opened or folded.
+`ui.interaction` is not reported from the TUI yet.
+
+## Reload
+Mods reload when their files change (`lib/plugins/modWatch.ts`: source-like files only, at most one reload every
+3s, `AGENT_VIEWER_MODS_WATCH=0` turns it off), on **Reload mods** in the palette, or with `agent-viewer mods reload`.
+A rule file edited on disk clears cached cards. Bundled plugins' own code reloads through Next's dev reload (Web) or
+`npm run tui:dev`.
+
 ## For mods and plugins
-- `toolCard` hooks may return `blocks` (the same vocabulary) beside `lines`, and now receive the call's
-  `result` (text, `isError`, `truncated`) once it has one.
-- `runtimeEvent` hooks receive `block.unrendered`. (`ui.interaction` is declared in the event type and
-  capabilities but nothing reports it yet.)
+- `toolCard` hooks may return `blocks` (the same vocabulary) beside `lines`, and receive the call's `result`
+  (text, `isError`, `truncated`) once it has one.
+- `runtimeEvent` hooks receive `block.unrendered` and `ui.interaction`.
 
 ## Not done
-`transcriptCard` for non-tool blocks, project-scoped recipes (the hook has no cwd), `ui.interaction` reporting,
-agent tools and skills contributed by plugins, a plugin `model` service, draft `ViewSpec` proposals and usage
-suggestions. See the plan for the design.
+`transcriptCard` for non-tool blocks, project-scoped recipes (the hook has no cwd), `ui.interaction` from the TUI,
+card rules shipped in a mod's own folder, and a general mechanism for plugins to contribute agent tools (the
+`agent-viewer cards` CLI and the skill cover what an agent needs here).

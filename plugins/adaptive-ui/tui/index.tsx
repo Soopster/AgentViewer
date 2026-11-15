@@ -26,6 +26,10 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     if (!selected) return key === 'r' ? (void state.refresh(), true) : false
     if (key === 'r') { void state.refresh(); return true }
     if (key === 'p') { setPreview(value => !value); return true }
+    if (selected.kind === 'suggestion') {
+      if (key === 'a' || key === 'return') { void state.applySuggestion(selected.suggestion); return true }
+      if (key === 'i') { void state.dismissSuggestion(selected.suggestion.id); return true }
+    }
     if (selected.kind === 'rule') {
       if (key === 'a' || key === 'return') { if (selected.rule.status !== 'active') void state.setStatus(selected.rule.id, 'active'); return true }
       if (key === 'd') { if (selected.rule.status === 'active') void state.setStatus(selected.rule.id, 'disabled'); return true }
@@ -56,10 +60,11 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     <scrollbox ref={scroll} flexGrow={1} minHeight={1} paddingX={1}>
       {items.map((item, index) => {
         const active = index === at
-        const label = item.kind === 'rule' ? `${STATUS_GLYPH[item.rule.status]} ${item.rule.id}  ${item.rule.match.tool}` : item.kind === 'shape' ? `+ ${item.shape.tool}  ${item.shape.count} calls, no card` : `! ${item.file}  refused`
-        const tone = item.kind === 'rule' ? item.rule.status === 'active' ? theme.green : item.rule.status === 'draft' ? theme.amber : theme.dim : item.kind === 'shape' ? theme.text : theme.red
+        const label = item.kind === 'suggestion' ? `★ ${item.suggestion.title}` : item.kind === 'rule' ? `${STATUS_GLYPH[item.rule.status]} ${item.rule.id}  ${item.rule.match.tool}` : item.kind === 'shape' ? `+ ${item.shape.tool}  ${item.shape.count} calls, no card` : `! ${item.file}  refused`
+        const tone = item.kind === 'suggestion' ? theme.cyan : item.kind === 'rule' ? item.rule.status === 'active' ? theme.green : item.rule.status === 'draft' ? theme.amber : theme.dim : item.kind === 'shape' ? theme.text : theme.red
         return <box key={item.key} ref={active ? row : undefined} flexDirection="column" backgroundColor={active ? theme.surface2 : undefined} onMouseDown={() => { if (focused) setCursor(index) }}>
           <text fg={active ? theme.cyan : tone} wrapMode="none" selectable={false}>{fitText(`${active ? '›' : ' '} ${label}`, inner - 2)}</text>
+          {active && item.kind === 'suggestion' ? <text fg={theme.dim} wrapMode="word">{`    ${item.suggestion.detail} a ${item.suggestion.kind === 'view' ? 'adds the view' : 'designs the card here'} · i dismisses`}</text> : null}
           {active && item.kind === 'invalid' ? item.problems.map((problem, i) => <text key={i} fg={theme.red} wrapMode="word">{`    ${problem}`}</text>) : null}
           {active && item.kind === 'shape' ? <text fg={theme.dim} wrapMode="word">{`    keys: ${item.shape.inputKeys.join(', ') || 'none'} · ${item.shape.samples.length} samples · g hands a design request to the composer · h drafts it here`}</text> : null}
           {active && item.kind === 'rule' ? lines.length ? lines.map((text, i) => <text key={i} fg={theme.text} wrapMode="word">{`    ${text}`}</text>) : <text fg={theme.dim} wrapMode="word">{`    ${item.rule.samples?.length ? 'preview hidden (p)' : 'no samples saved: drawn on real calls once enabled'}`}</text> : null}

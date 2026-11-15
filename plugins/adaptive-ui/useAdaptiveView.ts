@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AdaptiveUiService, AdaptiveUiSnapshot } from '../../lib/plugins/adaptiveUi'
 import { renderCardRule, type CardRule, type CardRuleStatus, type RenderedCard } from '../../lib/plugins/cardTemplates'
 import type { ShapeRecord } from '../../lib/adaptiveUi/shapes'
+import type { Suggestion } from '../../lib/adaptiveUi/suggest'
 
-export type AdaptiveItem = { kind: 'rule'; key: string; rule: CardRule } | { kind: 'shape'; key: string; shape: ShapeRecord } | { kind: 'invalid'; key: string; file: string; problems: readonly string[] }
+export type AdaptiveItem = { kind: 'suggestion'; key: string; suggestion: Suggestion } | { kind: 'rule'; key: string; rule: CardRule } | { kind: 'shape'; key: string; shape: ShapeRecord } | { kind: 'invalid'; key: string; file: string; problems: readonly string[] }
 const REFRESH_MS = 5_000
 
 /** Shared state of the Adaptive UI view: what exists, what needs designing, and the actions on both. Renderers keep only presentation and input. */
@@ -34,6 +35,7 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
     if (!snapshot) return []
     const order: Record<CardRuleStatus, number> = { draft: 0, active: 1, disabled: 2 }
     return [
+      ...snapshot.suggestions.map(suggestion => ({ kind: 'suggestion' as const, key: `suggestion:${suggestion.id}`, suggestion })),
       ...[...snapshot.rules].sort((a, b) => order[a.status] - order[b.status] || a.id.localeCompare(b.id)).map(rule => ({ kind: 'rule' as const, key: `rule:${rule.id}`, rule })),
       ...snapshot.shapes.filter(shape => !shape.dismissed && !snapshot.rules.some(rule => rule.match.tool === shape.tool)).map(shape => ({ kind: 'shape' as const, key: `shape:${shape.key}`, shape })),
       ...snapshot.invalid.map(entry => ({ kind: 'invalid' as const, key: `invalid:${entry.file}`, file: entry.file, problems: entry.problems })),
@@ -47,6 +49,12 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
     remove: (id: string) => { if (armed !== id) { setArmed(id); setNotice(`Press delete again to remove ${id}`); return Promise.resolve() } setArmed(null); return act(() => service.remove(id), `${id} deleted`) },
     disarm: () => setArmed(null),
     dismiss: (key: string) => act(() => service.dismissShape(key, true), 'Dismissed'),
+    /** A view suggestion adds an unselected view; a card suggestion drafts the card in place. */
+    applySuggestion: async (suggestion: Suggestion) => {
+      if (suggestion.kind === 'design-card') { setBusy(true); setNotice('Designing a card…'); try { const id = await service.designHere(suggestion.shapeKey); if (alive.current) setNotice(`Drafted ${id}: review it, then enable it`); await refresh() } catch (error) { if (alive.current) setNotice(error instanceof Error ? error.message : String(error)) } finally { if (alive.current) setBusy(false) } return }
+      await act(async () => { setNotice(await service.applySuggestion(suggestion.id)) }, '')
+    },
+    dismissSuggestion: (id: string) => act(() => service.dismissSuggestion(id), 'Dismissed'),
     /** In place, through a tool-less model; the result is a draft to review. */
     designHere: async (key: string) => {
       setBusy(true); setNotice('Designing a card…')

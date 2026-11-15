@@ -4,9 +4,10 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 const dir = mkdtempSync(join(tmpdir(), 'cards-cli-'))
 const env = { ...process.env, AGENT_VIEWER_UI_RECIPES_DIR: dir }
-const cli = (...args: string[]) => { const r = spawnSync(process.execPath, ['run', join(import.meta.dir, '..', 'bin', 'agent-viewer-cards.ts'), ...args], { env, encoding: 'utf8' }); return { code: r.status, out: r.stdout, err: r.stderr } }
+const cli = (...args: string[]) => { const r = spawnSync(process.execPath, ['run', fileURLToPath(new URL('../bin/agent-viewer-cards.ts', import.meta.url)), ...args], { env, encoding: 'utf8' }); return { code: r.status, out: r.stdout, err: r.stderr } }
 const good = { id: 'ok', status: 'draft', match: { tool: 'mcp__a__b' }, title: '{{input.q}}', blocks: [{ type: 'text', text: '{{result.text | truncate 10}}' }], samples: [{ input: { q: 'hi' }, result: { text: 'a long result string' } }] }
 writeFileSync(join(dir, 'ok.json'), JSON.stringify(good))
 writeFileSync(join(dir, 'bad.json'), JSON.stringify({ ...good, id: 'bad', match: { tool: '*' }, title: '{{input.q | eval}}' }))
