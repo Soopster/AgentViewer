@@ -6,6 +6,8 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, wri
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseCardRule, type CardRule, type CardRuleStatus } from '../plugins/cardTemplates'
+import { appendCardHistory, type CardHistoryAction, type CardHistoryActor } from './history'
+import { applyCardPatch, checkPatched, currentRevision, type CardPatch } from './patch'
 
 export type InvalidRuleFile = { readonly file: string; readonly problems: readonly string[] }
 export type LoadedCardRules = { readonly dir: string; readonly rules: readonly CardRule[]; readonly invalid: readonly InvalidRuleFile[] }
@@ -72,27 +74,52 @@ export function loadCardRules(dir = recipesDir()): LoadedCardRules {
   return value
 }
 
-/** Atomic write of one rule, after it validates. Throws with the reasons if it does not. */
-export function writeCardRule(rule: unknown, dir = recipesDir()): CardRule {
+export type WriteMeta = { readonly actor: CardHistoryActor; readonly action: CardHistoryAction; readonly summary?: string }
+const blockTypesOf = (rule: CardRule) => (rule.blocks as readonly { type?: unknown }[]).map(block => String(block.type))
+
+/**
+ * Atomic write of one rule, after it validates. The host owns `revision`: a new rule is 1, every write after
+ * it one more, whatever the incoming rule claims. Every write is recorded in the history with who made it.
+ */
+export function writeCardRule(rule: unknown, dir = recipesDir(), meta: WriteMeta = { actor: 'cli', action: 'create' }): CardRule {
   const parsed = parseCardRule(rule)
   if (!parsed.rule) throw new Error(`card rule refused: ${parsed.problems.join('; ')}`)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, `${parsed.rule.id}.json`)
+  let previous: CardRule | null = null
+  try { previous = parseCardRule(JSON.parse(readFileSync(path, 'utf8'))).rule } catch { /* new rule, or one that was unreadable */ }
+  const stored: CardRule = { ...parsed.rule, revision: previous ? currentRevision(previous) + 1 : 1 }
   const temp = `${path}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(parsed.rule, null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(temp, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 })
   renameSync(temp, path)
   cache.delete(dir)
-  return parsed.rule
+  appendCardHistory(dir, { id: stored.id, actor: meta.actor, action: previous ? meta.action : meta.action === 'create' ? 'create' : meta.action, revision: stored.revision, summary: meta.summary ?? `${meta.action} ${stored.id}`, blockTypes: blockTypesOf(stored) })
+  return stored
 }
 
-export function setCardRuleStatus(id: string, status: CardRuleStatus, dir = recipesDir()): CardRule {
+/**
+ * Apply a patch to the stored rule. Refused (PatchConflictError) when the rule moved since the patch was
+ * written; the result is always a draft, so a patch can change what a card says but never what is drawn.
+ */
+export function patchCardRule(id: string, patch: CardPatch, actor: CardHistoryActor, dir = recipesDir()): CardRule {
   const rule = loadCardRules(dir).rules.find(entry => entry.id === id)
   if (!rule) throw new Error(`no card rule "${id.slice(0, 64)}"`)
-  return writeCardRule({ ...rule, status }, dir)
+  const { candidate, summary } = applyCardPatch(rule, patch)
+  const checked = checkPatched(candidate)
+  if (!checked.rule) throw new Error(`the patch makes an invalid rule: ${checked.problems.join('; ')}`)
+  return writeCardRule(checked.rule, dir, { actor, action: 'patch', summary })
 }
 
-export function deleteCardRule(id: string, dir = recipesDir()): void {
+export function setCardRuleStatus(id: string, status: CardRuleStatus, dir = recipesDir(), actor: CardHistoryActor = 'user'): CardRule {
+  const rule = loadCardRules(dir).rules.find(entry => entry.id === id)
+  if (!rule) throw new Error(`no card rule "${id.slice(0, 64)}"`)
+  return writeCardRule({ ...rule, status }, dir, { actor, action: status === 'active' ? 'enable' : status === 'disabled' ? 'disable' : 'patch', summary: `${status === 'active' ? 'enabled' : status === 'disabled' ? 'disabled' : 'set to draft'} at revision ${currentRevision(rule)}` })
+}
+
+export function deleteCardRule(id: string, dir = recipesDir(), actor: CardHistoryActor = 'user'): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id)) throw new Error('not a rule id')
+  const rule = loadCardRules(dir).rules.find(entry => entry.id === id)
   rmSync(join(dir, `${id}.json`), { force: true })
   cache.delete(dir)
+  if (rule) appendCardHistory(dir, { id, actor, action: 'delete', revision: currentRevision(rule), summary: `deleted ${id}`, blockTypes: blockTypesOf(rule) })
 }

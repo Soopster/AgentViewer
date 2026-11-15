@@ -5,13 +5,14 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AdaptiveUiService, AdaptiveUiSnapshot } from '../plugins/adaptiveUi'
-import { buildDesignPrompt } from './prompt'
-import { DESIGN_DAILY_LIMIT, designCardWithModel } from './design'
+import { buildDesignPrompt, buildRefinePrompt } from './prompt'
+import { DESIGN_DAILY_LIMIT, designCardWithModel, refineCardWithModel } from './design'
+import { preferenceHint, readCardHistory } from './history'
 import type { ModelAsk } from '../plugins/modelService'
 import { suggest, type InteractionCounts, type Suggestion, type ViewSuggestionSpec } from './suggest'
 import { getConfiguredTuiCustomViews, setConfiguredTuiCustomViews } from '../tuiState'
 import { ShapeBook, type ShapeRecord } from './shapes'
-import { deleteCardRule, loadEffectiveCardRules, recipesDir, setCardRuleStatus } from './store'
+import { deleteCardRule, loadCardRules, loadEffectiveCardRules, recipesDir, setCardRuleStatus } from './store'
 import { localPluginDiscovery } from '../plugins/localPlugins'
 import { isPluginEnabled } from '../plugins/enablement'
 import { clearPluginToolCardCache } from '../plugins/toolCards'
@@ -104,7 +105,7 @@ export function adaptiveUiSnapshot(existingViewIds: ReadonlySet<string> = new Se
   const loaded = effectiveRules()
   const usage = [...s.usage].map(([tool, u]) => ({ tool, ...u })).sort((a, b) => b.completed - a.completed).slice(0, 50)
   const suggestions = suggest({ shapes: s.book.list(), usage, interactions: Object.fromEntries(s.interactions), ruledTools: new Set(loaded.rules.map(rule => rule.match.tool)), dismissed: s.dismissed, existingViewIds })
-  return { dir: loaded.dir, rules: loaded.rules, origins: loaded.origins, invalid: loaded.invalid, shapes: s.book.list(), usage, suggestions, settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
+  return { dir: loaded.dir, history: readCardHistory(loaded.dir, { limit: 40 }), rules: loaded.rules, origins: loaded.origins, invalid: loaded.invalid, shapes: s.book.list(), usage, suggestions, settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
 }
 
 /** A suggested view becomes a new custom view, never the selected one, and never replaces one with its id. */
@@ -123,6 +124,24 @@ function spendModelQuestion(s: State, now = new Date()): void {
   schedulePersist(s)
 }
 
+/** What this person's own decisions say about cards they like, once there are enough of them to say. */
+function currentPreference(): string | null {
+  const own = loadCardRules()
+  return preferenceHint(readCardHistory(own.dir, { limit: 200 }), own.rules.filter(rule => rule.status === 'active').map(rule => (rule.blocks as readonly { type?: unknown }[]).map(block => String(block.type))))
+}
+
+/** Change one of the person's own rules from a plain-language instruction; the result is a draft. */
+export async function refineHere(id: string, instruction: string, ask?: ModelAsk): Promise<string> {
+  const s = state()
+  const rule = loadCardRules().rules.find(entry => entry.id === id)
+  if (!rule) throw new Error(`no card rule of yours named "${id.slice(0, 64)}"`)
+  spendModelQuestion(s)
+  const model = ask ?? (await import('../plugins/modelService')).askModel
+  const next = await refineCardWithModel(rule, instruction, model)
+  clearPluginToolCardCache()
+  return `${next.id} is now revision ${next.revision} and a draft: review it, then enable it`
+}
+
 /** Ask a tool-less model to design a card for a shape; the result is always a draft. */
 export async function designHere(key: string, ask?: ModelAsk): Promise<string> {
   const s = state(); refreshFromDisk(s)
@@ -131,7 +150,7 @@ export async function designHere(key: string, ask?: ModelAsk): Promise<string> {
   if (!shape.samples.length) throw new Error('no samples were kept for this tool yet: call it once more, or design it with an agent')
   spendModelQuestion(s)
   const model = ask ?? (await import('../plugins/modelService')).askModel
-  const rule = await designCardWithModel(shape, model)
+  const rule = await designCardWithModel(shape, model, { preference: currentPreference() })
   clearPluginToolCardCache()
   return rule.id
 }
@@ -151,10 +170,16 @@ export const nativeAdaptiveUi: AdaptiveUiService = {
     return `Use Design card on ${suggestion.tool}.`
   },
   async dismissSuggestion(id) { const s = state(); s.dismissed.add(id); schedulePersist(s) },
+  async refineHere(id, instruction, ask) { return refineHere(id, instruction, ask) },
+  async refinePrompt(id) {
+    const rule = loadCardRules().rules.find(entry => entry.id === id)
+    if (!rule) throw new Error(`no card rule of yours named "${id.slice(0, 64)}"`)
+    return buildRefinePrompt(rule, recipesDir())
+  },
   async designPrompt(key) {
     const s = state(); refreshFromDisk(s)
     const shape = s.book.get(key)
     if (!shape) throw new Error('that shape is no longer tracked')
-    return buildDesignPrompt(shape, recipesDir())
+    return buildDesignPrompt(shape, recipesDir(), currentPreference())
   },
 }

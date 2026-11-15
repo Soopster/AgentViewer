@@ -21,8 +21,21 @@ export type CardRuleStatus = 'draft' | 'active' | 'disabled'
 export type CardRuleTone = 'info' | 'success' | 'warning' | 'error'
 export type CardRuleMatch = { readonly tool: string; readonly mcpServer?: string; readonly keys?: readonly string[] }
 export type CardRuleCondition = { readonly path: string; readonly equals?: string | number | boolean; readonly contains?: string; readonly exists?: boolean }
+/**
+ * Why a card is the way it is, written by whoever designed it. It is a claim, not a fact: the host
+ * derives what a rule reads and shows from the rule itself (explainRule) and labels these as declared.
+ */
+export type CardRuleRationale = {
+  readonly intent?: string
+  readonly choices?: readonly { readonly block: string; readonly reason: string }[]
+  readonly alternatives?: readonly string[]
+  readonly assumptions?: readonly string[]
+}
 export type CardRule = {
   readonly id: string
+  /** Counts the writes to this rule, set by the host; a patch names the revision it was written against. */
+  readonly revision?: number
+  readonly rationale?: CardRuleRationale
   readonly status: CardRuleStatus
   readonly match: CardRuleMatch
   readonly title: string
@@ -42,7 +55,7 @@ export type CardRuleContext = {
   readonly result?: { readonly text: string; readonly isError: boolean }
 }
 
-export const CARD_RULE_LIMITS = Object.freeze({ id: 64, template: 600, blocks: 30, pathDepth: 8, pathSegment: 64, globLength: 120, keys: 12, samples: 3, sampleChars: 4_000, conditions: 8, jsonChars: 8_000 })
+export const CARD_RULE_LIMITS = Object.freeze({ id: 64, template: 600, blocks: 30, pathDepth: 8, pathSegment: 64, globLength: 120, keys: 12, samples: 3, sampleChars: 4_000, conditions: 8, jsonChars: 8_000, intent: 300, reason: 200, choices: 12, alternatives: 6, alternative: 100, assumptions: 6, assumption: 200 })
 export const CARD_FORMATTERS = Object.freeze(['basename', 'dirname', 'truncate', 'join', 'upper', 'lower', 'count', 'default'] as const)
 type Formatter = (typeof CARD_FORMATTERS)[number]
 
@@ -108,6 +121,30 @@ function blockTemplateProblems(block: unknown, index: number): string[] {
 
 function globToRegExp(glob: string): RegExp { return new RegExp(`^${glob.split('*').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`) }
 
+/** A rationale reduced to bounded, scrubbed strings; whatever is malformed is dropped, never repaired. */
+function parseRationale(raw: Record<string, unknown>): CardRuleRationale {
+  const L = CARD_RULE_LIMITS
+  const list = (value: unknown, max: number, each: number) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && !!item.trim()).slice(0, max).map(item => scrubCardText(item, each)) : []
+  const choices = Array.isArray(raw.choices) ? raw.choices.slice(0, L.choices).flatMap((choice: unknown) => { const c = choice as { block?: unknown; reason?: unknown } | null; return c && typeof c.block === 'string' && typeof c.reason === 'string' && c.reason.trim() ? [{ block: scrubCardText(c.block, 40), reason: scrubCardText(c.reason, L.reason) }] : [] }) : []
+  const alternatives = list(raw.alternatives, L.alternatives, L.alternative), assumptions = list(raw.assumptions, L.assumptions, L.assumption)
+  return { ...(typeof raw.intent === 'string' && raw.intent.trim() ? { intent: scrubCardText(raw.intent, L.intent) } : {}), ...(choices.length ? { choices } : {}), ...(alternatives.length ? { alternatives } : {}), ...(assumptions.length ? { assumptions } : {}) }
+}
+
+/** Every binding a rule reads, in the order first met: what the card is grounded in. */
+export function ruleBindingPaths(rule: CardRule): string[] {
+  const seen = new Set<string>()
+  const scan = (text: unknown) => { if (typeof text === 'string') for (const match of text.matchAll(BINDING)) { const parsed = parseBinding(match[1]!); if (typeof parsed !== 'string') seen.add(parsed.path.join('.')) } }
+  scan(rule.title)
+  for (const block of rule.blocks as readonly Record<string, unknown>[]) {
+    for (const key of ['text', 'label', 'value', 'max']) scan(block[key])
+    if (Array.isArray(block.rows)) for (const row of block.rows) if (Array.isArray(row)) { scan(row[0]); scan(row[1]) }
+    if (typeof block.rowsFrom === 'string') { const parsed = parseBinding(block.rowsFrom); if (typeof parsed !== 'string') seen.add(parsed.path.join('.')) }
+    if (Array.isArray(block.columns)) for (const column of block.columns) scan((column as { header?: unknown }).header)
+  }
+  if (Array.isArray(rule.tone)) for (const entry of rule.tone) { const parsed = parseBinding(entry.when.path); if (typeof parsed !== 'string') seen.add(parsed.path.join('.')) }
+  return [...seen]
+}
+
 /** A rule from untrusted data (a file, an agent), or the reasons it was refused. A refused rule is never rendered. */
 export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: string[] } {
   const problems: string[] = []
@@ -132,6 +169,8 @@ export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: 
       else { problems.push(...pathProblems(e.when.path, `tone[${index}].when.path`)); if (e.when.equals === undefined && e.when.contains === undefined && e.when.exists === undefined) problems.push(`tone[${index}].when needs equals, contains or exists`) }
     })
   }
+  if (r.revision !== undefined && !(Number.isInteger(r.revision) && (r.revision as number) >= 1 && (r.revision as number) <= 1_000_000)) problems.push('revision must be a positive integer')
+  if (r.rationale !== undefined && (!r.rationale || typeof r.rationale !== 'object' || Array.isArray(r.rationale))) problems.push('rationale must be an object')
   if (r.samples !== undefined && (!Array.isArray(r.samples) || r.samples.length > CARD_RULE_LIMITS.samples)) problems.push('samples must be at most 3 entries')
   if (problems.length) return { rule: null, problems }
   const samples = (Array.isArray(r.samples) ? r.samples : []).flatMap((sample: unknown) => {
@@ -143,6 +182,8 @@ export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: 
   return {
     rule: {
       id: r.id as string, status: r.status as CardRuleStatus,
+      ...(typeof r.revision === 'number' ? { revision: r.revision } : {}),
+      ...(r.rationale ? { rationale: parseRationale(r.rationale as Record<string, unknown>) } : {}),
       match: { tool: (m as { tool: string }).tool, ...(typeof m!.mcpServer === 'string' ? { mcpServer: m!.mcpServer } : {}), ...(Array.isArray(m!.keys) ? { keys: m!.keys as string[] } : {}) },
       title: r.title as string, blocks: r.blocks as unknown[],
       ...(r.tone !== undefined ? { tone: r.tone as CardRule['tone'] } : {}),

@@ -17,6 +17,7 @@ card made of a title and a few blocks. It is data: there is no code and no expre
               { "type": "kv", "rows": [["Assignee", "{{result.json.assignee.name | default none}}"]] } ] }
 ```
 
+- **The vocabulary is generated:** run `agent-viewer cards schema` for the current blocks, what each is for, the bindings and formatters. What follows is a summary.
 - **Blocks:** `heading`, `text`, `badge`, `code`, `progress {label,value,max}`, `kv {rows}`, `table {rowsFrom,columns:[{header,path}]}`.
 - **Bindings** start with `input.`, `result.` (`text`, `isError`, `json` when the result is JSON) or `tool.name`.
   Formatters: `basename dirname truncate join upper lower count default`, e.g. `{{input.path | basename}}`.
@@ -30,3 +31,11 @@ card made of a title and a few blocks. It is data: there is no code and no expre
 4. While the call runs there is no result, so `result.*` bindings are empty. Titles should still read well without them.
 5. Do not try to hide a failure. A failed call is shown as an error whatever the rule says.
 6. Samples in the request are redacted. Do not invent fields that are not in them.
+
+## Changing an existing rule
+Do not rewrite the file. Run `agent-viewer cards show <id>` (note the `revision`), write
+`{ "baseRevision": <revision>, "operations": [ … ] }` and run `agent-viewer cards patch <id> <file>`. Operations:
+`set-title`, `set-tone`, `replace-block`, `insert-block`, `remove-block` (blocks count from 0), `set-rationale`.
+Exit code 4 means someone changed the rule since you read it: show it again and redo the change. A patched rule goes back
+to draft. Add a `rationale` ({ intent, choices:[{block,reason}], alternatives, assumptions }) to every rule you design:
+it is shown to the person beside the card, so keep it true. `agent-viewer cards explain <id>` shows what it will say.

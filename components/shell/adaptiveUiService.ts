@@ -14,5 +14,7 @@ export const webAdaptiveUi: AdaptiveUiService = {
   applySuggestion: id => post<string>({ action: 'apply-suggestion', id }),
   dismissSuggestion: id => post({ action: 'dismiss-suggestion', id }),
   designHere: key => post<string>({ action: 'design-here', key }),
+  refineHere: (id, instruction) => post<string>({ action: 'refine-here', id, instruction }),
+  refinePrompt: id => post<string>({ action: 'refine-prompt', id }),
   designPrompt: key => post<string>({ action: 'design-prompt', key }),
 }

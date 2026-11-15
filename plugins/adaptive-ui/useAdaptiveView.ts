@@ -55,6 +55,21 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
       await act(async () => { setNotice(await service.applySuggestion(suggestion.id)) }, '')
     },
     dismissSuggestion: (id: string) => act(() => service.dismissSuggestion(id), 'Dismissed'),
+    /** Change a rule from a plain-language instruction, in place; it comes back a draft. */
+    refineHere: async (id: string, instruction: string) => {
+      setBusy(true); setNotice('Changing the card…')
+      try { const message = await service.refineHere(id, instruction); if (alive.current) setNotice(message); await refresh() }
+      catch (error) { if (alive.current) setNotice(error instanceof Error ? error.message : String(error)) }
+      finally { if (alive.current) setBusy(false) }
+    },
+    /** Hand an agent the request to change a rule by patch. */
+    refineWithAgent: async (id: string) => {
+      try {
+        const prompt = await service.refinePrompt(id)
+        if (!insertText) { setNotice('Open a session composer to hand this to an agent'); return false }
+        insertText(prompt); setNotice('Say what to change, then send it to an agent'); return true
+      } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); return false }
+    },
     /** In place, through a tool-less model; the result is a draft to review. */
     designHere: async (key: string) => {
       setBusy(true); setNotice('Designing a card…')
@@ -72,6 +87,9 @@ export function useAdaptiveView(service: AdaptiveUiService, insertText: ((text: 
   }
 }
 export type AdaptiveViewState = ReturnType<typeof useAdaptiveView>
+
+/** The history entries about one rule, newest first. */
+export const historyFor = (state: AdaptiveViewState, id: string) => (state.snapshot?.history ?? []).filter(entry => entry.id === id).slice(0, 5)
 
 /** A rule rendered against each of its stored samples (what a person reviews before enabling it). */
 export function previewRule(rule: CardRule): RenderedCard[] {

@@ -10,6 +10,8 @@ export type AdaptiveUiSnapshot = {
   readonly shapes: readonly ShapeRecord[]
   /** Calls by tool since the process started, for suggestions. */
   readonly usage: readonly { readonly tool: string; readonly completed: number; readonly failed: number }[]
+  /** What happened to rules and who did it, newest first. */
+  readonly history: readonly import('../adaptiveUi/history').CardHistoryEntry[]
   readonly suggestions: readonly import('../adaptiveUi/suggest').Suggestion[]
   readonly settings: { readonly autoDraft: boolean; readonly autoDraftAfter: number }
 }
@@ -21,6 +23,10 @@ export type AdaptiveUiService = {
   /** Add a suggested view as a new, unselected custom view (or acknowledge a card suggestion). */
   applySuggestion(id: string): Promise<string>
   dismissSuggestion(id: string): Promise<void>
+  /** Change one of your own rules from a plain-language instruction through a tool-less model; it comes back a draft. Counted against the daily limit. */
+  refineHere(id: string, instruction: string, ask?: import('./modelService').ModelAsk): Promise<string>
+  /** The request to hand an agent to change a rule by patch. */
+  refinePrompt(id: string): Promise<string>
   /** Ask a tool-less model to design a card in place; it lands as a draft. Returns the rule id. Counted against a daily limit. */
   designHere(key: string, ask?: import('./modelService').ModelAsk): Promise<string>
   /** The request to hand an agent (the composer's text) to design a card for a shape. */

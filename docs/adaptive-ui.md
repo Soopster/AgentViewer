@@ -50,6 +50,29 @@ lower count default`. There is no code and no expression language.
   draft for that tool only. It cannot activate a rule, retarget it or ask to replace a built-in card, and is limited to
   20 designs a day.
 
+## Changing, explaining and remembering
+Ideas taken from a shared design for self-describing UIs (a capability contract the agent reads, patches instead of
+rewrites, explanations grounded in the spec, authority levels, an audit trail):
+
+- **One vocabulary, generated.** `lib/adaptiveUi/vocabulary.ts` describes each block (what it is for, when to use it),
+  binding and formatter once. The design request, `agent-viewer cards schema` and the docs come from it, and
+  `adaptiveVocabularySmoke` fails if the validator and the vocabulary disagree in either direction.
+- **Patches, not rewrites.** `agent-viewer cards show <id>` prints a rule with its `revision`; `cards patch <id> <file|->`
+  applies `{ "baseRevision": N, "operations": [set-title, set-tone, replace-block, insert-block, remove-block, set-rationale] }`.
+  A patch against a stale revision is a conflict (exit 4), not an overwrite. A patched rule always goes back to `draft`,
+  and no operation can change what it matches, add a control or replace a built-in card. In the gallery, **Change**
+  takes a plain-language instruction (a tool-less model answers with a patch) and **Change with an agent** hands an
+  agent the request. `cards refine <id> "<instruction>"` does the former from a shell.
+- **Why this card.** A rule may carry a `rationale` (intent, a reason per block, alternatives, assumptions). The gallery and
+  `cards explain <id>` show it beside what the host *derives* from the rule: the fields it reads, what each block shows,
+  when it applies, its tone rules, and what it can never do. The two are labelled apart: the declared part is a claim.
+- **Who did what.** Every write is recorded (`.history.jsonl` beside the rules): actor (`user`, `model`, `agent`, `cli`,
+  `mod`), action and revision. `cards history [id]`, and the gallery's per-rule history.
+- **It learns what you keep.** Once there are three decisions of yours, design requests carry a hint of the block types you
+  keep and the ones you removed. Decisions by a model or an agent never count as yours.
+- **Authority.** A card is presentation only: it cannot run anything, call a tool, change state or add a button. The
+  vocabulary states this and the smoke checks that no block can act.
+
 ## Suggestions
 The gallery lists what the app could change about itself, from how it is used: a card for a tool called often or opened
 often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.

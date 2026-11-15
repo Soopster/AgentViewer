@@ -4,16 +4,18 @@ import type { BoxRenderable, ScrollBoxRenderable } from '@opentui/core'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import { cardBlockLines } from '../../../lib/plugins/cardBlocks'
 import { popoverRootProps, PopoverDetachButton, fitText, type TuiPluginView, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
-import { previewRule, useAdaptiveView, type AdaptiveItem } from '../useAdaptiveView'
+import { explainRule, explanationLines } from '../../../lib/adaptiveUi/explain'
+import { historyFor, previewRule, useAdaptiveView, type AdaptiveItem } from '../useAdaptiveView'
 
 const STATUS_GLYPH = { active: '●', draft: '◐', disabled: '○' } as const
-const HINT = 'j/k move · a enable · d disable · x delete (twice) · g design with an agent · h design here · i dismiss · p preview · r refresh · esc'
+const HINT = 'j/k move · a enable · d disable · x delete (twice) · w why · f change with an agent · g design with an agent · h design here · i dismiss · p preview · r refresh · esc'
 
 function AdaptiveUi(props: TuiPluginViewProps) {
   const { services, theme, width, height, placement, focused, detach, registerKeys, useState: scoped } = props
   const state = useAdaptiveView(services['adaptive-ui']!, services.composer?.insertPrompt)
   const [cursor, setCursor] = scoped('cursor', 0)
   const [preview, setPreview] = useState(true)
+  const [why, setWhy] = useState(false)
   const scroll = useRef<ScrollBoxRenderable>(null), row = useRef<BoxRenderable>(null)
   const overlay = placement === 'overlay'
   const w = overlay ? Math.max(1, Math.min(width - 4, 120)) : width, h = overlay ? Math.max(1, height - 4) : height
@@ -32,6 +34,8 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     }
     if (selected.kind === 'rule' && state.origins[selected.rule.id]) return false
     if (selected.kind === 'rule') {
+      if (key === 'w') { setWhy(value => !value); return true }
+      if (key === 'f') { void state.refineWithAgent(selected.rule.id).then(ok => { if (ok && overlay) props.close() }); return true }
       if (key === 'a' || key === 'return') { if (selected.rule.status !== 'active') void state.setStatus(selected.rule.id, 'active'); return true }
       if (key === 'd') { if (selected.rule.status === 'active') void state.setStatus(selected.rule.id, 'disabled'); return true }
       if (key === 'x') { void state.remove(selected.rule.id); return true }
@@ -54,7 +58,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     })
     return () => registerKeys(null)
   })
-  const lines = selected?.kind === 'rule' && preview ? previewRule(selected.rule).flatMap(card => [`▸ ${card.title}`, ...cardBlockLines(card.blocks).map(text => `  ${text}`)]) : []
+  const lines = selected?.kind === 'rule' ? [...(preview ? previewRule(selected.rule).flatMap(card => [`▸ ${card.title}`, ...cardBlockLines(card.blocks).map(text => `  ${text}`)]) : []), ...(why ? ['', ...explanationLines(explainRule(selected.rule))] : []), ...(historyFor(state, selected.rule.id).slice(0, 3).map(entry => `${entry.at.slice(5, 16).replace('T', ' ')} ${entry.actor} ${entry.action}${entry.revision ? ` r${entry.revision}` : ''}`))] : []
   return <box {...popoverRootProps(!overlay, { top: 2, left: Math.max(0, Math.floor((width - w) / 2)), width: w, height: h }, props.zIndex ?? 50)} border={overlay} borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title={overlay ? ' Adaptive UI ' : undefined}>
     {overlay && detach ? <PopoverDetachButton theme={theme} onPress={detach} /> : null}
     <box height={1} flexShrink={0} paddingX={1}><text fg={theme.dim} wrapMode="none">{fitText(`${state.snapshot?.rules.length ?? 0} cards · ${items.filter(item => item.kind === 'shape').length} drawn generically · ${state.snapshot?.dir ?? ''}`, inner - 2)}</text></box>
