@@ -57,6 +57,7 @@ assert.ok(!adaptiveUiSnapshot().shapes.some(s => s.tool === 'Bash'))
 const prompt = await nativeAdaptiveUi.designPrompt(shape.key)
 assert.ok(prompt.includes(join(root, 'recipes')) && prompt.includes('linear.get_issue.json') && prompt.includes('"status": "draft"') && prompt.includes('ENG-'))
 assert.ok(!prompt.includes(SECRET))
+assert.ok(prompt.includes('agent-viewer cards check') && prompt.includes('Do not enable the rule'), 'the request tells the agent how to validate and not to enable')
 
 // 3. A rule written as a draft draws nothing; enabling it draws the card, in the same read path.
 const rule = { id: 'linear.get_issue', status: 'draft', match: { tool: TOOL }, title: '{{input.id}} · {{result.json.title}}',

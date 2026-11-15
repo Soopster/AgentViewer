@@ -20,6 +20,7 @@ export function buildDesignPrompt(shape: Pick<ShapeRecord, 'tool' | 'mcpServer' 
     `Bindings start with input., result. (result.text, result.isError, result.json when the result is JSON) or tool.name, and may pipe through: ${CARD_FORMATTERS.join(', ')} (e.g. {{input.path | basename}}, {{result.json.name | default none}}).`,
     `Limits: at most ${CARD_RULE_LIMITS.blocks} blocks, ${CARD_RULE_LIMITS.template} characters per template. No code, no other bindings. While the call is running there is no result, so bindings to result.* are empty. A failed call is shown as an error whatever you write.`,
     `Show what a person needs at a glance: the title says what was asked and what came back; blocks show the few fields that matter, not the whole payload. Input keys: ${shape.inputKeys.join(', ') || '(none)'}.`,
+    `After writing the file, run \`agent-viewer cards check ${dir}/${id}.json\` and fix anything it reports, then \`agent-viewer cards preview ${id}\` to see what the samples will draw. Do not enable the rule: I do that after reviewing the preview.`,
     samples,
   ].join('\n\n')
 }

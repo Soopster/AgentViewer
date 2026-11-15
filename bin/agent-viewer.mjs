@@ -639,6 +639,15 @@ if (command === '-h' || command === '--help' || command === 'help') {
     forwardSignals(child)
     trackExit(child)
   }
+} else if (command === 'cards') {
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) failMissingBun()
+  else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', fileURLToPath(new URL('./agent-viewer-cards.ts', import.meta.url)), ...args.slice(1)], { stdio: 'inherit' })
+    child.on('error', error => { throw error })
+    forwardSignals(child)
+    trackExit(child)
+  }
 } else if (command === 'mods' && ['create', 'configure', 'test', 'check', 'reload'].includes(args[1])) {
   const bunLauncher = resolveBunLauncher()
   if (!bunLauncher.command) failMissingBun()
