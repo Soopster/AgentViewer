@@ -12,7 +12,7 @@ import { readPluginSettingsFile } from './settingsFile'
 import { PLUGIN_FOLLOW_UP_LIMIT, type PluginBeforeTurnContext, type PluginPermissionRequest, type PluginTurnTarget } from './behavior'
 import type { PluginBehaviorModule } from './behavior'
 import type { PluginManifest } from './types'
-import { localPluginDiscovery } from './localPlugins'
+import { localPluginDiscovery, subscribeLocalPluginReload } from './localPlugins'
 import { localBehaviorLoaders } from './localPluginRuntime'
 
 /** Field a plugin follow-up turn carries; stripped before the provider sees the body. */
@@ -59,6 +59,17 @@ function host() {
   }
   return current.host
 }
+
+subscribeLocalPluginReload(() => {
+  const current = state()
+  const wasActive = current.host !== null
+  current.host?.dispose()
+  current.host = null
+  for (const timer of current.timers.values()) clearTimeout(timer)
+  current.timers.clear()
+  // Re-arm metadata observers for turns already running; modules remain lazy.
+  if (wasActive) host()
+})
 
 const targetKey = (target: PluginTurnTarget) => `${target.provider}@${target.providerInstanceId ?? ''}:${target.sessionId}`
 

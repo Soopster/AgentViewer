@@ -197,7 +197,7 @@ Modes:
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   acp        Run an ACP (agentclientprotocol.com) Agent over stdio
   terminal   Drive the running TUI's terminals and windows: list, read, send, keys, run, wait, windows, window
-  mods       Check local mods or inspect their runtime status
+  mods       Create, configure, reload, check, test, install, update, rollback or inspect mods
   app status Inspect running Web and OpenTUI instances
   session    Script ordinary chats: list, get, read, prompt --wait, wait --until, interrupt, report, explain
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
@@ -630,11 +630,20 @@ if (command === '-h' || command === '--help' || command === 'help') {
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)
-} else if (command === 'mods' && args[1] === 'check') {
+} else if (command === 'mods' && ['inspect', 'install', 'update', 'remove', 'rollback', 'list'].includes(args[1])) {
   const bunLauncher = resolveBunLauncher()
   if (!bunLauncher.command) failMissingBun()
   else {
-    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', fileURLToPath(new URL('./agent-viewer-mod-check.ts', import.meta.url)), ...args.slice(2)], { stdio: 'inherit' })
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', fileURLToPath(new URL('./agent-viewer-mod-packages.ts', import.meta.url)), ...args.slice(1)], { stdio: 'inherit' })
+    child.on('error', error => { throw error })
+    forwardSignals(child)
+    trackExit(child)
+  }
+} else if (command === 'mods' && ['create', 'configure', 'test', 'check', 'reload'].includes(args[1])) {
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) failMissingBun()
+  else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', fileURLToPath(new URL(args[1] === 'check' ? './agent-viewer-mod-check.ts' : './agent-viewer-mod-tools.ts', import.meta.url)), ...args.slice(args[1] === 'check' ? 2 : 1)], { stdio: 'inherit' })
     child.on('error', error => { throw error })
     forwardSignals(child)
     trackExit(child)

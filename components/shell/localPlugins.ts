@@ -13,10 +13,12 @@ import { decodeModView, readModComponentViews, setModViewService } from '@/lib/p
 import { isPluginEnabled } from '@/lib/plugins/enablement'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
+let modRevision: string | null = null
 setModInspectionPublisher(async value => {
-  const response = await fetch('/api/plugins/inspection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value), keepalive: false })
+  const response = await fetch('/api/plugins/inspection', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...value, modRevision }), keepalive: false })
   if (!response.ok) return
   const result = await response.json()
+  if (result.local) applyWebLocalPlugins(result)
   if (Array.isArray(result.diagnostics)) setRemoteModDiagnostics(result.diagnostics)
 })
 let report: WebLocalPluginReport | null = null
@@ -54,7 +56,7 @@ setModViewService({
   act: async (view, action, item, signal) => {
     const response = await fetch('/api/plugins/local/views', {
       method: 'POST', signal, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ app: modAppStore.getSnapshot(), plugin: view.pluginId, view: view.viewId, action, ...(item ? { item } : {}) }),
+      body: JSON.stringify({ app: modAppStore.getSnapshot(), plugin: view.pluginId, view: view.viewId, action, ...(item !== undefined ? { item } : {}) }),
     })
     const body = await response.json().catch(() => ({}))
     if (!response.ok || body?.error) throw new Error(body?.error || `Action failed (${response.status})`)
@@ -81,6 +83,8 @@ const importAtRuntime = new Function('url', 'return import(url)') as (url: strin
 export function applyWebLocalPlugins(value: unknown): void {
   const local = (value as { local?: { dir?: unknown; plugins?: unknown; refused?: unknown } } | null)?.local
   if (!local) return
+  const revision = (local as { revision?: unknown }).revision
+  if (typeof revision === 'string') modRevision = revision
   const reserved = new Set<string>(PLUGIN_MANIFESTS.map(manifest => manifest.id))
   const manifests: LocalPluginManifest[] = []
   for (const raw of Array.isArray(local.plugins) ? local.plugins : []) {
@@ -88,7 +92,7 @@ export function applyWebLocalPlugins(value: unknown): void {
     const entry = raw as LocalPluginManifest
     if (entry?.source !== 'local' || typeof entry.id !== 'string' || reserved.has(entry.id)) continue
     const reparsed = parseLocalPluginManifest({
-      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews, provider: entry.localProvider, appServices: entry.appServices,
+      id: entry.id, title: entry.title, description: entry.description, behavior: entry.behavior, widgets: entry.localWidgets, views: entry.localViews?.filter(view => !(entry.config && view.id === 'mod-config')), provider: entry.localProvider, appServices: entry.appServices, config: entry.config, version: entry.version, hostApi: entry.hostApi,
       // Only the mod's own commands: a view's command is derived from the view by the parse.
       commands: (entry.commands ?? []).filter(command => command.handler).map(command => ({ ...command, id: command.handler })),
     }, reserved)

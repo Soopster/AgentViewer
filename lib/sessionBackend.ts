@@ -1,3 +1,4 @@
+import { observePluginRuntimeResponse } from './plugins/runtimeEventStream'
 // Provider architecture extraction: SDK behavior preserved from the session backend.
 import { steerViewSession } from './sessionSteering'
 import { listPendingProviderPermissionPayloads } from './sessionControlPlane'
@@ -73,7 +74,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
         })).catch(() => null)
         : undefined;
     const runtime = await getProviderRuntime(provider);
-    return runtime.streamTurn({ ...params, provider, providerInstanceId }, checkpoint);
+    return observePluginRuntimeResponse(await runtime.streamTurn({ ...params, provider, providerInstanceId }, checkpoint), { provider, providerInstanceId, sessionId: params.sessionId });
 }
 export async function forkViewSession(params: ForkParams): Promise<{
     sessionId: string;

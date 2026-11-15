@@ -1,3 +1,6 @@
+import { onPluginRuntimeEvent } from './runtimeEvents'
+import { recordModDiagnostic } from './modDiagnostics'
+import { recordPluginPermissionReceipt, type PluginPermissionTrace } from './permissionHistory'
 import { createLazyRegistry } from '../extensions/lazyRegistry'
 import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { createPluginResourceScope } from './lifecycle'
@@ -55,6 +58,23 @@ export function createPluginBehaviorHost(
     return scope
   }
   let disposed = false
+  const pendingEvents = new Map<string, { tail: Promise<void>; pending: number }>()
+  const unsubscribeEvents = hooked('runtimeEvent').length ? onPluginRuntimeEvent(event => {
+    for (const manifest of hooked('runtimeEvent')) {
+      if (disposed || !isPluginEnabled(manifest.id)) continue
+      let queue = pendingEvents.get(manifest.id)
+      if (!queue) { queue = { tail: Promise.resolve(), pending: 0 }; pendingEvents.set(manifest.id, queue) }
+      if (queue.pending >= 64) { recordModDiagnostic(manifest.id, 'runtimeEvent', 'Runtime event queue full; metadata event dropped'); continue }
+      queue.pending++
+      const lifetime = scopeFor(manifest.id).signal
+      queue.tail = queue.tail.then(async () => {
+        if (disposed || lifetime.aborted || !isPluginEnabled(manifest.id)) return
+        const signal = AbortSignal.any([lifetime, AbortSignal.timeout(1000)])
+        try { await abortable(signal, async () => (await registry.get(manifest.id)).runtimeEvent!({ event, signal })) }
+        catch (error) { recordModDiagnostic(manifest.id, 'runtimeEvent', error) }
+      }).finally(() => { queue!.pending-- })
+    }
+  }) : () => {}
   return {
     isLoaded: (id: string) => registry.peek(id) !== undefined,
     /** Whether any enabled plugin observes settled turns: the host skips its work otherwise. */
@@ -63,6 +83,7 @@ export function createPluginBehaviorHost(
       if (disposed) return
       disposed = true
       unsubscribe()
+      unsubscribeEvents()
       for (const manifest of contributors) deactivate(manifest.id)
     },
     async beforeTurn(context: PluginBeforeTurnContext): Promise<Record<string, unknown>> {
@@ -133,28 +154,56 @@ export function createPluginBehaviorHost(
     },
     observesSteering: () => hooked('beforeSteer').some(m => isPluginEnabled(m.id)),
     decidesPermissions: () => hooked('permission').some(m => isPluginEnabled(m.id)),
-    /**
-     * The first plugin decision on an approval, or null to ask the person. A
-     * failing or slow hook counts as undecided — never as allow.
-     */
-    async permission(context: { target: PluginTurnTarget; request: PluginPermissionRequest; signal?: AbortSignal }): Promise<{ pluginId: string; decision: 'allow' | 'deny'; reason?: string } | null> {
+    /** Mandatory policy is evaluated completely before any automation decision. */
+    async permission(context: { target: PluginTurnTarget; request: PluginPermissionRequest; signal?: AbortSignal; fallbackAllow?: { pluginId: string; reason?: string } }): Promise<{ pluginId: string; decision: 'allow' | 'deny'; reason?: string } | null> {
       if (disposed) return null
       const target = Object.freeze({ ...context.target })
-      const request = Object.freeze(structuredClone(context.request))
-      for (const manifest of hooked('permission')) {
-        if (!isPluginEnabled(manifest.id)) continue
-        const timeout = AbortSignal.timeout(PLUGIN_PERMISSION_TIMEOUT_MS)
-        const signal = AbortSignal.any([scopeFor(manifest.id).signal, timeout, ...(context.signal ? [context.signal] : [])])
+      const request = freezePermissionRequest(structuredClone(context.request))
+      const traces: PluginPermissionTrace[] = []
+      type Decision = { pluginId: string; decision: 'allow' | 'deny'; reason?: string }
+      let allowed: Decision | null = null, denied: Decision | null = null, mustAsk = false
+      const modeOf = (manifest: PluginManifest): 'policy' | 'automation' => manifest.behavior?.permissionMode === 'policy' ? 'policy' : 'automation'
+      const finish = (decision: Decision | null) => {
+        recordPluginPermissionReceipt({ target, kind: request.kind, ...(request.toolName ? { toolName: request.toolName } : {}), decision: decision?.decision ?? 'ask', ...(decision ? { pluginId: decision.pluginId } : {}), traces })
+        return decision
+      }
+      const run = async (manifest: PluginManifest) => {
+        const mode = modeOf(manifest)
+        if (disposed || !isPluginEnabled(manifest.id) || context.signal?.aborted) { traces.push({ pluginId: manifest.id, mode, outcome: 'cancelled' }); mustAsk = true; return undefined }
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(PLUGIN_PERMISSION_TIMEOUT_MS), ...(context.signal ? [context.signal] : [])])
         try {
           const result = await abortable(signal, async () => (await registry.get(manifest.id)).permission!({ target, signal, request }))
-          if (result && (result.decision === 'allow' || result.decision === 'deny')) {
-            return { pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) }
-          }
+          signal.throwIfAborted()
+          if (result && !['allow', 'deny', 'ask'].includes(result.decision)) throw new Error('Invalid permission decision')
+          traces.push({ pluginId: manifest.id, mode, outcome: result?.decision ?? 'abstain' })
+          return result
         } catch (error) {
-          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} permission hook failed:`, error)
+          traces.push({ pluginId: manifest.id, mode, outcome: signal.aborted && !isPluginEnabled(manifest.id) ? 'cancelled' : 'error' })
+          recordModDiagnostic(manifest.id, 'permission', error)
+          mustAsk = true
+          return undefined
         }
       }
-      return null
+      const contributors = hooked('permission').filter(manifest => isPluginEnabled(manifest.id))
+      for (const manifest of contributors.filter(manifest => modeOf(manifest) === 'policy')) {
+        const result = await run(manifest)
+        if (result?.decision === 'ask') mustAsk = true
+        if (result?.decision === 'deny' || result?.decision === 'allow') {
+          const decision = { pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) }
+          if (result.decision === 'deny') denied ??= decision
+          else allowed ??= decision
+        }
+      }
+      if (denied) return finish(denied)
+      if (mustAsk || context.signal?.aborted) return finish(null)
+      if (allowed) return finish(allowed)
+      for (const manifest of contributors.filter(manifest => modeOf(manifest) === 'automation')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const result = await run(manifest)
+        if (mustAsk || result?.decision === 'ask') return finish(null)
+        if (result?.decision === 'allow' || result?.decision === 'deny') return finish({ pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) })
+      }
+      return finish(context.fallbackAllow ? { ...context.fallbackAllow, decision: 'allow' } : null)
     },
     /**
      * Run every enabled afterTurn hook in order. One hook's failure is logged
@@ -199,4 +248,12 @@ function abortable<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
     signal.addEventListener('abort', aborted, { once: true })
     Promise.resolve().then(run).then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
   })
+}
+
+/** Hooks cannot change a later policy's view of nested tool arguments or paths. */
+function freezePermissionRequest<T>(value: T, seen = new Set<object>()): T {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value
+  seen.add(value)
+  for (const child of Object.values(value)) freezePermissionRequest(child, seen)
+  return Object.freeze(value)
 }

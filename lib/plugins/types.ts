@@ -161,7 +161,7 @@ export type PluginManifest = {
    */
   readonly widgets?: readonly { readonly id: string; readonly slot: PluginWidgetSlot; readonly order?: number }[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
-  readonly behavior?: { readonly hooks: readonly ('beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard')[]; readonly order?: number }
+  readonly behavior?: { readonly hooks: readonly ('beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'runtimeEvent')[]; readonly order?: number; readonly permissionMode?: 'policy' | 'automation' }
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]

@@ -128,6 +128,10 @@ The UI is capability-driven: an operation a provider cannot do is hidden or disa
 Local mods can read live app context and navigate sessions, files and plugin surfaces in Web and OpenTUI. Declare `appServices: ["data", "navigation"]` in the mod manifest. See [mod app services and inspection](docs/mod-app-services.md) and the [live sessions example](docs/examples/mods/live-sessions).
 
 ```sh
+agent-viewer mods create my-mod --path ./my-mod
+agent-viewer mods test ./my-mod
+agent-viewer mods configure my-mod
+agent-viewer mods reload
 agent-viewer mods check /path/to/mod --json
 agent-viewer mods check /path/to/trusted-mod --render --json
 agent-viewer mods status --json
@@ -135,6 +139,13 @@ agent-viewer app status --json
 ```
 
 `--render` executes trusted mod code in bounded child processes. Status reports distinguish each Web tab and OpenTUI instance; `--instance <id>` selects one.
+
+Portable views support inputs, selects, tables, progress and code blocks. A manifest
+configuration schema generates settings surfaces in both renderers. See the
+[mod SDK guide](docs/mod-sdk.md) for types, author fixtures, secret references and limits.
+Local mods can also declare [panels and named widget slots](docs/mod-contributions.md),
+observe [runtime events](docs/mod-runtime-events.md), compose [permission policies](docs/mod-permissions.md),
+[reload explicitly](docs/mod-reload.md), and use [pinned local packages](docs/mod-distribution.md).
 
 ### Bundled plugins
 
@@ -352,6 +363,9 @@ npm run composer:smoke      # fast, no network
 npm run routes:smoke        # remote-access scope table covers every route
 npm run adapters:smoke      # every provider's read path against your local sessions
 npm run plugins:smoke       # plugin boundaries
+npm run mods:sdk:smoke      # mod SDK, configuration, scaffolding and author fixtures
+npm run mods:sdk:tui:smoke  # portable controls and settings with native input
+npm run mods:sdk:web:smoke  # browser interactions with real mod server actions
 npm run mods:smoke          # mod app services, inspection routes and OpenTUI rendering
 npm run tui:smoke           # terminal app (slow)
 ```

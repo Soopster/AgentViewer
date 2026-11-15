@@ -16,6 +16,11 @@
 import type { LocalCommandEffects } from './localManifest'
 
 export type ModViewBlock =
+  | { readonly type: 'input'; readonly id: string; readonly label: string; readonly action: string; readonly value?: string; readonly placeholder?: string }
+  | { readonly type: 'select'; readonly id: string; readonly label: string; readonly action: string; readonly value?: string; readonly options: readonly { readonly value: string; readonly label: string }[] }
+  | { readonly type: 'progress'; readonly label: string; readonly value: number; readonly max: number }
+  | { readonly type: 'code'; readonly text: string; readonly language?: string }
+  | { readonly type: 'table'; readonly columns: readonly string[]; readonly rows: readonly (readonly string[])[] }
   | { readonly type: 'heading'; readonly text: string }
   | { readonly type: 'text'; readonly text: string; readonly tone?: 'default' | 'muted' | 'success' | 'warning' | 'error' }
   | { readonly type: 'item'; readonly id?: string; readonly label: string; readonly detail?: string; readonly action?: string }
@@ -65,7 +70,22 @@ export function decodeModView(value: unknown, fallbackTitle: string): ModViewCon
   const id = (v: unknown) => (typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(v) ? v : undefined)
   for (const entry of Array.isArray(raw.blocks) ? raw.blocks.slice(0, MAX_BLOCKS) : []) {
     const block = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>
-    if (block.type === 'heading' && text(block.text)) blocks.push({ type: 'heading', text: text(block.text, 120) })
+    if (block.type === 'input' && id(block.id) && id(block.action) && text(block.label)) blocks.push({ type: 'input', id: id(block.id)!, action: id(block.action)!, label: text(block.label, 120), value: text(block.value, 4000), placeholder: text(block.placeholder, 200) })
+    else if (block.type === 'select' && id(block.id) && id(block.action) && text(block.label) && Array.isArray(block.options)) {
+      const options = block.options.slice(0, 100).flatMap((option: unknown) => {
+        const entry = option as { value?: unknown; label?: unknown } | null
+        return entry && typeof entry.value === 'string' && entry.value.length <= 2000 && text(entry.label) ? [{ value: entry.value, label: text(entry.label, 200) }] : []
+      })
+      if (options.length && new Set(options.map(option => option.value)).size === options.length) blocks.push({ type: 'select', id: id(block.id)!, action: id(block.action)!, label: text(block.label, 120), options, value: options.some(option => option.value === block.value) ? block.value as string : options[0]!.value })
+    }
+    else if (block.type === 'progress' && text(block.label) && typeof block.value === 'number' && Number.isFinite(block.value) && typeof block.max === 'number' && Number.isFinite(block.max) && block.max > 0) blocks.push({ type: 'progress', label: text(block.label, 120), value: Math.max(0, Math.min(block.max, block.value)), max: block.max })
+    else if (block.type === 'code' && typeof block.text === 'string') blocks.push({ type: 'code', text: text(block.text, 20000), ...(typeof block.language === 'string' ? { language: text(block.language, 40) } : {}) })
+    else if (block.type === 'table' && Array.isArray(block.columns) && block.columns.length && block.columns.every(column => typeof column === 'string') && Array.isArray(block.rows)) {
+      const columns = block.columns.slice(0, 12).map(column => text(column, 120))
+      const rows = block.rows.slice(0, 100).filter((row: unknown): row is unknown[] => Array.isArray(row)).map(row => columns.map((_, index) => text(row[index], 500)))
+      blocks.push({ type: 'table', columns, rows })
+    }
+    else if (block.type === 'heading' && text(block.text)) blocks.push({ type: 'heading', text: text(block.text, 120) })
     else if (block.type === 'text' && typeof block.text === 'string') blocks.push({ type: 'text', text: text(block.text, 2000), ...(TONES.has(block.tone as string) ? { tone: block.tone as 'muted' } : {}) })
     else if (block.type === 'item' && text(block.label)) {
       const action = id(block.action), itemId = id(block.id)
@@ -76,8 +96,8 @@ export function decodeModView(value: unknown, fallbackTitle: string): ModViewCon
 }
 
 /** The blocks a person can act on, in order: what keyboard selection moves through. */
-export function modViewActionables(content: ModViewContent): Array<Extract<ModViewBlock, { type: 'item' | 'button' }> & { readonly index: number }> {
-  return content.blocks.flatMap((block, index) => (block.type === 'button' || (block.type === 'item' && block.action)) ? [{ ...block, index }] as never[] : [])
+export function modViewActionables(content: ModViewContent): Array<Extract<ModViewBlock, { type: 'item' | 'button' | 'input' | 'select' }> & { readonly index: number }> {
+  return content.blocks.flatMap((block, index) => (block.type === 'input' || block.type === 'select' || block.type === 'button' || (block.type === 'item' && block.action)) ? [{ ...block, index }] as never[] : [])
 }
 
 /** Where mods' views live, installed by each renderer (TUI in process, Web through its daemon). */

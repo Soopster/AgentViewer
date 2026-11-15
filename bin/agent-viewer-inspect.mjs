@@ -4,7 +4,18 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 const args = process.argv.slice(2)
 const [mode, verb, ...rest] = args
-const usage = 'Usage: agent-viewer mods check <path> [--render] [--json] | mods status [--instance <id>] [--json] | app status [--instance <id>] [--json]'
+const usage = `Usage: agent-viewer mods <command>
+  create <id> [--path <new-directory>]
+  configure <id> [--values-stdin]
+  reload [--dir <trusted-mod> | --clear-dev]
+  check <path> [--render] [--json]
+  test <path>
+  inspect <local-source>
+  install <local-source> --sha256 <digest>
+  update <id> --source <local-source> --sha256 <digest>
+  remove <id> | rollback <id> | list
+  status [--instance <id>] [--json]
+  agent-viewer app status [--instance <id>] [--json]`
 if (args.includes('--help') || args.includes('-h')) { console.log(usage); process.exit(0) }
 if (mode === 'mods' && verb === 'check') {
   const child = spawn(process.env.AGENT_VIEWER_BUN || 'bun', ['run', fileURLToPath(new URL('./agent-viewer-mod-check.ts', import.meta.url)), ...rest], { stdio: 'inherit' })
@@ -18,6 +29,7 @@ if (mode === 'mods' && verb === 'check') {
   if (unknown.length) { console.error(usage); process.exit(2) }
   const instances = readAppInspections(instance).map(entry => mode === 'app' ? entry : {
     instanceId: entry.app.instanceId, renderer: entry.app.renderer, pid: entry.pid, updatedAt: entry.updatedAt, stale: entry.stale,
+    modRevision: entry.modRevision ?? null, permissionHistory: entry.permissionHistory ?? [], runtimeCapabilities: entry.runtimeCapabilities ?? {},
     mods: entry.mods.map(mod => ({ ...mod, status: !mod.enabled ? 'disabled' : entry.diagnostics.some(error => error.pluginId === mod.id) ? 'failed' : 'enabled', errors: entry.diagnostics.filter(error => error.pluginId === mod.id) })), refused: entry.refused ?? [],
   })
   if (rest.includes('--json')) console.log(JSON.stringify({ version: 1, instances }, null, 2))

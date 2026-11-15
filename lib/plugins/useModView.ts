@@ -11,7 +11,7 @@ import { useDisabledPlugins } from './useDisabledPlugins'
 import { modViewService, type ModViewContent, type ModViewRef } from './modViews'
 
 export function useModView(selectedKey: string | null) {
-  useSyncExternalStore(subscribeLocalPlugins, localPluginsVersion, localPluginsVersion)
+  const localVersion = useSyncExternalStore(subscribeLocalPlugins, localPluginsVersion, localPluginsVersion)
   const appSnapshot = useSyncExternalStore(modAppStore.subscribe, modAppStore.getSnapshot, modAppStore.getSnapshot)
   const disabled = useDisabledPlugins()
   const service = modViewService()
@@ -19,14 +19,14 @@ export function useModView(selectedKey: string | null) {
   const selected = views.find(view => `${view.pluginId}:${view.viewId}` === selectedKey) ?? views[0] ?? null
   const [content, setContent] = useState<ModViewContent | null>(null)
   // A `component` view is the mod's own component; a plain view is data.
-  const [component, setComponent] = useState<{ key: string; view: unknown; generation: number } | null>(null)
+  const [component, setComponent] = useState<{ key: string; view: unknown; generation: number; catalogVersion: number } | null>(null)
   // Refresh reloads a component; an action's re-render does not.
   const [reloads, setReloads] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [generation, setGeneration] = useState(0)
   const manifest = listLocalPluginManifests().find(item => item.id === selected?.pluginId)
-  const actionLife = useMemo(() => ({ controller: new AbortController(), active: false }), [selected?.pluginId, selected?.viewId, disabled])
+  const actionLife = useMemo(() => ({ controller: new AbortController(), active: false }), [selected?.pluginId, selected?.viewId, disabled, localVersion])
   useEffect(() => {
     actionLife.controller = new AbortController(); actionLife.active = true
     return () => { actionLife.active = false; actionLife.controller.abort() }
@@ -41,12 +41,12 @@ export function useModView(selectedKey: string | null) {
     if (selected.component) {
       // A component re-renders itself; reloading it after an action would
       // remount it and lose its state. Only a new view (or Refresh) reloads.
-      if (component?.key === `${selected.pluginId}:${selected.viewId}` && component.generation === reloads) return undefined
+      if (component?.key === `${selected.pluginId}:${selected.viewId}` && component.generation === reloads && component.catalogVersion === localVersion) return undefined
       service.loadComponent(selected)
         .then(view => {
           if (controller.signal.aborted) return
           if (!view) setError(`${selected.title}: the mod ships no component for this view in this app`)
-          else setComponent({ key: `${selected.pluginId}:${selected.viewId}`, view, generation: reloads })
+          else setComponent({ key: `${selected.pluginId}:${selected.viewId}`, view, generation: reloads, catalogVersion: localVersion })
         })
         .catch((cause: unknown) => { if (!controller.signal.aborted) { recordModDiagnostic(selected.pluginId, 'component-load', cause); setError(cause instanceof Error ? cause.message : String(cause)) } })
       return () => controller.abort()
@@ -57,7 +57,7 @@ export function useModView(selectedKey: string | null) {
         .catch((cause: unknown) => { if (!controller.signal.aborted) { recordModDiagnostic(selected.pluginId, `view:${selected.viewId}`, cause); setError(cause instanceof Error ? cause.message : String(cause)) } })
     }, 50)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [service, key, generation, dataRevision])
+  }, [service, key, generation, dataRevision, localVersion])
   const refresh = useCallback(() => { setGeneration(value => value + 1); setReloads(value => value + 1) }, [])
   const run = useCallback(async (action: string, item?: string): Promise<{ kind: 'info' | 'error'; text: string } | null> => {
     if (!service || !selected) return null

@@ -434,9 +434,9 @@ mocked SDK/provider boundaries and local fixtures, not live agent execution.
 - `permission({ target, request })` — a tool approval from any provider, in one
   shape: `kind` (`tool`/`command`/`file`/`network`/`other`), `toolName`,
   `command`, `paths`, `input`, `title`. Return `{ decision: 'allow' | 'deny',
-  reason? }` to answer the agent, or nothing to ask the person. The first plugin
-  to decide wins; a hook that throws or takes longer than 5s counts as
-  undecided, so a broken policy only ever falls back to asking. Questions and
+  reason? }` to answer the agent, or nothing to ask the person. Enabled mandatory policy hooks run before automation; deny wins among policies,
+  and ask/error/timeout/cancellation falls back to the person. Automation retains
+  first-decision ordering only after policies pass. See mod-permissions.md. Questions and
   plan approvals are never offered to this hook. Every bridge calls
   `lib/plugins/permissionBridge.ts`; a new provider's bridge should too.
 - `toolCard({ target, tool })` — how a tool call reads in the transcript:
@@ -513,11 +513,11 @@ export const commands = {
   subset of `notices`, `composer`, `transcript` (default `notices`), all required.
 - Widgets: declare `"widgets": [{ "id": "status", "refreshMs": 5000 }]` and
   export `widgets: { status: () => ({ title, text | lines, tone }) }`. The shell
-  draws them in the corner slot of both renderers; one that throws, returns
+  draws them in the declared corner/top-center/viewport slot of both renderers; one that throws, returns
   nothing or takes over 2s is skipped that round.
 - All five hooks (`beforeTurn`, `afterTurn`, `beforeSteer`, `permission`,
   `toolCard`) are available to mods by listing them in `behavior.hooks`.
-- Discovery runs once per process; restart after adding a mod. Both plugin
+- Discovery refreshes on an explicit mods reload revision or restart; see mod-reload.md. Both plugin
   managers list mods (they can be turned off like any plugin) and any refused,
   with the reasons.
 - Views: declare `"views": [{ "id": "tally", "title": "Tally" }]` and export
@@ -655,3 +655,19 @@ removes the instance. `scripts/modProviderSmoke.ts` is the worked example.
 An SDK-backed provider that needs native capabilities (fork, rewind,
 permissions, tool streaming) is still a bundled extension:
 `npm run providers:scaffold -- <id> "<Name>"`.
+
+### SDK, portable controls and configuration
+
+Read [mod-sdk.md](mod-sdk.md) for scaffolding, typed exports, generated Web/OpenTUI
+settings surfaces, secret references and author fixtures. These extend the existing
+mod runtime through the same hosts, without feature callbacks in the roots.
+
+### Extended runtime and package lifecycle
+
+See [mod-contributions.md](mod-contributions.md) for panel/default placement and
+named widget slots, [mod-runtime-events.md](mod-runtime-events.md) for observational
+events and capability reporting, [mod-permissions.md](mod-permissions.md) for
+mandatory policy composition/history, [mod-reload.md](mod-reload.md) for explicit
+live reload and snapshot paths, and [mod-distribution.md](mod-distribution.md) for
+pinned local package installation/update/removal/rollback. Use the documented
+focused smokes; unsupported provider controls remain unsupported.

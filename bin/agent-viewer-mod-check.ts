@@ -1,3 +1,4 @@
+import { resolveModConfig } from '../lib/plugins/modConfig'
 // Static validation never imports the mod. --render explicitly runs trusted code in bounded children.
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
@@ -35,9 +36,9 @@ async function renderCheck(renderer: 'server' | 'web' | 'tui'): Promise<void> {
     for (const hook of manifest.behavior?.hooks ?? []) if (typeof module[hook] !== 'function') throw new Error(`Missing ${hook} export`)
     for (const command of manifest.commands.filter(item => item.handler)) if (typeof table('commands')?.[command.handler!] !== 'function') throw new Error(`Missing commands.${command.handler}`)
     if (manifest.localProvider) for (const method of ['listSessions', 'readMessages', 'createSession', 'sendTurn']) if (typeof (module.provider as Record<string, unknown> | undefined)?.[method] !== 'function') throw new Error(`Missing provider.${method}`)
-    const context = { signal: new AbortController().signal, ...(manifest.appServices?.length ? { app: fixture } : {}) }
+    const context = { config: resolveModConfig(manifest.config, {}, process.env), signal: new AbortController().signal, ...(manifest.appServices?.length ? { app: fixture } : {}) }
     for (const view of manifest.localViews ?? []) {
-      if (view.component) continue
+      if (view.component || (view.id === 'mod-config' && manifest.config)) continue
       const fn = table('views')?.[view.id]
       if (typeof fn !== 'function') throw new Error(`Missing views.${view.id}`)
       const raw = await fn(context) as { title?: unknown; blocks?: unknown[] }

@@ -1,3 +1,5 @@
+import { readPluginPermissionHistory } from '../../../lib/plugins/permissionHistory'
+import { pluginRuntimeCapabilities } from '../../../lib/plugins/runtimeEvents'
 // The TUI's half of local plugins: discover the user's mods and register them
 // before the root loads (the ⌃K chord table and the command catalog are built
 // from manifests at module load), and run their commands in this process.
@@ -13,8 +15,15 @@ import { pathToFileURL } from 'node:url'
 import { statSync } from 'node:fs'
 
 export function installTuiLocalPlugins(): void {
-  const discovery = localPluginDiscovery()
-  setModInspectionPublisher(value => writeAppInspection({ ...value, refused: discovery.refused }))
+  let discovery = localPluginDiscovery()
+  setModInspectionPublisher(value => {
+    const next = localPluginDiscovery()
+    if (next !== discovery) {
+      discovery = next
+      registerLocalPluginManifests(discovery.plugins.map(plugin => plugin.manifest))
+    }
+    writeAppInspection({ ...value, modRevision: discovery.revision, permissionHistory: readPluginPermissionHistory(), runtimeCapabilities: Object.fromEntries(value.app.sessions.map(session => session.target.provider).filter((provider): provider is NonNullable<typeof provider> => !!provider).map(provider => [provider, pluginRuntimeCapabilities(provider)])), refused: discovery.refused })
+  })
   registerLocalPluginManifests(discovery.plugins.map(plugin => plugin.manifest))
   setLocalCommandRunner(async (request, signal) => {
     const { runLocalPluginCommand } = await import('../../../lib/plugins/localPluginRuntime')
@@ -37,7 +46,7 @@ export function installTuiLocalPlugins(): void {
       const file = localPluginComponentFile(view.pluginId, 'tui')
       if (!file) return null
       const React = await import('react')
-      const exported = await import(`${pathToFileURL(file).href}?v=${statSync(file).mtimeMs}`)
+      const exported = await import(`${pathToFileURL(file).href}?v=${statSync(file).mtimeMs}&revision=${localPluginDiscovery().revision ?? 'initial'}`)
       return readModComponentViews(exported, (React as { default?: unknown }).default ?? React)[view.viewId] ?? null
     },
   })

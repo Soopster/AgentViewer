@@ -16,18 +16,30 @@ class ComponentBoundary extends React.Component<{ pluginId?: string; name: strin
   render() { return this.state.failed ? <text fg={this.props.color}>{`${this.props.name} failed: ${this.state.failed.message}`}</text> : this.props.children }
 }
 
+function PortableInput({ value, placeholder, focused, submit }: { value: string; placeholder?: string; focused: boolean; submit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  return <input focused={focused} value={draft} maxLength={4000} placeholder={placeholder} onInput={setDraft} onSubmit={() => submit(draft)} />
+}
+
 function ModViews(props: TuiPluginViewProps) { return <ModViewPanel {...props} fixedKey={null} /> }
 
-function ModViewPanel({ theme, accent, width, height, placement, registerKeys, close, services, useState: useScopedState, fixedKey }: TuiPluginViewProps & { fixedKey: string | null }) {
+function ModViewPanel({ theme, accent, width, height, placement, registerKeys, setCapture, focused, close, services, useState: useScopedState, fixedKey }: TuiPluginViewProps & { fixedKey: string | null }) {
   const [chosenKey, setChosenKey] = useScopedState<string | null>('view', null)
   const selectedKey = fixedKey ?? chosenKey
   const setSelectedKey = (key: string) => { if (!fixedKey) setChosenKey(key) }
   const view = useModView(selectedKey)
+  const [editing, setEditing] = useState<number | null>(null)
+  const [choices, setChoices] = useState<Record<string, string>>({})
   const [cursor, setCursor] = useState(0)
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null)
+  useEffect(() => {
+    setCapture?.(editing !== null && focused ? 'input' : false)
+    return () => setCapture?.(false)
+  }, [editing, focused, setCapture])
   const actionables = view.content ? modViewActionables(view.content) : []
   const docked = placement !== 'overlay'
   const act = async (action: string, item?: string) => {
+    if (view.busy) return
     const result = await view.run(action, item)
     setNotice(result)
     if (result && services.notices) services.notices.show(result.kind, result.text)
@@ -38,20 +50,35 @@ function ModViewPanel({ theme, accent, width, height, placement, registerKeys, c
     const next = view.views[(index + step + view.views.length) % view.views.length]!
     setSelectedKey(`${next.pluginId}:${next.viewId}`)
     setCursor(0)
+    setEditing(null)
   }
   const componentKeys = React.useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean | void) | null>(null)
   useEffect(() => {
     registerKeys((key) => {
       // A mod component sees keys first; returning true keeps one.
       if (view.selected?.component && componentKeys.current?.(key) === true) return true
+      if (editing !== null) {
+        if (key.name === 'escape') { setEditing(null); return true }
+        return false
+      }
+      const current = actionables[cursor]
+      if (current?.type === 'select' && (key.name === 'left' || key.name === 'right')) {
+        const choiceKey = `${view.key}:${current.id}`
+        const index = Math.max(0, current.options.findIndex(option => option.value === (choices[choiceKey] ?? current.value)))
+        const option = current.options[(index + (key.name === 'left' ? -1 : 1) + current.options.length) % current.options.length]!
+        setChoices(previous => ({ ...previous, [choiceKey]: option.value }))
+        return true
+      }
       if (key.name === 'escape' || key.sequence === 'q') { close(); return true }
       if (!fixedKey && (key.name === 'tab' || key.name === 'right' || key.name === 'left')) { switchView(key.name === 'left' || key.shift ? -1 : 1); return true }
       if (key.name === 'down' || key.sequence === 'j') { setCursor(value => Math.min(value + 1, Math.max(actionables.length - 1, 0))); return true }
       if (key.name === 'up' || key.sequence === 'k') { setCursor(value => Math.max(value - 1, 0)); return true }
       if (key.sequence === 'r') { view.refresh(); return true }
       if (key.name === 'return') {
+        if (view.busy) return true
         const target = actionables[cursor]
-        if (target) void act(target.action!, target.type === 'item' ? target.id : undefined)
+        if (target?.type === 'input') setEditing(target.index)
+        else if (target) void act(target.action!, target.type === 'select' ? choices[`${view.key}:${target.id}`] ?? target.value : target.type === 'item' ? target.id : undefined)
         return true
       }
       return placement === 'overlay'
@@ -101,6 +128,24 @@ function ModViewPanel({ theme, accent, width, height, placement, registerKeys, c
                 const selected = index === selectedIndex
                 if (block.type === 'heading') return <text key={index} fg={theme.cyan} wrapMode="none">{fitText(`┄ ${block.text}`, innerW)}</text>
                 if (block.type === 'text') return <text key={index} fg={block.tone === 'error' ? theme.red : block.tone === 'warning' ? theme.amber : block.tone === 'success' ? theme.green : block.tone === 'default' ? theme.text : theme.muted} wrapMode="word" width={innerW}>{block.text}</text>
+                if (block.type === 'progress') {
+                  const filled = Math.round(20 * block.value / block.max)
+                  return <text key={index} fg={theme.cyan} wrapMode="word" width={innerW}>{`${block.label} [${'#'.repeat(filled)}${'-'.repeat(20 - filled)}] ${Math.round(100 * block.value / block.max)}%`}</text>
+                }
+                if (block.type === 'code') return <text key={index} fg={theme.text} wrapMode="word" width={innerW}>{block.text}</text>
+                if (block.type === 'table') {
+                  const cellWidth = Math.max(1, Math.floor(innerW / block.columns.length) - 1)
+                  const rowText = (row: readonly string[]) => row.map(cell => fitText(cell, cellWidth).padEnd(cellWidth)).join(' ')
+                  return <box key={index} flexDirection="column"><text fg={theme.cyan}>{rowText(block.columns)}</text>{block.rows.map((row, i) => <text key={i} fg={theme.text}>{rowText(row)}</text>)}</box>
+                }
+                if (block.type === 'input') return <box key={`${view.key}:${block.id}`} flexDirection="column" onMouseDown={() => { setCursor(actionables.findIndex(entry => entry.index === index)); setEditing(index) }}>
+                  <text fg={selected ? accent : theme.text}>{`${selected ? '▎' : ' '}${block.label}${editing === index ? ' (enter to apply, esc to cancel)' : ' (enter to edit)'}`}</text>
+                  {editing === index ? <PortableInput focused={focused} value={block.value ?? ''} placeholder={block.placeholder} submit={value => { setEditing(null); void act(block.action, value) }} /> : <text fg={theme.muted}>{block.value || block.placeholder || ' '}</text>}
+                </box>
+                if (block.type === 'select') {
+                  const value = choices[`${view.key}:${block.id}`] ?? block.value
+                  return <box key={index} onMouseDown={() => { setCursor(actionables.findIndex(entry => entry.index === index)); const n = block.options.findIndex(option => option.value === value); setChoices(previous => ({ ...previous, [`${view.key}:${block.id}`]: block.options[(n + 1) % block.options.length]!.value })) }}><text fg={selected ? accent : theme.text}>{`${selected ? '▎' : ' '}${block.label}: ${block.options.find(option => option.value === value)?.label ?? ''} (left/right choose, enter apply)`}</text></box>
+                }
                 const run = () => { const position = actionables.findIndex(entry => entry.index === index); if (position >= 0) setCursor(position); void act(block.action!, block.type === 'item' ? block.id : undefined) }
                 if (block.type === 'button') {
                   return (

@@ -124,3 +124,25 @@ For this host contract, run `npm run mods:smoke` and
 `node scripts/webModAppBrowserSmoke.mjs` alongside relevant plugin smokes and
 both typechecks. Full API details and a worked example live in
 `docs/mod-app-services.md` and `docs/examples/mods/live-sessions/` in a checkout.
+
+## Mod SDK and configuration
+
+Use `agent-viewer mods create <id> [--path <new-directory>]` for scaffolding and
+`agent-viewer mods test <path>` for author fixtures. Declare `config` for validated
+server values and generated settings surfaces in both renderers. Portable views
+also support input/select/progress/table/code. Read
+[references/mod-sdk.md](references/mod-sdk.md) for contracts, limits and checks.
+
+## Extended mod framework
+
+Read the installed references before extending these contracts:
+
+- [Contribution placements and widget slots](references/mod-contributions.md)
+- [Runtime observations and provider capabilities](references/mod-runtime-events.md)
+- [Permission policy composition and receipts](references/mod-permissions.md)
+- [Explicit reload and source snapshots](references/mod-reload.md)
+- [Pinned local package distribution](references/mod-distribution.md)
+
+Do not claim universal tool interception or organization-managed policy enforcement.
+Package operations do not execute mod code; runtime snapshots do. Preserve qualified
+identities and do not interrupt user-owned turns/processes when reloading.

@@ -32,7 +32,7 @@ export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'to
   const repository = app.cwd ? { cwd: app.cwd, sessionId: null } : undefined
   const widgets = usePluginWidgets('web', webPluginWidgets, slot)
   // Mods' widgets are content from their server module; the shell draws them.
-  const local = useLocalPluginWidgets(slot === 'corner')
+  const local = useLocalPluginWidgets(true, slot)
   if (widgets.length === 0 && local.length === 0) return null
   return (
     <div data-plugin-widget-slot={slot} style={SLOT_STYLE[slot]}>
@@ -41,13 +41,13 @@ export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'to
           <WidgetBoundary id={`${pluginId}:${id}`}><Widget slot={slot} services={{ notifications: webNotifications.service, 'plan-review': webPlanReview, proof: webProof, repository }} /></WidgetBoundary>
         </div>
       ))}
-      {slot === 'corner' ? local.map(entry => (
+      {local.map(entry => (
         <div key={`local:${entry.pluginId}:${entry.id}`} data-plugin-widget={`${entry.pluginId}:${entry.id}`}
           style={{ pointerEvents: 'auto', minWidth: 200, maxWidth: 360, background: 'var(--surface)', border: `1px solid ${LOCAL_TONE[entry.tone]}`, borderRadius: 8, padding: '8px 10px', fontSize: 12, boxShadow: '0 6px 20px rgba(0,0,0,0.25)' }}>
           <div style={{ fontWeight: 600, color: LOCAL_TONE[entry.tone], marginBottom: 4 }}>{entry.title}</div>
           {entry.lines.map((line, index) => <div key={index} style={{ color: 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{line || '\u00a0'}</div>)}
         </div>
-      )) : null}
+      ))}
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { publishPluginRuntimeEvent } from './plugins/runtimeEvents'
 import type { AgentProvider } from './types'
 import { currentProviderInstance } from './providerInstances'
 
@@ -165,8 +166,10 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
   const instance = session.providerInstanceId ?? (active?.provider === session.provider ? active.id : undefined)
   const key = runtimeKey(sessionId, runningSessions, { ...session, providerInstanceId: instance })
   waitingSessions.delete(key)
-  const startedAt = runningSessions.get(key)?.startedAt ?? session.startedAt ?? Date.now()
+  const prior = runningSessions.get(key)
+  const startedAt = prior?.startedAt ?? session.startedAt ?? Date.now()
   runningSessions.set(key, instance && instance !== session.provider ? { ...session, providerInstanceId: instance, startedAt } : { ...session, startedAt })
+  if (!prior || (session.requestId !== undefined && prior.requestId !== session.requestId)) publishPluginRuntimeEvent({ type: 'turn.started', source: 'runtime-registry', target: { provider: session.provider, sessionId, ...(instance ? { providerInstanceId: instance } : {}) } })
   const pendingKey = currentProviderInstance() ? key : pendingInterrupts.has(key) ? key : sessionId
   const pending = pendingInterrupts.get(pendingKey)
   if (pending && session.requestId === pending.requestId) {
@@ -219,6 +222,7 @@ export function clearRunningSession(sessionId: string, requestId?: string): bool
   if (requestId && running.requestId !== requestId) return false
   const deleted = runningSessions.delete(key)
   if (deleted) {
+    publishPluginRuntimeEvent({ type: 'turn.settled', source: 'runtime-registry', target: { provider: running.provider, sessionId, ...(running.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) } })
     notifyTurnSettled({
       sessionId,
       provider: running.provider,

@@ -1,6 +1,7 @@
 'use client'
 
 // Web entry for Mod views: its own chunk, loaded on first open.
+import { PortableBlock } from './PortableBlock'
 import { recordModDiagnostic } from '@/lib/plugins/modDiagnostics'
 import React, { useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '@/lib/plugins/types'
@@ -57,6 +58,7 @@ function ModViewPanel({ placement, close, useState: useScopedState, fixedKey }: 
           : <>
             <div style={{ fontWeight: 700, marginBottom: 8 }}>{view.content.title}</div>
             {view.content.blocks.map((block, index) => {
+              if (block.type === 'input' || block.type === 'select' || block.type === 'progress' || block.type === 'code' || block.type === 'table') return <PortableBlock key={`${view.key}:${index}:${'id' in block ? block.id : block.type}:${'value' in block ? block.value : ''}`} block={block} busy={view.busy} run={act} />
               if (block.type === 'heading') return <div key={index} style={{ fontWeight: 600, marginTop: 10, color: 'var(--text)' }}>{block.text}</div>
               if (block.type === 'text') return <div key={index} style={{ color: TONE[block.tone ?? 'muted'], whiteSpace: 'pre-wrap' }}>{block.text}</div>
               if (block.type === 'button') return <button key={index} type="button" disabled={view.busy} data-mod-view-action={block.action} onClick={() => { void act(block.action) }} style={{ margin: '6px 6px 0 0', fontSize: 12 }}>{block.label}</button>

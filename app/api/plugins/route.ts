@@ -14,6 +14,7 @@ export async function GET() {
     ...readPluginSettingsFile(),
     local: {
       dir: discovery.dir,
+      revision: discovery.revision,
       plugins: discovery.plugins.map(plugin => plugin.manifest),
       refused: discovery.refused.map(entry => ({ id: entry.id, dir: entry.dir, problems: entry.problems })),
     },

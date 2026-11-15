@@ -1,3 +1,4 @@
+import { currentProviderInstanceId } from '../providerInstances'
 // The one call every provider's approval bridge makes before asking a person.
 // It fills in the provider instance from the running-turn registry, maps a
 // tool name to a coarse kind, and never throws: any failure means "ask".
@@ -27,17 +28,32 @@ export async function askPluginsAboutPermission(
 ): Promise<PluginPermissionDecision | null> {
   try {
     const { getRunningSession } = await import('../sessionRuntime')
-    const running = getRunningSession(sessionId)
+    const instance = currentProviderInstanceId(provider)
+    let running = getRunningSession(sessionId, { provider, providerInstanceId: instance })
+    if (!running && instance === provider) {
+      // Some SDK event callbacks lose ambient instance context. A unique running
+      // match is safe only for this provider; ambiguous native IDs stay unresolved.
+      try { const unique = getRunningSession(sessionId); if (unique?.provider === provider) running = unique } catch { return null /* ambiguous instance: ask instead of guessing */ }
+    }
+    let researchAllows = false
     if (hasResearchToolPolicy(provider, sessionId) || (running?.provider === provider && isResearchSession({ provider, sessionId, providerInstanceId: running.providerInstanceId }))) {
       const tool = request.toolName?.toLowerCase() ?? ''
       const read = (RESEARCH_FILE_TOOLS as readonly string[]).includes(tool)
       // Codex runs these commands inside its enforced read-only, offline sandbox.
       const sandboxedCommand = provider === 'codex' && (request.kind === 'command' || COMMAND_TOOLS.test(tool))
-      return { pluginId: 'research', decision: read || sandboxedCommand ? 'allow' : 'deny', reason: 'Research sessions may only read and search; implementation tools are disabled.' }
+      if (!read && !sandboxedCommand) return { pluginId: 'research', decision: 'deny', reason: 'Research sessions may only read and search; implementation tools are disabled.' }
+      researchAllows = true
     }
-    const { decidePermissionByPlugins } = await import('./serverBehaviors')
+    const { decidePermissionByPlugins, pluginBehaviorHost } = await import('./serverBehaviors')
+    // Preserve research read auto-approval only when every plugin abstains.
+    // A deny, ask, failure or cancellation must never fall through to this allow.
+    if (researchAllows) return pluginBehaviorHost().permission({
+      target: { provider, sessionId, providerInstanceId: running?.providerInstanceId ?? instance },
+      request: { ...request, kind: request.kind ?? permissionKind(request.toolName) }, signal,
+      fallbackAllow: { pluginId: 'research', reason: 'Research read-only tool' },
+    })
     return await decidePermissionByPlugins(
-      { provider: running?.provider ?? provider, sessionId, ...(running?.providerInstanceId ? { providerInstanceId: running.providerInstanceId } : {}) },
+      { provider, sessionId, providerInstanceId: running?.providerInstanceId ?? instance },
       { ...request, kind: request.kind ?? permissionKind(request.toolName) },
       signal,
     )

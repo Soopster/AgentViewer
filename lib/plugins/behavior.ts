@@ -1,5 +1,6 @@
 // Renderer-independent behavior contract. Implementations live in server entries;
 // importing these types never loads a provider SDK or a plugin implementation.
+import type { PluginRuntimeEventContext } from './runtimeEvents'
 import type { AgentProvider, SessionMessage } from '../types'
 import type { PLUGIN_API_VERSION } from './types'
 
@@ -77,12 +78,12 @@ export type PluginPermissionContext = {
 
 /**
  * 'allow' or 'deny' answers the agent without asking anyone; returning nothing
- * leaves the decision to the person (or the next plugin). The first plugin to
- * decide wins; a hook that fails or takes longer than PLUGIN_PERMISSION_TIMEOUT_MS
- * is treated as undecided, so a broken plugin can only ever fall back to asking.
+ * abstains. Policy hooks are all evaluated before automation: any policy deny
+ * wins, and a failed/slow policy or explicit ask requires a person. Automation
+ * retains first-decision order after policy checks. Hook failures never approve.
  */
 export type PluginPermissionResult =
-  | { readonly decision: 'allow' | 'deny'; readonly reason?: string }
+  | { readonly decision: 'allow' | 'deny' | 'ask'; readonly reason?: string }
   | void
 
 export const PLUGIN_PERMISSION_TIMEOUT_MS = 5_000
@@ -98,7 +99,7 @@ export type PluginToolCardResult =
   | void
   | null
 
-export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard'
+export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'runtimeEvent'
 
 /** Consecutive plugin follow-ups allowed before a user turn resets the count. */
 export const PLUGIN_FOLLOW_UP_LIMIT = 25
@@ -116,6 +117,8 @@ export type PluginBehaviorModule = {
   readonly permission?: (context: PluginPermissionContext) => PluginPermissionResult | Promise<PluginPermissionResult>
   /** Present a tool call in the transcript (both renderers). Runs on the read path: keep it cheap and pure. */
   readonly toolCard?: (context: PluginToolCardContext) => PluginToolCardResult | Promise<PluginToolCardResult>
+  /** Observe runtime metadata; return values cannot mutate or block execution. */
+  readonly runtimeEvent?: (context: PluginRuntimeEventContext) => void | Promise<void>
   readonly deactivate?: () => void
 }
 

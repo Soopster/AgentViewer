@@ -73,3 +73,21 @@ Each Web tab and OpenTUI process has its own ID. Inspection includes selection, 
 Snapshots publish on changes and every five seconds. After fifteen seconds without an update they are marked stale/disconnected; terminal focus stays null when unknown. Inspection does not resume sessions, load providers or execute mods. Web background throttling may make an inactive tab stale until it becomes active again.
 
 Files are atomic, user-scoped and private under the OS runtime/temp directory. `AGENT_VIEWER_INSPECTION_DIR` selects another directory for testing. Inspection lists all published instances, including stale ones, or selects an exact ID. No matching explicit ID exits 1. A daemon without a connected renderer does not claim a renderer's focus/layout.
+
+## SDK and configuration
+
+[Mod SDK](mod-sdk.md) covers scaffolding, typed server exports, portable controls,
+generated settings surfaces, secret references and author fixtures. Server
+contexts now receive frozen `config` values, including without `appServices`.
+Configuration is not included in app snapshots or custom renderer props.
+
+## Extended local-mod framework
+
+- [Contribution placements and widget slots](mod-contributions.md)
+- [Provider runtime observations and capability reporting](mod-runtime-events.md)
+- [Permission composition and decision receipts](mod-permissions.md)
+- [Explicit development reload](mod-reload.md)
+- [Pinned local package management](mod-distribution.md)
+
+Instance status now includes the applied mod revision, bounded permission receipts
+and capability reports for providers present in that snapshot.

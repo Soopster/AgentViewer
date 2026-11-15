@@ -1,3 +1,5 @@
+import { parseModConfigSchema, type ModConfigSchema } from './modConfig'
+import { parseModPackageMetadata, type ModPackageMetadata } from './modPackageMetadata'
 // Local plugins ("mods"): plugins the user installs in their own config
 // directory, not bundled with the app. This module is the browser-safe half —
 // what a local plugin may declare and how one of its commands reaches the
@@ -13,7 +15,7 @@
 import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapshot, type ModAppEffect } from './modApp'
 import { recordModDiagnostic } from './modDiagnostics'
 import { isPluginEnabled } from './enablement'
-import { PLUGIN_API_VERSION, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest } from './types'
+import { PLUGIN_API_VERSION, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
 export const LOCAL_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
@@ -21,15 +23,20 @@ const LOCAL_COMMAND_SERVICES: readonly PluginCommandServiceId[] = ['notices', 'c
 const CATEGORIES = ['Session', 'View', 'Transcript', 'Coordination'] as const
 
 /** A validated local plugin manifest, as the catalog and both plugin managers list it. */
-export type LocalPluginManifest = PluginManifest & {
+export type LocalWidgetSlot = Exclude<PluginWidgetSlot, 'top-bar'>
+export const LOCAL_WIDGET_SLOTS: readonly LocalWidgetSlot[] = ['corner', 'top-center', 'viewport']
+export type LocalViewSpec = { readonly id: string; readonly title: string; readonly component?: boolean; readonly placements?: readonly PluginPlacement[]; readonly defaultPlacement?: 'overlay' | 'panel'; readonly panelOrder?: number }
+
+export type LocalPluginManifest = PluginManifest & ModPackageMetadata & {
   readonly source: 'local'
+  readonly config?: ModConfigSchema
   readonly appServices?: readonly ('data' | 'navigation')[]
   /** A mod's widgets are content from its server module, drawn by the shell. */
-  readonly localWidgets?: readonly { readonly id: string; readonly slot: 'corner'; readonly refreshMs: number }[]
+  readonly localWidgets?: readonly { readonly id: string; readonly slot: LocalWidgetSlot; readonly refreshMs: number; readonly order?: number }[]
   /** A mod that is an agent backend: its sessions appear under the `mod` provider (lib/modProvider.ts). */
   readonly localProvider?: { readonly displayName: string }
   /** Interactive views the mod returns as data (lib/plugins/modViews.ts). */
-  readonly localViews?: readonly { readonly id: string; readonly title: string; readonly component?: boolean }[]
+  readonly localViews?: readonly LocalViewSpec[]
 }
 
 /** A mod view's surface id. A dot never appears in a plugin id, so it cannot name a built-in. */
@@ -66,7 +73,12 @@ export function decodeLocalWidgetContent(pluginId: string, id: string, fallbackT
 /** Reads every enabled mod widget's content where the mods run (in process, or the daemon). */
 export type LocalWidgetReader = (signal: AbortSignal) => Promise<LocalWidgetContent[]>
 let widgetReader: LocalWidgetReader | null = null
-export function setLocalWidgetReader(next: LocalWidgetReader): void { widgetReader = next }
+const widgetReaderListeners = new Set<() => void>()
+export function setLocalWidgetReader(next: LocalWidgetReader): void {
+  widgetReader = next
+  for (const listener of widgetReaderListeners) listener()
+}
+export function subscribeLocalWidgetReader(listener: () => void): () => void { widgetReaderListeners.add(listener); return () => { widgetReaderListeners.delete(listener) } }
 export function localWidgetReader(): LocalWidgetReader | null { return widgetReader }
 
 export function isLocalManifest(manifest: PluginManifest): manifest is LocalPluginManifest {
@@ -96,15 +108,20 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   const title = typeof value.title === 'string' && value.title.trim() ? value.title.trim().slice(0, 64) : id
   const description = typeof value.description === 'string' ? value.description.trim().slice(0, 240) : ''
 
+  let packageMetadata: ModPackageMetadata = {}
+  try { packageMetadata = parseModPackageMetadata(value) } catch (error) { problems.push(error instanceof Error ? error.message : String(error)) }
+  let config: ModConfigSchema | undefined
+  if (value.config !== undefined) { try { config = parseModConfigSchema(value.config) } catch (error) { problems.push(error instanceof Error ? error.message : String(error)) } }
   const appServices = Array.isArray(value.appServices) ? value.appServices : []
   if (value.appServices !== undefined && (!Array.isArray(value.appServices) || appServices.some(service => service !== 'data' && service !== 'navigation'))) problems.push('appServices must list data and/or navigation')
   let behavior: PluginManifest['behavior']
   if (value.behavior !== undefined) {
-    const spec = value.behavior as { hooks?: unknown; order?: unknown }
-    const known = ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission', 'toolCard'] as const
+    const spec = value.behavior as { hooks?: unknown; order?: unknown; permissionMode?: unknown }
+    const known = ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission', 'toolCard', 'runtimeEvent'] as const
     const hooks = Array.isArray(spec?.hooks) ? spec.hooks.filter((hook): hook is typeof known[number] => known.includes(hook)) : []
     if (!hooks.length || hooks.length !== (spec.hooks as unknown[]).length) problems.push(`behavior.hooks must list some of ${known.join(', ')}`)
-    else behavior = { hooks: [...new Set(hooks)], ...(typeof spec.order === 'number' && Number.isFinite(spec.order) ? { order: spec.order } : {}) }
+    else if (spec.permissionMode !== undefined && spec.permissionMode !== 'policy' && spec.permissionMode !== 'automation') problems.push('behavior.permissionMode must be policy or automation')
+    else behavior = { hooks: [...new Set(hooks)], ...(typeof spec.order === 'number' && Number.isFinite(spec.order) ? { order: spec.order } : {}), ...(spec.permissionMode ? { permissionMode: spec.permissionMode } : {}) }
   }
 
   const commands: PluginCommandSpec[] = []
@@ -138,14 +155,15 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
         ? { tuiChord: { key: chord.key, short: chord.short.slice(0, 8) } } : {}),
     })
   }
-  const widgets: { id: string; slot: 'corner'; refreshMs: number }[] = []
+  const widgets: { id: string; slot: LocalWidgetSlot; refreshMs: number; order?: number }[] = []
   if (value.widgets !== undefined && !Array.isArray(value.widgets)) problems.push('widgets must be a list')
   for (const [index, entry] of (Array.isArray(value.widgets) ? value.widgets : []).entries()) {
     const widget = entry as Record<string, unknown>
     if (typeof widget?.id !== 'string' || !LOCAL_PLUGIN_ID.test(widget.id)) { problems.push(`widgets[${index}].id is invalid`); continue }
-    if (widget.slot !== undefined && widget.slot !== 'corner') { problems.push(`widgets[${index}].slot must be "corner"`); continue }
+    if (widget.slot !== undefined && !LOCAL_WIDGET_SLOTS.includes(widget.slot as LocalWidgetSlot)) { problems.push(`widgets[${index}].slot must be corner, top-center or viewport`); continue }
+    if (widget.order !== undefined && (typeof widget.order !== 'number' || !Number.isFinite(widget.order))) { problems.push(`widgets[${index}].order must be finite`); continue }
     const refresh = typeof widget.refreshMs === 'number' && Number.isFinite(widget.refreshMs) ? widget.refreshMs : LOCAL_WIDGET_REFRESH_MS
-    widgets.push({ id: widget.id, slot: 'corner', refreshMs: Math.max(LOCAL_WIDGET_MIN_REFRESH_MS, Math.min(refresh, 600_000)) })
+    widgets.push({ id: widget.id, slot: (widget.slot ?? 'corner') as LocalWidgetSlot, ...(typeof widget.order === 'number' ? { order: widget.order } : {}), refreshMs: Math.max(LOCAL_WIDGET_MIN_REFRESH_MS, Math.min(refresh, 600_000)) })
   }
   let localProvider: { displayName: string } | undefined
   if (value.provider !== undefined) {
@@ -153,12 +171,21 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (!spec || typeof spec !== 'object') problems.push('provider must be an object')
     else localProvider = { displayName: typeof spec.displayName === 'string' && spec.displayName.trim() ? spec.displayName.trim().slice(0, 40) : title }
   }
-  const views: { id: string; title: string; component?: boolean }[] = []
+  const views: LocalViewSpec[] = []
   if (value.views !== undefined && !Array.isArray(value.views)) problems.push('views must be a list')
   for (const [index, entry] of (Array.isArray(value.views) ? value.views : []).entries()) {
     const view = entry as Record<string, unknown>
     if (typeof view?.id !== 'string' || !LOCAL_PLUGIN_ID.test(view.id)) { problems.push(`views[${index}].id is invalid`); continue }
-    views.push({ id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id, ...(view.component === true ? { component: true } : {}) })
+    const placements = view.placements === undefined ? ['overlay', 'window'] as const : view.placements
+    if (!Array.isArray(placements) || !placements.length || placements.some(placement => !['overlay', 'window', 'panel'].includes(placement as string)) || new Set(placements).size !== placements.length) { problems.push(`views[${index}].placements must list unique overlay, window and/or panel placements`); continue }
+    const defaultPlacement = view.defaultPlacement ?? (placements.includes('overlay') ? 'overlay' : 'panel')
+    if ((defaultPlacement !== 'overlay' && defaultPlacement !== 'panel') || !placements.includes(defaultPlacement)) { problems.push(`views[${index}].defaultPlacement must be overlay or panel and included in placements`); continue }
+    if (view.panelOrder !== undefined && (typeof view.panelOrder !== 'number' || !Number.isFinite(view.panelOrder))) { problems.push(`views[${index}].panelOrder must be finite`); continue }
+    views.push({ placements: placements as PluginPlacement[], defaultPlacement, ...(typeof view.panelOrder === 'number' ? { panelOrder: view.panelOrder } : {}), id: view.id, title: typeof view.title === 'string' && view.title.trim() ? view.title.trim().slice(0, 60) : view.id, ...(view.component === true ? { component: true } : {}) })
+  }
+  if (config && Object.keys(config).length) {
+    if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
+    else views.push({ id: 'mod-config', title: `${title} settings` })
   }
   if (!behavior && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
   for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views]] as const) {
@@ -169,17 +196,17 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   // takes the palette, a window, a tab and a saved layout through the same host.
   const surfaces = views.map(view => ({
     id: localViewSurfaceId(id, view.id), title: view.title, pin: null, single: true, keys: 'window' as const,
-    placements: ['overlay', 'window'] as const, windowLabel: `${view.title} in a window`, services: [], optionalServices: ['notices'] as const,
+    placements: view.placements ?? ['overlay', 'window'] as const, ...(view.panelOrder !== undefined ? { panelOrder: view.panelOrder } : {}), windowLabel: `${view.title} in a window`, services: [], optionalServices: ['notices'] as const,
   }))
   const viewCommands = views.map(view => ({
     id: `${id}:view-${view.id}`, label: view.title, category: 'View' as const, opens: localViewSurfaceId(id, view.id),
-    requires: null, scope: 'application' as const, renderers: ['web', 'tui'] as const, keywords: ['mod', title.toLowerCase()],
+    requires: null, scope: 'application' as const, renderers: ['web', 'tui'] as const, ...(view.defaultPlacement === 'panel' ? { placement: 'panel' as const } : {}), keywords: ['mod', title.toLowerCase()],
   }))
   if (new Set([...commands, ...viewCommands].map(command => command.id)).size !== commands.length + viewCommands.length) return { manifest: null, problems: ['command id conflicts with a generated view command'] }
   return {
     manifest: {
-      apiVersion: PLUGIN_API_VERSION, id, title, description, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }
