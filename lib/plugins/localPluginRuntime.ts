@@ -40,6 +40,7 @@ type LocalServerModule = {
   permission?: (context: Parameters<NonNullable<PluginBehaviorModule['permission']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['permission']>>
   runtimeEvent?: (context: Parameters<NonNullable<PluginBehaviorModule['runtimeEvent']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['runtimeEvent']>>
   toolCard?: (context: Parameters<NonNullable<PluginBehaviorModule['toolCard']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['toolCard']>>
+  transcriptCard?: (context: Parameters<NonNullable<PluginBehaviorModule['transcriptCard']>>[0] & LocalModContext) => ReturnType<NonNullable<PluginBehaviorModule['transcriptCard']>>
   deactivate?: () => void
   commands?: Record<string, (context: LocalCommandContext) => unknown>
   widgets?: Record<string, (context: AppContext & { signal: AbortSignal }) => unknown>
@@ -110,6 +111,7 @@ export function localBehaviorLoaders(): Record<string, () => Promise<PluginBehav
       ...(module.afterTurn ? { afterTurn: context => diagnosed(plugin.manifest.id, 'afterTurn', () => module.afterTurn!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.beforeSteer ? { beforeSteer: context => diagnosed(plugin.manifest.id, 'beforeSteer', () => module.beforeSteer!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.permission ? { permission: context => diagnosed(plugin.manifest.id, 'permission', () => module.permission!({ ...context, ...appContext(plugin) })) } : {}),
+      ...(module.transcriptCard ? { transcriptCard: context => diagnosed(plugin.manifest.id, 'transcriptCard', () => module.transcriptCard!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.toolCard ? { toolCard: context => diagnosed(plugin.manifest.id, 'toolCard', () => module.toolCard!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.runtimeEvent ? { runtimeEvent: context => diagnosed(plugin.manifest.id, 'runtimeEvent', () => module.runtimeEvent!({ ...context, ...appContext(plugin) })) } : {}),
       ...(module.deactivate ? { deactivate: () => deactivateModule(module) } : {}),

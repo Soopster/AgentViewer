@@ -26,7 +26,7 @@ export const CARD_VOCABULARY = Object.freeze({
     { type: 'code', purpose: 'Verbatim text in a box.', useWhen: ['The exact output matters (a command, a diff, a log)', 'Whitespace is meaningful'], fields: { text: 'template' }, example: { type: 'code', text: '{{result.text | truncate 400}}' } },
   ],
   bindings: [
-    { root: 'input', meaning: 'The arguments the tool was called with', example: 'input.path' },
+    { root: 'input', meaning: 'The arguments the tool was called with (for a rule with match.kind "system": the fields of the system message)', example: 'input.path' },
     { root: 'result', meaning: 'What came back: text, isError, and json when the result parses as JSON (empty while the call runs)', example: 'result.json.items.0.name' },
     { root: 'tool', meaning: 'tool.name is the tool called', example: 'tool.name' },
   ],
@@ -41,6 +41,8 @@ export const CARD_VOCABULARY = Object.freeze({
     { name: 'default', meaning: 'A fallback when the value is empty', example: '{{result.json.owner | default nobody}}' },
   ],
   limits: { blocks: CARD_RULE_LIMITS.blocks, template: CARD_RULE_LIMITS.template },
+  /** What a rule can match: a tool call (the default), or a system message by subtype with `match.kind: "system"`, which replaces that message's generic card. */
+  matches: ['tool', 'system'],
   /** What a rule may do: present. It cannot run anything, call a tool, change state or add a button. */
   authority: 'presentation only',
 } as const)

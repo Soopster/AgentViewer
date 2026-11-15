@@ -104,7 +104,7 @@ export function adaptiveUiSnapshot(existingViewIds: ReadonlySet<string> = new Se
   const s = state(); refreshFromDisk(s)
   const loaded = effectiveRules()
   const usage = [...s.usage].map(([tool, u]) => ({ tool, ...u })).sort((a, b) => b.completed - a.completed).slice(0, 50)
-  const suggestions = suggest({ shapes: s.book.list(), usage, interactions: Object.fromEntries(s.interactions), ruledTools: new Set(loaded.rules.map(rule => rule.match.tool)), dismissed: s.dismissed, existingViewIds })
+  const suggestions = suggest({ shapes: s.book.list(), usage, interactions: Object.fromEntries(s.interactions), ruledTools: new Set(loaded.rules.filter(rule => rule.match.kind !== 'system').map(rule => rule.match.tool)), dismissed: s.dismissed, existingViewIds })
   return { dir: loaded.dir, history: readCardHistory(loaded.dir, { limit: 40 }), rules: loaded.rules, origins: loaded.origins, invalid: loaded.invalid, shapes: s.book.list(), usage, suggestions, settings: { autoDraft: false, autoDraftAfter: AUTO_DRAFT_AFTER } }
 }
 

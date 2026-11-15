@@ -19,7 +19,8 @@ import { decodeCardBlocks, scrubCardText, type CardBlock } from './cardBlocks'
 
 export type CardRuleStatus = 'draft' | 'active' | 'disabled'
 export type CardRuleTone = 'info' | 'success' | 'warning' | 'error'
-export type CardRuleMatch = { readonly tool: string; readonly mcpServer?: string; readonly keys?: readonly string[] }
+/** `tool` is a tool name, or for kind "system" the subtype of a system message (a notice, a retry, a status). */
+export type CardRuleMatch = { readonly kind?: 'tool' | 'system'; readonly tool: string; readonly mcpServer?: string; readonly keys?: readonly string[] }
 export type CardRuleCondition = { readonly path: string; readonly equals?: string | number | boolean; readonly contains?: string; readonly exists?: boolean }
 /**
  * Why a card is the way it is, written by whoever designed it. It is a claim, not a fact: the host
@@ -51,6 +52,7 @@ export type CardRuleSample = { readonly input: Record<string, unknown>; readonly
 
 /** What a rule is evaluated against: the call and, once it has one, its result. */
 export type CardRuleContext = {
+  readonly kind?: 'tool' | 'system'
   readonly tool: { readonly name: string; readonly input: Readonly<Record<string, unknown>> }
   readonly result?: { readonly text: string; readonly isError: boolean }
 }
@@ -155,6 +157,7 @@ export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: 
   const m = r.match as Record<string, unknown> | undefined
   if (!m || typeof m !== 'object' || typeof m.tool !== 'string' || !m.tool || m.tool.length > CARD_RULE_LIMITS.globLength || !/^[A-Za-z0-9_.*:-]+$/.test(m.tool)) problems.push('match.tool must be a tool name, with * as the only wildcard')
   else if (m.tool.replace(/\*/g, '') === '') problems.push('match.tool must name something: "*" alone would match every tool')
+  if (m && m.kind !== undefined && m.kind !== 'tool' && m.kind !== 'system') problems.push('match.kind must be tool or system')
   if (m && m.mcpServer !== undefined && (typeof m.mcpServer !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(m.mcpServer))) problems.push('match.mcpServer is not a server name')
   if (m && m.keys !== undefined && (!Array.isArray(m.keys) || m.keys.length > CARD_RULE_LIMITS.keys || !m.keys.every(key => typeof key === 'string' && SEGMENT.test(key) && !FORBIDDEN.has(key)))) problems.push('match.keys must be up to 12 plain key names')
   problems.push(...templateProblems(r.title, 'title'))
@@ -184,7 +187,7 @@ export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: 
       id: r.id as string, status: r.status as CardRuleStatus,
       ...(typeof r.revision === 'number' ? { revision: r.revision } : {}),
       ...(r.rationale ? { rationale: parseRationale(r.rationale as Record<string, unknown>) } : {}),
-      match: { tool: (m as { tool: string }).tool, ...(typeof m!.mcpServer === 'string' ? { mcpServer: m!.mcpServer } : {}), ...(Array.isArray(m!.keys) ? { keys: m!.keys as string[] } : {}) },
+      match: { ...(m!.kind === 'system' ? { kind: 'system' as const } : {}), tool: (m as { tool: string }).tool, ...(typeof m!.mcpServer === 'string' ? { mcpServer: m!.mcpServer } : {}), ...(Array.isArray(m!.keys) ? { keys: m!.keys as string[] } : {}) },
       title: r.title as string, blocks: r.blocks as unknown[],
       ...(r.tone !== undefined ? { tone: r.tone as CardRule['tone'] } : {}),
       ...(r.overridesNative === true ? { overridesNative: true } : {}),
@@ -202,6 +205,7 @@ export function mcpServerOf(toolName: string): string | null {
 }
 
 export function cardRuleMatches(rule: CardRule, context: CardRuleContext): boolean {
+  if ((rule.match.kind ?? 'tool') !== (context.kind ?? 'tool')) return false
   if (!globToRegExp(rule.match.tool).test(context.tool.name)) return false
   if (rule.match.mcpServer && mcpServerOf(context.tool.name) !== rule.match.mcpServer) return false
   if (rule.match.keys?.some(key => !Object.hasOwn(context.tool.input, key))) return false

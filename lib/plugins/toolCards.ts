@@ -10,8 +10,8 @@
 import { subscribePluginEnablement } from './enablement'
 import { hasNativeToolCard } from './nativeTools'
 import { hasPluginRuntimeObservers, publishPluginRuntimeEvent } from './runtimeEvents'
-import { PLUGIN_TOOL_RESULT_MAX_CHARS, type PluginToolCardContext } from './behavior'
-import type { AgentProvider, ContentBlock, PluginToolCard, SessionMessage, ToolResultBlock, ToolUseBlock } from '../types'
+import { PLUGIN_TOOL_RESULT_MAX_CHARS, PLUGIN_TRANSCRIPT_PAYLOAD_MAX_CHARS, type PluginToolCardContext } from './behavior'
+import type { AgentProvider, ContentBlock, PluginToolCard, SessionMessage, SystemMessagePayload, ToolResultBlock, ToolUseBlock } from '../types'
 
 const CACHE_MAX = 4_000
 const cache = new Map<string, PluginToolCard | null>()
@@ -57,14 +57,41 @@ function noteUnrendered(target: { provider: AgentProvider; providerInstanceId?: 
 /** Forget which shapes were reported (a plugin turned on later should hear about them). */
 export function clearReportedUnrenderedShapes(): void { reportedShapes.clear() }
 
+/** A system payload reduced to what a hook should see: primitives and short strings, never a transcript's worth. */
+function boundSystemPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(payload).slice(0, 40)) {
+    if (key === 'pluginCard') continue
+    out[key] = typeof value === 'string' ? value.slice(0, 1_000) : typeof value === 'number' || typeof value === 'boolean' || value === null ? value : value === undefined ? undefined : JSON.stringify(value).slice(0, 500)
+  }
+  return JSON.stringify(out).length > PLUGIN_TRANSCRIPT_PAYLOAD_MAX_CHARS ? Object.fromEntries(Object.entries(out).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 200) : value])) : out
+}
+
 export async function annotatePluginToolCards(provider: AgentProvider, providerInstanceId: string | undefined, sessionId: string, messages: SessionMessage[]): Promise<SessionMessage[]> {
   const { pluginBehaviorHost } = await import('./serverBehaviors')
   const host = pluginBehaviorHost()
-  if (!host.presentsToolCards()) return messages
+  const tools = host.presentsToolCards(), systems = host.presentsTranscriptCards()
+  if (!tools && !systems) return messages
   const target = { provider, sessionId, ...(providerInstanceId ? { providerInstanceId } : {}) }
   const results = collectToolResults(messages)
   const out: SessionMessage[] = []
   for (const message of messages) {
+    if (message.type === 'system') {
+      // A system message is not a tool call: plugins answer for it through transcriptCard, and the answer rides on its payload.
+      const payload = message.message as { subtype?: unknown; pluginCard?: unknown }
+      if (!systems || typeof payload?.subtype !== 'string') { out.push(message); continue }
+      const key = `sys:${provider}@${providerInstanceId ?? ''}:${sessionId}:${message.uuid}`
+      let card: PluginToolCard | null | undefined = cache.get(key)
+      if (card === undefined) {
+        const answered = await host.transcriptCard({ target, block: { kind: 'system', id: message.uuid, subtype: payload.subtype, payload: boundSystemPayload(message.message as Record<string, unknown>) } })
+        card = answered ? { pluginId: answered.pluginId, title: answered.title ?? payload.subtype, lines: answered.lines, tone: answered.tone, ...(answered.blocks ? { blocks: answered.blocks } : {}) } : null
+        cache.set(key, card)
+        if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+      }
+      out.push(card ? { ...message, message: { ...(message.message as SystemMessagePayload), pluginCard: card } } : message)
+      continue
+    }
+    if (!tools) { out.push(message); continue }
     const content = (message.message as { content?: unknown })?.content
     if (!Array.isArray(content) || !content.some((block: ContentBlock) => block?.type === 'tool_use')) { out.push(message); continue }
     let changed = false

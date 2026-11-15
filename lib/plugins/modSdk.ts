@@ -19,6 +19,7 @@ export type ModServerModule = {
   readonly permission?: Hook<'permission'>
   readonly runtimeEvent?: Hook<'runtimeEvent'>
   readonly toolCard?: Hook<'toolCard'>
+  readonly transcriptCard?: Hook<'transcriptCard'>
   readonly deactivate?: () => void
   readonly commands?: Readonly<Record<string, (context: LocalCommandContext) => LocalCommandEffects | Promise<LocalCommandEffects>>>
   readonly widgets?: Readonly<Record<string, (context: LocalModContext & { signal: AbortSignal }) => { title?: string; text?: string; lines?: readonly string[]; tone?: 'info' | 'success' | 'warning' | 'error' } | null | Promise<{ title?: string; text?: string; lines?: readonly string[]; tone?: 'info' | 'success' | 'warning' | 'error' } | null>>>

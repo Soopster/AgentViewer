@@ -14,7 +14,7 @@ import {
   type PluginBehaviorModule,
   type PluginBeforeTurnContext,
   type PluginPermissionRequest,
-  type PluginToolCardContext,
+  type PluginToolCardContext, PluginTranscriptCardContext,
   type PluginTurnTarget,
   PLUGIN_PERMISSION_TIMEOUT_MS,
 } from './behavior'
@@ -150,6 +150,29 @@ export function createPluginBehaviorHost(
           return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), tone }
         } catch (error) {
           if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} toolCard failed:`, error)
+        }
+      }
+      return null
+    },
+    presentsTranscriptCards: () => hooked('transcriptCard').some(m => isPluginEnabled(m.id)),
+    /** The first plugin presentation of a non-tool block, or null for the built-in card. */
+    async transcriptCard(context: PluginTranscriptCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; blocks?: CardBlock[]; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
+      if (disposed) return null
+      for (const manifest of hooked('transcriptCard')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(500)])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).transcriptCard!(context))
+          if (!result) continue
+          const text = typeof result.text === 'string' ? result.text : Array.isArray(result.lines) ? result.lines.filter(line => typeof line === 'string').join('\n') : ''
+          const lines = text ? text.split('\n').map(line => line.slice(0, 400)).slice(0, 40) : []
+          const title = typeof result.title === 'string' && result.title.trim() ? result.title.trim().slice(0, 120) : undefined
+          const blocks = decodeCardBlocks(result.blocks)
+          if (!title && !lines.length && !blocks.length) continue
+          const tone = result.tone === 'success' || result.tone === 'warning' || result.tone === 'error' ? result.tone : 'info'
+          return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), tone }
+        } catch (error) {
+          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} transcriptCard failed:`, error)
         }
       }
       return null

@@ -78,7 +78,7 @@ The gallery lists what the app could change about itself, from how it is used: a
 often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.
 A view suggestion adds a new custom view (never selected for you). Counts come from `tool.completed` events and the
 `ui.interaction` event, which the Web reports in batches (30s) when a generic, MCP or plugin card is opened or folded.
-`ui.interaction` is not reported from the TUI yet.
+The TUI reports the same when a card is expanded or folded with `e` (cards carry their tools' real names), delivered in process on the first flush or to the daemon when attached.
 
 ## Rules shipped by a mod
 A mod may keep card rules in a `ui-recipes/` folder beside its `plugin.json`. They apply while the mod is enabled,
@@ -95,10 +95,11 @@ A rule file edited on disk clears cached cards. Bundled plugins' own code reload
 - `toolCard` hooks may return `blocks` (the same vocabulary) beside `lines`, and receive the call's `result`
   (text, `isError`, `truncated`) once it has one.
 - `runtimeEvent` hooks receive `block.unrendered` and `ui.interaction`.
+- **`transcriptCard`** presents a block that is not a tool call. Today that is a system message: the hook gets `{ target, block: { kind: 'system', id, subtype, payload } }` (payload bounded to 8,000 characters) and answers like `toolCard`; the card rides on the payload through threading, so both renderers draw it, and the Web keeps a *show original* toggle. A rule with `match: { kind: 'system', tool: '<subtype>' }` does the same declaratively (`input.*` is the message's fields); a failed system message (`level: error`, or an `error` field) is an error card whatever the rule says. A tool rule never draws a system message or the reverse. System messages are not designed from observed shapes (the host cannot tell which are drawn generically), so these rules are written by hand, by an agent, or by a mod.
 
 ## Not done
-`transcriptCard` for non-tool blocks, `ui.interaction` from the TUI, and a general mechanism for plugins to contribute agent tools (the
-`agent-viewer cards` CLI and the skill cover what an agent needs here).
+A general mechanism for plugins to contribute agent tools (the `agent-viewer cards` CLI and the skill cover what an agent needs here), and
+`transcriptCard` for blocks other than system messages (text, thinking, slash commands).
 
 Project-scoped recipes (`<repo>/.agent-viewer/ui-recipes`) are deliberately not loaded: a cloned repository would decide how
 your tool calls look. If they are added they should arrive as drafts to adopt, like a design from an agent.

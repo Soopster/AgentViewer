@@ -104,7 +104,18 @@ export type PluginToolCardResult =
   | void
   | null
 
-export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'runtimeEvent'
+/**
+ * A transcript block that is not a tool call: today a system message (a notice, a retry, a status), which the
+ * host draws with a generic system card unless a plugin presents it. `payload` is the message as the provider
+ * mapper produced it, bounded; the answer is the same title, blocks and tone a tool card gets.
+ */
+export type PluginTranscriptCardContext = {
+  readonly target: PluginTurnTarget
+  readonly block: { readonly kind: 'system'; readonly id: string; readonly subtype: string; readonly payload: Readonly<Record<string, unknown>> }
+}
+export const PLUGIN_TRANSCRIPT_PAYLOAD_MAX_CHARS = 8_000
+
+export type PluginBehaviorHook = 'beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'transcriptCard' | 'runtimeEvent'
 
 /** Consecutive plugin follow-ups allowed before a user turn resets the count. */
 export const PLUGIN_FOLLOW_UP_LIMIT = 25
@@ -122,6 +133,8 @@ export type PluginBehaviorModule = {
   readonly permission?: (context: PluginPermissionContext) => PluginPermissionResult | Promise<PluginPermissionResult>
   /** Present a tool call in the transcript (both renderers). Runs on the read path: keep it cheap and pure. */
   readonly toolCard?: (context: PluginToolCardContext) => PluginToolCardResult | Promise<PluginToolCardResult>
+  /** Present a non-tool transcript block (a system message) in both renderers. Runs on the read path: keep it cheap and pure. */
+  readonly transcriptCard?: (context: PluginTranscriptCardContext) => PluginToolCardResult | Promise<PluginToolCardResult>
   /** Observe runtime metadata; return values cannot mutate or block execution. */
   readonly runtimeEvent?: (context: PluginRuntimeEventContext) => void | Promise<void>
   readonly deactivate?: () => void

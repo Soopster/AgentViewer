@@ -117,7 +117,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   let behavior: PluginManifest['behavior']
   if (value.behavior !== undefined) {
     const spec = value.behavior as { hooks?: unknown; order?: unknown; permissionMode?: unknown }
-    const known = ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission', 'toolCard', 'runtimeEvent'] as const
+    const known = ['beforeTurn', 'afterTurn', 'beforeSteer', 'permission', 'toolCard', 'transcriptCard', 'runtimeEvent'] as const
     const hooks = Array.isArray(spec?.hooks) ? spec.hooks.filter((hook): hook is typeof known[number] => known.includes(hook)) : []
     if (!hooks.length || hooks.length !== (spec.hooks as unknown[]).length) problems.push(`behavior.hooks must list some of ${known.join(', ')}`)
     else if (spec.permissionMode !== undefined && spec.permissionMode !== 'policy' && spec.permissionMode !== 'automation') problems.push('behavior.permissionMode must be policy or automation')

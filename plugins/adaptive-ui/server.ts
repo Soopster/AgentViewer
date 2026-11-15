@@ -55,6 +55,20 @@ export const behavior: PluginBehaviorModule = {
     return null
   },
   deactivate: closeRecipeWatcher,
+  transcriptCard({ block }) {
+    ensureWatching()
+    // A failed system message is an error whatever a rule says, as a failed tool call is.
+    const failed = block.payload.level === 'error' || typeof block.payload.error === 'string'
+    const context = { kind: 'system' as const, tool: { name: block.subtype, input: block.payload }, result: { text: '', isError: failed } }
+    let best: ReturnType<typeof effectiveRules>['rules'][number] | null = null
+    for (const rule of effectiveRules().rules) {
+      if (rule.status !== 'active' || rule.match.kind !== 'system' || !cardRuleMatches(rule, context)) continue
+      if (!best || cardRuleSpecificity(rule) > cardRuleSpecificity(best)) best = rule
+    }
+    if (!best) return null
+    const card = renderCardRule(best, context)
+    return { title: card.title, blocks: card.blocks, tone: card.tone }
+  },
   runtimeEvent({ event }) {
     if (event.type === 'tool.completed' && event.tool?.name) noteToolCompleted(event.tool.name, event.tool.failed === true)
     else if (event.type === 'ui.interaction' && event.interaction) noteInteraction(event.interaction.subject, event.interaction.action, event.interaction.count)

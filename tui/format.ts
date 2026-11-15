@@ -23,7 +23,7 @@ import {
 
 import { inlineImageBlock } from '../lib/imageContent'
 import { reasoningLabel, latestReasoningSummary, hasReasoningContent, thinkingTranscriptText } from '../lib/reasoningDisplay'
-import type { ToolResultBlock } from '../lib/types'
+import type { PluginToolCard, ToolResultBlock } from '../lib/types'
 import { readAsyncQuestions } from '../lib/asyncQuestions'
 import { mcpResourceLinks } from '../lib/mcpArtifacts'
 import { readableContextText } from '../lib/composerContext'
@@ -542,6 +542,7 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
         : [line('(no output)', 'dim')]
     }
     case 'claude_system': {
+      { const pluginCard = (block.payload as { pluginCard?: PluginToolCard }).pluginCard; if (pluginCard) return pluginSystemCardLines(pluginCard, false) }
       const subagentType = typeof block.payload.subagent_type === 'string' ? block.payload.subagent_type : ''
       const subagentPrefix = subagentType ? `[${subagentType}] ` : ''
       const errorCode = typeof block.payload.error === 'string' ? block.payload.error : ''
@@ -1368,6 +1369,7 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
       return lines.length > 0 ? lines : [line('(no output)', 'dim')]
     }
     case 'claude_system': {
+      { const pluginCard = (block.payload as { pluginCard?: PluginToolCard }).pluginCard; if (pluginCard) return pluginSystemCardLines(pluginCard, true) }
       const errorCode = typeof block.payload.error === 'string' ? block.payload.error : ''
       if (errorCode) {
         const apiStatus = typeof block.payload.api_error_status === 'number' ? block.payload.api_error_status : null
@@ -1641,6 +1643,13 @@ function toolNamesOf(blocks: readonly ThreadedBlock[]): string[] | undefined {
  * as the tool row, its lines under it (all of them when expanded, the first
  * otherwise), and the call's error if it failed — a plugin cannot hide that.
  */
+/** A plugin's presentation of a system message: its title, its lines (all when expanded, the first otherwise). */
+function pluginSystemCardLines(card: PluginToolCard, expanded: boolean): TuiTranscriptCardLine[] {
+  const bodyTone: TuiTranscriptLineTone = card.tone === 'error' ? 'result_error' : card.tone === 'success' ? 'result_ok' : 'dim'
+  const source = expanded && card.blocks?.length ? cardBlockLines(card.blocks) : card.lines
+  return [line(truncateLine(sanitizeLine(card.title)), 'system'), ...(expanded ? source : card.lines.slice(0, 1)).map(text => line(truncateLine(sanitizeLine(text)), bodyTone))]
+}
+
 function pluginToolCardLines(block: Extract<ThreadedBlock, { type: 'tool_thread' }>, expanded: boolean): TuiTranscriptCardLine[] {
   const card = block.toolUse.pluginCard!
   const bodyTone: TuiTranscriptLineTone = card.tone === 'error' ? 'result_error' : card.tone === 'success' ? 'result_ok' : 'dim'

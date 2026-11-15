@@ -6,11 +6,33 @@ import { McpArtifactLinks } from '../McpArtifacts'
 import { mcpResourceLinks } from '@/lib/mcpArtifacts'
 
 import type { ClaudeSystemBlock } from '@/lib/threading'
+import type { PluginToolCard } from '@/lib/types'
+import { PluginCardBlocks } from '../shell/PluginCardBlocks'
 
 import { useColorTreatment, washBg } from './appearance'
 import { describeClaudeSystem } from './claudeSystemModel'
 
+const TONE_BORDER = { info: 'var(--border-2)', success: 'var(--green, #3fb950)', warning: 'var(--amber, #d29922)', error: 'var(--red, #f85149)' } as const
+
+/** A plugin's presentation of a system message; the original card is one click away. */
 export function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
+  const card = (block.payload as { pluginCard?: PluginToolCard }).pluginCard
+  const [native, setNative] = useState(false)
+  if (!card) return <ClaudeSystemCardBody block={block} />
+  return (
+    <div data-plugin-system-card={card.pluginId}>
+      {native ? <ClaudeSystemCardBody block={block} /> : (
+        <div style={{ border: `1px solid ${TONE_BORDER[card.tone]}`, borderRadius: 8, padding: '6px 10px', fontSize: 12.5, background: 'var(--surface)', marginTop: 4 }}>
+          <div style={{ fontWeight: 600, color: 'var(--text)' }}>{card.title}</div>
+          {card.blocks?.length ? <PluginCardBlocks blocks={card.blocks} /> : card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? TONE_BORDER.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
+        </div>
+      )}
+      <button type="button" onClick={() => setNative(value => !value)} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{native ? 'show adaptive card' : 'show original'}</button>
+    </div>
+  )
+}
+
+function ClaudeSystemCardBody({ block }: { block: ClaudeSystemBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const flat = useColorTreatment() === 'flat'

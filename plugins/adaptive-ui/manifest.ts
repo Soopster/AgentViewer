@@ -8,5 +8,5 @@ export const manifest = {
   renderers: ['web', 'tui'], stateVersion: 1,
   surfaces: [{ id: 'adaptive-ui', title: 'Adaptive UI', pin: null, single: true, keys: 'window', placements: ['overlay', 'window', 'panel'], panelOrder: 230, windowLabel: 'Adaptive UI in a window', services: ['adaptive-ui'], optionalServices: ['composer', 'notices'] }],
   commands: [{ id: 'adaptive-ui', label: 'Adaptive UI cards', category: 'View', opens: 'adaptive-ui', requires: null, scope: 'application', renderers: ['web', 'tui'], keywords: ['cards', 'render', 'recipes', 'adaptive', 'tool', 'transcript', 'design'] }],
-  behavior: { hooks: ['toolCard', 'runtimeEvent'], order: 90 },
+  behavior: { hooks: ['toolCard', 'transcriptCard', 'runtimeEvent'], order: 90 },
 } as const satisfies PluginManifest

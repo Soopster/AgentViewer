@@ -33,7 +33,7 @@ export function explainRule(rule: CardRule): RuleExplanation {
   return {
     id: rule.id, status: rule.status, revision: rule.revision ?? 1,
     derived: {
-      appliesTo: `${rule.match.tool}${rule.match.mcpServer ? ` on MCP server ${rule.match.mcpServer}` : ''}${rule.match.keys?.length ? ` when the call has ${rule.match.keys.join(', ')}` : ''}`,
+      appliesTo: `${rule.match.kind === 'system' ? 'system messages of subtype ' : ''}${rule.match.tool}${rule.match.mcpServer ? ` on MCP server ${rule.match.mcpServer}` : ''}${rule.match.keys?.length ? ` when the call has ${rule.match.keys.join(', ')}` : ''}`,
       reads: ruleBindingPaths(rule),
       blocks, tone: `${tone}; error whenever the call failed`,
       cannot: ['run anything or call a tool', 'add a button or any control', 'change state', 'hide that a call failed', rule.overridesNative ? 'be replaced by the built-in card (it replaces it)' : 'replace a built-in card'].filter(item => !item.endsWith('(it replaces it)')),

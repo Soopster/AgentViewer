@@ -6,6 +6,6 @@ import { localPluginDiscovery } from './localPlugins'
 import type { PluginManifest } from './types'
 
 export function pluginsMayPresentToolCards(): boolean {
-  if ((PLUGIN_MANIFESTS as readonly PluginManifest[]).some(manifest => manifest.behavior?.hooks.includes('toolCard'))) return true
-  try { return localPluginDiscovery().plugins.some(plugin => plugin.manifest.behavior?.hooks.includes('toolCard')) } catch { return false }
+  if ((PLUGIN_MANIFESTS as readonly PluginManifest[]).some(manifest => manifest.behavior?.hooks.some(hook => hook === 'toolCard' || hook === 'transcriptCard'))) return true
+  try { return localPluginDiscovery().plugins.some(plugin => plugin.manifest.behavior?.hooks.some(hook => hook === 'toolCard' || hook === 'transcriptCard')) } catch { return false }
 }

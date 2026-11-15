@@ -43,7 +43,7 @@
     "skills-manager:smoke": "bun scripts/skillsManagerSmoke.ts && bun tui/opentui/skillsManagerSmoke.tsx",
     "skills-manager:web:smoke": "bun scripts/webSkillsManagerBrowserSmoke.mjs",
     "mods:autoreload:smoke": "bun scripts/modAutoReloadSmoke.ts",
-    "adaptive-ui:smoke": "bun scripts/cardTemplatesSmoke.ts && bun scripts/adaptiveUiSmoke.ts && bun scripts/adaptiveDesignSmoke.ts && bun scripts/cardsCliSmoke.ts && bun scripts/uiInteractionSmoke.ts && bun scripts/adaptiveSuggestSmoke.ts && bun scripts/adaptiveVocabularySmoke.ts && bun scripts/adaptiveEvolveSmoke.ts && bun tui/opentui/adaptiveUiSmoke.tsx",
+    "adaptive-ui:smoke": "bun scripts/cardTemplatesSmoke.ts && bun scripts/adaptiveUiSmoke.ts && bun scripts/adaptiveDesignSmoke.ts && bun scripts/cardsCliSmoke.ts && bun scripts/uiInteractionSmoke.ts && bun scripts/adaptiveSuggestSmoke.ts && bun scripts/adaptiveVocabularySmoke.ts && bun scripts/adaptiveEvolveSmoke.ts && bun scripts/transcriptCardSmoke.ts && bun scripts/tuiCardInteractionSmoke.ts && bun tui/opentui/adaptiveUiSmoke.tsx",
     "plan-review:smoke": "bun scripts/planReviewSmoke.ts && bun tui/opentui/planReviewSmoke.tsx",
     "plan-review:web:smoke": "bun scripts/webPlanReviewBrowserSmoke.mjs",
     "proof:smoke": "node scripts/proofSmoke.mjs && bun run scripts/proofRulesSmoke.ts && bun run tui/opentui/proofSmoke.tsx && node --import tsx scripts/webProofBrowserSmoke.mjs",
