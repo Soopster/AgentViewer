@@ -98,9 +98,9 @@ palette (**Adaptive UI cards**), from the side-panel launcher, or from the butto
   built-in card with **Keep** and **Discard** (the TUI notes it under the call). The built-in card stays; only **Keep** makes it
   draw instead.
 - **Design a card for this tool** sits on any call a generic card draws (Web), so the gallery is not the only way in.
-- The Web view restores the few spacing utilities it uses itself: `app/globals.css` resets `*` to `padding: 0` outside any
-  cascade layer, which beats every Tailwind padding utility, so plugin views built from `p-4`/`px-2` otherwise draw flush
-  against their edges. Moving that reset into `@layer base` would fix every plugin view at once.
+- `app/globals.css` used to reset `*` to `padding: 0` outside any cascade layer, which beat every Tailwind padding and margin
+  utility, so plugin views built from `p-4`/`px-2` drew flush against their edges (Skills Manager, this gallery). The reset now
+  lives in `@layer base`, so utilities apply; the app's own unlayered rules still override it as before.
 
 ## Learning from past sessions
 The live read path sees a call once and keeps three samples. **Learn from past sessions** (the gallery's button, `l` in the

@@ -1541,7 +1541,11 @@ html[data-color-treatment="flat"] .av-hover-control:not(:disabled):hover {
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* In the base layer, not unlayered: an unlayered `*` rule beats every Tailwind utility (utilities live in a layer), so
+   `p-4`, `px-2` and `m-0` did nothing anywhere. The app's own unlayered rules still override this, as before. */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+}
 html, body { height: 100%; overflow: hidden; }
 
 .timeline-row {

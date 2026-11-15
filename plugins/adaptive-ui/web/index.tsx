@@ -12,10 +12,6 @@ import { ADAPTIVE_FILTERS, coverageWarnings, countAdaptive, describeAdaptiveItem
 // its tabs and actions beside it. Below the `md` breakpoint it shows the list or the detail, with a way back.
 const RULE_TABS = [['preview', 'Preview'], ['why', 'Why'], ['history', 'History'], ['rule', 'Rule']] as const
 type RuleTab = (typeof RULE_TABS)[number][0]
-// app/globals.css resets `*` to `margin: 0; padding: 0` OUTSIDE any cascade layer, which beats every Tailwind
-// padding and margin utility, so a plugin view built from `p-4`/`px-2` draws flush against its edges. Until that
-// reset moves into a layer, the few spacing utilities this view uses are restored here, scoped to the view.
-const SPACING = `[data-plugin-view="adaptive-ui"].p-4,[data-plugin-view="adaptive-ui"] .p-4{padding:1rem}[data-plugin-view="adaptive-ui"] .p-2{padding:.5rem}[data-plugin-view="adaptive-ui"] .p-1{padding:.25rem}[data-plugin-view="adaptive-ui"] .px-1{padding-inline:.25rem}[data-plugin-view="adaptive-ui"] .px-2{padding-inline:.5rem}[data-plugin-view="adaptive-ui"] .px-3{padding-inline:.75rem}[data-plugin-view="adaptive-ui"] .py-1{padding-block:.25rem}[data-plugin-view="adaptive-ui"] .pt-1{padding-top:.25rem}[data-plugin-view="adaptive-ui"] .pt-2{padding-top:.5rem}[data-plugin-view="adaptive-ui"] .pl-2{padding-left:.5rem}[data-plugin-view="adaptive-ui"] .mb-1{margin-bottom:.25rem}[data-plugin-view="adaptive-ui"] .m-0{margin:0}[data-plugin-view="adaptive-ui"] .h-8{height:2rem}[data-plugin-view="adaptive-ui"] button{cursor:pointer}`
 const TONE_CLASS: Record<AdaptiveRowTone, string> = { accent: 'text-primary', good: 'text-green-600', warn: 'text-amber-600', muted: 'text-muted-foreground', bad: 'text-red-600' }
 
 function Detail({ state, item, tab, setTab }: { state: AdaptiveViewState; item: AdaptiveItem; tab: RuleTab; setTab: (tab: RuleTab) => void }) {
@@ -91,7 +87,6 @@ function AdaptiveUi({ services, placement, close, useState: scoped }: WebPluginV
   const ruleCount = state.snapshot?.rules.length ?? 0
   let lastSection = ''
   const body = <section data-plugin-view="adaptive-ui" aria-label="Adaptive UI" className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-background p-4 text-foreground">
-    <style>{SPACING}</style>
     <header className="flex flex-wrap items-center gap-2">
       <h2 className="mr-auto font-semibold">Adaptive UI <span className="text-xs font-normal text-muted-foreground">cards for tool calls · {ruleCount} card{ruleCount === 1 ? '' : 's'} · {countAdaptive(state.items, 'generic')} drawn generically</span></h2>
       <label className="flex items-center gap-1 text-xs" title={`Draft a card for a tool drawn generically ${state.snapshot?.settings.autoDraftAfter ?? 5}+ times, unprompted, at most ${state.snapshot?.settings.autoDraftDaily ?? 3} a day. Drafts only: nothing is enabled for you.`}><input type="checkbox" checked={state.snapshot?.settings.autoDraft ?? false} disabled={state.busy || !state.snapshot} onChange={event => void state.setAutoDraft(event.target.checked)} />Draft cards automatically</label>
