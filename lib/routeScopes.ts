@@ -90,6 +90,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/plugins': { GET: 'read', PATCH: 'write' },
   // Runs the user's own plugin code, so never something a read-only device may do.
   '/api/plugins/local': { GET: 'read', POST: 'write' },
+  '/api/plugins/reload': { POST: 'write' },
   '/api/plugins/local/views': { GET: 'read', POST: 'write' },
   '/api/plugins/local/component': { GET: 'read' },
   '/api/provider': { GET: 'read', PATCH: 'write' },

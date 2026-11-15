@@ -53,6 +53,14 @@ export class ShapeBook {
     while (this.shapes.size > SHAPE_LIMITS.shapes) this.shapes.delete(this.shapes.keys().next().value!)
     return next
   }
+  /** Fold in records another isolate persisted: a shape is taken from the other side only when it was seen more recently. */
+  merge(records: readonly ShapeRecord[]): void {
+    for (const record of records.slice(0, SHAPE_LIMITS.shapes)) {
+      const mine = this.shapes.get(record.key)
+      if (!mine || record.lastSeen > mine.lastSeen) this.shapes.set(record.key, mine?.dismissed && !record.dismissed ? { ...record, dismissed: true } : record)
+    }
+    while (this.shapes.size > SHAPE_LIMITS.shapes) this.shapes.delete(this.shapes.keys().next().value!)
+  }
   dismiss(key: string, dismissed = true): void { const prev = this.shapes.get(key); if (prev) this.shapes.set(key, { ...prev, ...(dismissed ? { dismissed: true } : { dismissed: undefined }) }) }
   forget(key: string): void { this.shapes.delete(key) }
   list(): ShapeRecord[] { return [...this.shapes.values()].sort((a, b) => b.count - a.count || b.lastSeen - a.lastSeen) }

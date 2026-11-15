@@ -33,5 +33,9 @@ export const manifest = {
     renderers: ['web', 'tui'],
     tuiChord: { key: 'x', short: 'mods', label: 'Views from your mods' },
     keywords: ['mod', 'mods', 'extension', 'local plugin', 'view', 'panel'],
+  }, {
+    id: 'reload', label: 'Reload mods', category: 'View', handler: 'reload', scope: 'application', requires: null,
+    renderers: ['web', 'tui'], services: ['notices'],
+    keywords: ['reload', 'refresh', 'mods', 'plugins', 'restart', 'extension'],
   }],
 } as const satisfies PluginManifest

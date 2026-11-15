@@ -41,6 +41,7 @@
     "knowledge-plugins:web:smoke": "bun scripts/webKnowledgePluginsBrowserSmoke.mjs",
     "skills-manager:smoke": "bun scripts/skillsManagerSmoke.ts && bun tui/opentui/skillsManagerSmoke.tsx",
     "skills-manager:web:smoke": "bun scripts/webSkillsManagerBrowserSmoke.mjs",
+    "mods:autoreload:smoke": "bun scripts/modAutoReloadSmoke.ts",
     "adaptive-ui:smoke": "bun scripts/cardTemplatesSmoke.ts && bun scripts/adaptiveUiSmoke.ts && bun tui/opentui/adaptiveUiSmoke.tsx",
     "plan-review:smoke": "bun scripts/planReviewSmoke.ts && bun tui/opentui/planReviewSmoke.tsx",
     "plan-review:web:smoke": "bun scripts/webPlanReviewBrowserSmoke.mjs",

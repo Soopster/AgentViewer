@@ -99,6 +99,13 @@ assert.throws(() => writeCardRule({ id: 'x', status: 'active', match: { tool: '*
 await nativeAdaptiveUi.remove('linear.any'); await nativeAdaptiveUi.remove('linear.get_issue'); clearPluginToolCardCache()
 assert.equal(await card(call('t9', TOOL, { id: 'ENG-9' }, { text: issue })), undefined)
 assert.ok(!readdirSync(join(root, 'recipes')).includes('linear.get_issue.json'))
+// 8. The TUI reads transcripts in a worker isolate and draws the gallery in the main one: shapes the
+// other isolate persisted reach this one's snapshot without a restart.
+const { writeFileSync: write, mkdirSync: mk } = await import('node:fs')
+mk(join(root, 'state'), { recursive: true })
+await new Promise(resolve => setTimeout(resolve, 20))
+write(join(root, 'state', 'state.json'), JSON.stringify({ shapes: [{ key: 'mcp__other__ping|q', tool: 'mcp__other__ping', inputKeys: ['q'], count: 7, firstSeen: 1, lastSeen: Date.now() + 5_000, samples: [] }] }))
+assert.ok(adaptiveUiSnapshot().shapes.some(shape => shape.tool === 'mcp__other__ping' && shape.count === 7), 'a shape persisted by another isolate appears')
 off()
 console.log('adaptiveUiSmoke: ok')
 process.exit(0)

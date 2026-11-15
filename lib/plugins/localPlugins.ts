@@ -12,6 +12,7 @@
 // inspection heartbeats observe reload markers without scanning project folders.
 // Refused declarations are reported without loading executable code.
 import { readModReloadRequest } from './modReload'
+import { ensureModWatcher } from './modWatch'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -73,6 +74,8 @@ declare global {
 export function localPluginDiscovery(): LocalPluginDiscovery {
   const request = readModReloadRequest()
   const dir = localPluginsDir()
+  // Editing a mod reloads it: watch the directories this discovery reads (once per process).
+  ensureModWatcher(() => [dir, ...readModReloadRequest().developmentDirs])
   const previous = globalThis.__agentViewerLocalPlugins
   if (previous?.revision === request.revision && previous.dir === dir) return previous
   const next = discoverDirectories(dir, [...installedDirectories(dir), ...request.developmentDirs], request.revision)

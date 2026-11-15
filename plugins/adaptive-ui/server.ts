@@ -24,6 +24,12 @@ function ensureWatching(): void {
   } catch { /* the directory does not exist yet: it is watched again on the next call, once a rule has been written */ }
 }
 
+/** A reload disposes the behavior host: stop watching and drop pending work so a fresh host starts clean. */
+function closeRecipeWatcher(): void {
+  if (debounce) { clearTimeout(debounce); debounce = null }
+  watcher?.close(); watcher = null; watchedDir = ''
+}
+
 export const behavior: PluginBehaviorModule = {
   apiVersion: PLUGIN_API_VERSION,
   pluginId: 'adaptive-ui',
@@ -48,6 +54,7 @@ export const behavior: PluginBehaviorModule = {
     }
     return null
   },
+  deactivate: closeRecipeWatcher,
   runtimeEvent({ event }) {
     if (event.type === 'tool.completed' && event.tool?.name) noteToolCompleted(event.tool.name, event.tool.failed === true)
   },
