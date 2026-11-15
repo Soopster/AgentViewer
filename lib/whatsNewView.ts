@@ -113,3 +113,21 @@ export function changeBarCells(file: WhatsNewFile, largest: number, cells: numbe
 }
 
 export { WHATS_NEW_FILE_LIMIT }
+
+/** Word-wraps to `width` cells; a token longer than a line is broken, and a path breaks after its slashes. */
+export function wrapCells(text: string, width: number): string[] {
+  const limit = Math.max(width, 1)
+  const lines: string[] = []
+  let line = ''
+  const flush = () => { if (line) lines.push(line); line = '' }
+  for (const word of text.split(/(?<=\/)|\s+/).filter(Boolean)) {
+    let rest = word
+    const joiner = line && !line.endsWith('/') ? ' ' : ''
+    if (line.length + joiner.length + rest.length <= limit) { line += joiner + rest; continue }
+    flush()
+    while (rest.length > limit) { lines.push(rest.slice(0, limit)); rest = rest.slice(limit) }
+    line = rest
+  }
+  flush()
+  return lines.length > 0 ? lines : ['']
+}

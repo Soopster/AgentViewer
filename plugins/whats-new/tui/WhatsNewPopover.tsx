@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { WhatsNew, WhatsNewKind } from '../../../lib/whatsNew'
 import { formatWhatsNewMarkdown } from '../../../lib/whatsNew'
-import { reconcileWhatsNewSelection, splitWhatsNewPath, whatsNewDetail, whatsNewRows } from '../../../lib/whatsNewView'
+import { reconcileWhatsNewSelection, splitWhatsNewPath, whatsNewDetail, whatsNewRows, wrapCells } from '../../../lib/whatsNewView'
 
 type KeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 type Pane = 'list' | 'detail'
@@ -28,7 +28,6 @@ type Props = {
 }
 
 const PAGE = 14
-const ROW_HEIGHT = 2
 /** Below this many inner columns the list and the detail take turns. */
 const WIDE_MIN = 84
 const HELP: ShortcutHelpGroup[] = [
@@ -77,17 +76,29 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
   const canLoadMore = Boolean(summary?.truncated) && (summary?.revisions.length ?? 0) >= limit
 
   const frame = popoverFrameCells(docked)
-  const popW = docked ? width : Math.min(width - 4, 132)
-  const popH = docked ? height : Math.min(height - 2, 46)
+  const popW = docked ? width : Math.max(width - 4, 20)
+  const popH = docked ? height : Math.max(height - 2, 10)
   const popTop = Math.max(Math.floor((height - popH) / 2), 0)
   const popLeft = Math.max(Math.floor((width - popW) / 2), 0)
   const innerW = popW - frame - 2
   const bodyH = Math.max(popH - frame - 2, 4)
   const wide = innerW >= WIDE_MIN
-  const listW = wide ? Math.min(Math.max(Math.floor(innerW * 0.4), 34), 54) : innerW
+  const listW = wide ? Math.min(Math.max(Math.floor(innerW * 0.38), 34), 70) : innerW
   const detailW = wide ? innerW - listW - 1 : innerW
   const showList = wide || pane === 'list'
   const showDetail = wide || pane === 'detail'
+
+  // A label wraps rather than truncating, so a row is its label's lines plus one line of meta.
+  const rowLayout = useMemo(() => {
+    let top = 0
+    return rows.map((row) => {
+      const indent = row.type === 'highlight' ? 5 : 2
+      const lines = wrapCells(row.label, Math.max(listW - 1 - indent, 8))
+      const layout = { key: row.key, top, lines, height: lines.length + 1, indent }
+      top += layout.height
+      return layout
+    })
+  }, [rows, listW])
 
   const selectRow = useCallback((key: string) => {
     setSelectedKey(key)
@@ -99,11 +110,12 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
     const box = listRef.current
     const index = rows.findIndex((row) => row.key === activeKey)
     if (!box || index < 0) return
-    const top = index * ROW_HEIGHT
-    const viewport = Math.max(bodyH - 1, ROW_HEIGHT)
-    if (top < box.scrollTop) box.scrollTop = top
-    else if (top + ROW_HEIGHT > box.scrollTop + viewport) box.scrollTop = top + ROW_HEIGHT - viewport
-  }, [activeKey, rows, bodyH])
+    const layout = rowLayout[index]
+    if (!layout) return
+    const viewport = Math.max(bodyH - 1, layout.height)
+    if (layout.top < box.scrollTop) box.scrollTop = layout.top
+    else if (layout.top + layout.height > box.scrollTop + viewport) box.scrollTop = layout.top + layout.height - viewport
+  }, [activeKey, rows, rowLayout, bodyH])
 
   const scrollDetail = useCallback((delta: number) => {
     const box = detailRef.current
@@ -173,19 +185,27 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
   const listPane = (
     <box width={listW} height={bodyH} flexDirection="column" flexShrink={0} onMouseDown={() => setPane('list')}>
       <scrollbox ref={listRef} flexGrow={1} minHeight={0} scrollY scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}>
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const selected = row.key === activeKey
-          const marker = selected ? '▌' : ' '
-          const fg = selected && pane === 'list' ? theme.text : selected ? theme.text : row.type === 'revision' ? theme.cyan : theme.text
+          const layout = rowLayout[index]!
+          const pad = ' '.repeat(layout.indent)
+          const fg = selected ? theme.text : row.type === 'revision' ? theme.cyan : theme.text
           return (
-            <box key={row.key} height={ROW_HEIGHT} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined}
+            <box key={row.key} height={layout.height} flexDirection="column" flexShrink={0} backgroundColor={selected ? theme.surface2 : undefined}
               onMouseDown={() => { selectRow(row.key); setPane(wide ? 'list' : 'detail') }}>
               <text fg={fg} wrapMode="none">
-                <span fg={selected ? accentColor : theme.dim}>{marker}</span>
-                {row.type === 'highlight' ? <span fg={kindColor(row.kind)}>{`  ${KIND_GLYPH[row.kind ?? 'chore']} `}</span> : <span fg={theme.dim}>{' '}</span>}
-                {fit(row.label, listW - 1 - (row.type === 'highlight' ? 5 : 2))}
+                {layout.lines.map((line, lineIndex) => (
+                  <span key={lineIndex}>
+                    <span fg={selected ? accentColor : theme.dim}>{lineIndex === 0 ? (selected ? '▌' : ' ') : (selected ? '▌' : ' ')}</span>
+                    {row.type === 'highlight'
+                      ? <span fg={kindColor(row.kind)}>{lineIndex === 0 ? `  ${KIND_GLYPH[row.kind ?? 'chore']} ` : '    '}</span>
+                      : <span fg={theme.dim}>{' '}</span>}
+                    {line}
+                    {lineIndex < layout.lines.length - 1 ? '\n' : ''}
+                  </span>
+                ))}
               </text>
-              <text fg={theme.dim} wrapMode="none">{fit(`${row.type === 'highlight' ? '     ' : '  '}${row.meta}`, listW - 2)}</text>
+              <text fg={theme.dim} wrapMode="none">{fit(`${pad}${row.meta}`, listW - 2)}</text>
             </box>
           )
         })}
@@ -222,16 +242,25 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
                   // The scrollbar takes a column of its own; a row that reaches it loses its last digits.
                   const statCells = (numberWidth + 1) + (numberWidth + 2)
                   const pathCells = Math.max(detailW - 1 - statCells - 2, 12)
-                  const shownName = fit(name, pathCells)
-                  const dirCells = pathCells - shownName.length - 1
-                  const shownDir = dirCells >= 4 ? fit(dir, dirCells) : ''
-                  const gap = ' '.repeat(Math.max(pathCells - shownName.length - (shownDir ? shownDir.length + 1 : 0), 0))
+                  // The name leads; the folder shares its line when it fits and otherwise wraps beneath it.
+                  const nameLines = wrapCells(name, pathCells)
+                  const lastName = nameLines[nameLines.length - 1]!
+                  const inline = dir && lastName.length + 1 + dir.length <= pathCells
+                  const dirLines = dir && !inline ? wrapCells(dir, pathCells - 2) : []
+                  const first = nameLines.length === 1 ? lastName : nameLines[0]!
+                  const head = nameLines.slice(0, -1)
+                  const tail = nameLines.length === 1 ? '' : lastName
+                  const mainLine = head.length === 0 ? first : tail
+                  const used = mainLine.length + (inline ? dir.length + 1 : 0)
+                  const gap = ' '.repeat(Math.max(pathCells - used, 0))
                   return (
                     <span key={file.path}>
-                      <span fg={theme.text}>{shownName}</span>
-                      <span fg={theme.dim}>{`${shownDir ? ` ${shownDir}` : ''}${gap}  `}</span>
+                      {head.map((line, headIndex) => <span key={headIndex} fg={theme.text}>{`${line}\n`}</span>)}
+                      <span fg={theme.text}>{mainLine}</span>
+                      <span fg={theme.dim}>{`${inline ? ` ${dir}` : ''}${gap}  `}</span>
                       <span fg={file.added > 0 ? theme.green : theme.dim}>{`+${file.added}`.padStart(numberWidth + 1)}</span>
                       <span fg={file.removed > 0 ? theme.red : theme.dim}>{` −${file.removed}`.padStart(numberWidth + 2)}</span>
+                      {dirLines.map((line, dirIndex) => <span key={`d${dirIndex}`} fg={theme.dim}>{`\n  ${line}`}</span>)}
                       {index < detail.files.length - 1 || detail.hiddenFiles > 0 ? '\n' : ''}
                     </span>
                   )

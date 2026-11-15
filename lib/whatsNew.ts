@@ -162,7 +162,7 @@ export function scoreCommit(commit: WhatsNewCommit, kind: WhatsNewKind = classif
 function firstParagraph(body: string): string | null {
   const paragraph = body.split(/\n\s*\n/)[0]?.replace(/\s+/g, ' ').trim()
   if (!paragraph) return null
-  return paragraph.length > 280 ? `${paragraph.slice(0, 279)}…` : paragraph
+  return paragraph.length > 700 ? `${paragraph.slice(0, 699)}…` : paragraph
 }
 
 function localDay(ms: number): string {

@@ -1,7 +1,7 @@
 // What's new: grouping, scoring and the git-log parser, plus the reader against this repository.
 import assert from 'node:assert/strict'
 import { buildWhatsNew, classifyCommit, formatWhatsNewMarkdown, scoreCommit, whatsNewLineTone, type WhatsNewCommit } from '../lib/whatsNew'
-import { changeBarCells, reconcileWhatsNewSelection, splitWhatsNewPath, whatsNewDetail, whatsNewRows } from '../lib/whatsNewView'
+import { wrapCells, changeBarCells, reconcileWhatsNewSelection, splitWhatsNewPath, whatsNewDetail, whatsNewRows } from '../lib/whatsNewView'
 import { parseWhatsNewLog, readWhatsNew } from '../lib/whatsNewReader'
 
 const at = (day: number, hour = 12) => new Date(2026, 10, day, hour).getTime()
@@ -78,6 +78,10 @@ assert.equal(classifyCommit('Adaptive UI: patches and history'), 'improvement')
   assert.equal(reconcileWhatsNewSelection(rows, 'h:gone:zzz'), rows[0]!.key, 'a vanished one falls back to the first row')
   assert.equal(reconcileWhatsNewSelection([], 'x'), null)
   assert.deepEqual(splitWhatsNewPath('a/b/c.ts'), { dir: 'a/b/', name: 'c.ts' })
+  assert.deepEqual(wrapCells('aaa bbb ccc', 7), ['aaa bbb', 'ccc'])
+  assert.deepEqual(wrapCells('abcdefghij', 4), ['abcd', 'efgh', 'ij'], 'a long token is broken')
+  assert.deepEqual(wrapCells('a/b/c/d/', 4), ['a/b/', 'c/d/'], 'a path breaks after a slash')
+  assert.deepEqual(wrapCells('', 5), [''])
   assert.deepEqual(splitWhatsNewPath('c.ts'), { dir: '', name: 'c.ts' })
   assert.deepEqual(changeBarCells({ path: 'x', added: 10, removed: 0 }, 10, 10), { add: 10, remove: 0 })
   const mixed = changeBarCells({ path: 'x', added: 5, removed: 5 }, 10, 10)
