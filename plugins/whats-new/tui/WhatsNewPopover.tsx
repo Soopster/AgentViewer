@@ -183,9 +183,9 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
               <text fg={fg} wrapMode="none">
                 <span fg={selected ? accentColor : theme.dim}>{marker}</span>
                 {row.type === 'highlight' ? <span fg={kindColor(row.kind)}>{`  ${KIND_GLYPH[row.kind ?? 'chore']} `}</span> : <span fg={theme.dim}>{' '}</span>}
-                {fit(row.label, listW - (row.type === 'highlight' ? 5 : 2))}
+                {fit(row.label, listW - 1 - (row.type === 'highlight' ? 5 : 2))}
               </text>
-              <text fg={theme.dim} wrapMode="none">{fit(`${row.type === 'highlight' ? '     ' : '  '}${row.meta}`, listW - 1)}</text>
+              <text fg={theme.dim} wrapMode="none">{fit(`${row.type === 'highlight' ? '     ' : '  '}${row.meta}`, listW - 2)}</text>
             </box>
           )
         })}
@@ -219,17 +219,19 @@ export function WhatsNewPopover({ theme, accentColor, width, height, read, onClo
               <text wrapMode="none">
                 {detail.files.map((file, index) => {
                   const { dir, name } = splitWhatsNewPath(file.path)
-                  const stat = `+${file.added}`.padStart(numberWidth + 1) + ` −${file.removed}`.padStart(numberWidth + 2)
-                  const pathCells = Math.max(detailW - stat.length - 3, 12)
+                  // The scrollbar takes a column of its own; a row that reaches it loses its last digits.
+                  const statCells = (numberWidth + 1) + (numberWidth + 2)
+                  const pathCells = Math.max(detailW - 1 - statCells - 2, 12)
                   const shownName = fit(name, pathCells)
-                  const shownDir = fit(dir, Math.max(pathCells - shownName.length, 0))
-                  const gap = ' '.repeat(Math.max(pathCells - shownName.length - shownDir.length, 0))
+                  const dirCells = pathCells - shownName.length - 1
+                  const shownDir = dirCells >= 4 ? fit(dir, dirCells) : ''
+                  const gap = ' '.repeat(Math.max(pathCells - shownName.length - (shownDir ? shownDir.length + 1 : 0), 0))
                   return (
                     <span key={file.path}>
                       <span fg={theme.text}>{shownName}</span>
                       <span fg={theme.dim}>{`${shownDir ? ` ${shownDir}` : ''}${gap}  `}</span>
-                      <span fg={theme.green}>{`+${file.added}`.padStart(numberWidth + 1)}</span>
-                      <span fg={theme.red}>{` −${file.removed}`.padStart(numberWidth + 2)}</span>
+                      <span fg={file.added > 0 ? theme.green : theme.dim}>{`+${file.added}`.padStart(numberWidth + 1)}</span>
+                      <span fg={file.removed > 0 ? theme.red : theme.dim}>{` −${file.removed}`.padStart(numberWidth + 2)}</span>
                       {index < detail.files.length - 1 || detail.hiddenFiles > 0 ? '\n' : ''}
                     </span>
                   )

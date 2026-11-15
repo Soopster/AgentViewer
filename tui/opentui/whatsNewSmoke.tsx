@@ -14,7 +14,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const at = (day: number, hour = 12) => new Date(2026, 10, day, hour).getTime()
 const commit = (sha: string, subject: string, when: number, files: WhatsNewCommit['files'], body = ''): WhatsNewCommit => ({ sha, subject, body, author: 'me', timestampMs: when, tags: [], files })
 const fixture = () => buildWhatsNew([
-  commit('aaaaaaa1', 'Add the gallery', at(15), [{ path: 'plugins/adaptive-ui/tui/Gallery.tsx', added: 120, removed: 4 }, { path: 'lib/adaptiveUi/shapes.ts', added: 30, removed: 0 }], 'People could not find recipes.'),
+  commit('aaaaaaa1', 'Add the gallery', at(15), [{ path: 'plugins/adaptive-ui/tui/Gallery.tsx', added: 120, removed: 4 }, { path: 'lib/adaptiveUi/shapes.ts', added: 30, removed: 0 }, { path: 'lib/a/very/deeply/nested/directory/structure/that/goes/on/LongFileNameForClipping.ts', added: 9, removed: 345 }, ...Array.from({ length: 40 }, (_, i) => ({ path: `lib/gen/g${i}.ts`, added: 1, removed: 1 }))], 'People could not find recipes.'),
   commit('bbbbbbb2', 'Fix a label', at(15, 9), [{ path: 'components/Label.tsx', added: 1, removed: 1 }]),
   commit('ccccccc3', 'Add live mods', at(14), [{ path: 'lib/mods/live.ts', added: 80, removed: 0 }]),
 ])
@@ -41,6 +41,7 @@ let copied = ''
   assert(screen.includes('2 days · 3 commits read'), 'the header counts what was read')
   assert(screen.includes('Sun, Nov 15, 2026') && screen.includes('Sat, Nov 14, 2026'), 'every revision is a row')
   assert(screen.includes('Gallery.tsx') && screen.includes('+120') && screen.includes('−4'), 'the first revision lists its files with line counts')
+  assert(screen.includes('−345') && screen.includes('+120'), 'a row is never clipped into the scrollbar: both counts stay whole')
   assert(screen.indexOf('Gallery.tsx') < screen.indexOf('Label.tsx'), 'the largest change is listed first')
 
   await press('j')
@@ -72,6 +73,7 @@ let copied = ''
   await press('j')
   await press('return')
   screen = await frame()
+  assert(screen.includes('−345'), 'counts stay whole on a narrow panel too')
   assert(screen.includes('← all revisions') && screen.includes('Gallery.tsx'), 'Enter opens the detail with a way back')
   assert(!screen.includes('Add live mods'), 'the list is hidden while the detail is open')
   const before = closedCount()
