@@ -9,6 +9,7 @@ import { startRawHeapSampler, reportWorkerHeap } from './workerHeapProbe'
 import { installProcessWarningRouting } from '../../lib/processWarnings'
 import { installUserKeys, readUserKeyConfig, resolveChords } from './userKeys'
 import { COMMANDS } from './app/commands'
+import { installTuiUiInteractionSink } from './uiInteractionSink'
 
 // A runtime warning prints straight onto the alternate screen; send it to
 // OpenTUI's captured console instead.
@@ -20,6 +21,7 @@ installProcessWarningRouting((text) => console.warn(text))
 const mouseDisabled = process.env.AGENT_VIEWER_DISABLE_MOUSE === '1'
 
 // The user's own ⌃K chords (keys.json), installed before the first render.
+installTuiUiInteractionSink()
 installUserKeys(resolveChords(readUserKeyConfig(), new Map(COMMANDS.map((command) => [command.id, command.label]))))
 
 const renderer = await createCliRenderer({

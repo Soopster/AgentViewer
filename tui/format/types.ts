@@ -39,6 +39,8 @@ export type TuiTranscriptCard = {
   thinkingTranscript?: boolean
   images?: string[]
   asyncQuestions?: import('../../lib/permissions').PendingQuestion[]
+  /** The tools this message called, by their real names (at most 12): what a card interaction is about. */
+  toolNames?: string[]
   key: string
   role: ThreadedMessage['role']
   provider?: ThreadedMessage['provider']

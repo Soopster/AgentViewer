@@ -3,6 +3,7 @@ import type { ViewSpec } from '../../viewSpec'
 import { indexComposerMessages, visibleComposerMessages } from '../../../lib/composerTranscript'
 import { foldTurnActivity } from './turnActivity'
 import { toggleFullToolOutput } from './fullToolOutput'
+import { reportCardToolInteraction } from './reportCardInteraction'
 import { transcriptMeasure } from '../engineeringLayout'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { WindowButton } from '../WindowButton'
@@ -667,6 +668,7 @@ export function SplitTranscriptPaneInner({
           else next.delete(card.key)
           return next
         }
+        reportCardToolInteraction(card, !isExpanded, sessionRef.current)
         if (cardFoldsByDefault(card, view, chatLike, foldAll)) {
           setCollapsedCardKeys((current) => toggle(current, false))
           setExpandedCardKeys((current) => toggle(current, !isExpanded))

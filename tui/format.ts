@@ -958,6 +958,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
 
   const searchText = deferSearchText ? '' : cardSearchText(expandedLines)
   return {
+    toolNames: toolNamesOf(message.blocks),
     asyncQuestions: asyncQuestions ? message.blocks.flatMap(block => block.type === 'tool_thread' ? readAsyncQuestions(block.toolUse.input) : []) : undefined,
     images: images.length ? [...new Set(images)] : undefined,
     key: message.uuid,
@@ -1626,6 +1627,13 @@ export function formatSessionMeta(session: Session, info: SessionInfo | null): s
     truncateLine(`model: ${model}`),
     truncateLine(`tag: ${tag}`),
   ]
+}
+
+/** The distinct tool names a message's blocks called, in order, bounded; undefined when it called none. */
+function toolNamesOf(blocks: readonly ThreadedBlock[]): string[] | undefined {
+  const names: string[] = []
+  for (const block of blocks) if (block.type === 'tool_thread' && !names.includes(block.toolUse.name) && names.length < 12) names.push(block.toolUse.name)
+  return names.length ? names : undefined
 }
 
 /**
