@@ -54,7 +54,7 @@ export type CardRuleSample = { readonly input: Record<string, unknown>; readonly
 export type CardRuleContext = {
   readonly kind?: 'tool' | 'system'
   readonly tool: { readonly name: string; readonly input: Readonly<Record<string, unknown>> }
-  readonly result?: { readonly text: string; readonly isError: boolean }
+  readonly result?: { readonly text: string; readonly isError: boolean; /** Parsed from the whole result when `text` was cut; otherwise `text` is parsed here. */ readonly json?: unknown }
 }
 
 export const CARD_RULE_LIMITS = Object.freeze({ id: 64, template: 600, blocks: 30, pathDepth: 8, pathSegment: 64, globLength: 120, keys: 12, samples: 3, sampleChars: 4_000, conditions: 8, jsonChars: 8_000, intent: 300, reason: 200, choices: 12, alternatives: 6, alternative: 100, assumptions: 6, assumption: 200 })
@@ -165,7 +165,7 @@ export function parseCardRule(raw: unknown): { rule: CardRule | null; problems: 
   else if (r.blocks.length > CARD_RULE_LIMITS.blocks) problems.push(`blocks has more than ${CARD_RULE_LIMITS.blocks} entries`)
   else r.blocks.forEach((block, index) => problems.push(...blockTemplateProblems(block, index)))
   if (r.tone !== undefined && !(typeof r.tone === 'string' && TONES.has(r.tone))) {
-    if (!Array.isArray(r.tone) || r.tone.length > CARD_RULE_LIMITS.conditions) problems.push('tone must be a tone or up to 8 {when, tone} rules')
+    if (!Array.isArray(r.tone) || r.tone.length > CARD_RULE_LIMITS.conditions) problems.push('tone must be "info", "success", "warning" or "error" (not "default", which is a block tone), or up to 8 {when, tone} rules')
     else r.tone.forEach((entry, index) => {
       const e = entry as { when?: { path?: unknown; equals?: unknown; contains?: unknown; exists?: unknown }; tone?: unknown } | null
       if (!e || !TONES.has(String(e.tone)) || !e.when) problems.push(`tone[${index}] needs when and a tone`)
@@ -220,9 +220,9 @@ export function cardRuleSpecificity(rule: CardRule): number {
 type Scope = { input: unknown; result: { text: string; isError: boolean; json: unknown } | undefined; tool: { name: string } }
 
 function scopeOf(context: CardRuleContext): Scope {
-  let json: unknown
+  let json: unknown = context.result?.json
   const text = context.result?.text ?? ''
-  if (context.result && text.length <= CARD_RULE_LIMITS.jsonChars && /^\s*[[{]/.test(text)) { try { json = JSON.parse(text) } catch { /* not JSON: result.json stays unset */ } }
+  if (json === undefined && context.result && text.length <= CARD_RULE_LIMITS.jsonChars && /^\s*[[{]/.test(text)) { try { json = JSON.parse(text) } catch { /* not JSON: result.json stays unset */ } }
   return { input: context.tool.input, result: context.result ? { text, isError: context.result.isError, json } : undefined, tool: { name: context.tool.name } }
 }
 
@@ -270,6 +270,12 @@ function conditionHolds(when: CardRuleCondition, scope: Scope): boolean {
   if (when.equals !== undefined) return value === when.equals || asText(value) === String(when.equals)
   if (when.contains !== undefined) return asText(value).includes(when.contains)
   return false
+}
+
+/** The value a binding path finds in a call, or undefined: for checking a rule against calls. */
+export function evaluateBinding(path: string, context: CardRuleContext): unknown {
+  const parsed = parseBinding(path)
+  return typeof parsed === 'string' ? undefined : lookup(scopeOf(context), parsed.path)
 }
 
 export type RenderedCard = { readonly title: string; readonly tone: CardRuleTone; readonly blocks: CardBlock[] }

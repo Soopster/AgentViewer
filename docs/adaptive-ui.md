@@ -73,6 +73,20 @@ rewrites, explanations grounded in the spec, authority levels, an audit trail):
 - **Authority.** A card is presentation only: it cannot run anything, call a tool, change state or add a button. The
   vocabulary states this and the smoke checks that no block can act.
 
+## Checked against real data
+Found by running it live against a real coordinator session and a real model:
+- **Hooks see the JSON of the whole result.** A hook's `result.text` is cut at 8,000 characters, which breaks JSON, so a rule
+  reading `result.json.*` of a large result found nothing. The host now parses the whole result (up to 2 MB) and hands
+  `result.json`, thinned to a bounded size (long lists keep their first 100 items), beside the text.
+- **Samples stay valid JSON.** A sample is thinned structurally, never cut mid-object, so a card previewed against it
+  reads what a real call would.
+- **Coverage.** The gallery, `cards preview` and the design flow say what a rule reads that its samples do not have
+  ("`result.json.checkout.diff` is empty in 1 of 1 samples", "the result is not JSON: use result.text").
+- **The model is taught the rule's own fields**, not just blocks: the card tone is `info|success|warning|error` (a block's
+  `default` is not one of them, and was what a model wrote), and a formatter argument is literal text.
+- **A call is counted once**, however many windows or instance keys present it, and a model question that never got an
+  answer (quota, network) is not charged to the day.
+
 ## Suggestions
 The gallery lists what the app could change about itself, from how it is used: a card for a tool called often or opened
 often, a view that groups tool calls when they are rarely opened, a view that opens cards by default when most are.

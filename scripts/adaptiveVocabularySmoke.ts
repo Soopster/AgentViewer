@@ -22,6 +22,12 @@ for (const formatter of CARD_VOCABULARY.formatters) assert.deepEqual(parseCardRu
 // Binding roots are exactly the ones the engine accepts.
 for (const root of ['input', 'result', 'tool']) assert.ok(CARD_VOCABULARY.bindings.some(binding => binding.root === root))
 assert.ok(parseCardRule({ id: 'f', status: 'draft', match: { tool: 'x' }, title: '{{env.HOME}}', blocks: [] }).problems.length)
+// The rule's own tone values are the ones the parser accepts, and the one a model confuses with a block tone is refused.
+const withTone = (tone: unknown) => parseCardRule({ id: 'r', status: 'draft', match: { tool: 'x' }, title: 't', blocks: [], tone }).rule
+for (const tone of CARD_VOCABULARY.rule.toneValues) assert.ok(withTone(tone), `rule tone ${tone}`)
+assert.equal(withTone('default'), null); assert.equal(withTone('muted'), null)
+for (const field of Object.keys(CARD_VOCABULARY.rule.fields)) assert.ok(vocabularyMarkdown().includes(`**${field}**`), `the rule field ${field} is taught`)
+assert.ok(parseCardRule({ id: 'r', status: 'draft', match: { tool: 'x' }, title: '{{input.id | default {{input.x}}}}', blocks: [] }).problems.length, 'nested bindings are refused, and the vocabulary says so')
 assert.equal(CARD_VOCABULARY.authority, 'presentation only')
 assert.equal(decodeCardBlocks([{ type: 'button', text: 'x' }]).length, 0, 'there is no block that can act')
 const md = vocabularyMarkdown()

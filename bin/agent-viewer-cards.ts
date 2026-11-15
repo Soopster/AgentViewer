@@ -9,6 +9,7 @@ import { loadCardRules, patchCardRule, recipesDir, setCardRuleStatus } from '../
 import { explainRule, explanationLines } from '../lib/adaptiveUi/explain'
 import { readCardHistory } from '../lib/adaptiveUi/history'
 import { currentRevision, parseCardPatch } from '../lib/adaptiveUi/patch'
+import { ruleCoverage, sampleCalls } from '../lib/adaptiveUi/coverage'
 import { CARD_VOCABULARY, vocabularyMarkdown } from '../lib/adaptiveUi/vocabulary'
 
 const [verb, ...args] = process.argv.slice(2)
@@ -35,7 +36,8 @@ try {
     if (!rule) { out({ file, problems }, `INVALID ${file}\n${problems.map(problem => `  - ${problem}`).join('\n')}`); process.exitCode = 1 }
     else {
       const cards = (rule.samples ?? []).map(sample => renderCardRule(rule, { tool: { name: rule.match.tool.replace(/\*/g, 'x'), input: sample.input }, ...(sample.result ? { result: { text: sample.result.text, isError: sample.result.isError === true } } : {}) }))
-      out(cards, cards.length ? cards.map((card, i) => `sample ${i + 1}  [${card.tone}]  ${card.title}\n${cardBlockLines(card.blocks).map(line => `  ${line}`).join('\n')}`).join('\n\n') : `${rule.id} is valid but has no samples to preview`)
+      const coverage = ruleCoverage(rule, sampleCalls(rule))
+      out({ cards, coverage }, `${cards.length ? cards.map((card, i) => `sample ${i + 1}  [${card.tone}]  ${card.title}\n${cardBlockLines(card.blocks).map(line => `  ${line}`).join('\n')}`).join('\n\n') : `${rule.id} is valid but has no samples to preview`}${coverage.warnings.length ? `\n\n${coverage.warnings.map(warning => `warning: ${warning}`).join('\n')}` : ''}`)
     }
   } else if (verb === 'show') {
     if (rest.length !== 1) usage()

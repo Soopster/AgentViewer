@@ -93,7 +93,7 @@ export type PluginToolCardContext = {
   readonly target: PluginTurnTarget
   readonly tool: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
   /** The call's result once it has one (text only, at most PLUGIN_TOOL_RESULT_MAX_CHARS); absent while the call is running. */
-  readonly result?: { readonly text: string; readonly isError: boolean; readonly truncated: boolean }
+  readonly result?: { readonly text: string; readonly isError: boolean; readonly truncated: boolean; /** The result parsed as JSON, from the WHOLE result (a cut-off `text` would not parse), thinned to a bounded size; absent when it is not JSON. */ readonly json?: unknown }
 }
 
 export const PLUGIN_TOOL_RESULT_MAX_CHARS = 8_000

@@ -6,7 +6,7 @@ import { cardRuleMatches, cardRuleSpecificity, mcpServerOf, renderCardRule } fro
 import { clearPluginToolCardCache } from '../../lib/plugins/toolCards'
 import { recipesDir } from '../../lib/adaptiveUi/store'
 import { effectiveRules, noteInteraction, noteToolCompleted, recordShape } from '../../lib/adaptiveUi/runtime'
-import { redactForSample, redactResultText } from '../../lib/adaptiveUi/shapes'
+import { redactForSample, redactResultJson, redactResultText } from '../../lib/adaptiveUi/shapes'
 
 // A rule edited on disk (by an agent, by hand) must reach cards already cached,
 // so the recipes directory is watched and the card cache cleared when it changes.
@@ -26,16 +26,32 @@ function ensureWatching(): void {
 
 /** A reload disposes the behavior host: stop watching and drop pending work so a fresh host starts clean. */
 function closeRecipeWatcher(): void {
+  counted.clear()
   if (debounce) { clearTimeout(debounce); debounce = null }
   watcher?.close(); watcher = null; watchedDir = ''
+}
+
+/**
+ * A call is counted once. The same call is presented again under another provider-instance key, after the
+ * card cache evicts it, or from another window of the transcript; counting each presentation made a tool
+ * called twice read as called six times (seen live).
+ */
+const counted = new Set<string>()
+const COUNTED_MAX = 5_000
+function firstSighting(sessionId: string, callId: string): boolean {
+  const key = `${sessionId}:${callId}`
+  if (counted.has(key)) return false
+  if (counted.size >= COUNTED_MAX) counted.delete(counted.values().next().value!)
+  counted.add(key)
+  return true
 }
 
 export const behavior: PluginBehaviorModule = {
   apiVersion: PLUGIN_API_VERSION,
   pluginId: 'adaptive-ui',
-  toolCard({ tool, result }) {
+  toolCard({ target, tool, result }) {
     ensureWatching()
-    const context = { tool: { name: tool.name, input: tool.input }, ...(result ? { result: { text: result.text, isError: result.isError } } : {}) }
+    const context = { tool: { name: tool.name, input: tool.input }, ...(result ? { result: { text: result.text, isError: result.isError, ...(result.json !== undefined ? { json: result.json } : {}) } } : {}) }
     const native = hasNativeToolCard(tool.name)
     let best: ReturnType<typeof effectiveRules>['rules'][number] | null = null
     for (const rule of effectiveRules().rules) {
@@ -47,10 +63,10 @@ export const behavior: PluginBehaviorModule = {
       return { title: card.title, blocks: card.blocks, tone: card.tone }
     }
     // Nothing draws this specially: remember its shape, and a redacted sample once the call has finished.
-    if (!native && result) {
+    if (!native && result && firstSighting(target.sessionId, tool.id)) {
       const inputKeys = Object.keys(tool.input ?? {}).filter(key => /^[A-Za-z0-9_-]{1,64}$/.test(key)).sort().slice(0, 24)
       const server = mcpServerOf(tool.name)
-      recordShape({ tool: tool.name, ...(server ? { mcpServer: server } : {}), inputKeys, sample: { input: redactForSample(tool.input) as Record<string, unknown>, result: { text: redactResultText(result.text), isError: result.isError } } })
+      recordShape({ tool: tool.name, ...(server ? { mcpServer: server } : {}), inputKeys, sample: { input: redactForSample(tool.input) as Record<string, unknown>, result: { text: result.json !== undefined ? redactResultJson(result.json) : redactResultText(result.text), isError: result.isError } } })
     }
     return null
   },

@@ -116,12 +116,14 @@ async function addSuggestedView(view: ViewSuggestionSpec): Promise<void> {
 }
 
 /** Spend one of today's model questions, or refuse: a plugin may not spend without bound. */
-function spendModelQuestion(s: State, now = new Date()): void {
+function spendModelQuestion(s: State, now = new Date()): () => void {
   const day = now.toISOString().slice(0, 10)
   if (s.model.day !== day) s.model = { day, count: 0 }
   if (s.model.count >= DESIGN_DAILY_LIMIT) throw new Error(`today's limit of ${DESIGN_DAILY_LIMIT} designed cards is used; design one with an agent instead`)
   s.model.count += 1
   schedulePersist(s)
+  // A question the model never answered (quota, network) is not one of today's.
+  return () => { if (s.model.day === day && s.model.count > 0) { s.model.count -= 1; schedulePersist(s) } }
 }
 
 /** What this person's own decisions say about cards they like, once there are enough of them to say. */
@@ -135,9 +137,12 @@ export async function refineHere(id: string, instruction: string, ask?: ModelAsk
   const s = state()
   const rule = loadCardRules().rules.find(entry => entry.id === id)
   if (!rule) throw new Error(`no card rule of yours named "${id.slice(0, 64)}"`)
-  spendModelQuestion(s)
+  const refund = spendModelQuestion(s)
   const model = ask ?? (await import('../plugins/modelService')).askModel
-  const next = await refineCardWithModel(rule, instruction, model)
+  let asked = false
+  const counted: ModelAsk = async input => { const reply = await model(input); asked = true; return reply }
+  let next
+  try { next = await refineCardWithModel(rule, instruction, counted) } catch (error) { if (!asked) refund(); throw error }
   clearPluginToolCardCache()
   return `${next.id} is now revision ${next.revision} and a draft: review it, then enable it`
 }
@@ -148,9 +153,13 @@ export async function designHere(key: string, ask?: ModelAsk): Promise<string> {
   const shape = s.book.get(key)
   if (!shape) throw new Error('that shape is no longer tracked')
   if (!shape.samples.length) throw new Error('no samples were kept for this tool yet: call it once more, or design it with an agent')
-  spendModelQuestion(s)
+  const refund = spendModelQuestion(s)
   const model = ask ?? (await import('../plugins/modelService')).askModel
-  const rule = await designCardWithModel(shape, model, { preference: currentPreference() })
+  let asked = false
+  const counted: ModelAsk = async input => { try { const reply = await model(input); asked = true; return reply } catch (error) { throw error } }
+  let rule
+  try { rule = await designCardWithModel(shape, counted, { preference: currentPreference() }) }
+  catch (error) { if (!asked) refund(); throw error }
   clearPluginToolCardCache()
   return rule.id
 }

@@ -25,6 +25,20 @@ export const CARD_VOCABULARY = Object.freeze({
     { type: 'progress', purpose: 'How far along something is.', useWhen: ['The result carries a done/total pair or a percentage'], fields: { label: 'template', value: 'template giving a number', max: 'template giving a number' }, example: { type: 'progress', label: 'Done', value: '{{result.json.done}}', max: '{{result.json.total}}' } },
     { type: 'code', purpose: 'Verbatim text in a box.', useWhen: ['The exact output matters (a command, a diff, a log)', 'Whitespace is meaningful'], fields: { text: 'template' }, example: { type: 'code', text: '{{result.text | truncate 400}}' } },
   ],
+  /** The rule itself: what a card's own fields take. (Blocks have their own tone values; these are the card's.) */
+  rule: {
+    fields: {
+      id: 'lowercase letters, digits, ".", "_" or "-"',
+      status: 'always "draft" when you write it',
+      match: '{ "tool": the tool name, with * as the only wildcard } — or { "kind": "system", "tool": a system message subtype }',
+      title: 'template: what was asked and what came back, in one line',
+      tone: '"info", "success", "warning" or "error"; or a list of { "when": { "path", "equals" | "contains" | "exists" }, "tone": … } (first that holds wins). Not "default": that is a block tone.',
+      blocks: 'a list of the blocks above',
+      rationale: '{ intent, choices: [{ block, reason }], alternatives: [], assumptions: [] } (optional, short, true to the rule)',
+    },
+    toneValues: ['info', 'success', 'warning', 'error'],
+    templateNotes: ['A formatter argument is literal text, never a binding: write {{input.id | default none}}, not {{… | default {{input.id}}}}.', 'Bindings cannot be nested or combined with expressions.'],
+  },
   bindings: [
     { root: 'input', meaning: 'The arguments the tool was called with (for a rule with match.kind "system": the fields of the system message)', example: 'input.path' },
     { root: 'result', meaning: 'What came back: text, isError, and json when the result parses as JSON (empty while the call runs)', example: 'result.json.items.0.name' },
@@ -52,6 +66,9 @@ export function vocabularyMarkdown(): string {
   return [
     '## Blocks',
     ...V.blocks.map(block => `- **${block.type}**: ${block.purpose} Use when: ${block.useWhen.join('; ')}. Fields: ${Object.entries(block.fields).map(([name, what]) => `${name} (${what})`).join(', ')}.`),
+    '## The rule',
+    ...Object.entries(V.rule.fields).map(([name, what]) => `- **${name}**: ${what}`),
+    ...V.rule.templateNotes.map(note => `- ${note}`),
     '## Bindings',
     ...V.bindings.map(binding => `- \`${binding.root}\`: ${binding.meaning}. e.g. \`{{${binding.example}}}\``),
     '## Formatters',

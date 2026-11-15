@@ -45,6 +45,8 @@ recordShape({ tool: 'mcp__notion__search', mcpServer: 'notion', inputKeys: ['q']
 await assert.rejects(designHere('mcp__notion__search|q', async () => ''), /no samples/)
 recordShape({ tool: 'mcp__notion__search', mcpServer: 'notion', inputKeys: ['q'], sample: { input: { q: 'roadmap' }, result: { text: '[]', isError: false } } })
 const notion = JSON.stringify({ id: 'notion.search', status: 'draft', match: { tool: 'mcp__notion__search' }, title: 'search {{input.q}}', blocks: [] })
+// A question the model never answered (quota, network) is not charged to the day.
+for (let i = 0; i < DESIGN_DAILY_LIMIT + 3; i++) await assert.rejects(designHere('mcp__notion__search|q', async () => { throw new Error('quota') }), /quota/)
 let made = 0
 for (; made < DESIGN_DAILY_LIMIT; made++) assert.equal(await designHere('mcp__notion__search|q', async () => notion), 'notion.search')
 await assert.rejects(designHere('mcp__notion__search|q', async () => notion), /limit/)

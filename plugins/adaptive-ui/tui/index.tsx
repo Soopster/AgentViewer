@@ -5,7 +5,7 @@ import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/
 import { cardBlockLines } from '../../../lib/plugins/cardBlocks'
 import { popoverRootProps, PopoverDetachButton, fitText, type TuiPluginView, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 import { explainRule, explanationLines } from '../../../lib/adaptiveUi/explain'
-import { historyFor, previewRule, useAdaptiveView, type AdaptiveItem } from '../useAdaptiveView'
+import { coverageWarnings, historyFor, previewRule, useAdaptiveView, type AdaptiveItem } from '../useAdaptiveView'
 
 const STATUS_GLYPH = { active: '●', draft: '◐', disabled: '○' } as const
 const HINT = 'j/k move · a enable · d disable · x delete (twice) · w why · f change with an agent · g design with an agent · h design here · i dismiss · p preview · r refresh · esc'
@@ -58,7 +58,7 @@ function AdaptiveUi(props: TuiPluginViewProps) {
     })
     return () => registerKeys(null)
   })
-  const lines = selected?.kind === 'rule' ? [...(preview ? previewRule(selected.rule).flatMap(card => [`▸ ${card.title}`, ...cardBlockLines(card.blocks).map(text => `  ${text}`)]) : []), ...(why ? ['', ...explanationLines(explainRule(selected.rule))] : []), ...(historyFor(state, selected.rule.id).slice(0, 3).map(entry => `${entry.at.slice(5, 16).replace('T', ' ')} ${entry.actor} ${entry.action}${entry.revision ? ` r${entry.revision}` : ''}`))] : []
+  const lines = selected?.kind === 'rule' ? [...(preview ? previewRule(selected.rule).flatMap(card => [`▸ ${card.title}`, ...cardBlockLines(card.blocks).map(text => `  ${text}`)]) : []), ...coverageWarnings(selected.rule).map(warning => `⚠ ${warning}`), ...(why ? ['', ...explanationLines(explainRule(selected.rule))] : []), ...(historyFor(state, selected.rule.id).slice(0, 3).map(entry => `${entry.at.slice(5, 16).replace('T', ' ')} ${entry.actor} ${entry.action}${entry.revision ? ` r${entry.revision}` : ''}`))] : []
   return <box {...popoverRootProps(!overlay, { top: 2, left: Math.max(0, Math.floor((width - w) / 2)), width: w, height: h }, props.zIndex ?? 50)} border={overlay} borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title={overlay ? ' Adaptive UI ' : undefined}>
     {overlay && detach ? <PopoverDetachButton theme={theme} onPress={detach} /> : null}
     <box height={1} flexShrink={0} paddingX={1}><text fg={theme.dim} wrapMode="none">{fitText(`${state.snapshot?.rules.length ?? 0} cards · ${items.filter(item => item.kind === 'shape').length} drawn generically · ${state.snapshot?.dir ?? ''}`, inner - 2)}</text></box>

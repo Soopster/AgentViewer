@@ -3,6 +3,7 @@ import type { AdaptiveUiService, AdaptiveUiSnapshot } from '../../lib/plugins/ad
 import { renderCardRule, type CardRule, type CardRuleStatus, type RenderedCard } from '../../lib/plugins/cardTemplates'
 import type { ShapeRecord } from '../../lib/adaptiveUi/shapes'
 import type { Suggestion } from '../../lib/adaptiveUi/suggest'
+import { ruleCoverage, sampleCalls } from '../../lib/adaptiveUi/coverage'
 
 export type AdaptiveItem = { kind: 'suggestion'; key: string; suggestion: Suggestion } | { kind: 'rule'; key: string; rule: CardRule } | { kind: 'shape'; key: string; shape: ShapeRecord } | { kind: 'invalid'; key: string; file: string; problems: readonly string[] }
 const REFRESH_MS = 5_000
@@ -90,6 +91,9 @@ export type AdaptiveViewState = ReturnType<typeof useAdaptiveView>
 
 /** The history entries about one rule, newest first. */
 export const historyFor = (state: AdaptiveViewState, id: string) => (state.snapshot?.history ?? []).filter(entry => entry.id === id).slice(0, 5)
+
+/** What a rule reads that its samples do not have: shown beside its preview. */
+export function coverageWarnings(rule: CardRule): string[] { return ruleCoverage(rule, sampleCalls(rule)).warnings.slice(0, 4) }
 
 /** A rule rendered against each of its stored samples (what a person reviews before enabling it). */
 export function previewRule(rule: CardRule): RenderedCard[] {

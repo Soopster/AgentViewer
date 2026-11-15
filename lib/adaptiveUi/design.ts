@@ -50,7 +50,7 @@ export async function designCardWithModel(shape: ShapeRecord, ask: ModelAsk, opt
     try {
       const raw = extractRuleJson(reply) as Record<string, unknown>
       // Whatever the reply says, the rule is this tool's, a draft, and carries its own provenance and samples.
-      const candidate = { ...raw, id: typeof raw.id === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.id) ? raw.id : ruleIdFor(shape.tool), status: 'draft', match: { tool: shape.tool, ...(shape.mcpServer ? { mcpServer: shape.mcpServer } : {}) }, overridesNative: undefined, samples: shape.samples, provenance: { by: 'model', at: (options.now?.() ?? new Date()).toISOString() } }
+      const candidate = { ...raw, id: typeof raw.id === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(raw.id) ? raw.id : ruleIdFor(shape.tool), status: 'draft', tone: raw.tone === 'default' || raw.tone === 'neutral' || raw.tone === 'muted' ? 'info' : raw.tone, match: { tool: shape.tool, ...(shape.mcpServer ? { mcpServer: shape.mcpServer } : {}) }, overridesNative: undefined, samples: shape.samples, provenance: { by: 'model', at: (options.now?.() ?? new Date()).toISOString() } }
       const parsed = parseCardRule(candidate)
       if (!parsed.rule) { last = parsed.problems.join('; '); feedback = `\n\nYour previous reply was refused: ${last}. Reply again with a corrected JSON object.`; continue }
       return writeCardRule(parsed.rule, options.dir, { actor: 'model', action: 'design', summary: `designed ${parsed.rule.id} from ${shape.samples.length} samples` })

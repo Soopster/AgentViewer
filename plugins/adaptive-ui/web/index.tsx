@@ -5,7 +5,7 @@ import { PluginCardBlocks } from '@/components/shell/PluginCardBlocks'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '@/lib/plugins/types'
 import type { WebPluginView, WebPluginViewProps } from '@/components/shell/pluginTypes'
 import { explainRule, explanationLines } from '@/lib/adaptiveUi/explain'
-import { historyFor, previewRule, useAdaptiveView, type AdaptiveItem, type AdaptiveViewState } from '../useAdaptiveView'
+import { coverageWarnings, historyFor, previewRule, useAdaptiveView, type AdaptiveItem, type AdaptiveViewState } from '../useAdaptiveView'
 
 const STATUS_STYLE = { active: 'text-green-600', draft: 'text-amber-600', disabled: 'text-muted-foreground' } as const
 function RuleRow({ state, rule }: { state: AdaptiveViewState; rule: Extract<AdaptiveItem, { kind: 'rule' }>['rule'] }) {
@@ -20,6 +20,7 @@ function RuleRow({ state, rule }: { state: AdaptiveViewState; rule: Extract<Adap
     </div>
     {open ? <div className="mt-2 grid gap-2">
       {previews.length ? previews.map((card, index) => <div key={index} className="rounded border p-2"><div className="font-semibold">{card.title || rule.match.tool}</div><PluginCardBlocks blocks={card.blocks} /></div>) : <p className="text-muted-foreground">No samples were saved with this rule, so there is no preview. It is drawn on real calls once enabled.</p>}
+      {coverageWarnings(rule).length ? <div role="status" className="rounded border border-amber-600 p-2 text-amber-700">{coverageWarnings(rule).map((warning, i) => <p key={i}>⚠ {warning}</p>)}</div> : null}
       <details><summary>Why this card</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-[11px]">{explanationLines(explainRule(rule)).join('\n')}</pre></details>
       {!state.origins[rule.id] ? <form className="flex flex-wrap items-center gap-2" onSubmit={event => { event.preventDefault(); if (instruction.trim() && !state.busy) void state.refineHere(rule.id, instruction.trim()).then(() => setInstruction('')) }}>
         <input aria-label={`Change ${rule.id}`} className="min-w-0 flex-1 rounded border bg-background p-1" maxLength={500} placeholder="Change this card… e.g. show the owner, drop the table" value={instruction} onChange={event => setInstruction(event.target.value)} />

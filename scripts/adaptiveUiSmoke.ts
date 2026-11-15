@@ -62,6 +62,11 @@ assert.ok(prompt.includes(join(root, 'recipes')) && prompt.includes('linear.get_
 assert.ok(!prompt.includes(SECRET))
 assert.ok(prompt.includes('agent-viewer cards check') && prompt.includes('Do not enable the rule'), 'the request tells the agent how to validate and not to enable')
 
+// The same call seen again (another instance key, an evicted cache) is still one call.
+clearPluginToolCardCache()
+assert.equal(await card(call('t1', TOOL, { id: 'ENG-1', apiKey: SECRET }, { text: issue })), undefined)
+{ const again = await annotatePluginToolCards('claude', 'work-account', 's', call('t1', TOOL, { id: 'ENG-1', apiKey: SECRET }, { text: issue }) as never); assert.equal(again.length, 2) }
+assert.equal(adaptiveUiSnapshot().shapes.find(entry => entry.tool === TOOL)!.count, 2, 'a call presented three times counts once (t1 and t2 are the two real calls)')
 // 3. A rule written as a draft draws nothing; enabling it draws the card, in the same read path.
 const rule = { id: 'linear.get_issue', status: 'draft', match: { tool: TOOL }, title: '{{input.id}} · {{result.json.title}}',
   tone: [{ when: { path: 'result.json.state', equals: 'Done' }, tone: 'success' }],
@@ -79,6 +84,19 @@ const running = await card(call('t5', TOOL, { id: 'ENG-5' }))
 assert.equal(running!.title, 'ENG-5 ·'); assert.equal(running!.tone, 'info')
 // A failed call is an error whatever the rule says.
 assert.equal((await card(call('t6', TOOL, { id: 'ENG-6' }, { text: 'boom', error: true })))!.tone, 'error')
+
+// 3b. A result larger than what a hook is shown as text is still read as JSON: the rule's bindings and the shape's sample come from the whole result.
+const BIG_TOOL = 'mcp__big__read'
+const bigResult = JSON.stringify({ task: { title: 'Big one', status: 'completed' }, filler: 'x'.repeat(40_000), more: Array.from({ length: 500 }, (_, i) => ({ i })) })
+assert.ok(bigResult.length > 8_000 * 4)
+assert.equal(await card(call('big1', BIG_TOOL, { id: 'B' }, { text: bigResult })), undefined)
+const bigShape = adaptiveUiSnapshot().shapes.find(entry => entry.tool === BIG_TOOL)!
+assert.doesNotThrow(() => JSON.parse(bigShape.samples[0]!.result!.text), 'the sample of a large result is still valid JSON')
+assert.equal(JSON.parse(bigShape.samples[0]!.result!.text).task.status, 'completed')
+writeCardRule({ id: 'big.read', status: 'active', match: { tool: BIG_TOOL }, title: '{{result.json.task.title}} · {{result.json.task.status}}', blocks: [{ type: 'text', text: '{{result.json.more | count}} items' }] }); clearPluginToolCardCache()
+const bigCard = await card(call('big2', BIG_TOOL, { id: 'B' }, { text: bigResult }))
+assert.equal(bigCard?.title, 'Big one · completed', 'bindings read the whole result, not its first 8,000 characters'); assert.deepEqual(bigCard?.lines, ['100 items'], 'long lists are thinned for the hook, not dropped')
+await nativeAdaptiveUi.remove('big.read'); clearPluginToolCardCache()
 
 // 4. A rule does not replace a built-in card unless it says so.
 writeCardRule({ id: 'bash.card', status: 'active', match: { tool: 'Bash' }, title: 'ran {{input.command}}', blocks: [] }); clearPluginToolCardCache()

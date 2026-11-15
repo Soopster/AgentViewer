@@ -29,7 +29,7 @@ export function explainRule(rule: CardRule): RuleExplanation {
     type: String(block.type),
     shows: [...new Set([...bindingsIn(block.text), ...bindingsIn(block.label), ...bindingsIn(block.value), ...(Array.isArray(block.rows) ? block.rows.flatMap(row => Array.isArray(row) ? [...bindingsIn(row[1])] : []) : []), ...(typeof block.rowsFrom === 'string' ? [block.rowsFrom] : []), ...(Array.isArray(block.columns) ? block.columns.flatMap(column => bindingsIn((column as { header?: unknown }).header)) : [])])],
   }))
-  const tone = typeof rule.tone === 'string' ? `always ${rule.tone}` : Array.isArray(rule.tone) ? `${rule.tone.map(entry => `${entry.tone} when ${entry.when.path}`).join('; ')}, otherwise info` : 'info'
+  const tone = typeof rule.tone === 'string' ? `always ${rule.tone}` : Array.isArray(rule.tone) ? `${rule.tone.map(entry => `${entry.tone} when ${entry.when.path}${entry.when.equals !== undefined ? ` is ${JSON.stringify(entry.when.equals)}` : entry.when.contains !== undefined ? ` contains ${JSON.stringify(entry.when.contains)}` : entry.when.exists !== undefined ? (entry.when.exists ? ' exists' : ' is missing') : ''}`).join('; ')}, otherwise info` : 'info'
   return {
     id: rule.id, status: rule.status, revision: rule.revision ?? 1,
     derived: {

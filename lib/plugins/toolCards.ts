@@ -20,9 +20,11 @@ subscribePluginEnablement(() => { cache.clear(); reportedShapes.clear() })
 
 type ToolResult = NonNullable<PluginToolCardContext['result']>
 
-/** The text of each tool result in a window, by call id, bounded: a hook sees what a person would read, not a transcript's worth of output. */
-function collectToolResults(messages: SessionMessage[]): Map<string, ToolResult> {
-  const results = new Map<string, ToolResult>()
+type RawResult = { readonly full: string; readonly isError: boolean }
+
+/** The whole text of each tool result in a window, by call id. Nothing is parsed or cut here: that happens only for a call a hook is asked about. */
+function collectToolResults(messages: SessionMessage[]): Map<string, RawResult> {
+  const results = new Map<string, RawResult>()
   for (const message of messages) {
     const content = (message.message as { content?: unknown })?.content
     if (!Array.isArray(content)) continue
@@ -30,10 +32,34 @@ function collectToolResults(messages: SessionMessage[]): Map<string, ToolResult>
       if (block?.type !== 'tool_result') continue
       const result = block as ToolResultBlock
       const full = typeof result.content === 'string' ? result.content : Array.isArray(result.content) ? result.content.map(part => (part as { type?: string; text?: unknown })?.type === 'text' ? String((part as { text?: unknown }).text ?? '') : '').join('\n') : ''
-      results.set(result.tool_use_id, { text: full.slice(0, PLUGIN_TOOL_RESULT_MAX_CHARS), isError: result.is_error === true, truncated: full.length > PLUGIN_TOOL_RESULT_MAX_CHARS })
+      results.set(result.tool_use_id, { full, isError: result.is_error === true })
     }
   }
   return results
+}
+
+const JSON_PARSE_MAX_CHARS = 2_000_000
+const THIN = { depth: 8, items: 100, keys: 100, string: 4_000, nodes: 20_000 }
+/** A parsed value reduced to a bounded size, keeping its shape: what a hook is handed as `result.json`. */
+export function thinJson(value: unknown): unknown {
+  let nodes = 0
+  const walk = (v: unknown, depth: number): unknown => {
+    if (++nodes > THIN.nodes) return undefined
+    if (typeof v === 'string') return v.length > THIN.string ? `${v.slice(0, THIN.string)}…` : v
+    if (v === null || typeof v === 'number' || typeof v === 'boolean') return v
+    if (depth >= THIN.depth) return Array.isArray(v) ? [] : {}
+    if (Array.isArray(v)) return v.slice(0, THIN.items).map(item => walk(item, depth + 1))
+    if (typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).slice(0, THIN.keys).map(([key, item]) => [key, walk(item, depth + 1)]))
+    return undefined
+  }
+  return walk(value, 0)
+}
+
+/** What a hook sees of a result: bounded text, and the JSON of the whole result when it has one. */
+function presentResult(raw: RawResult): ToolResult {
+  let json: unknown
+  if (raw.full.length <= JSON_PARSE_MAX_CHARS && /^\s*[[{]/.test(raw.full)) { try { json = thinJson(JSON.parse(raw.full)) } catch { /* not JSON */ } }
+  return { text: raw.full.slice(0, PLUGIN_TOOL_RESULT_MAX_CHARS), isError: raw.isError, truncated: raw.full.length > PLUGIN_TOOL_RESULT_MAX_CHARS, ...(json !== undefined ? { json } : {}) }
 }
 
 const reportedShapes = new Set<string>()
@@ -43,7 +69,7 @@ const REPORTED_SHAPES_MAX = 2_000
  * draws. Shape is the tool and its input key *names* (never values): the event
  * stream is metadata by contract, and samples are a separate, explicit read.
  */
-function noteUnrendered(target: { provider: AgentProvider; providerInstanceId?: string; sessionId: string }, tool: ToolUseBlock, result: ToolResult | undefined): void {
+function noteUnrendered(target: { provider: AgentProvider; providerInstanceId?: string; sessionId: string }, tool: ToolUseBlock, result: RawResult | undefined): void {
   if (!hasPluginRuntimeObservers() || hasNativeToolCard(tool.name)) return
   const inputKeys = Object.keys(tool.input ?? {}).filter(key => /^[A-Za-z0-9_-]{1,64}$/.test(key)).sort().slice(0, 24)
   const key = `${tool.name}|${inputKeys.join(',')}`
@@ -51,7 +77,7 @@ function noteUnrendered(target: { provider: AgentProvider; providerInstanceId?: 
   if (reportedShapes.size >= REPORTED_SHAPES_MAX) reportedShapes.delete(reportedShapes.values().next().value!)
   reportedShapes.add(key)
   const server = /^mcp__(.+?)__.+$/.exec(tool.name)?.[1]
-  publishPluginRuntimeEvent({ type: 'block.unrendered', target, source: 'read-path', shape: { tool: tool.name.slice(0, 200), ...(server ? { mcpServer: server } : {}), inputKeys, ...(result ? { resultBytes: result.text.length } : {}) } })
+  publishPluginRuntimeEvent({ type: 'block.unrendered', target, source: 'read-path', shape: { tool: tool.name.slice(0, 200), ...(server ? { mcpServer: server } : {}), inputKeys, ...(result ? { resultBytes: result.full.length } : {}) } })
 }
 
 /** Forget which shapes were reported (a plugin turned on later should hear about them). */
@@ -100,10 +126,10 @@ export async function annotatePluginToolCards(provider: AgentProvider, providerI
       const tool = block as ToolUseBlock
       // A call is presented twice: running, then finished. The result is part of the question, so it is part of the key.
       const result = results.get(tool.id)
-      const key = `${provider}@${providerInstanceId ?? ''}:${sessionId}:${tool.id}:${result ? `${result.isError ? 'e' : 'r'}${result.text.length}${result.truncated ? 't' : ''}` : 'pending'}`
+      const key = `${provider}@${providerInstanceId ?? ''}:${sessionId}:${tool.id}:${result ? `${result.isError ? 'e' : 'r'}${result.full.length}` : 'pending'}`
       let card: PluginToolCard | null | undefined = cache.get(key)
       if (card === undefined) {
-        const answered = await host.toolCard({ target, tool: { id: tool.id, name: tool.name, input: tool.input ?? {} }, ...(result ? { result } : {}) })
+        const answered = await host.toolCard({ target, tool: { id: tool.id, name: tool.name, input: tool.input ?? {} }, ...(result ? { result: presentResult(result) } : {}) })
         const fresh: PluginToolCard | null = answered ? { pluginId: answered.pluginId, title: answered.title ?? tool.name, lines: answered.lines, tone: answered.tone, ...(answered.blocks ? { blocks: answered.blocks } : {}) } : null
         card = fresh
         cache.set(key, fresh)
