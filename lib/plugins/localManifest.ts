@@ -16,7 +16,8 @@ import { parseModPackageMetadata, type ModPackageMetadata } from './modPackageMe
 import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapshot, type ModAppEffect } from './modApp'
 import { recordModDiagnostic } from './modDiagnostics'
 import { isPluginEnabled } from './enablement'
-import { PLUGIN_API_VERSION, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
+import { blockPatternProblem } from '../blockRegistry'
+import { PLUGIN_API_VERSION, type PluginBlockSpec, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
 export const LOCAL_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
@@ -192,6 +193,20 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     // Namespaced so a mod's theme can never take a built-in's id.
     themes.push({ id: `${id}-${theme.id}`, label: typeof theme.label === 'string' && theme.label.trim() ? theme.label.trim().slice(0, 40) : theme.id, category: theme.category, ...(typeof theme.icon === 'string' && theme.icon.trim() ? { icon: theme.icon.trim().slice(0, 2) } : {}), ...(typeof css === 'string' ? { css: css.trim() } : {}), ...(tui ? { tui: { swatch: Object.fromEntries(swatchKeys.map(key => [key, tui[key] as string])) as NonNullable<NonNullable<PluginThemeSpec['tui']>['swatch']> } } : {}) })
   }
+  const blocks: PluginBlockSpec[] = []
+  if (value.blocks !== undefined && !Array.isArray(value.blocks)) problems.push('blocks must be a list')
+  for (const [index, entry] of (Array.isArray(value.blocks) ? value.blocks : []).entries()) {
+    const block = entry as Record<string, unknown>
+    if (typeof block?.kind !== 'string' || !LOCAL_PLUGIN_ID.test(block.kind)) { problems.push(`blocks[${index}].kind is invalid`); continue }
+    if (typeof block.pattern !== 'string') { problems.push(`blocks[${index}].pattern must be a string`); continue }
+    const flags = typeof block.flags === 'string' ? block.flags : undefined
+    const patternProblem = blockPatternProblem({ pattern: block.pattern, ...(flags !== undefined ? { flags } : {}) })
+    if (patternProblem) { problems.push(`blocks[${index}]: ${patternProblem}`); continue }
+    if (typeof block.title !== 'string' || !block.title.trim()) { problems.push(`blocks[${index}].title is required`); continue }
+    const lines = Array.isArray(block.lines) ? block.lines.filter((line): line is string => typeof line === 'string').slice(0, 8) : []
+    const tone = block.tone === 'success' || block.tone === 'warning' || block.tone === 'error' ? block.tone : 'info'
+    blocks.push({ kind: block.kind, pattern: block.pattern, ...(flags ? { flags } : {}), title: block.title.slice(0, 120), ...(lines.length ? { lines } : {}), tone })
+  }
   const transcriptViews: PluginTranscriptViewSpec[] = []
   if (value.transcriptViews !== undefined && !Array.isArray(value.transcriptViews)) problems.push('transcriptViews must be a list')
   for (const [index, entry] of (Array.isArray(value.transcriptViews) ? value.transcriptViews : []).entries()) {
@@ -223,8 +238,8 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
     else views.push({ id: 'mod-config', title: `${title} settings` })
   }
-  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views or provider')
-  for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views], ['themes', themes], ['transcriptViews', transcriptViews]] as const) {
+  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0 && blocks.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views, blocks or provider')
+  for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views], ['themes', themes], ['transcriptViews', transcriptViews], ['blocks', blocks.map(block => ({ id: block.kind }))]] as const) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
   }
   if (problems.length) return { manifest: null, problems }
@@ -242,7 +257,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(blocks.length ? { blocks } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }

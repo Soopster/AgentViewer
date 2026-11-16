@@ -46,6 +46,8 @@ function threadedBlockEqual(a: ThreadedMessage['blocks'][number], b: ThreadedMes
       return b.type === 'bash_output'
         && a.stdout === b.stdout
         && a.stderr === b.stderr
+    case 'plugin_block':
+      return b.type === 'plugin_block' && a.kind === b.kind && a.text === b.text
     case 'coordinator_brief':
       return b.type === 'coordinator_brief' && a.text === b.text
     case 'coordinator_mail':

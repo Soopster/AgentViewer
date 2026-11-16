@@ -1,4 +1,5 @@
 import { checkDigest } from './format/checkDigest'
+import { formatRegisteredToolExpanded, formatRegisteredToolPreview } from './format/registry'
 import { summarizeKind, normalizeUnifiedDiff, previewDiff, previewFileChange, synthesizeEditDiff } from './format/diffs'
 import { extractMarkdownContent, extractCodeBlocksFromBlocks } from './format/code'
 import { formatAskUserQuestionTool } from './format/questions'
@@ -280,6 +281,9 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
   const normalizedThread = normalizeToolThreadForTui(thread)
   const toolName = normalizedThread.toolUse.name
 
+  const registered = formatRegisteredToolPreview(normalizedThread)
+  if (registered) return registered
+
   const coordinatorLines = formatCoordinatorTool(normalizedThread, false)
   if (coordinatorLines) return coordinatorLines
 
@@ -517,6 +521,8 @@ function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms,
     case 'tool_thread':
       if (block.toolUse.pluginCard) return pluginToolCardLines(block, false)
       return withDraftCardLine(previewTool(block, activeForms, taskRegistry), block)
+    case 'plugin_block':
+      return pluginSystemCardLines(block.card, false)
     case 'task_notification':
       return [line(`task ${block.status}: ${truncateLine(tidyTaskSummary(block.summary || block.taskId))}`, 'thinking')]
     case 'system_reminder':
@@ -1122,9 +1128,14 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
         .filter((entry) => entry.text.length > 0)]
     }
 
+    case 'plugin_block':
+      return pluginSystemCardLines(block.card, true)
+
     case 'tool_thread': {
       if (block.toolUse.pluginCard) return pluginToolCardLines(block, true)
       const normalizedBlock = normalizeToolThreadForTui(block)
+      const registered = formatRegisteredToolExpanded(normalizedBlock)
+      if (registered) return registered
       const input = toolInputRecord(normalizedBlock)
       const toolName = normalizedBlock.toolUse.name
 

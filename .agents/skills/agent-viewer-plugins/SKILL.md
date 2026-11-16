@@ -65,6 +65,27 @@ aligned across renderers while using their native controls.
   code returns `appEffects` for the originating renderer. Command access is
   limited to supported surface-opening commands, not arbitrary handlers or
   new send/interrupt operations. Preserve cancellation and captured targets.
+- For a colour scheme, declare `themes` (Web CSS variables and/or a terminal
+  palette); it is data, so a mod can ship it with no server module. Read the
+  `agent-viewer-themes` skill. Plugins that only add themes appear under
+  **Themes** in the plugin managers; any plugin may set `group` to choose its
+  heading.
+- For a terminal transcript preset, declare `transcriptViews` (a built-in `base`
+  plus ViewSpec overrides); they show read-only beside the user's own views.
+- To recognise something in message text and draw it as a card on every
+  renderer, declare `blocks` (a bounded regex plus a title and lines with
+  `{0}`/`{1}` placeholders), or register a `BlockRegionParser` from bundled code.
+  A block is a `plugin_block`, drawn from card data by Web, terminal and HTML
+  export; a faulty parser contributes nothing.
+- To draw a tool call yourself: Web `registerToolCard(names, Component)` from
+  `components/shell/sdk` (newest wins, unregistering restores the native card);
+  terminal `registerTuiToolFormatter(names, { preview, expanded })`
+  (`tui/format/registry.ts`, null defers to the built-ins); HTML export
+  `registerExportToolCard` (`lib/exportRegistry.ts`). A mod's own tools use
+  `toolCard` hooks and card templates instead.
+- To place a surface in the side panel, windows and launcher, give the surface
+  `windowTitle`, `shortcut`, `summary`, `multiWindow` and `fullScreen` metadata;
+  the host keeps no hand-written table of kinds.
 - A plugin can provide surfaces, server behavior and application observers
   together, or be headless.
 - To add an agent backend without touching the checkout, write a provider
@@ -72,7 +93,9 @@ aligned across renderers while using their native controls.
   `lib/extensions/providers/` (`npm run providers:scaffold`), a separate
   contract. Do not import provider runtimes into feature plugins.
 
-Read [references/authoring.md](references/authoring.md) for source locations,
+Read [references/extension-points.md](references/extension-points.md) for the
+registries above (contracts, limits, which isolates need which installer). Read
+[references/authoring.md](references/authoring.md) for source locations,
 registration, concrete examples, lifecycle and verification. Treat the installed
 source types as authoritative when the API changes.
 

@@ -186,6 +186,11 @@ export type PluginManifest = {
    * fields to change (tui/viewSpec.ts). Shown read-only beside the user's own.
    */
   readonly transcriptViews?: readonly PluginTranscriptViewSpec[]
+  /**
+   * Transcript blocks recognised in message text by a pattern, drawn as cards on
+   * every renderer. Data only, so a mod can ship them (lib/blockRegistry.ts).
+   */
+  readonly blocks?: readonly PluginBlockSpec[]
   /** Themes this plugin contributes while enabled: bare CSS-variable declarations, never code. */
   readonly themes?: readonly PluginThemeSpec[]
   /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
@@ -241,6 +246,18 @@ export type PluginTuiTheme = {
   readonly description?: string
   /** `omz` lists it under the prompt-theme group instead of light or dark. */
   readonly menu?: 'omz'
+}
+
+export type PluginBlockSpec = {
+  /** Names the block; the registered kind is `<plugin>.<kind>`. */
+  readonly kind: string
+  /** A JavaScript regular expression (at most 200 characters) matched against message text. */
+  readonly pattern: string
+  readonly flags?: string
+  /** `{0}` is the whole match and `{1}`… the capture groups. */
+  readonly title: string
+  readonly lines?: readonly string[]
+  readonly tone?: 'info' | 'success' | 'warning' | 'error'
 }
 
 export type PluginTranscriptViewSpec = {

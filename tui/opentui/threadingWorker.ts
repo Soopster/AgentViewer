@@ -1,3 +1,4 @@
+import { installLocalPluginBlocks } from '../../lib/plugins/blockContributionsLocal'
 import { sessionIdentityKey, sessionVariantKey, sessionVariantParts } from './sessionIdentity'
 import { SessionCacheBudget } from './sessionCacheBudget'
 import { transcriptPayloadBytes } from './transcriptPayloadSize'
@@ -187,6 +188,9 @@ declare const self: {
 // App.tsx). Sized below that, a prefetch round evicts the very session the user
 // is reading and the next poll rebuilds it from scratch — the cache thrashes
 // itself and the prefetch becomes a pure cost.
+// The worker threads transcripts, so it knows the mods' block patterns too.
+installLocalPluginBlocks()
+
 const THREADING_CACHE_LIMIT = 6
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 const sessionBudget = new SessionCacheBudget(96 * 1024 * 1024)

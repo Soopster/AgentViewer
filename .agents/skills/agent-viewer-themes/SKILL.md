@@ -97,6 +97,13 @@ edits are needed anywhere.
    plugin is off must fall back to light and return when the plugin is back.
 5. Report which of these you actually ran; a typecheck does not show a theme.
 
+## Related data contributions
+
+Themes sit beside two other data-only contributions a mod can ship in the same
+`plugin.json`: `transcriptViews` (below) and `blocks` (a regex that turns text in
+a message into a card). See the `agent-viewer-plugins` skill's
+`references/extension-points.md` for their limits.
+
 ## Transcript view presets
 
 A plugin or mod may also ship `transcriptViews`: `{ id, name, base, overrides }`

@@ -1,6 +1,7 @@
 'use client'
 
 import { PluginCardBlocks } from './shell/PluginCardBlocks'
+import type { PluginBlock } from '@/lib/blockRegistry'
 import { registerToolCard, resolveToolCard } from './message-view/toolCardRegistry'
 import { DesignCardButton, PluginDraftCard } from './shell/AdaptiveCardActions'
 import { reportUiInteraction } from '@/lib/plugins/uiInteractions'
@@ -3697,6 +3698,17 @@ function PluginToolCard({ thread }: { thread: ToolThread }) {
   )
 }
 
+/** A block a plugin's parser found in message text (lib/blockRegistry.ts), drawn from its card data. */
+function PluginBlockCard({ block }: { block: PluginBlock }) {
+  const { card } = block
+  return (
+    <div data-plugin-block={block.kind} style={{ border: `1px solid ${PLUGIN_CARD_TONE[card.tone]}`, borderRadius: 8, padding: '6px 10px', fontSize: 12.5, background: 'var(--surface)' }}>
+      <div style={{ fontWeight: 600, color: 'var(--text)' }}>{card.title}</div>
+      {card.blocks?.length ? <PluginCardBlocks blocks={card.blocks} /> : card.lines.map((text, index) => <div key={index} style={{ color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>{text}</div>)}
+    </div>
+  )
+}
+
 /** The call's own card, then — for a call a generic card draws — a draft card to judge or a way to make one. */
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
   const { pluginCardDraft } = thread.toolUse
@@ -4708,6 +4720,7 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'local_command_stdout')  return <LocalCommandStdoutCard  key={i} block={block as LocalCommandStdoutBlock} />
   if (block.type === 'bash_input')            return <BashInputCard           key={i} block={block as BashInputBlock} />
   if (block.type === 'bash_output')           return <BashOutputCard          key={i} block={block as BashOutputBlock} />
+  if (block.type === 'plugin_block')          return <PluginBlockCard         key={i} block={block} />
   if (block.type === 'coordinator_brief')     return <CoordinatorBriefCard    key={i} block={block} />
   if (block.type === 'coordinator_mail')      return <CoordinatorMailCard     key={i} block={block} />
   return null

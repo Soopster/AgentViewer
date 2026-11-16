@@ -1,3 +1,4 @@
+import type { PluginBlock } from './blockRegistry'
 import { registerExportBlock, registerExportToolCard, resolveExportBlock, resolveExportToolCard } from './exportRegistry'
 import { marked, Renderer } from 'marked'
 import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
@@ -577,6 +578,10 @@ registerExportBlock(['slash_command'], block => renderSlashCommand(block as Slas
 registerExportBlock(['local_command_stdout'], block => renderLocalCommandStdout(block as LocalCommandStdoutBlock))
 registerExportBlock(['bash_input'], block => renderBashInput(block as BashInputBlock))
 registerExportBlock(['bash_output'], block => renderBashOutput(block as BashOutputBlock))
+registerExportBlock(['plugin_block'], (anyBlock) => {
+  const block = anyBlock as PluginBlock
+  return `<div class="plugin-block" data-kind="${escapeHtml(block.kind)}" style="border:1px solid #1e2a44;border-radius:8px;padding:8px 12px;margin:8px 0"><strong>${escapeHtml(block.card.title)}</strong>${block.card.lines.map(text => `<div>${escapeHtml(text)}</div>`).join('')}</div>`
+})
 registerExportBlock(['coordinator_brief'], (anyBlock) => { const block = anyBlock as Extract<ThreadedBlock, { type: 'coordinator_brief' }>; return `> Coordinator standing instructions (${block.role}${block.agentName ? ` ${block.agentName}` : ''}) folded\n` })
 registerExportBlock(['coordinator_mail'], (anyBlock) => { const block = anyBlock as Extract<ThreadedBlock, { type: 'coordinator_mail' }>; return block.messages.map((message) => `**${message.from}** (${message.kind}${message.replyRequired ? ', reply required' : ''}${message.urgent ? ', urgent' : ''})\n\n${message.body}\n`).join('\n') })
 
