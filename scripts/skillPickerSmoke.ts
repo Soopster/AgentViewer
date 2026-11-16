@@ -99,14 +99,25 @@ assert.equal(skillChipsFor('s1').length, 0)
 // /skill <words> seeds the picker once, and tells one that is already open.
 assert.equal(takeSkillQuery(), null)
 let told = 0
-const stop = subscribeSkillQuery(() => { told += 1 })
 seedSkillQuery('  review pr ')
-assert.equal(told, 1)
 assert.equal(takeSkillQuery(), 'review pr')
 assert.equal(takeSkillQuery(), null, 'taken once')
+let heard = ''
+const stop = subscribeSkillQuery(query => { told += 1; heard = query })
+let alsoHeard = ''
+const stopSecond = subscribeSkillQuery(query => { alsoHeard = query })
+seedSkillQuery(' deploy ')
+assert.equal(told, 1)
+assert.equal(heard, 'deploy', 'an open picker is told the words')
+assert.equal(alsoHeard, 'deploy', 'each mounted picker receives the query without consuming it from another')
+assert.equal(takeSkillQuery(), null, 'and nothing is left waiting')
 seedSkillQuery('  ')
 assert.equal(told, 1, 'an empty argument seeds nothing')
 stop()
+stopSecond()
+seedSkillQuery('pdf')
+assert.equal(takeSkillQuery(), 'pdf', 'after all pickers close the next query waits for a new picker')
+assert.equal(told, 1, 'unsubscribed pickers receive no further queries')
 
 // The menu's Skills section: only where the provider flags its built-ins, never a name the catalog lists.
 const menuBaseline = [{ command: '/help', description: '' }, { command: '/review', description: '' }]

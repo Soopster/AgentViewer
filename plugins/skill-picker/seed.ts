@@ -4,11 +4,13 @@
  * when it is told). Module state shared by the command and the view (one bundle).
  */
 let pending: string | null = null
-const listeners = new Set<() => void>()
+const listeners = new Set<(query: string) => void>()
 
+/** An open picker is handed the words directly; otherwise they wait for the next one to open. */
 export function seedSkillQuery(query: string): void {
-  pending = query.trim() || null
-  if (pending) for (const listener of listeners) listener()
+  const words = query.trim()
+  if (!words) return
+  if (listeners.size) { pending = null; for (const listener of listeners) listener(words) } else pending = words
 }
 
 export function takeSkillQuery(): string | null {
@@ -17,7 +19,7 @@ export function takeSkillQuery(): string | null {
   return value
 }
 
-export function subscribeSkillQuery(listener: () => void): () => void {
+export function subscribeSkillQuery(listener: (query: string) => void): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }

@@ -111,6 +111,10 @@ const fourth = await testRender(
 await act(async () => { await new Promise(r => setTimeout(r, 80)) }); await fourth.renderOnce()
 screen = fourth.captureCharFrame()
 assert(screen.includes('› jira') && !screen.includes('pdf'), '/skill jira starts with the search filled in')
+await act(async () => { seedSkillQuery('pdf'); await new Promise(r => setTimeout(r, 80)) })
+await fourth.renderOnce()
+screen = fourth.captureCharFrame()
+assert(screen.includes('› pdf') && !screen.includes('jira'), '/skill pdf updates a picker that is already open')
 fourth.renderer.destroy?.()
 
 // A skill added by the picker shows as a chip, and clicking × takes it and its text back out.

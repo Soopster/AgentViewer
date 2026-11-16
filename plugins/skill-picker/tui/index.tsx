@@ -64,7 +64,7 @@ function SkillPickerSurface({ services, theme, width, height, placement, zIndex,
   const draft = useMemo(() => composer?.readDraft?.() ?? '', [composer])
 
   // `/skill <words>` while the picker is already open searches for those words.
-  useEffect(() => subscribeSkillQuery(() => { const next = takeSkillQuery(); if (next) { setQuery(next); setIndex(0) } }), [])
+  useEffect(() => subscribeSkillQuery(next => { setQuery(next); setIndex(0) }), [])
   const sessionId = services.session?.session?.sessionId
   const [liveCommands, setLiveCommands] = useState(() => composer?.liveCommands?.() ?? [])
   useEffect(() => { setLiveCommands(composer?.liveCommands?.() ?? []) }, [composer, snapshot])

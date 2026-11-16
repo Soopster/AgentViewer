@@ -54,7 +54,7 @@ function SkillPickerView({ services, close }: WebPluginViewProps) {
   const requested = useRef(new Set<string>())
 
   // `/skill <words>` while the picker is already open searches for those words.
-  useEffect(() => subscribeSkillQuery(() => { const next = takeSkillQuery(); if (next) { setQuery(next); setIndex(0) } }), [])
+  useEffect(() => subscribeSkillQuery(next => { setQuery(next); setIndex(0) }), [])
   const sessionId = services.session?.session?.sessionId
   const draft = useMemo(() => composer?.readDraft?.() ?? '', [composer])
   const liveCommands = useMemo(() => composer?.liveCommands?.() ?? [], [composer])
