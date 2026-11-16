@@ -1,6 +1,7 @@
 'use client'
 
 import { PluginCardBlocks } from './shell/PluginCardBlocks'
+import { registerToolCard, resolveToolCard } from './message-view/toolCardRegistry'
 import { DesignCardButton, PluginDraftCard } from './shell/AdaptiveCardActions'
 import { reportUiInteraction } from '@/lib/plugins/uiInteractions'
 import '@/lib/plugins/uiInteractionsWeb'
@@ -3707,35 +3708,39 @@ function ToolThreadCard({ thread }: { thread: ToolThread }) {
   )
 }
 
+// The native cards, registered like any plugin's. Names are provider tool names;
+// the MCP predicate is last-resort and matches by shape, not by name.
+registerToolCard(['Edit'], EditToolCard)
+registerToolCard(['MultiEdit'], MultiEditCard)
+registerToolCard(['FileChange'], FileChangeCard)
+registerToolCard(['Write'], WriteToolCard)
+registerToolCard(['Bash'], BashCard)
+registerToolCard(['Read'], ReadCard)
+registerToolCard(['Grep'], GrepCard)
+registerToolCard(['Glob'], GlobCard)
+registerToolCard(['TodoWrite'], TodoWriteCard)
+registerToolCard(['Agent'], AgentCard)
+registerToolCard(['task', 'task_status'], OpenCodeTaskCard)
+registerToolCard(['EnterPlanMode', 'ExitPlanMode'], PlanModeCard)
+registerToolCard(['Skill'], SkillCard)
+registerToolCard(['AskUserQuestion'], AskUserQuestionCard)
+registerToolCard(['ToolSearch'], ToolSearchCard)
+registerToolCard(['WebSearch'], WebSearchCard)
+registerToolCard(['WebFetch'], WebFetchCard)
+registerToolCard(['NotebookEdit'], NotebookEditCard)
+registerToolCard(['EnterWorktree', 'ExitWorktree'], WorktreeCard)
+registerToolCard(['TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop'], TaskCard)
+registerToolCard(['CronCreate', 'CronList', 'CronDelete'], CronCard)
+registerToolCard(['ListMcpResourcesTool', 'ReadMcpResourceTool'], McpCard)
+registerToolCard(isMcpToolName, McpToolCard)
+
 function ToolThreadCardBase({ thread }: { thread: ToolThread }) {
   if (thread.toolUse.pluginCard) return <PluginToolCard thread={thread} />
   if (thread.toolUse.input.asyncUserInput === true && thread.toolUse.name === 'AskUserQuestion') return <AsyncQuestionCard toolUse={thread.toolUse} />
   if (thread.toolUse.mcp) return <McpToolCard thread={thread} />
   const nativeThread = normalizeToolThreadForNativeCard(thread)
-  const name = nativeThread.toolUse.name
-  if (name === 'Edit')                         return <EditToolCard thread={nativeThread} />
-  if (name === 'MultiEdit')                    return <MultiEditCard thread={nativeThread} />
-  if (name === 'FileChange')                   return <FileChangeCard thread={nativeThread} />
-  if (name === 'Write')                        return <WriteToolCard thread={nativeThread} />
-  if (name === 'Bash')                         return <BashCard thread={nativeThread} />
-  if (name === 'Read')                         return <ReadCard thread={nativeThread} />
-  if (name === 'Grep')                         return <GrepCard thread={nativeThread} />
-  if (name === 'Glob')                         return <GlobCard thread={nativeThread} />
-  if (name === 'TodoWrite')                    return <TodoWriteCard thread={nativeThread} />
-  if (name === 'Agent')                        return <AgentCard thread={nativeThread} />
-  if (name === 'task' || name === 'task_status') return <OpenCodeTaskCard thread={nativeThread} />
-  if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return <PlanModeCard thread={nativeThread} />
-  if (name === 'Skill')                        return <SkillCard thread={nativeThread} />
-  if (name === 'AskUserQuestion')              return <AskUserQuestionCard thread={nativeThread} />
-  if (name === 'ToolSearch')                   return <ToolSearchCard thread={nativeThread} />
-  if (name === 'WebSearch')                    return <WebSearchCard thread={nativeThread} />
-  if (name === 'WebFetch')                     return <WebFetchCard thread={nativeThread} />
-  if (name === 'NotebookEdit')                 return <NotebookEditCard thread={nativeThread} />
-  if (name === 'EnterWorktree' || name === 'ExitWorktree') return <WorktreeCard thread={nativeThread} />
-  if (name === 'TaskCreate' || name === 'TaskList' || name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') return <TaskCard thread={nativeThread} />
-  if (name === 'CronCreate' || name === 'CronList' || name === 'CronDelete') return <CronCard thread={nativeThread} />
-  if (name === 'ListMcpResourcesTool' || name === 'ReadMcpResourceTool') return <McpCard thread={nativeThread} />
-  if (isMcpToolName(name)) return <McpToolCard thread={nativeThread} />
+  const Card = resolveToolCard(nativeThread.toolUse.name)
+  if (Card) return <Card thread={nativeThread} />
   return <GenericToolCard thread={thread} />
 }
 

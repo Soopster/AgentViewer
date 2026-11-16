@@ -9,6 +9,8 @@ import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } fr
 import type { WebPluginView, WebPluginViewProps, WebPluginWidget, WebPluginWidgetProps } from '@/components/shell/pluginTypes'
 import type { GitSummary } from '@/lib/gitProvider'
 import { availableActions, overviewSegments, runOmniAction } from '../model'
+import { moveLayoutItem, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
+import { omniLayoutStore } from './storage'
 
 /** The bar's width in the model's units (characters), from the window. */
 function useColumns(): number {
@@ -24,6 +26,7 @@ function useColumns(): number {
 
 function OmniBar({ services }: WebPluginWidgetProps) {
   const overview = services?.['shell-overview']
+  const layout = useOmniLayout(omniLayoutStore)
   const cwd = overview?.snapshot.cwd ?? ''
   const readGit = overview?.readGit
   const columns = useColumns()
@@ -52,7 +55,7 @@ function OmniBar({ services }: WebPluginWidgetProps) {
     return () => clearInterval(timer)
   }, [running, startedAt])
   if (!overview) return null
-  const segments = overviewSegments(overview.snapshot, git?.cwd === cwd ? git.summary : null, columns, now, overview.commands?.ids)
+  const segments = overviewSegments(overview.snapshot, git?.cwd === cwd ? git.summary : null, columns, now, overview.commands?.ids, layout)
   return (
     <nav id="omni-bar" aria-label="Omni bar" style={{ display: 'flex', alignItems: 'center', gap: 2, height: 28, padding: '0 8px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden' }}>
       {segments.map(segment => {
@@ -106,5 +109,36 @@ function OmniActions({ services, close }: WebPluginViewProps) {
   )
 }
 
+function OmniSettings({ close }: WebPluginViewProps) {
+  const layout = useOmniLayout(omniLayoutStore)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [close])
+  const small = { border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', borderRadius: 4, padding: '1px 7px', cursor: 'pointer', fontSize: 12 } as const
+  return (
+    <div role="dialog" aria-label="Customize omni bar" onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '10vh', background: 'rgba(0,0,0,0.35)' }}>
+      <div data-plugin-view="omni-bar-settings" onClick={event => event.stopPropagation()} style={{ width: 'min(460px, calc(100vw - 32px))', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 10, overflow: 'hidden', boxShadow: '0 16px 48px var(--shadow, rgba(0,0,0,0.3))' }}>
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13, display: 'flex', justifyContent: 'space-between' }}>
+          Customize omni bar
+          <button type="button" onClick={() => omniLayoutStore.reset()} style={small}>Reset</button>
+        </div>
+        {layout.map((item, index) => (
+          <div key={item.id} data-omni-item={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', opacity: item.enabled ? 1 : 0.55 }}>
+            <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={item.enabled} onChange={() => omniLayoutStore.set(toggleLayoutItem(layout, index))} />
+              {omniItemLabel(item.id)}
+            </label>
+            <button type="button" aria-label={`Move ${omniItemLabel(item.id)} earlier`} disabled={index === 0} onClick={() => omniLayoutStore.set(moveLayoutItem(layout, index, -1))} style={small}>↑</button>
+            <button type="button" aria-label={`Move ${omniItemLabel(item.id)} later`} disabled={index === layout.length - 1} onClick={() => omniLayoutStore.set(moveLayoutItem(layout, index, 1))} style={small}>↓</button>
+          </div>
+        ))}
+        <div style={{ padding: '6px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-3)', fontSize: 11 }}>Commands… is always shown, last. Esc closes.</div>
+      </div>
+    </div>
+  )
+}
+
 export const widgets: PluginWidgetModule<WebPluginWidget> = { apiVersion: PLUGIN_API_VERSION, pluginId: 'omni-bar', widgets: { overview: OmniBar } }
-export const module: PluginViewModule<WebPluginView> = { apiVersion: PLUGIN_API_VERSION, pluginId: 'omni-bar', views: { 'omni-bar-actions': OmniActions } }
+export const module: PluginViewModule<WebPluginView> = { apiVersion: PLUGIN_API_VERSION, pluginId: 'omni-bar', views: { 'omni-bar-actions': OmniActions, 'omni-bar-settings': OmniSettings } }

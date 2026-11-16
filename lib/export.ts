@@ -1,3 +1,4 @@
+import { registerExportBlock, registerExportToolCard, resolveExportBlock, resolveExportToolCard } from './exportRegistry'
 import { marked, Renderer } from 'marked'
 import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
@@ -403,17 +404,7 @@ function renderGenericCard(thread: ToolThread): string {
 }
 
 function renderToolThread(thread: ToolThread): string {
-  switch (thread.toolUse.name) {
-    case 'Edit':
-    case 'MultiEdit':  return renderEditCard(thread)
-    case 'FileChange': return renderFileChangeCard(thread)
-    case 'Write':      return renderWriteCard(thread)
-    case 'Bash':       return renderBashCard(thread)
-    case 'Read':       return renderReadCard(thread)
-    case 'Grep':       return renderGrepCard(thread)
-    case 'Glob':       return renderGlobCard(thread)
-    default:           return renderGenericCard(thread)
-  }
+  return (resolveExportToolCard(thread.toolUse.name) ?? renderGenericCard)(thread)
 }
 
 // ── Special block renderers ───────────────────────────────────────────────────
@@ -564,23 +555,30 @@ function renderClaudeSystem(block: ClaudeSystemBlock): string {
 }
 
 function renderBlock(block: ThreadedBlock): string {
-  switch (block.type) {
-    case 'tool_thread':           return renderToolThread(block as ToolThread)
-    case 'text':                  return renderText(block as TextBlock)
-    case 'thinking':              return renderThinking(block as ThinkingBlock)
-    case 'image':                 return renderImageBlock(block as ImageBlock)
-    case 'task_notification':     return renderTaskNotification(block as TaskNotificationBlock)
-    case 'system_reminder':       return renderSystemReminder(block as SystemReminderBlock)
-    case 'claude_system':         return renderClaudeSystem(block as ClaudeSystemBlock)
-    case 'slash_command':         return renderSlashCommand(block as SlashCommandBlock)
-    case 'local_command_stdout':  return renderLocalCommandStdout(block as LocalCommandStdoutBlock)
-    case 'bash_input':            return renderBashInput(block as BashInputBlock)
-    case 'bash_output':           return renderBashOutput(block as BashOutputBlock)
-    case 'coordinator_brief':     return `> Coordinator standing instructions (${block.role}${block.agentName ? ` ${block.agentName}` : ''}) folded\n`
-    case 'coordinator_mail':      return block.messages.map((message) => `**${message.from}** (${message.kind}${message.replyRequired ? ', reply required' : ''}${message.urgent ? ', urgent' : ''})\n\n${message.body}\n`).join('\n')
-    default:                      return ''
-  }
+  return resolveExportBlock(block.type)?.(block) ?? ''
 }
+
+// The exporter's own renderers, registered like any plugin's.
+registerExportToolCard(['Edit', 'MultiEdit'], renderEditCard)
+registerExportToolCard(['FileChange'], renderFileChangeCard)
+registerExportToolCard(['Write'], renderWriteCard)
+registerExportToolCard(['Bash'], renderBashCard)
+registerExportToolCard(['Read'], renderReadCard)
+registerExportToolCard(['Grep'], renderGrepCard)
+registerExportToolCard(['Glob'], renderGlobCard)
+registerExportBlock(['tool_thread'], block => renderToolThread(block as ToolThread))
+registerExportBlock(['text'], block => renderText(block as TextBlock))
+registerExportBlock(['thinking'], block => renderThinking(block as ThinkingBlock))
+registerExportBlock(['image'], block => renderImageBlock(block as ImageBlock))
+registerExportBlock(['task_notification'], block => renderTaskNotification(block as TaskNotificationBlock))
+registerExportBlock(['system_reminder'], block => renderSystemReminder(block as SystemReminderBlock))
+registerExportBlock(['claude_system'], block => renderClaudeSystem(block as ClaudeSystemBlock))
+registerExportBlock(['slash_command'], block => renderSlashCommand(block as SlashCommandBlock))
+registerExportBlock(['local_command_stdout'], block => renderLocalCommandStdout(block as LocalCommandStdoutBlock))
+registerExportBlock(['bash_input'], block => renderBashInput(block as BashInputBlock))
+registerExportBlock(['bash_output'], block => renderBashOutput(block as BashOutputBlock))
+registerExportBlock(['coordinator_brief'], (anyBlock) => { const block = anyBlock as Extract<ThreadedBlock, { type: 'coordinator_brief' }>; return `> Coordinator standing instructions (${block.role}${block.agentName ? ` ${block.agentName}` : ''}) folded\n` })
+registerExportBlock(['coordinator_mail'], (anyBlock) => { const block = anyBlock as Extract<ThreadedBlock, { type: 'coordinator_mail' }>; return block.messages.map((message) => `**${message.from}** (${message.kind}${message.replyRequired ? ', reply required' : ''}${message.urgent ? ', urgent' : ''})\n\n${message.body}\n`).join('\n') })
 
 function renderMessage(msg: ThreadedMessage): string {
   const dotCls = msg.role === 'assistant'

@@ -7,3 +7,6 @@ export { sessionSelectionKey } from '../session-catalog/selectionKey'
 // The reader's code theme, so a plugin that draws code matches the transcript's.
 export { useCodeTheme } from '../CodeThemeContext'
 export { codeStyleToHighlightsTheme, getCodeThemeStyle } from '../../lib/codeThemeStyles'
+
+// Draw a tool call with a card of the plugin's own (the host's native cards register the same way).
+export { registerToolCard, type ToolCardComponent } from '../message-view/toolCardRegistry'

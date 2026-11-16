@@ -30,3 +30,14 @@ and session history search. Plugin shortcuts disappear when their owning plugin
 is disabled; the actions menu provides keyboard access at smaller widths.
 The activity segment includes the selected provider and session title. Git
 context distinguishes a clean worktree and reports stashes when present.
+
+Further shortcuts — **Editor**, **PRs**, **GitHub**, **Checkpoints** and **Analytics** — are
+declared once in `OMNI_COMMAND_SHORTCUTS` (`model.ts`), which also feeds the actions menu.
+Each appears only while its plugin is enabled and the width leaves room, in that order.
+
+**Customize omni bar** (command palette, or the actions menu) lists every item with a
+checkbox and an order: Space toggles, ⇧↑/⇧↓ move (the Web has checkboxes and ↑/↓
+buttons), `r` resets. Opt-in items (Editor, PRs, GitHub, Checkpoints, Analytics) start off.
+The layout is per renderer — the TUI in `.agent-viewer-data/omni-bar.json`, the Web in
+localStorage — and unknown or newly added items are reconciled on read (`normalizeLayout`).
+**Commands…** cannot be disabled or moved: it is the way back to everything else.
