@@ -31,6 +31,17 @@ const byName = (list: typeof forClaude, name: string) => list.find(entry => entr
 assert.equal(forClaude.filter(entry => entry.name === 'pdf').length, 1, 'one skill in two roots is one entry')
 assert.equal(byName(forClaude, 'pdf').source, 'project', 'the project copy wins over the user copy')
 assert.equal(byName(forClaude, 'pdf').path, '/p/.claude/skills/pdf/SKILL.md')
+for (const [directory, expected] of [
+  ['/project/skills/', '/project/skills/nested/pdf/SKILL.md'],
+  ['C:\\project\\skills\\', 'C:\\project\\skills\\nested\\pdf\\SKILL.md'],
+  ['\\\\server\\share\\skills', '\\\\server\\share\\skills\\nested\\pdf\\SKILL.md'],
+]) {
+  const entries = composerSkillsFromSnapshot({
+    roots: [root('paths', directory, 'project', ['Claude (claude)'])],
+    skills: [skill('path', 'paths', 'nested/pdf', 'pdf', '')], diagnostics: [], receipts: [],
+  }, [], 'claude')
+  assert.equal(entries[0]?.path, expected, 'paths use the inventory filesystem, without Node APIs in the browser')
+}
 assert.equal(byName(forClaude, 'pdf').nativeForProvider, true, 'a Claude root means Claude loads it')
 assert.equal(byName(forClaude, 'deploy').nativeForProvider, true, 'a live command the provider reports means it loads it')
 assert.equal(byName(forClaude, 'chief-of-staff').nativeForProvider, false, 'the copy-only library is loaded by nobody')

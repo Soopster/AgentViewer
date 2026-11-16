@@ -1,4 +1,3 @@
-import path from 'node:path'
 import type { SkillsSnapshot } from '../plugins/skillsManager'
 import type { SlashCommandSuggestion } from '../slashCommands'
 import type { ComposerSkill } from './types'
@@ -10,6 +9,13 @@ function instanceOf(consumer: string): string | null {
 
 const loads = (instanceId: string, provider: string) =>
   instanceId === provider || instanceId.startsWith(`${provider}:`) || instanceId.startsWith(`${provider}-`)
+
+// Inventory paths belong to the server's filesystem, even in a remote browser.
+// Preserve their separator without importing Node APIs into the Web picker.
+function skillFilePath(root: string, key: string): string {
+  const separator = root.includes('\\') ? '\\' : '/'
+  return [root.replace(/[\\/]+$/, ''), ...key.split('/'), 'SKILL.md'].join(separator)
+}
 
 /**
  * The skills a composer can offer for `provider`: every installed skill the Skills
@@ -33,7 +39,7 @@ export function composerSkillsFromSnapshot(
       // A project copy is the one that applies here, so it wins over a user one.
       if (root.scope === 'project' && existing.source === 'user') {
         existing.source = 'project'
-        existing.path = path.join(root.path, ...skill.key.split('/'), 'SKILL.md')
+        existing.path = skillFilePath(root.path, skill.key)
         existing.skillId = skill.id
         existing.rootId = root.id
         existing.description = skill.description || existing.description
@@ -48,7 +54,7 @@ export function composerSkillsFromSnapshot(
       loadedBy: [...new Set(loadedBy)],
       nativeForProvider: false,
       files: skill.files.map(file => file.path),
-      path: path.join(root.path, ...skill.key.split('/'), 'SKILL.md'),
+      path: skillFilePath(root.path, skill.key),
       skillId: skill.id,
       rootId: root.id,
     })

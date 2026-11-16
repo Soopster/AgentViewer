@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { findLspExecutable, resolveLspCommand } from '../../plugins/editor/tui/editorLspCommand'
 import {
   clearEditorLspConfigCache,
@@ -71,6 +72,21 @@ console.log('Editor LSP cross-platform command resolution smoke passed')
 
 const workspace = await mkdtemp(join(tmpdir(), 'agent-viewer-lsp-servers-'))
 try {
+  // Put the registry outside the application's node_modules ancestry so only
+  // the separate workspace resolver can discover this fixture's native server.
+  const isolatedRegistry = join(workspace, 'editorLspServers.ts')
+  await copyFile(fileURLToPath(new URL('../../plugins/editor/tui/editorLspServers.ts', import.meta.url)), isolatedRegistry)
+  const project = join(workspace, 'separate-project')
+  const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`
+  const packageDirectory = join(project, 'node_modules', platformPackage)
+  await mkdir(packageDirectory, { recursive: true })
+  await writeFile(join(packageDirectory, 'package.json'), JSON.stringify({ name: platformPackage, version: '1.0.0' }))
+  const isolated = await import(pathToFileURL(isolatedRegistry).href) as typeof import('../../plugins/editor/tui/editorLspServers')
+  const discovered = isolated.getEditorLspServerSpecs('typescript', project)
+  const expected = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN ?? join(await realpath(packageDirectory), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')
+  assert(discovered[0]?.command === expected,
+    `The native resolver must find the separate workspace's TypeScript server: ${JSON.stringify(discovered)}`)
+
   const typescript = getEditorLspServerSpecs('typescript')
   assert(typescript.some((spec) => spec.name === 'TypeScript 7' || spec.name === 'typescript-language-server'),
     `TypeScript has no server configured: ${JSON.stringify(typescript)}`)

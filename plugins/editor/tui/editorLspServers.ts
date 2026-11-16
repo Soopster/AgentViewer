@@ -1,11 +1,21 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { Module } from 'node:module'
 import { dirname, isAbsolute, join, parse, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export type EditorLspServerSpec = { command: string; args: string[]; name: string }
 
-const moduleRequire = createRequire(import.meta.url)
+// These resolve packages installed at runtime, including in another workspace.
+// Importing createRequire directly lets Webpack replace the resolver with a
+// compile-time context (or undefined for a dynamic filename). Keep the native
+// factory call opaque to that parser so Node/Bun own package resolution.
+function runtimeRequire(filename: string | URL): NodeRequire {
+  return Module.createRequire(filename)
+}
+
+// Next's CommonJS bundle has a runtime filename; its import.meta.url points
+// back at the source checkout, which may not exist in a standalone install.
+const moduleRequire = runtimeRequire(typeof __filename === 'string' ? __filename : import.meta.url)
 
 function typescriptLspCommand(root?: string): EditorLspServerSpec[] {
   const packagedCommand = process.env.AGENT_VIEWER_TYPESCRIPT_LSP_BIN
@@ -17,7 +27,7 @@ function typescriptLspCommand(root?: string): EditorLspServerSpec[] {
   // its build output, where no node_modules is, and would otherwise fall back to
   // a server that cannot read a TypeScript 7 workspace at all.
   const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}/package.json`
-  for (const resolver of [moduleRequire, ...(root ? [createRequire(join(resolve(root), 'package.json'))] : [])]) {
+  for (const resolver of [moduleRequire, ...(root ? [runtimeRequire(join(resolve(root), 'package.json'))] : [])]) {
     try {
       const packagePath = resolver.resolve(platformPackage)
       specs.push(native(join(dirname(packagePath), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc')))
@@ -305,7 +315,6 @@ function markerExists(directory: string, marker: string): boolean {
   // markers use, and a readdir per directory is cheaper than a glob library.
   const suffix = marker.slice(marker.indexOf('*') + 1)
   try {
-    const { readdirSync } = moduleRequire('node:fs') as typeof import('node:fs')
     return readdirSync(directory).some((entry) => entry.endsWith(suffix))
   } catch {
     return false

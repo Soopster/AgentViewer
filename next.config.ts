@@ -5,7 +5,12 @@ const nextConfig: NextConfig = {
   // desktop sidecar); keep serverExternalPackages/node:sqlite indirection
   // working under standalone tracing — see CLAUDE.md's node:sqlite note.
   output: 'standalone',
-  outputFileTracingIncludes: { '/api/proof': ['./lib/proof/*.mjs'] },
+  outputFileTracingIncludes: {
+    '/api/proof': ['./lib/proof/*.mjs'],
+    // The editor resolves this native server at runtime; static tracing cannot
+    // infer the platform-specific package name from the native resolver.
+    '/api/editor/lsp': [`./node_modules/@typescript/typescript-${process.platform}-${process.arch}/**/*`],
+  },
   // Non-packaging directories the tracer otherwise sweeps into the
   // standalone output: .agent-viewer-data is gitignored runtime state
   // (search index, coord worktrees, tags) whose nested worktree symlinks
