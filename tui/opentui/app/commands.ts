@@ -89,8 +89,6 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'new', label: 'New agent session', key: '⇧N', category: 'Session' },
   { id: 'rename', label: 'Rename session', key: '⌃R', category: 'Session' },
   { id: 'cli', label: 'Copy CLI resume command', key: '', category: 'Session' },
-  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: '⇧C ⌃R', category: 'Session' },
-  { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: '', category: 'Session' },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },
   // Feature plugins contribute their own entries (lib/plugins/catalog.ts).
   ...listPluginCommands('tui').map((command) => ({ id: command.id, label: command.label, key: command.tuiKeyLabel ?? '', category: command.category })),

@@ -2869,10 +2869,10 @@ function OpenTuiWorkspace() {
       : withViews
     const bridgeFiltered = canUseChannelBridge
       ? enabledCommands
-      : enabledCommands.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
+      : enabledCommands.filter((cmd) => cmd.id !== 'channel-bridge')
     const availableCommands = canUseIdeBridge
       ? bridgeFiltered
-      : bridgeFiltered.filter((cmd) => cmd.id !== 'ide-bridge' && cmd.id !== 'ide-bridge-route')
+      : bridgeFiltered.filter((cmd) => cmd.id !== 'ide-bridge')
     const q = commandPaletteQuery.toLowerCase()
     if (!q) {
       // Keyboard selection indexes this array, so keep it in the exact same
@@ -6230,7 +6230,7 @@ function OpenTuiWorkspace() {
     pasteSystemClipboardToComposer, toggleComposerHidden, stashComposerPrompt, popComposerStash,
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
     setRenameSessionKey, setRenameDraft, copyCliCommand,
-    toggleComposerBridgeRoute, toggleComposerIdeRoute, toggleSidebarSort, sidebarSort,
+    toggleSidebarSort, sidebarSort,
     toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
   }, id)
