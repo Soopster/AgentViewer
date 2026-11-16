@@ -83,6 +83,11 @@ try {
   await act(async () => { await setup.mockMouse.pressDown(editorNode.x + 2, editorNode.y, 2 as never) })
   await act(async () => { await setup.mockMouse.release(editorNode.x + 2, editorNode.y, 2 as never) })
   assert.equal(commands.at(-1), 'omni-bar-settings', 'right click did not open customization')
+  await act(async () => { await setup.mockMouse.moveTo(editorNode.x + 2, editorNode.y) })
+  await settle()
+  const lit = setup.captureSpans().lines[editorNode.y]!.spans.find(span => span.text.includes('Editor'))!
+  const idle = setup.captureSpans().lines[editorNode.y]!.spans.find(span => span.text.includes('Files'))!
+  assert.notDeepEqual(lit.bg, idle.bg, 'hovering a bar item did not highlight it')
   const newSession = setup.renderer.root.findDescendantById('omni-bar:new-session')!
   await act(async () => { await setup.mockMouse.click(newSession.x + 1, newSession.y) })
   assert.equal(actions.at(-1), 'new-session')

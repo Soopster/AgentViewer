@@ -14,6 +14,7 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
   const readGit = overview?.readGit
   const [gitState, setGit] = useState<{ cwd: string; summary: GitSummary | null } | null>(null)
   const [now, setNow] = useState(Date.now)
+  const [hovered, setHovered] = useState<string | null>(null)
   const running = overview?.snapshot.running ?? false
   const startedAt = overview?.snapshot.startedAt ?? null
   useEffect(() => {
@@ -53,8 +54,10 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
         ? Math.floor(contextWidth / flexibleCount) + (flexibleIndex++ === 0 ? contextWidth % flexibleCount : 0)
         : Math.min(width, segment.text.length + 2)
       return <box key={segment.action} id={`omni-bar:${segment.action}`} width={cells} height={1} flexShrink={0}
+        backgroundColor={hovered === segment.action ? theme.surface3 : theme.surface2}
+        onMouseOver={() => setHovered(segment.action)} onMouseOut={() => setHovered(current => current === segment.action ? null : current)}
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); runOmniAction(overview, segment.action) } }}>
-        <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${segment.text} `, cells)}</text>
+        <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' || hovered === segment.action ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${segment.text} `, cells)}</text>
       </box>
     })}
   </box>
@@ -88,6 +91,7 @@ export function OmniActions({ services, theme, width, height, registerKeys, clos
     {actions.slice(start, start + visibleRows).map((action, offset) => {
       const index = start + offset
       return <box key={action.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
+      onMouseOver={() => setCursor(index)}
       onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); activate(index) } }}>
       <text fg={selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} ${omniGlyph(action.id)} ${action.label}`, popWidth - 2)}</text>
       </box>
@@ -128,6 +132,7 @@ export function OmniSettings({ theme, width, height, registerKeys, close }: TuiP
     {layout.slice(start, start + visibleRows).map((item, offset) => {
       const index = start + offset
       return <box key={item.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
+        onMouseOver={() => setCursor(index)}
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(index); omniLayoutStore.set(toggleLayoutItem(layout, index)) } }}>
         <text fg={!item.enabled ? theme.dim : selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} [${item.enabled ? 'x' : ' '}] ${omniGlyph(item.id)} ${omniItemLabel(item.id)}`, popWidth - 2)}</text>
       </box>

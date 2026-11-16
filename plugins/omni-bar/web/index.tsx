@@ -126,7 +126,7 @@ function OmniSettings({ close }: WebPluginViewProps) {
           <button type="button" onClick={() => omniLayoutStore.reset()} style={small}>Reset</button>
         </div>
         {layout.map((item, index) => (
-          <div key={item.id} data-omni-item={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', opacity: item.enabled ? 1 : 0.55 }}>
+          <div key={item.id} data-omni-item={item.id} className="av-hover-control" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', opacity: item.enabled ? 1 : 0.55 }}>
             <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={item.enabled} onChange={() => omniLayoutStore.set(toggleLayoutItem(layout, index))} />
               {omniGlyph(item.id)} {omniItemLabel(item.id)}
