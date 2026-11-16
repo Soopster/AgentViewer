@@ -38,6 +38,12 @@ export function skillPreviewLines(text: string): string[] {
   return body.split(/\r?\n/)
 }
 
+/** The selected file's cached preview, or its loading/command-only placeholder. */
+export function selectedSkillPreview(skill: ComposerSkill | undefined, previews: Record<string, string[]>): string[] {
+  if (!skill) return []
+  return previews[skill.key] ?? (skill.skillId ? ['loading…'] : [skill.description])
+}
+
 export const SKILL_USAGE_KEY = 'agentViewer:skillUsage'
 
 /** Frecency: how often, discounted by age in days (the file pickers' rule). */

@@ -7,14 +7,48 @@ import { composerSkillsFromSnapshot } from '../../../lib/skillPicker/list'
 import { planSkillInsert } from '../../../lib/skillPicker/insert'
 import type { ComposerSkill } from '../../../lib/skillPicker/types'
 import { frecencyKey, readFrecencyScores, recordFrecencyUse } from '../../../lib/tuiFrecency'
-import { fitText, type TuiPluginView, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
-import { installTarget, pickerRows, skillPreviewLines } from '../model'
+import { fitText, type TuiPluginView, type TuiPluginViewProps, type TuiThemePalette } from '../../../tui/opentui/shell/sdk'
+import { installTarget, pickerRows, skillPreviewLines, selectedSkillPreview } from '../model'
 import { addSkillChip } from '../chips'
 import { subscribeSkillQuery, takeSkillQuery } from '../seed'
 
 type Mode = { kind: 'browse' } | { kind: 'choose'; skill: ComposerSkill } | { kind: 'install'; skill: ComposerSkill; summary: string; previewId?: string; targetId?: string; blocked: boolean }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+function pickerDimensions(width: number, height: number, placement: TuiPluginViewProps['placement']) {
+  const docked = placement !== 'overlay'
+  const totalW = docked ? width : Math.min(width - 6, 124)
+  const totalH = docked ? height : Math.min(height - 4, 34)
+  const leftW = Math.floor((totalW - 4) * 0.46)
+  return { docked, totalW, totalH, leftW, rightW: totalW - 4 - leftW - 1, listRows: Math.max(totalH - 7, 3) }
+}
+
+function SkillPreview({ skill, lines, provider, theme, width, rows }: {
+  skill: ComposerSkill | undefined; lines: string[]; provider: string; theme: TuiThemePalette; width: number; rows: number
+}) {
+  if (!skill) return null
+  return (
+    <>
+      <text fg={theme.text}>{fitText(skill.name, width)}</text>
+      <text fg={theme.dim}>{fitText(`${skill.source} · loaded by ${skill.loadedBy.join(', ') || '—'}${skill.nativeForProvider ? '' : ` · not ${provider}`}`, width)}</text>
+      <text fg={theme.muted}>{fitText(skill.description, width)}</text>
+      <text fg={theme.dim}>{fitText(skill.files.length ? `${skill.files.length} file(s): ${skill.files.slice(0, 3).join(', ')}` : '', width)}</text>
+      {lines.slice(0, Math.max(rows - 4, 1)).map((line, i) => <text key={i} fg={theme.dim}>{fitText(line, width)}</text>)}
+    </>
+  )
+}
+
+function SkillPickerFooter({ mode, provider, theme, width }: { mode: Mode; provider: string; theme: TuiThemePalette; width: number }) {
+  const footer = mode.kind === 'choose' ? `${provider} does not load "${mode.skill.name}" · a attach SKILL.md · i install for ${provider} · esc back`
+    : mode.kind === 'install' ? `${mode.summary}${mode.blocked ? '' : ' · y install'} · esc back`
+    : 'type to search · ↑/↓ or ⌃N/⌃P move · enter add · esc clear/close'
+  return (
+    <box paddingX={1} backgroundColor={theme.surface2}>
+      <text fg={mode.kind === 'browse' ? theme.dim : theme.amber}>{fitText(footer, width - 4)}</text>
+    </box>
+  )
+}
 
 function SkillPickerSurface({ services, theme, width, height, placement, zIndex, registerKeys, close }: TuiPluginViewProps) {
   const manager = services['skills-manager']!
@@ -135,19 +169,11 @@ function SkillPickerSurface({ services, theme, width, height, placement, zIndex,
     return () => registerKeys(null)
   }, [registerKeys, mode, query, selectable.length, choose, close, provider, services.notices, use, previewInstall, applyInstall])
 
-  const docked = placement !== 'overlay'
-  const totalW = docked ? width : Math.min(width - 6, 124)
-  const totalH = docked ? height : Math.min(height - 4, 34)
-  const leftW = Math.floor((totalW - 4) * 0.46)
-  const rightW = totalW - 4 - leftW - 1
-  const listRows = Math.max(totalH - 7, 3)
+  const { docked, totalW, totalH, leftW, rightW, listRows } = pickerDimensions(width, height, placement)
   const selectedAt = selectable[cursor] ?? 0
   const top = clamp(selectedAt - Math.floor(listRows / 2), 0, Math.max(rows.length - listRows, 0))
   const visible = rows.slice(top, top + listRows)
-  const preview = selected ? (previews[selected.key] ?? (selected.skillId ? ['loading…'] : [selected.description])) : []
-  const footer = mode.kind === 'choose' ? `${provider} does not load "${mode.skill.name}" · a attach SKILL.md · i install for ${provider} · esc back`
-    : mode.kind === 'install' ? `${mode.summary}${mode.blocked ? '' : ' · y install'} · esc back`
-    : 'type to search · ↑/↓ or ⌃N/⌃P move · enter add · esc clear/close'
+  const preview = selectedSkillPreview(selected, previews)
   return (
     <box
       {...(docked
@@ -179,20 +205,10 @@ function SkillPickerSurface({ services, theme, width, height, placement, zIndex,
         </box>
         <box width={1}><text fg={theme.dim}>│</text></box>
         <box width={rightW} flexDirection="column">
-          {selected ? (
-            <>
-              <text fg={theme.text}>{fitText(selected.name, rightW)}</text>
-              <text fg={theme.dim}>{fitText(`${selected.source} · loaded by ${selected.loadedBy.join(', ') || '—'}${selected.nativeForProvider ? '' : ` · not ${provider}`}`, rightW)}</text>
-              <text fg={theme.muted}>{fitText(selected.description, rightW)}</text>
-              <text fg={theme.dim}>{fitText(selected.files.length ? `${selected.files.length} file(s): ${selected.files.slice(0, 3).join(', ')}` : '', rightW)}</text>
-              {preview.slice(0, Math.max(listRows - 4, 1)).map((line, i) => <text key={i} fg={theme.dim}>{fitText(line, rightW)}</text>)}
-            </>
-          ) : null}
+          <SkillPreview skill={selected} lines={preview} provider={provider} theme={theme} width={rightW} rows={listRows} />
         </box>
       </box>
-      <box paddingX={1} backgroundColor={theme.surface2}>
-        <text fg={mode.kind === 'browse' ? theme.dim : theme.amber}>{fitText(footer, totalW - 4)}</text>
-      </box>
+      <SkillPickerFooter mode={mode} provider={provider} theme={theme} width={totalW} />
     </box>
   )
 }

@@ -10,7 +10,7 @@ import { planSkillInsert } from '@/lib/skillPicker/insert'
 import type { ComposerSkill } from '@/lib/skillPicker/types'
 import { addSkillChip } from '../chips'
 import { subscribeSkillQuery, takeSkillQuery } from '../seed'
-import { SKILL_USAGE_KEY, installTarget, pickerRows, skillPreviewLines, usageScore } from '../model'
+import { SKILL_USAGE_KEY, installTarget, pickerRows, skillPreviewLines, selectedSkillPreview, usageScore } from '../model'
 
 type Usage = Record<string, { n: number; last: number }>
 type Mode = { kind: 'browse' } | { kind: 'choose'; skill: ComposerSkill } | { kind: 'install'; skill: ComposerSkill; summary: string; previewId?: string; targetId?: string; blocked: boolean }
@@ -25,6 +25,19 @@ function recordUse(cwd: string, name: string) {
     usage[key] = { n: (usage[key]?.n ?? 0) + 1, last: Date.now() }
     localStorage.setItem(SKILL_USAGE_KEY, JSON.stringify(usage))
   } catch { /* usage ranking is a convenience; private windows may refuse storage */ }
+}
+
+function SkillPreview({ skill, lines, provider }: { skill: ComposerSkill | undefined; lines: string[]; provider: string }) {
+  if (!skill) return null
+  return (
+    <>
+      <div className="font-medium">{skill.name}</div>
+      <div className="text-xs text-muted-foreground">{skill.source} · loaded by {skill.loadedBy.join(', ') || '—'}{skill.nativeForProvider ? '' : ` · not ${provider}`}</div>
+      <p className="mt-1">{skill.description}</p>
+      {skill.files.length ? <p className="text-xs text-muted-foreground">{skill.files.length} file(s): {skill.files.slice(0, 4).join(', ')}</p> : null}
+      <pre className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">{lines.slice(0, 40).join('\n')}</pre>
+    </>
+  )
 }
 
 function SkillPickerView({ services, close }: WebPluginViewProps) {
@@ -108,26 +121,26 @@ function SkillPickerView({ services, close }: WebPluginViewProps) {
     if (event.key === 'Escape') { event.preventDefault(); if (mode.kind !== 'browse') setMode({ kind: 'browse' }); else if (query) setQuery(''); else close() }
     else if (event.key === 'ArrowDown') { event.preventDefault(); setIndex(Math.min(cursor + 1, selectable.length - 1)) }
     else if (event.key === 'ArrowUp') { event.preventDefault(); setIndex(Math.max(cursor - 1, 0)) }
-    else if (event.key === 'Enter' && selected && mode.kind === 'browse') { event.preventDefault(); choose(selected) }
+    else if (event.key === 'Enter' && event.target instanceof HTMLInputElement && selected && mode.kind === 'browse') { event.preventDefault(); choose(selected) }
   }
 
-  const preview = selected ? (previews[selected.key] ?? (selected.skillId ? ['loading…'] : [selected.description])) : []
+  const preview = selectedSkillPreview(selected, previews)
   return (
     <div className="flex h-full flex-col gap-2 p-3 text-sm" onKeyDown={onKeyDown}>
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">✦ Skills <span className="font-normal text-muted-foreground">· {provider} · {snapshot ? `${skills.length} found` : 'loading…'}</span></h2>
         <button type="button" onClick={close} className="text-muted-foreground hover:text-foreground">Close</button>
       </div>
-      <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setIndex(0) }} placeholder="Search skills" aria-label="Search skills" className="rounded border border-border bg-background px-2 py-1" />
+      <input value={query} onChange={event => { setQuery(event.target.value); setIndex(0) }} placeholder="Search skills" aria-label="Search skills" className="rounded border border-border bg-background px-2 py-1" />
       {error ? <p role="alert" className="text-destructive">{error}</p> : null}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,5fr)_minmax(0,6fr)] gap-3">
-        <ul className="min-h-0 overflow-auto" role="listbox" aria-label="Skills">
+        <ul className="min-h-0 overflow-auto" aria-label="Skills">
           {snapshot && rows.length === 0 ? <li className="text-muted-foreground">{query ? 'No skill matches that.' : 'No skills installed.'}</li> : null}
           {rows.map(row => row.kind === 'header'
             ? <li key={`h-${row.label}`} className="mt-2 text-xs font-medium text-muted-foreground">{row.label}</li>
             : (
-              <li key={row.skill.key} role="option" aria-selected={row.skill === selected}>
-                <button type="button" onClick={() => { setIndex(selectable.indexOf(row.skill)); choose(row.skill) }} onMouseEnter={() => setIndex(selectable.indexOf(row.skill))}
+              <li key={row.skill.key}>
+                <button type="button" aria-current={row.skill === selected ? 'true' : undefined} onFocus={() => setIndex(selectable.indexOf(row.skill))} onClick={() => { setIndex(selectable.indexOf(row.skill)); choose(row.skill) }} onMouseEnter={() => setIndex(selectable.indexOf(row.skill))}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left ${row.skill === selected ? 'bg-muted' : ''}`}>
                   <span title={row.skill.nativeForProvider ? `${provider} loads this` : `${provider} does not load this`} className={row.skill.nativeForProvider ? 'text-green-600' : 'text-muted-foreground'}>{row.skill.nativeForProvider ? '●' : '○'}</span>
                   <span className="truncate">{row.skill.name}</span>
@@ -136,15 +149,7 @@ function SkillPickerView({ services, close }: WebPluginViewProps) {
             ))}
         </ul>
         <div className="min-h-0 overflow-auto rounded border border-border p-2">
-          {selected ? (
-            <>
-              <div className="font-medium">{selected.name}</div>
-              <div className="text-xs text-muted-foreground">{selected.source} · loaded by {selected.loadedBy.join(', ') || '—'}{selected.nativeForProvider ? '' : ` · not ${provider}`}</div>
-              <p className="mt-1">{selected.description}</p>
-              {selected.files.length ? <p className="text-xs text-muted-foreground">{selected.files.length} file(s): {selected.files.slice(0, 4).join(', ')}</p> : null}
-              <pre className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">{preview.slice(0, 40).join('\n')}</pre>
-            </>
-          ) : null}
+          <SkillPreview skill={selected} lines={preview} provider={provider} />
         </div>
       </div>
       {mode.kind === 'choose' ? (
