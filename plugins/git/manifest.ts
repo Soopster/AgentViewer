@@ -20,6 +20,7 @@ export const manifest = {
     placements: ['overlay', 'window', 'panel'],
     panelOrder: 20,
     windowLabel: 'Git in a window',
+    windowTitle: '± Diff', summary: 'Review this repository’s changes.', shortcut: 'D',
     services: ['repository'],
     // Review notes and "ask an agent" go to the composer; the Web view has neither yet.
     optionalServices: ['composer', 'clipboard'],

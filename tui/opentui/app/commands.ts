@@ -1,42 +1,12 @@
 import { listPluginSurfaces } from '../../../lib/plugins/catalog'
 import { listPluginCommands } from '../../../lib/plugins/catalog'
 import type { AgentProvider } from '../../../lib/types'
-import type { TuiTranscriptView } from '../../theme'
 import type { PaletteCommand } from './types'
 import { POPOVER_WINDOWS } from '../popoverWindows'
 import { splitCommandKey } from '../splitPaneState'
 
-export const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'engineering']
-export const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
-  conversation: 'CONVERSATION',
-  full: 'FULL',
-  continue: 'CONTINUE',
-  stream: 'STREAM',
-  agents: 'AGENTS',
-  chat: 'CHAT',
-  transcript: 'TRANSCRIPT',
-  scrollback: 'SCROLLBACK',
-  codex: 'CODEX',
-  'claude-code': 'CLAUDE',
-  copilot: 'COPILOT',
-  opencode: 'OPENCODE',
-  engineering: 'ENGINEERING',
-}
-export const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
-  conversation: 'Conversation with technical details folded',
-  full: 'Every transcript card expanded',
-  continue: 'Focus on the latest continuation',
-  stream: 'Chronological Claude-style activity stream',
-  agents: 'Group tool activity by agent',
-  chat: 'Composer flows inline with the conversation, no dock',
-  transcript: 'One continuous transcript, a rule per message',
-  scrollback: 'One long text transcript that scrolls by line, no card cursor',
-  codex: 'Codex CLI-style scrollback with shaded prompts and compact activity',
-  'claude-code': 'Claude Code-style scrollback with slim prompts and muted tool activity',
-  copilot: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
-  opencode: 'OpenCode-style continuous transcript with context sidebar',
-  engineering: 'Engineering workspace with changes, checks, tasks and attention',
-}
+// The built-in views, their labels and descriptions live in one table (tui/viewSpec.ts).
+export { TRANSCRIPT_VIEWS, TRANSCRIPT_VIEW_LABELS, TRANSCRIPT_VIEW_DESCRIPTIONS } from '../../viewSpec'
 export const COMMAND_CATEGORY_ORDER = ['Navigation', 'Transcript', 'Session', 'Coordination', 'Worktree', 'Tabs', 'View', 'App'] as const
 export const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
 export const FLEET_PAGE_SIZE = 9

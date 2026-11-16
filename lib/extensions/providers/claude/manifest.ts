@@ -10,6 +10,7 @@ export const manifest = {
   supportsInstances: true,
   fileRestoreHook: true,
   newSession: true,
+  coordinatorTeammate: true,
   attachments: { types: ['image', 'blob'], remotePaths: false, imageBlobsOnly: true },
   capabilities: {
     messageFork: true,

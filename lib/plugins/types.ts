@@ -41,6 +41,14 @@ export type PluginSurfaceSpec = {
   readonly panelOrder?: number
   /** Palette label for opening the surface as a window. */
   readonly windowLabel: string
+  /** Short name with its glyph for a tab, window and the side-panel launcher; defaults to `title`. */
+  readonly windowTitle?: string
+  /** One line on the side-panel launcher card; defaults to the plugin's description. */
+  readonly summary?: string
+  /** The letter the side-panel launcher honours for this surface while it is shown. */
+  readonly shortcut?: string
+  /** More than one window of this surface may be open at once (two shells, two localhost ports). */
+  readonly multiWindow?: boolean
   /** Services the view needs; activation fails when a host lacks one. */
   readonly services: readonly PluginServiceId[]
   /** Services the view uses when the host has them, and does without otherwise. */

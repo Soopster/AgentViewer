@@ -29,10 +29,8 @@ export const RIGHT_PANEL_SURFACE_KINDS: readonly RightPanelSurfaceKind[] = [...n
  * content is derived entirely from the active project, so a second copy would
  * show the same bytes twice.
  */
-const MULTI_INSTANCE_KINDS: ReadonlySet<RightPanelSurfaceKind> = new Set(['browser', 'terminal', 'files'])
-
 export function isMultiInstanceSurface(kind: RightPanelSurfaceKind): boolean {
-  return isPluginPanelSurfaceId(kind) ? !getPluginSurface(kind).single : MULTI_INSTANCE_KINDS.has(kind)
+  return isPluginPanelSurfaceId(kind) ? !getPluginSurface(kind).single : false
 }
 
 export type RightPanelSurface = {
@@ -126,40 +124,21 @@ export function nextSurfaceId(kind: RightPanelSurfaceKind): string {
 }
 
 export function surfaceKindLabel(kind: RightPanelSurfaceKind): string {
-  switch (kind) {
-    case 'browser': return 'Browser'
-    case 'terminal': return 'Terminal'
-    case 'files': return 'Files'
-    case 'diff': return 'Diff'
-    case 'pull-request': return 'Pull request'
-    case 'agents': return 'Agents'
-    default: return getPluginSurface(kind as PluginPanelSurfaceId).title.replace(/^\S+\s*/, '')
-  }
+  if (!isPluginPanelSurfaceId(kind)) return kind === 'agents' ? 'Agents' : kind
+  const surface = getPluginSurface(kind as PluginPanelSurfaceId)
+  return (surface.windowTitle ?? surface.title).replace(/^\S+\s*/, '')
 }
 
 /** Letter shortcut shown on the launcher card and honoured while it is visible. */
 export function surfaceKindShortcut(kind: RightPanelSurfaceKind): string {
-  switch (kind) {
-    case 'browser': return 'B'
-    case 'terminal': return 'T'
-    case 'files': return 'F'
-    case 'diff': return 'D'
-    case 'pull-request': return 'P'
-    case 'agents': return 'A'
-    default: return ''
-  }
+  if (!isPluginPanelSurfaceId(kind)) return kind === 'agents' ? 'A' : ''
+  return getPluginSurface(kind as PluginPanelSurfaceId).shortcut ?? ''
 }
 
 export function surfaceKindDescription(kind: RightPanelSurfaceKind): string {
-  switch (kind) {
-    case 'browser': return 'Open a local app or URL.'
-    case 'terminal': return 'Start a shell in this workspace.'
-    case 'files': return 'Browse and read workspace files.'
-    case 'diff': return 'Review this repository’s changes.'
-    case 'pull-request': return 'Open this branch’s pull request.'
-    case 'agents': return 'Follow subagents and workflows.'
-    default: return PLUGIN_MANIFESTS.find(manifest => manifest.surfaces.some(surface => surface.id === kind))?.description ?? ''
-  }
+  if (kind === 'agents') return 'Follow subagents and workflows.'
+  const surface = isPluginPanelSurfaceId(kind) ? getPluginSurface(kind as PluginPanelSurfaceId) : null
+  return surface?.summary ?? PLUGIN_MANIFESTS.find(manifest => manifest.surfaces.some(candidate => candidate.id === kind))?.description ?? ''
 }
 
 /** Metadata defaults are computed once; rendering only merges host overrides. */

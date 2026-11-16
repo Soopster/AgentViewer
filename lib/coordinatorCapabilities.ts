@@ -1,3 +1,4 @@
+import { isCoordinatorProvider } from './extensions/providers/catalog'
 import { getSessionAdapter } from './adapters/registry'
 import { withProviderInstance, listProviderInstances, listProviderInstanceSummaries } from './providerInstances'
 import { CUSTOM_ACP_COMMAND_ENV } from './acpAgentSpawn'
@@ -54,10 +55,8 @@ export async function validateCoordinatorSelection(provider: AgentProvider, cwd:
 
 /** Public configuration metadata only; never include environment or executable. */
 export async function readCoordinatorProviderInstances() {
-  return (await listProviderInstanceSummaries()).filter(instance => ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(instance.provider))
+  return (await listProviderInstanceSummaries()).filter(instance => isCoordinatorProvider(instance.provider))
 }
-
-const STAFFING_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp']
 
 /**
  * The provider instances a new teammate may be staffed from. An `acp` instance
@@ -66,7 +65,7 @@ const STAFFING_PROVIDERS: readonly AgentProvider[] = ['claude', 'codex', 'openco
  */
 export async function readCoordinatorStaffing(): Promise<CoordinatorStaffingChoice[]> {
   return (await listProviderInstances())
-    .filter(instance => STAFFING_PROVIDERS.includes(instance.provider))
+    .filter(instance => isCoordinatorProvider(instance.provider))
     .filter(instance => instance.provider !== 'acp' || Boolean(instance.executable || (instance.isDefault && process.env[CUSTOM_ACP_COMMAND_ENV]?.trim())))
     .map(instance => ({ provider: instance.provider, providerInstanceId: instance.id, label: instance.displayName, isDefault: instance.isDefault }))
 }

@@ -6,18 +6,14 @@
 // is marked as applying in the terminal only.
 import { useMemo, useState, type CSSProperties } from 'react'
 import {
-  BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WEB_VIEW_FIELDS,
+  BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, TRANSCRIPT_VIEW_DISPLAY_NAMES, VIEW_SPEC_BASES, VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WEB_VIEW_FIELDS,
   builtinDraftId, customViewSpec, newCustomViewId, viewSpecValueLabel,
   type CustomView, type ViewSpec, type ViewSpecField, type ViewSpecSection,
 } from '@/tui/viewSpec'
 import type { TuiTranscriptView } from '@/tui/theme'
 import type { WebViewLibrary, WebViewRef } from './useWebViews'
 
-const VIEW_LABELS: Record<TuiTranscriptView, string> = {
-  conversation: 'Conversation', full: 'Full', continue: 'Continue', stream: 'Stream', agents: 'Agents', chat: 'Chat',
-  transcript: 'Transcript', scrollback: 'Scrollback', codex: 'Codex', 'claude-code': 'Claude', copilot: 'Copilot',
-  opencode: 'OpenCode', engineering: 'Engineering',
-}
+const VIEW_LABELS = TRANSCRIPT_VIEW_DISPLAY_NAMES
 
 type Props = {
   library: WebViewLibrary

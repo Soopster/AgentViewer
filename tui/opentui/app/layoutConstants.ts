@@ -1,6 +1,7 @@
 import { MacOSScrollAccel } from '@opentui/core'
 import { sep } from 'node:path'
 import { clamp } from './util'
+import { PLUGIN_MANIFESTS } from '../../../lib/plugins/catalog'
 import { type PopoverWindowKind, isPopoverWindowKind, POPOVER_WINDOWS } from '../popoverWindows'
 import type { WindowSurfaceKind } from '../windowSurfaceNames'
 
@@ -147,9 +148,11 @@ export const FLOATING_PANE_INDEX = 64
 // The window full screen draws (⇧Z). No window is laid out then, and every key
 // goes to the focused window's handle, so full screen focuses this one.
 export const FULLSCREEN_PANE_INDEX = 65
-export const MULTI_INSTANCE_SURFACES: ReadonlySet<WindowSurfaceKind> = new Set(['terminal', 'browser', 'files'])
+const panelSurfaces = PLUGIN_MANIFESTS.flatMap(manifest => manifest.surfaces.filter(surface => (surface.placements as readonly string[]).includes('panel')))
+// Declared by each surface's own manifest (`multiWindow`, `fullScreen`), not listed here.
+export const MULTI_INSTANCE_SURFACES: ReadonlySet<WindowSurfaceKind> = new Set(panelSurfaces.filter(surface => 'multiWindow' in surface && surface.multiWindow).map(surface => surface.id as WindowSurfaceKind))
 // Surface kinds that are also full-screen popovers (Git, Files, pull requests).
-export const SURFACE_POPOVER_KINDS: ReadonlySet<WindowSurfaceKind> = new Set(['diff', 'files', 'pull-request'])
+export const SURFACE_POPOVER_KINDS: ReadonlySet<WindowSurfaceKind> = new Set(panelSurfaces.filter(surface => 'fullScreen' in surface && surface.fullScreen).map(surface => surface.id as WindowSurfaceKind))
 // A popover window kind whose windows pin a session or path: one per pin.
 const isPinnedPopoverKind = (kind: WindowSurfaceKind): kind is PopoverWindowKind => isPopoverWindowKind(kind) && POPOVER_WINDOWS[kind].pin !== null
 // Two presses this close in time and place are a double-click; OpenTUI reports presses only.

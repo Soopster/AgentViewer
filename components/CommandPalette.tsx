@@ -1,5 +1,6 @@
 'use client'
 
+import { LEGACY_SESSION_PROVIDER } from '@/lib/extensions/providers/catalog'
 import { useIndexedMessageSearch } from './command-palette/useIndexedMessageSearch'
 
 import { type CommandPaletteProps, type PaletteItem, type IndexedMessageItem } from './command-palette/types'
@@ -139,7 +140,7 @@ export default function CommandPalette({
       ...listPluginCommands('web')
         .filter((command) => !disabledPlugins.has(command.pluginId))
         .filter((command) => command.requires !== 'session' || (selectedSession && !selectedProject))
-        .filter(command => !command.providers || (selectedSession && command.providers.includes(selectedSession.provider ?? 'claude')))
+        .filter(command => !command.providers || (selectedSession && command.providers.includes(selectedSession.provider ?? LEGACY_SESSION_PROVIDER)))
         .map((command): PaletteItem => ({
           id: `plugin:${command.id}`,
           label: command.label,
@@ -396,7 +397,7 @@ export default function CommandPalette({
         return {
           id: `session:${sessionTabKey(session)}`,
           label: title,
-          description: session.cwd ? `${project} · ${session.provider ?? 'claude'}` : (session.provider ?? 'claude'),
+          description: session.cwd ? `${project} · ${session.provider ?? LEGACY_SESSION_PROVIDER}` : (session.provider ?? LEGACY_SESSION_PROVIDER),
           icon: <Search size={16} />,
           shortcut: session.sessionId.slice(-6),
           active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
@@ -682,7 +683,7 @@ export default function CommandPalette({
               <CommandSeparator />
               <CommandGroup heading="Sessions">
                 {sessionItems.map((item) => {
-                  const provider = sessions.find((session) => sessionTabKey(session) === item.id.slice('session:'.length))?.provider ?? 'claude'
+                  const provider = sessions.find((session) => sessionTabKey(session) === item.id.slice('session:'.length))?.provider ?? LEGACY_SESSION_PROVIDER
                   const style = providerStyle(provider)
                   return (
                     <CommandItem

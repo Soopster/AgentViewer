@@ -9,6 +9,7 @@ export const manifest = {
   composer,
   supportsInstances: false,
   newSession: true,
+  coordinatorTeammate: true,
   attachments: { types: ['image', 'blob'], remotePaths: false, imageBlobsOnly: true },
   capabilities: {
     messageFork: true,

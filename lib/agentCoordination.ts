@@ -1,3 +1,4 @@
+import { isCoordinatorProvider } from './extensions/providers/catalog'
 import { coordinatorWaitingPolicy } from './coordinatorWaitingPolicy'
 import { PROVIDER_COOLDOWN_SCHEMA, readProviderCooldown, deferCooldownDispatch, readCooldownDispatches } from './coordinatorProviderCooldowns'
 import { EXECUTION_ATTEMPT_SCHEMA, beginExecutionAttempt, updateExecutionAttempt, readExecutionAttempts, executionCooldown, providerRetryAt, unresolvedExecutionAttempt, reconcileExecutionAttempts, saveExecutionSettings, readExecutionSettings } from './coordinatorExecutionAttempts'
@@ -3417,7 +3418,7 @@ export async function createExternalProtocolTask(
 ): Promise<ExternalProtocolTaskCreateResult> {
   if (params.requestedProviderInstanceId) {
     const instance = await resolveProviderInstance(params.requestedProviderInstanceId, params.requestedProvider)
-    if (!['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(instance.provider)) throw new Error('Provider instance does not support Coordinator teammates')
+    if (!isCoordinatorProvider(instance.provider)) throw new Error('Provider instance does not support Coordinator teammates')
     params = { ...params, requestedProvider: instance.provider, requestedProviderInstanceId: instance.id }
   }
   const escalation = permissionModeEscalation(params.claudeAgentPolicy?.permissionMode)

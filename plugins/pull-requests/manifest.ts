@@ -19,6 +19,7 @@ export const manifest = {
     keys: 'window',
     placements: ['overlay', 'window', 'panel'],
     windowLabel: 'Pull request in a window',
+    windowTitle: '⑂ Pull request', summary: 'Open this branch’s pull request.', shortcut: 'P',
     services: ['repository'],
     // Questions and review notes go to the composer; the Web view also links a PR to the session.
     optionalServices: ['composer', 'session-pull-request'],

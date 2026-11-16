@@ -19,6 +19,7 @@ export const manifest = {
     keys: 'field',
     placements: ['window', 'panel'],
     windowLabel: 'Browser in a window',
+    windowTitle: '◍ Browser', summary: 'Open a local app or URL.', shortcut: 'B', multiWindow: true,
     services: [],
     optionalServices: ['browser-location', 'composer'],
   }],

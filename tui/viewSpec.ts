@@ -147,35 +147,60 @@ const STREAM: ViewSpec = {
 const SCROLLBACK: ViewSpec = { ...STREAM, cursor: 'none', turnBoundaries: 'summary-only' }
 const SCROLLBACK_CLI: ViewSpec = { ...SCROLLBACK, turnBoundaries: 'gaps', promptRule: false, userBold: false }
 
-export const BUILTIN_VIEW_SPECS: Readonly<Record<TuiTranscriptView, ViewSpec>> = {
-  conversation: { ...CARDS, dimAutoFolded: true },
-  full: { ...CARDS, foldDefault: 'expand-all' },
-  continue: { ...CARDS, cardFilter: 'prose' },
-  agents: { ...CARDS, composer: 'inline', idleTicker: false, toolGrouping: 'agents', agentCards: 'all', dimAutoFolded: true },
-  chat: { ...STREAM, composer: 'inline', readerHeader: true, idleTicker: false, liveReasoning: true, completedTurnHint: false },
-  stream: STREAM,
-  transcript: {
+/**
+ * Every built-in view in one table, in menu order: its name, one line for the
+ * menu and its spec. The label, menu, description, validation and base lists
+ * below are all derived from it, so adding a view is one entry. A view that is
+ * not a `base` (ENGINEERING owns its frame and state scope) cannot be the base
+ * of a custom view.
+ */
+const BUILTIN_VIEWS: readonly { readonly id: TuiTranscriptView; readonly label: string; readonly description: string; readonly base?: false; readonly spec: ViewSpec }[] = [
+  { id: 'conversation', label: 'Conversation', description: 'Conversation with technical details folded',
+    spec: { ...CARDS, dimAutoFolded: true } },
+  { id: 'full', label: 'Full', description: 'Every transcript card expanded',
+    spec: { ...CARDS, foldDefault: 'expand-all' } },
+  { id: 'continue', label: 'Continue', description: 'Focus on the latest continuation',
+    spec: { ...CARDS, cardFilter: 'prose' } },
+  { id: 'stream', label: 'Stream', description: 'Chronological Claude-style activity stream',
+    spec: STREAM },
+  { id: 'agents', label: 'Agents', description: 'Group tool activity by agent',
+    spec: { ...CARDS, composer: 'inline', idleTicker: false, toolGrouping: 'agents', agentCards: 'all', dimAutoFolded: true } },
+  { id: 'chat', label: 'Chat', description: 'Composer flows inline with the conversation, no dock',
+    spec: { ...STREAM, composer: 'inline', readerHeader: true, idleTicker: false, liveReasoning: true, completedTurnHint: false } },
+  { id: 'transcript', label: 'Transcript', description: 'One continuous transcript, a rule per message',
+    spec: {
     ...STREAM, agentCards: 'none', readerHeader: true, idleTicker: true, liveReasoning: true, completedTurnHint: false,
     turnBoundaries: 'none', turnFooter: true, messageLayout: 'continuous', promptBand: 'continuous', userBold: false,
-  },
-  scrollback: SCROLLBACK,
-  codex: { ...SCROLLBACK_CLI, promptMarker: '›', replyMarker: '•', promptBand: 'surface' },
-  'claude-code': { ...SCROLLBACK_CLI, promptMarker: '❯', replyMarker: '•', markerColor: 'plain', promptBand: 'soft', toolRows: 'dim' },
-  copilot: {
+  } },
+  { id: 'scrollback', label: 'Scrollback', description: 'One long text transcript that scrolls by line, no card cursor',
+    spec: SCROLLBACK },
+  { id: 'codex', label: 'Codex', description: 'Codex CLI-style scrollback with shaded prompts and compact activity',
+    spec: { ...SCROLLBACK_CLI, promptMarker: '›', replyMarker: '•', promptBand: 'surface' } },
+  { id: 'claude-code', label: 'Claude', description: 'Claude Code-style scrollback with slim prompts and muted tool activity',
+    spec: { ...SCROLLBACK_CLI, promptMarker: '❯', replyMarker: '•', markerColor: 'plain', promptBand: 'soft', toolRows: 'dim' } },
+  { id: 'copilot', label: 'Copilot', description: 'GitHub Copilot CLI-style transcript with app tabs and timestamps',
+    spec: {
     ...SCROLLBACK_CLI, promptMarker: '❯', replyMarker: '●', markerColor: 'cyan', promptBand: 'faint', thinking: 'muted-italic',
     toolRows: 'shell-bold', promptTimestamps: true, textWidth: 'full', appTabs: true,
-  },
-  opencode: {
+  } },
+  { id: 'opencode', label: 'OpenCode', description: 'OpenCode-style continuous transcript with context sidebar',
+    spec: {
     ...SCROLLBACK, turnBoundaries: 'gaps', messageLayout: 'continuous', promptBand: 'continuous', userBold: false,
     thinking: 'amber-italic', toolRows: 'dollar-shell', textWidth: 'full', turnFooter: true, contextSidebar: true,
-  },
-  engineering: { ...STREAM, completedTurnHint: false, promptNavigation: true, scrollMarkerJump: true },
-}
+  } },
+  { id: 'engineering', label: 'Engineering', description: 'Engineering workspace with changes, checks, tasks and attention', base: false,
+    spec: { ...STREAM, completedTurnHint: false, promptNavigation: true, scrollMarkerJump: true } },
+]
+
+export const BUILTIN_VIEW_SPECS: Readonly<Record<TuiTranscriptView, ViewSpec>> = Object.fromEntries(BUILTIN_VIEWS.map(view => [view.id, view.spec])) as Record<TuiTranscriptView, ViewSpec>
+export const TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = BUILTIN_VIEWS.map(view => view.id)
+/** Menu name in capitals (the terminal's convention); `viewDisplayName` is the title-case form the Web shows. */
+export const TRANSCRIPT_VIEW_LABELS: Readonly<Record<TuiTranscriptView, string>> = Object.fromEntries(BUILTIN_VIEWS.map(view => [view.id, view.label.toUpperCase()])) as Record<TuiTranscriptView, string>
+export const TRANSCRIPT_VIEW_DISPLAY_NAMES: Readonly<Record<TuiTranscriptView, string>> = Object.fromEntries(BUILTIN_VIEWS.map(view => [view.id, view.label])) as Record<TuiTranscriptView, string>
+export const TRANSCRIPT_VIEW_DESCRIPTIONS: Readonly<Record<TuiTranscriptView, string>> = Object.fromEntries(BUILTIN_VIEWS.map(view => [view.id, view.description])) as Record<TuiTranscriptView, string>
 
 /** Built-ins a custom view may start from. ENGINEERING has its own frame and state scope. */
-export const VIEW_SPEC_BASES: readonly TuiTranscriptView[] = [
-  'conversation', 'full', 'continue', 'agents', 'chat', 'stream', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode',
-]
+export const VIEW_SPEC_BASES: readonly TuiTranscriptView[] = BUILTIN_VIEWS.filter(view => view.base !== false).map(view => view.id)
 
 // ── the field registry the studio renders ──────────────────────────────────
 

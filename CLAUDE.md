@@ -1542,7 +1542,7 @@ messages" notice and wheel acceleration already exist.
 A transcript view is a `ViewSpec` (`tui/viewSpec.ts`): about 30 fields (flow, cursor, reader header,
 composer placement, card filter, tool grouping, agent cards, folding, turn boundaries, markers, prompt
 band, prompt rule, thinking style, tool rows, prompt timestamps, prose width) plus optional pins of global
-settings (density, width, tool calls, diff layout, lightweight, sticky prompt). The 13 built-ins are presets
+settings (density, width, tool calls, diff layout, lightweight, sticky prompt). The 13 built-ins are one ordered table (`BUILTIN_VIEWS` in `tui/viewSpec.ts`: id, label, menu description, spec) from which the menu order, labels, validation and base list are derived (`scripts/surfaceMetadataSmoke.ts`); surface titles, launcher letters, summaries and multi-window/full-screen kinds likewise come from each plugin's surface metadata (`windowTitle`, `shortcut`, `summary`, `multiWindow`, `fullScreen`), and the Coordinator-teammate provider set from `coordinatorTeammate` in provider manifests. The presets are
 of it (`BUILTIN_VIEW_SPECS`). The reader, the card and the composer read fields; they never compare view ids.
 Before this, five hand-kept lists of view ids already disagreed (TRANSCRIPT was missing from agent-card
 presentation, and that difference is preserved as `agentCards: 'none'`).

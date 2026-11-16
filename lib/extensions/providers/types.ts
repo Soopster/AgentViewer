@@ -14,6 +14,8 @@ export interface ProviderManifest {
   readonly transport: 'native' | 'acp'
   readonly indexable: boolean
   readonly newSession: boolean
+  /** Can be staffed as a Coordinator teammate (and named in rules and playbooks). */
+  readonly coordinatorTeammate?: boolean
   /** True only when SDK state/pools isolate configured instances. */
   readonly supportsInstances: boolean
   readonly fileRestoreHook?: boolean

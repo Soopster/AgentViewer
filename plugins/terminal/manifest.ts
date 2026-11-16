@@ -21,6 +21,7 @@ export const manifest = {
     keys: 'window',
     placements: ['window', 'panel'],
     windowLabel: 'Shell and processes in a window',
+    windowTitle: '❯ Terminal', summary: 'Start a shell in this workspace.', shortcut: 'T', multiWindow: true,
     services: [],
     optionalServices: ['repository', 'composer', 'open-file', 'notices', 'window-selection'],
   }],

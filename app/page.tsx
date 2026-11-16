@@ -1,5 +1,6 @@
 'use client'
 
+import { LEGACY_SESSION_PROVIDER } from '@/lib/extensions/providers/catalog'
 import { usePluginDashboards, usePluginDashboardCommands } from '@/components/shell/usePluginDashboards'
 import type { PluginDashboardId } from '@/lib/plugins/dashboard'
 import type { DashboardTab } from '@/components/viewer-navigation/model'
@@ -238,7 +239,7 @@ export default function Home() {
 
   const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
     clearCreationError()
-    const nextProvider = session.provider ?? 'claude'
+    const nextProvider = session.provider ?? LEGACY_SESSION_PROVIDER
     const nextProviderInstanceId = session.providerInstanceId ?? nextProvider
     adoptProvider(nextProvider, nextProviderInstanceId)
     if (nextProvider !== provider || nextProviderInstanceId !== providerInstanceId) {

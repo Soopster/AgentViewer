@@ -34,6 +34,15 @@ export function getProviderManifest(provider: RegisteredProvider): ProviderManif
 
 import type { ProviderManifest } from './types'
 
+/** Providers that can be staffed as Coordinator teammates, from their manifests. */
+export const COORDINATOR_PROVIDER_IDS = Object.freeze(PROVIDER_IDS.filter(id => (getProviderManifest(id) as ProviderManifest).coordinatorTeammate === true))
+export function isCoordinatorProvider(provider: unknown): boolean {
+  return typeof provider === 'string' && (COORDINATOR_PROVIDER_IDS as readonly string[]).includes(provider)
+}
+
+/** The provider a session recorded before sessions stored one belongs to; the only place that assumption lives. */
+export const LEGACY_SESSION_PROVIDER: RegisteredProvider = 'claude'
+
 export const NEW_SESSION_PROVIDER_IDS = Object.freeze(PROVIDER_IDS.filter(id => getProviderManifest(id).newSession))
 export const INDEXABLE_PROVIDER_IDS = Object.freeze(PROVIDER_IDS.filter(id => getProviderManifest(id).indexable))
 export const PROVIDER_CHOICES = Object.freeze(PROVIDER_IDS.map(value => Object.freeze({ value, label: getProviderManifest(value).displayName })))

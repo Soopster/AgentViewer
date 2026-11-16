@@ -19,6 +19,7 @@ export const manifest = {
     placements: ['overlay', 'window', 'panel'],
     panelOrder: 10,
     windowLabel: 'Files in a window',
+    windowTitle: '▤ Files', summary: 'Browse and read workspace files.', shortcut: 'F', multiWindow: true,
     services: ['repository'],
     optionalServices: ['composer', 'open-file', 'directory-picker', 'scroll-preferences'],
     fullScreen: true,

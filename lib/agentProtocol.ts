@@ -11,6 +11,7 @@
 //
 // Pure types + text builders only — no Node APIs — so it loads everywhere.
 
+import { isCoordinatorProvider } from './extensions/providers/catalog'
 import type { AgentProvider } from './types'
 
 export const AGENT_PROTOCOL_VERSION = '1.0' as const
@@ -1220,7 +1221,7 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
       if (task.seat !== undefined && !['director', 'executor', 'validator', 'watcher'].includes(String(task.seat))) {
         throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid seat`)
       }
-      if (task.provider !== undefined && !['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'].includes(String(task.provider))) {
+      if (task.provider !== undefined && !isCoordinatorProvider(task.provider)) {
         throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid provider`)
       }
       const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined

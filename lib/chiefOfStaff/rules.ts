@@ -4,7 +4,9 @@
  * What this module guarantees is that guidance is true: a rule naming a model the provider
  * does not advertise is reported and left out of the table, never passed on silently.
  */
-export const COS_PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'acp'] as const
+import { COORDINATOR_PROVIDER_IDS } from '../extensions/providers/catalog'
+
+export const COS_PROVIDERS = COORDINATOR_PROVIDER_IDS
 
 export interface CosRule {
   /** What kind of work this is for, in words ("frontend", "database migrations"). */

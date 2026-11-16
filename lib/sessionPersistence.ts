@@ -1,3 +1,4 @@
+import { LEGACY_SESSION_PROVIDER } from './extensions/providers/catalog'
 import { mapPersistedMessages, aggregateMessages, messageSignature } from './session-index/messages'
 import { persistedSessionKey } from './session-index/identity'
 export { persistedSessionKey } from './session-index/identity'
@@ -201,7 +202,7 @@ function normalizeStoredSession(value: unknown): PersistedSessionRecord | null {
 }
 
 function normalizeSession(session: Session, existing?: PersistedSessionRecord): PersistedSessionRecord {
-  const provider = session.provider ?? 'claude'
+  const provider = session.provider ?? LEGACY_SESSION_PROVIDER
   const key = persistedSessionKey(provider, session.sessionId, session.providerInstanceId)
   return {
     key,
@@ -474,7 +475,7 @@ export async function syncPersistedSessions(sessions: Session[]): Promise<void> 
   await runPersistenceWrite((db) => {
     withTransaction(db, () => {
       for (const session of sessions) {
-        const provider = session.provider ?? 'claude'
+        const provider = session.provider ?? LEGACY_SESSION_PROVIDER
         const key = persistedSessionKey(provider, session.sessionId, session.providerInstanceId)
         const next = normalizeSession(session, selectSessionByKey(db, key))
         if (!recordsEqual(selectSessionByKey(db, key), next)) {

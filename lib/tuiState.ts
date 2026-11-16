@@ -5,7 +5,7 @@ import path from 'node:path'
 
 const isStoredTheme = (value: unknown): value is string => VALID_TUI_THEMES.includes(value)
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
-import { isPluginViewId, normalizeBuiltinViewOverrides, normalizeCustomViews, type BuiltinViewOverrides, type CustomView } from '../tui/viewSpec'
+import { TRANSCRIPT_VIEWS, isPluginViewId, normalizeBuiltinViewOverrides, normalizeCustomViews, type BuiltinViewOverrides, type CustomView } from '../tui/viewSpec'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
 // Any theme id: the host's own, or one a plugin registers (plugins/themes-*). An id nothing
@@ -276,9 +276,7 @@ export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Pro
   await writeTuiState({ diffLayout })
 }
 
-const VALID_TUI_TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = [
-  'conversation', 'full', 'continue', 'stream', 'agents', 'chat', 'transcript', 'scrollback', 'codex', 'claude-code', 'copilot', 'opencode', 'engineering',
-]
+const VALID_TUI_TRANSCRIPT_VIEWS: readonly TuiTranscriptView[] = TRANSCRIPT_VIEWS
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
   const parsed = await readTuiState()
