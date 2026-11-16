@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes', 'view-studio', 'worktree-tasks']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).module,
@@ -33,6 +33,8 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   browser: async () => (await import('../../../plugins/browser/tui')).module,
   coordination: async () => (await import('../../../plugins/coordination/tui')).module,
   desk: async () => (await import('../../../plugins/desk/tui')).module,
+  'worktree-tasks': async () => (await import('../../../plugins/worktree-tasks/tui')).module,
+  'view-studio': async () => (await import('../../../plugins/view-studio/tui')).module,
   'theme-picker': async () => (await import('../../../plugins/theme-picker/tui')).module,
   github: async () => (await import('../../../plugins/github/tui')).module,
   'session-insights': async () => (await import('../../../plugins/session-insights/tui')).module,

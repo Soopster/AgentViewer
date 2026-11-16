@@ -304,10 +304,8 @@ import { terminalSelectionCopyDestination } from './app/terminalSelection'
 import { keepEmpty, keepFiltered, sameKeys, touchMapEntry, pruneSessionCaches } from './app/collections'
 import { ExitConfirmOverlay } from './app/overlays/ExitConfirmOverlay'
 import { QuestionPickerOverlay } from './app/overlays/QuestionPickerOverlay'
-import { WorktreeModalOverlay } from './app/overlays/WorktreeModalOverlay'
 import { useComposerAccessories } from '../../lib/plugins/useComposerAccessories'
 import { ComposerAccessoryHost } from './shell/ComposerAccessoryHost'
-import { WorktreeConfirmOverlay } from './app/overlays/WorktreeConfirmOverlay'
 import { TranscriptSearchBar } from './app/overlays/TranscriptSearchBar'
 import { SessionSearchBar } from './app/overlays/SessionSearchBar'
 import { SurfacePanelResizeLayer } from './app/overlays/SurfacePanelResizeLayer'
@@ -349,7 +347,7 @@ import { SIDEBAR_ACTIVITY_OPTIONS, filterSessionsByActivity, isDateBucketCollaps
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '../../lib/sessionTags'
 const NO_WORKTREES: readonly string[] = []
 import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
-import { ViewStudioOverlay, VIEW_STUDIO_WIDTH, type ViewStudioKeyHandler } from './app/overlays/ViewStudioOverlay'
+import { VIEW_STUDIO_WIDTH } from './app/viewStudioLayout'
 import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, isPluginViewId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
@@ -841,7 +839,7 @@ function OpenTuiWorkspace() {
     loadingDetailRef, foregroundLoadInFlightRef, pendingForegroundLoadRef, navSelectStartRef,
     navPaintedKeyRef, navDetailSetAtRef, backgroundRefreshInFlightRef, sessionDetailMtimeRef,
     selectedSessionKeyRef, openTabSessionsRef, runningSessionsRef, tabsEnabledRef,
-    themeMenuOriginRef, themeMenuKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
+    themeMenuOriginRef, themeMenuKeyHandlerRef, worktreeKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
     exitInProgressRef, densityRef, showToolCallsRef, transcriptDiffHoverTimeoutRef,
     composerActiveRef, composerDraftRef, searchModeRef, sessionSearchModeRef, teammatesOpen,
     teammatesKeyHandlerRef, windowedPopoverKinds, teammatesModalOpen, remoteCoordinatorTarget,
@@ -2608,7 +2606,7 @@ function OpenTuiWorkspace() {
   // ── View Studio ──
   // The draft is shown while the studio is open (provider.ts resolves it ahead
   // of the active custom view), with `transcriptView` following its base.
-  const viewStudioKeyHandlerRef = useRef<ViewStudioKeyHandler | null>(null)
+  const viewStudioKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; meta?: boolean }) => boolean | void) | null>(null)
   const viewStudioOriginRef = useRef<{ view: TuiTranscriptView; customId: string | null }>({ view: 'conversation', customId: null })
   // `edit` opens the view itself — a custom view, or a built-in (its edits are
   // kept apart and can be reset); otherwise a new custom view starts from it.
@@ -5263,6 +5261,24 @@ function OpenTuiWorkspace() {
       watchRun: watchCoordinatorRun,
       copyJoinCommand: copyCoordinationJoinCommand,
     },
+    ...(worktreeModalOpen || worktreeConfirm ? { 'worktree-tasks': {
+      draft: worktreeDraft, setDraft: setWorktreeDraft, busy: worktreeBusy, submit: submitWorktreeTask,
+      cancel: () => { setWorktreeModalOpen(false); setWorktreeDraft('') },
+      pending: worktreeConfirm, task: selectedWorktreeTask,
+      confirmPending: () => {
+        const action = worktreeConfirm
+        setWorktreeConfirm(null)
+        if (action === 'merge') void mergeSelectedWorktreeTask(); else void discardSelectedWorktreeTask()
+      },
+      dismissPending: () => setWorktreeConfirm(null),
+    } } : {}),
+    ...(viewDraft ? { 'view-studio': {
+      draft: viewDraft,
+      saved: viewDraft.builtin ? { ...viewDraft, overrides: builtinViewEdits[viewDraft.base] ?? {} } : allCustomViews.find((view) => view.id === viewDraft.id) ?? null,
+      layout: { top: focusMode ? 1 : 4, width: Math.min(VIEW_STUDIO_WIDTH, Math.max(width - 4, 30)), height: Math.max(height - (focusMode ? 1 : 4) - 1, 16) },
+      density: globalDensity,
+      change: changeViewDraft, save: saveViewDraft, discard: discardViewDraft, remove: deleteViewDraft,
+    } } : {}),
     themes: {
       mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme,
       origin: themeMenuOriginRef.current, preview: setThemeMode, cancel: closeThemeMenu,
@@ -5304,7 +5320,9 @@ function OpenTuiWorkspace() {
     ...(canUseIdeBridge ? { 'ide-bridge': { routed: routeComposerToIde, toggleRoute: toggleComposerIdeRoute, accentColor: composerAccentColor, sendComment: (text: string) => insertComposerPromptText(text) } } : {}),
   // The callbacks are the root's stable events and setters.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode, runLaunchService, revealAcceptedRun])
+  }), [subagentTranscriptSelection, density, renderer, velocityScrollEnabled, Boolean(gitRepoCwd), canUseChannelBridge, canUseIdeBridge, routeComposerToBridge, routeComposerToIde, composerAccentColor, surfaceBrowserRecent, coordBoardRunId, themeMode, runLaunchService, revealAcceptedRun,
+    // The theme picker and View Studio read these through their services while open.
+    themeFollowsTerminal, showBorders, themeMenuOpen, worktreeModalOpen, worktreeConfirm, worktreeDraft, worktreeBusy, selectedWorktreeTask, viewDraft, builtinViewEdits, allCustomViews, focusMode, width, height, globalDensity])
   // The session fleet changes on every poll, so only a view that asks for it is
   // handed a bag holding it; the rest keep the stable one above.
   const fleetDetailOwned = Boolean(sessionDetail && selectedSession && transcriptSession
@@ -6498,9 +6516,7 @@ function OpenTuiWorkspace() {
         )
       : selectedTranscriptCardDisplay
     if (handleModalDialogKeys({
-      exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm,
-      mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen,
-      setWorktreeModalOpen, setWorktreeDraft, submitWorktreeTask,
+      exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, worktreeModalOpen, worktreeKeyHandlerRef,
       remoteCoordinatorTarget, remoteCoordinatorKeyHandlerRef,
       teammatesModalOpen, teammatesKeyHandlerRef, searchMode, setSearchMode, sessionSearchMode,
       setSessionSearchMode, setSessionSearchQuery, fileHistoryPath, fileHistoryKeyHandlerRef,
@@ -7150,10 +7166,20 @@ function OpenTuiWorkspace() {
         toasts={toasts}
       />
       {viewDraft ? (
-        <ViewStudioOverlay theme={theme} top={focusMode ? 1 : 4} width={Math.min(VIEW_STUDIO_WIDTH, Math.max(width - 4, 30))} height={Math.max(height - (focusMode ? 1 : 4) - 1, 16)}
-          draft={viewDraft} saved={viewDraft.builtin ? { ...viewDraft, overrides: builtinViewEdits[viewDraft.base] ?? {} } : allCustomViews.find((view) => view.id === viewDraft.id) ?? null} globalDensity={globalDensity}
-          onChange={changeViewDraft} onSave={saveViewDraft} onDiscard={discardViewDraft} onDelete={deleteViewDraft}
-          keyHandlerRef={viewStudioKeyHandlerRef} />
+        // The View Studio plugin is the editing panel; the root keeps the draft (the transcript draws with it) and the stored views.
+        <PluginSurfaceHost
+          surfaceId="view-studio"
+          placement="overlay"
+          scrim={false}
+          provided={pluginServices}
+          runCommand={runCommandForPlugin}
+          theme={theme}
+          width={width}
+          height={height}
+          focused
+          onClose={discardViewDraft}
+          onKeyHandlerReady={(handler) => { viewStudioKeyHandlerRef.current = handler }}
+        />
       ) : null}
 
       {/* Under the reader the panel takes these rows in flow. The main row above
@@ -7710,11 +7736,22 @@ function OpenTuiWorkspace() {
         />
       ) : null}
 
-      <WorktreeModalOverlay worktreeModalOpen={worktreeModalOpen} width={width} height={height} theme={theme} worktreeDraft={worktreeDraft} setWorktreeDraft={setWorktreeDraft} submitWorktreeTask={submitWorktreeTask} worktreeBusy={worktreeBusy} />
-
-
-      <WorktreeConfirmOverlay worktreeConfirm={worktreeConfirm} selectedWorktreeTask={selectedWorktreeTask} width={width} height={height} theme={theme} />
-
+      {worktreeModalOpen || (worktreeConfirm && selectedWorktreeTask) ? (
+        // The worktree-tasks plugin draws the prompts; this host runs the git work and keeps what is open.
+        <PluginSurfaceHost
+          surfaceId={worktreeConfirm ? 'worktree-confirm' : 'worktree-new'}
+          placement="overlay"
+          scrim={false}
+          provided={pluginServices}
+          runCommand={runCommandForPlugin}
+          theme={theme}
+          width={width}
+          height={height}
+          focused
+          onClose={() => { if (worktreeConfirm) setWorktreeConfirm(null); else { setWorktreeModalOpen(false); setWorktreeDraft('') } }}
+          onKeyHandlerReady={(handler) => { worktreeKeyHandlerRef.current = handler }}
+        />
+      ) : null}
 
       {teammatesModalOpen ? (
         // Its state is the interactive coordinator store's: open while that is,

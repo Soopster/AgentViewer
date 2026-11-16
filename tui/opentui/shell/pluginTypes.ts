@@ -33,6 +33,30 @@ export type TuiPluginServices = {
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../../lib/plugins/schedules').PluginSchedulesService
   'chief-of-staff'?: import('../../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
+  /** The worktree task dialogs: naming a new task, and confirming a merge or discard. The host runs the git work. */
+  'worktree-tasks'?: {
+    readonly draft: string
+    readonly setDraft: (value: string) => void
+    readonly busy: boolean
+    readonly submit: () => Promise<void>
+    readonly cancel: () => void
+    readonly pending: 'merge' | 'discard' | null
+    readonly task: { readonly branch: string } | null
+    readonly confirmPending: () => void
+    readonly dismissPending: () => void
+  }
+  /** The View Studio's draft and the actions on it; the host keeps the draft (the transcript behind the studio draws with it) and the stored views. */
+  'view-studio'?: {
+    readonly draft: import('../../viewSpec').CustomView
+    /** The stored view this draft edits, or null for a new one. */
+    readonly saved: import('../../viewSpec').CustomView | null
+    readonly layout: { readonly top: number; readonly width: number; readonly height: number }
+    readonly density: import('../../theme').TuiDensity
+    readonly change: (next: import('../../viewSpec').CustomView) => void
+    readonly save: (asNew: boolean) => void
+    readonly discard: () => void
+    readonly remove: () => void
+  }
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
   'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService

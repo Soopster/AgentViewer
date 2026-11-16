@@ -76,7 +76,7 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     loadingDetailRef, foregroundLoadInFlightRef, pendingForegroundLoadRef, navSelectStartRef,
     navPaintedKeyRef, navDetailSetAtRef, backgroundRefreshInFlightRef, sessionDetailMtimeRef,
     selectedSessionKeyRef, openTabSessionsRef, runningSessionsRef, tabsEnabledRef,
-    themeMenuOriginRef, themeMenuKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
+    themeMenuOriginRef, themeMenuKeyHandlerRef, worktreeKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
     exitInProgressRef, densityRef, showToolCallsRef, transcriptDiffHoverTimeoutRef,
     composerActiveRef, composerDraftRef, searchModeRef, sessionSearchModeRef,
   } = useNavigationRefs()
@@ -135,7 +135,7 @@ export function useComposerInterruptPendingRefGroup(ctx: UseComposerInterruptPen
     loadingDetailRef, foregroundLoadInFlightRef, pendingForegroundLoadRef, navSelectStartRef,
     navPaintedKeyRef, navDetailSetAtRef, backgroundRefreshInFlightRef, sessionDetailMtimeRef,
     selectedSessionKeyRef, openTabSessionsRef, runningSessionsRef, tabsEnabledRef,
-    themeMenuOriginRef, themeMenuKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
+    themeMenuOriginRef, themeMenuKeyHandlerRef, worktreeKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
     exitInProgressRef, densityRef, showToolCallsRef, transcriptDiffHoverTimeoutRef,
     composerActiveRef, composerDraftRef, searchModeRef, sessionSearchModeRef, teammatesOpen,
     teammatesKeyHandlerRef, windowedPopoverKinds, teammatesModalOpen, remoteCoordinatorTarget,

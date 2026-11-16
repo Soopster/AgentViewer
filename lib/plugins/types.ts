@@ -334,6 +334,8 @@ export type PluginServiceId =
   | 'schedules'
   /** A repository's Chief of Staff: read it, start it, hand it a request. */
   | 'chief-of-staff'
+  | 'view-studio'
+  | 'worktree-tasks'
   /** Open a session in the reader, optionally at a message. */
   | 'session-navigation'
   /** What a session wrote, and which sessions wrote a file's current lines. */

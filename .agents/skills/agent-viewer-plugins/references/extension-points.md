@@ -84,3 +84,27 @@ to run, so `plugin.json` needs no `server.mjs` (`localManifestNeedsServer`).
 `agent-viewer mods check <path> --json`. Smokes prove the registries and the
 data paths; look at the real Web and terminal transcripts before claiming a card
 or block looks right.
+
+## Host overlays that are plugins (terminal)
+
+The theme menu (`theme-picker`), the View Studio (`view-studio`) and the worktree
+task prompts (`worktree-tasks`) are capture-key overlay surfaces, not root
+components. The pattern for moving a host modal out, which these three followed:
+
+- The host keeps what must stay shared: whether the overlay is open, the state the
+  rest of the app draws with (the View Studio's draft, the theme being previewed),
+  and the work that touches the app (git, persistence). It exposes them as a
+  service (`themes`, `view-studio`, `worktree-tasks` in `tui/opentui/shell/pluginTypes.ts`)
+  and renders `<PluginSurfaceHost surfaceId=… onKeyHandlerReady=…>` while it is open.
+- The plugin owns the UI state (search text, group, selected section) and its keys.
+  Its key handler returns `true` only for keys it uses, so typing reaches a focused
+  `<input>`; the host consumes the event only then (`handled(...)`).
+- A service that varies with state is rebuilt in the `pluginServices` memo in
+  `App.tsx`: add what it reads to that memo's dependency list.
+- Shared building blocks reach the plugin through `tui/opentui/shell/sdk*.ts`
+  (`sdkThemes.ts`, `sdkViews.ts`), never by importing the root.
+- Smokes: `themePickerSmoke.tsx`, `viewStudioSmoke.tsx`, `worktreeDialogsSmoke.tsx`.
+
+The palette's own commands are registrations too (`tui/opentui/app/actions/hostCommands.ts`,
+groups in `actions/palette/*`): a later `registerHostCommand([id], handler)` takes over or
+wraps a built-in action.

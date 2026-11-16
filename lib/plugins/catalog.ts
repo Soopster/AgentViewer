@@ -1,4 +1,6 @@
 import { manifest as tips } from '../../plugins/tips/manifest'
+import { manifest as worktreeTasks } from '../../plugins/worktree-tasks/manifest'
+import { manifest as viewStudio } from '../../plugins/view-studio/manifest'
 import { manifest as themePicker } from '../../plugins/theme-picker/manifest'
 import { manifest as themesClassic } from '../../plugins/themes-classic/manifest'
 import { manifest as themesBrand } from '../../plugins/themes-brand/manifest'
@@ -60,7 +62,7 @@ import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, viewStudio, worktreeTasks, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

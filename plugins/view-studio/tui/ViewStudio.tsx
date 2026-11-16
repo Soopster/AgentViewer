@@ -6,25 +6,15 @@
 // when the open session has no prompt, thinking or tool call to show them on.
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BoxRenderable, MouseEvent } from '@opentui/core'
-import { registerTabPaintOccluder, type TabPaintOccluder } from '../../SessionTabConnection'
-import type { TuiThemePalette } from '../../../theme'
-import {
-  BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, customViewSpec,
-  cycleViewSpecValue, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel,
-  type CustomView, type ViewSpec, type ViewSpecField, type ViewSpecKey,
-} from '../../../viewSpec'
-import { TRANSCRIPT_VIEW_LABELS } from '../commands'
-import { WindowButton } from '../../WindowButton'
-import { TranscriptCard, type TranscriptCardProps } from '../TranscriptCard'
-import { densityConfig, streamCompletedTurnHint, streamLandmarkText, transcriptAccent } from '../transcriptStyle'
-import { IDLE_TICKER_PHRASES } from '../chrome'
 import { TextAttributes } from '@opentui/core'
-import { computeAllLandmarks, renderedBodyLines, usesAgentCardPresentation, visibleCardsForTranscriptView } from '../transcriptRows'
-import { EMPTY_EXPANDED_KEYS } from '../timing'
-import { buildThreadedMessages } from '../../../../lib/threading'
-import { formatTranscriptCards } from '../../../format'
-import type { SessionMessage } from '../../../../lib/types'
-import type { TuiDensity } from '../../../theme'
+import {
+  BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, EMPTY_EXPANDED_KEYS, IDLE_TICKER_PHRASES, TRANSCRIPT_VIEW_LABELS, TranscriptCard, VIEW_SPEC_BASES,
+  VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WindowButton, buildThreadedMessages, computeAllLandmarks, customViewSpec, cycleViewSpecValue, densityConfig,
+  formatTranscriptCards, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
+  usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
+  type CustomView, type SessionMessage, type TabPaintOccluder, type TranscriptCardProps, type TuiDensity, type TuiThemePalette,
+  type ViewSpec, type ViewSpecField, type ViewSpecKey,
+} from '../../../tui/opentui/shell/sdkViews'
 
 export type ViewStudioKey = { name: string; sequence: string; ctrl: boolean; meta: boolean; shift: boolean }
 export type ViewStudioKeyHandler = (key: ViewStudioKey) => boolean
@@ -45,7 +35,6 @@ type Props = {
   keyHandlerRef: React.MutableRefObject<ViewStudioKeyHandler | null>
 }
 
-export const VIEW_STUDIO_WIDTH = 56
 
 const FIELDS_BY_SECTION = new Map(VIEW_SPEC_SECTIONS.map((section) => [section, VIEW_SPEC_FIELDS.filter((field) => field.section === section)]))
 const SPECIMEN_MIN_ROWS = 12

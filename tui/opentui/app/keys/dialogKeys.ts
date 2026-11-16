@@ -13,9 +13,7 @@ import { type RemoteCoordinatorTarget } from '../../../../lib/tui/remoteCoordina
 
 /** Returns true when one of these branches handled the key. */
 export function handleModalDialogKeys({
-  exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, setWorktreeConfirm,
-  mergeSelectedWorktreeTask, discardSelectedWorktreeTask, worktreeModalOpen, setWorktreeModalOpen,
-  setWorktreeDraft, submitWorktreeTask,
+  exitConfirmOpen, key, handled, confirmExit, cancelExit, worktreeConfirm, worktreeModalOpen, worktreeKeyHandlerRef,
   remoteCoordinatorTarget,
   remoteCoordinatorKeyHandlerRef, teammatesModalOpen, teammatesKeyHandlerRef, searchMode,
   setSearchMode, sessionSearchMode, setSessionSearchMode, setSessionSearchQuery, fileHistoryPath,
@@ -30,13 +28,8 @@ export function handleModalDialogKeys({
   confirmExit: () => void
   cancelExit: () => void
   worktreeConfirm: 'merge' | 'discard' | null
-  setWorktreeConfirm: React.Dispatch<React.SetStateAction<'merge' | 'discard' | null>>
-  mergeSelectedWorktreeTask: () => Promise<void>
-  discardSelectedWorktreeTask: () => Promise<void>
   worktreeModalOpen: boolean
-  setWorktreeModalOpen: React.Dispatch<React.SetStateAction<boolean>>
-  setWorktreeDraft: React.Dispatch<React.SetStateAction<string>>
-  submitWorktreeTask: () => Promise<void>
+  worktreeKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>
   remoteCoordinatorTarget: RemoteCoordinatorTarget | null
   remoteCoordinatorKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string; }) => void) | null>
   teammatesModalOpen: boolean
@@ -74,33 +67,15 @@ export function handleModalDialogKeys({
       return true
     }
 
+    // The worktree dialogs are the worktree-tasks plugin's; a confirmation swallows every key, the name prompt only its own.
     if (worktreeConfirm) {
-      if (key.name === 'return' || key.name === 'y') {
-        handled(() => {
-          const action = worktreeConfirm
-          setWorktreeConfirm(null)
-          if (action === 'merge') void mergeSelectedWorktreeTask()
-          else void discardSelectedWorktreeTask()
-        })
-        return true
-      }
-      if (key.name === 'escape' || key.name === 'n') {
-        handled(() => setWorktreeConfirm(null))
-        return true
-      }
+      worktreeKeyHandlerRef.current?.(key)
       handled(() => {})
       return true
     }
 
     if (worktreeModalOpen) {
-      if (key.name === 'escape') {
-        handled(() => {
-          setWorktreeModalOpen(false)
-          setWorktreeDraft('')
-        })
-      } else if (key.name === 'return') {
-        handled(() => { void submitWorktreeTask() })
-      }
+      if (worktreeKeyHandlerRef.current?.(key) === true) handled(() => {})
       // Other keys fall through to the focused name input.
       return true
     }

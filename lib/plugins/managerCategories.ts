@@ -19,7 +19,7 @@ const BY_ID: Readonly<Record<string, PluginCategory>> = {
   'skill-picker': 'Composer', 'skills-manager': 'Composer', 'instructions-manager': 'Composer', 'project-memory': 'Composer', 'adaptive-ui': 'Composer',
   analytics: 'Sessions & history', 'session-insights': 'Sessions & history', 'daily-summary': 'Sessions & history', recaps: 'Sessions & history', bookmarks: 'Sessions & history',
   'tab-manager': 'Sessions & history', desk: 'Sessions & history', 'whats-new': 'Sessions & history', 'remote-access': 'Sessions & history', 'pi-activity': 'Sessions & history',
-  toasts: 'Interface', 'dynamic-island': 'Interface', 'omni-bar': 'Interface', 'mod-views': 'Interface', 'theme-picker': 'Interface',
+  toasts: 'Interface', 'dynamic-island': 'Interface', 'omni-bar': 'Interface', 'mod-views': 'Interface', 'theme-picker': 'Interface', 'view-studio': 'Interface', 'worktree-tasks': 'Code & repository',
 }
 
 /** A plugin that only contributes themes is a theme pack, wherever it came from. */
