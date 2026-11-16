@@ -5086,6 +5086,7 @@ function OpenTuiWorkspace() {
           replaceText: text => { applyComposerSnapshot({ text, attachments: [], promptParts: [], cursorOffset: text.length }); setComposerActive(true) },
         },
         schedules: tuiSchedules,
+        commands: { run: id => { runCommandForPlugin(id) } },
         notices,
       } : { notices }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) showNotice('error', error instanceof Error ? error.message : 'Plugin command failed') })
       return
@@ -5224,6 +5225,8 @@ function OpenTuiWorkspace() {
         setComposerActive(true)
         showNotice('info', notice ?? 'Added to composer')
       },
+      readDraft: () => composerTextareaRef.current?.plainText ?? composerDraftRef.current,
+      liveCommands: () => composerLiveSlashCommands,
       appendPrompt: (prompt: string, notice: string) => {
         appendDiffCommentPromptToComposer(prompt)
         setSurfacePanelFocused(false)

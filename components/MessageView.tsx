@@ -1223,6 +1223,7 @@ function MessageViewInner({
           },
         },
         schedules: webSchedules,
+        commands: { run: commandId => { dispatchPluginCommand(commandId) } },
         notices: { show: (_kind, text) => setSessionActionNotice(text) },
       }, input).catch(error => { if (!(error instanceof Error && error.name === 'AbortError')) setSessionActionError(error instanceof Error ? error.message : 'Plugin command failed') })
       return true
@@ -1744,7 +1745,7 @@ function MessageViewInner({
 
   const sessionPluginServices = useMemo<WebPluginServices>(() => ({
     session: { session },
-    composer: { insertText: insertPromptText, attachContext: attachment => insertContextAttachments([attachment]) },
+    composer: { insertText: insertPromptText, readDraft: () => inputTextRef.current, liveCommands: () => liveSlashCommands, attachContext: attachment => insertContextAttachments([attachment]) },
     ...(canUseChannelBridge ? { 'channel-bridge': { ...channelBridge, acquireView: acquireChannelBridgeView, accent: { cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label } } } : {}),
     ...(canUseIdeBridge ? { 'ide-bridge': { ...ideBridge, acquireView: acquireIdeBridgeView, accent: { cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label } } } : {}),
     'session-transcript': { info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages },
@@ -1752,7 +1753,7 @@ function MessageViewInner({
     'task-control': session && !session.isPending
       ? createWebTaskControls(session, readerPlugins.isCurrent, handleJumpToMessage)
       : { jumpTo: handleJumpToMessage },
-  }), [session, sessionInfo, threadedFull, messages, liveThreadedMessages, openCodeTodos, codexPlan, readerPlugins.isCurrent, handleJumpToMessage, insertPromptText, insertContextAttachments, canUseChannelBridge, canUseIdeBridge, channelBridge, ideBridge, acquireChannelBridgeView, acquireIdeBridgeView, composerConfig])
+  }), [session, sessionInfo, threadedFull, messages, liveThreadedMessages, openCodeTodos, codexPlan, readerPlugins.isCurrent, handleJumpToMessage, insertPromptText, insertContextAttachments, canUseChannelBridge, canUseIdeBridge, channelBridge, ideBridge, acquireChannelBridgeView, acquireIdeBridgeView, composerConfig, liveSlashCommands])
 
   const handleReviewJumpToMessage = useCallback((messageId: string) => {
     setShowReviewMode(false)

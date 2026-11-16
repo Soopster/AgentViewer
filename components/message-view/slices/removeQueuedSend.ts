@@ -7,7 +7,7 @@ import type { Session } from '../../../lib/types'
 import { type ContextComposerHandle } from '../../ContextComposer'
 import { useCallback, useMemo } from 'react'
 import { type SendAttachment } from '@/lib/types'
-import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '@/lib/slashCommands'
+import { getSlashCommandSuggestions, filterSlashCommands, markSkillCommands, groupSkillCommands, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { removeComposerQueueItem } from '@/lib/composerAttachments'
 import { type QueuedWebSend } from '../types'
 import { detectMentionAtCursor } from '../composerUi'
@@ -86,7 +86,7 @@ export function useRemoveQueuedSendGroup(ctx: UseRemoveQueuedSendGroupContext) {
     const baseline = getSlashCommandSuggestions(session?.provider)
     const merged = [...pluginSlashCommands]
     const localNames = new Set(merged.map(entry => entry.command))
-    merged.push(...liveSlashCommands.filter(entry => !localNames.has(entry.command)))
+    merged.push(...markSkillCommands(liveSlashCommands, baseline).filter(entry => !localNames.has(entry.command)))
     const seen = new Set(merged.map((entry) => entry.command))
     for (const entry of baseline) {
       if (!seen.has(entry.command)) {
@@ -95,7 +95,7 @@ export function useRemoveQueuedSendGroup(ctx: UseRemoveQueuedSendGroupContext) {
       }
     }
     const firstLine = inputText.split('\n')[0] ?? ''
-    return filterSlashCommands(merged, firstLine.slice(1))
+    return groupSkillCommands(filterSlashCommands(merged, firstLine.slice(1)), firstLine.slice(1))
   }, [inputText, liveSlashCommands, session?.provider, pluginSlashCommands])
 
   const commandSessionId = session?.sessionId

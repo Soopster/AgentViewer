@@ -2759,6 +2759,33 @@ Recurring prompts: a trigger (own 5-field cron with time zone, or `every <n><m|h
 `npm run schedules:smoke` (cron, engine incl. a real second process contending for the lease, declared, slash, CLI) and
 `tui/opentui/schedulesViewSmoke.tsx`. Not verified live: a real turn fired by the daemon, and mutation checks on the new smokes.
 
+### Skill picker (`lib/skillPicker/`, `plugins/skill-picker`) (load-bearing)
+
+`/skill` (or ⌃K k, the palette, the web composer's Skills button) opens a two-pane picker: a grouped, searchable list
+(Suggested / Project / User / Commands) and the highlighted skill's SKILL.md. It sits on the Skills Manager's inventory
+(`nativeSkillsManager.scan`), so it adds no discovery of its own.
+
+- **"Loaded by this provider" comes from the root's consumers**, not from guessing: `composerSkillsFromSnapshot` reads
+  the instance id out of each root's consumer label (`Claude (claude)`), and matches whole ids (`codex` is not
+  `codex-sandbox`). The copy-only library root is loaded by nobody, which is what makes its skills offer Attach/Install.
+  Live non-builtin slash commands reach both views through the composer's `liveCommands` service.
+- **Matching decides; use only breaks ties** (`rankSkills`), as the file pickers do: a typed query still finds a skill never
+  used. TUI use lives in `lib/tuiFrecency` under `skill:<name>`; the web keeps counts in localStorage (a convenience).
+- **Suggestions are lexical on purpose** (`suggestSkills`): a name word in the draft counts triple, one lone common word is
+  never enough, and nothing is suggested for a one-word draft. It runs as the person types, so it never calls a model.
+- **Typing is search.** Letters, `j` and `k` included, go to the query; ↑/↓ and ⌃N/⌃P move (the palette lesson).
+- **Native insertion differs per provider** (`nativeSkillText`): Claude/Copilot `/name`, Codex `$name`, Pi `/skill:name`, OpenCode
+  a plain sentence naming the skill (it loads skills through a tool, so there is no syntax). Codex/Pi/OpenCode/Copilot forms
+  are from their docs and were not run against live CLIs.
+- **Attach is an ordinary `file` attachment of SKILL.md** (TUI: an `@path` mention), not the `'skill'` attachment type, which only
+  Codex consumes. Install previews through Skills Manager into the provider's own project root (else its user root), applies only
+  an `add` (never replace), and re-scans.
+- `/skill` is a session-scoped handler command that opens the surface through the new `commands` command service.
+- Inserted skills appear as removable composer chips. The ordinary `/` menu marks skills where the provider flags its built-ins,
+  and `/skill <search>` opens the picker with that query.
+
+`npm run skillpicker:smoke` and `tui/opentui/skillPickerSmoke.tsx`.
+
 ### Remote access
 
 Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two

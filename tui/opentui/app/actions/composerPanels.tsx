@@ -68,7 +68,7 @@ export function runRenderComposerSlashPanel(ctx: RenderComposerSlashPanelContext
             <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
             <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{commandText}</text>
             <text fg={theme.dim} wrapMode="none">  </text>
-            <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
+            <text fg={theme.dim} wrapMode="none">{fitText(entry.section === 'skills' ? `✦ ${entry.description}` : entry.description, descWidth)}</text>
           </box>
         )
       })}

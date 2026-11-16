@@ -101,6 +101,10 @@ export function createPluginCommandHost(renderer: PluginRenderer, manifests: rea
         const notices = context.services.notices
         Object.assign(services, { notices: { show: (kind: 'info' | 'error', text: string) => { if (active()) notices.show(kind, text) } } })
       }
+      if (command.services.includes('commands') && context.services.commands) {
+        const commands = context.services.commands
+        Object.assign(services, { commands: { run: (commandId: string) => { if (active()) commands.run(commandId) } } })
+      }
       if (command.services.includes('schedules') && context.services.schedules) {
         const schedules = context.services.schedules
         Object.assign(services, { schedules: { create: async (request: Parameters<typeof schedules.create>[0]) => { check(); await schedules.create(request) } } })

@@ -68,6 +68,8 @@ export type TuiPluginServices = {
     readonly insertText?: (text: string, notice?: string) => void
     /** What the user has typed into the composer, read when asked. */
     readonly readDraft?: () => string
+    /** The commands the provider reports for this session, built-ins flagged; read when asked. */
+    readonly liveCommands?: () => readonly import('../../../lib/slashCommands').SlashCommandSuggestion[]
     /** Append a prompt to the composer and hand it the keyboard, saying so with `notice`. */
     readonly appendPrompt?: (prompt: string, notice: string) => void
   }

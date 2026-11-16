@@ -28,6 +28,7 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   handoff: async () => (await import('@/plugins/handoff/web')).module,
   bookmarks: async () => (await import('@/plugins/bookmarks/web')).module,
   schedules: async () => (await import('@/plugins/schedules/web')).module,
+  'skill-picker': async () => (await import('@/plugins/skill-picker/web')).module,
   provenance: async () => (await import('@/plugins/provenance/web')).module,
   'run-dashboard': async () => (await import('@/plugins/run-dashboard/web')).module,
   'mod-views': async () => (await import('@/plugins/mod-views/web')).module,

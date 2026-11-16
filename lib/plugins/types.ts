@@ -104,7 +104,7 @@ type PluginCommandCommon = {
   readonly keywords?: readonly string[]
 }
 
-export type PluginCommandServiceId = 'notifications' | 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing' | 'schedules'
+export type PluginCommandServiceId = 'notifications' | 'transcript' | 'composer' | 'notices' | 'composer-accessories' | 'bridge-routing' | 'schedules' | 'commands'
 
 export type PluginCommandSpec = PluginCommandCommon & (
   | {

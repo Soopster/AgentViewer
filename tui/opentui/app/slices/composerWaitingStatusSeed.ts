@@ -2,7 +2,7 @@ import { useComposerSlashCommands } from '../../../../lib/plugins/useComposerSla
 /** @jsxImportSource @opentui/react */
 import { useMemo, useRef } from 'react'
 import { type Session } from '../../../../lib/types'
-import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../../../lib/slashCommands'
+import { getSlashCommandSuggestions, filterSlashCommands, markSkillCommands, groupSkillCommands, type SlashCommandSuggestion } from '../../../../lib/slashCommands'
 import { type readViewSessionComposerOptions } from '../../../../lib/sessionBackend'
 import { TUI_HANDOFF_COMMAND } from '../composerConstants'
 
@@ -34,7 +34,7 @@ export function useComposerWaitingStatusSeedGroup(ctx: UseComposerWaitingStatusS
     const baseline = [...getSlashCommandSuggestions(selectedSession?.provider ?? 'claude'), TUI_HANDOFF_COMMAND]
     const merged: SlashCommandSuggestion[] = [...pluginSlashCommands]
     const localNames = new Set(merged.map(entry => entry.command))
-    merged.push(...composerLiveSlashCommands.filter(entry => !localNames.has(entry.command)))
+    merged.push(...markSkillCommands(composerLiveSlashCommands, baseline).filter(entry => !localNames.has(entry.command)))
     const seen = new Set(merged.map((entry) => entry.command))
     for (const entry of baseline) {
       if (!seen.has(entry.command)) {
@@ -42,7 +42,7 @@ export function useComposerWaitingStatusSeedGroup(ctx: UseComposerWaitingStatusS
         seen.add(entry.command)
       }
     }
-    return filterSlashCommands(merged, composerFirstLine.slice(1))
+    return groupSkillCommands(filterSlashCommands(merged, composerFirstLine.slice(1)), composerFirstLine.slice(1))
   }, [composerSlashOpen, composerFirstLine, selectedSession?.provider, composerTargetSession?.provider, composerLiveSlashCommands, pluginSlashCommands])
 
   const composerAffordancesCacheRef = useRef(new Map<string, {

@@ -6,6 +6,8 @@ export type SlashCommandSuggestion = {
   argumentHint?: string
   /** Claude Code's own command; absent for a skill, user, plugin or MCP command. */
   builtin?: boolean
+  /** Set by `markSkillCommands`: a skill or custom command the menu lists under its own heading. */
+  section?: 'skills'
 }
 
 // Per-provider fallback slash command catalogs. These mirror what each
@@ -184,6 +186,24 @@ export function filterSlashCommands(entries: SlashCommandSuggestion[], rawQuery:
     .map((item) => item.entry)
 }
 
+/**
+ * Tags the live commands that are skills or custom commands, for the menu's Skills
+ * section. Only a provider that flags its own built-ins (Claude) can say which are
+ * which — elsewhere every live command is unflagged, and calling them all skills would
+ * be wrong — and a name the fallback catalog already lists is that provider's built-in.
+ */
+export function markSkillCommands(live: readonly SlashCommandSuggestion[], baseline: readonly SlashCommandSuggestion[]): SlashCommandSuggestion[] {
+  if (!live.some((entry) => entry.builtin)) return [...live]
+  const known = new Set(baseline.map((entry) => entry.command))
+  return live.map((entry) => !entry.builtin && !known.has(entry.command) ? { ...entry, section: 'skills' as const } : entry)
+}
+
+/** With nothing typed the menu is browsed, so skills gather under their heading; a query keeps its ranking. */
+export function groupSkillCommands(entries: SlashCommandSuggestion[], rawQuery: string): SlashCommandSuggestion[] {
+  if (rawQuery.trim()) return entries
+  return [...entries.filter((entry) => entry.section !== 'skills'), ...entries.filter((entry) => entry.section === 'skills')]
+}
+
 export function normalizeSlashCommandSuggestions(value: unknown): SlashCommandSuggestion[] | null {
   if (!Array.isArray(value)) return null
   return value.flatMap((entry): SlashCommandSuggestion[] => {
@@ -203,6 +223,7 @@ export function normalizeSlashCommandSuggestions(value: unknown): SlashCommandSu
       command: command.startsWith('/') ? command : `/${command}`,
       description: typeof record.description === 'string' ? record.description : '',
       argumentHint,
+      ...(record.builtin === true ? { builtin: true } : {}),
     }]
   })
 }

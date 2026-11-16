@@ -1,6 +1,6 @@
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import type { AgentProvider } from '../../lib/types'
-import { useMemo } from 'react'
+import { Fragment, useMemo } from 'react'
 import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { useState } from 'react'
 import type { DragEvent } from 'react'
@@ -1118,9 +1118,11 @@ export function ComposerShell(props: ComposerShellProps) {
                   </div>
                   {slashCommands.map((entry, index) => {
                     const active = index === slashActiveIndex
+                    const startsSkills = entry.section === 'skills' && slashCommands[index - 1]?.section !== 'skills'
                     return (
+                      <Fragment key={entry.command}>
+                      {startsSkills && <div style={{ ...composerPopoverHintStyle, marginTop: 4 }}>✦ Skills</div>}
                       <button
-                        key={entry.command}
                         type="button"
                         className="av-hover-control"
                         ref={(node) => { slashItemRefs.current[index] = node }}
@@ -1143,6 +1145,7 @@ export function ComposerShell(props: ComposerShellProps) {
                         )}
                         <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.description}</span>
                       </button>
+                      </Fragment>
                     )
                   })}
                 </div>

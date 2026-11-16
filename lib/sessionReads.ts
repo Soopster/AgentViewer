@@ -554,7 +554,7 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
   return withSessionInstance(provider, sessionId, () => adapter.readComposerOptions!(sessionId))
 }
 
-export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
+export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string; builtin?: boolean }>> {
   const provider = await resolveProvider(providerOverride)
   const adapter = await getSessionAdapter(provider)
   if (!adapter.readSlashCommands) return []

@@ -105,10 +105,11 @@ export function runSlashCommandsEffect(ctx: SlashCommandsEffectContext) {
     .then((res) => res.ok ? res.json() : null)
     .then((data) => {
       if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
-      setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string }) => ({
+      setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string; builtin?: boolean }) => ({
         command: entry.command,
         description: entry.description ?? '',
         argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+        ...(entry.builtin ? { builtin: true } : {}),
       })))
     })
     .catch(() => { /* ignore */ })

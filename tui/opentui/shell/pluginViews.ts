@@ -43,6 +43,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   handoff: async () => (await import('../../../plugins/handoff/tui')).module,
   bookmarks: async () => (await import('../../../plugins/bookmarks/tui')).module,
   schedules: async () => (await import('../../../plugins/schedules/tui')).module,
+  'skill-picker': async () => (await import('../../../plugins/skill-picker/tui')).module,
   'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,
   provenance: async () => (await import('../../../plugins/provenance/tui')).module,
   'remote-access': async () => (await import('../../../plugins/remote-access/tui')).module,

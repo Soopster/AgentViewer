@@ -67,6 +67,10 @@ export type WebPluginServices = {
     readonly insertPath?: (path: string) => void
     /** Insert text (a question for the agent) into the composer the user is writing in. */
     readonly insertText?: (text: string) => void
+    /** What has been typed into the composer, read when asked. */
+    readonly readDraft?: () => string
+    /** The commands the provider reports for this session, built-ins flagged; read when asked. */
+    readonly liveCommands?: () => readonly import('../../lib/slashCommands').SlashCommandSuggestion[]
     /** Attach a piece of context (a terminal selection, a page) to the message being written. */
     readonly attachContext?: (attachment: SendAttachment) => void
   }

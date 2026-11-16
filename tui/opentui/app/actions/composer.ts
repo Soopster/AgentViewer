@@ -616,6 +616,7 @@ export async function runFetchComposerAffordances(ctx: FetchComposerAffordancesC
       command: entry.command,
       description: entry.description,
       argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+      ...(entry.builtin ? { builtin: true } : {}),
     }))
     // Cache even when the session has changed since — the work is done, and
     // the next visit to this session should not spawn again.
