@@ -7,6 +7,7 @@ import { type PaneFocus } from '../types'
 import { ATTACHED_DAEMON_HOST } from '../timing'
 import { type InlineTextSegment } from '../inlineText'
 import { footerDockStatsReserve } from '../contextMeter'
+import { pluginFooterHints } from '../../../../lib/plugins/footerHints'
 
 export type FooterSegmentsContext = {
   composerActive: boolean
@@ -56,6 +57,10 @@ export function runFooterSegments(ctx: FooterSegmentsContext) {
             ? [[['j/k', 'scroll'], ['e', scrollbackExpanded ? 'fold all' : 'expand all'], ['c', 'compose'], ['tab', 'focus']]] as Array<Array<[string, string]>>
             : [[['j/k', 'move'], ['e', 'fold'], ['c', 'compose'], ['tab', 'focus']]] as Array<Array<[string, string]>>),
       ]
+  // Plugins' hints come last: groups drop whole from the end when the bar is narrow,
+  // so a plugin can never push out one of the host's own keys.
+  const pluginHints = pluginFooterHints(composerActive ? 'composer' : effectiveFocus === 'sessions' && sidebarView === 'sessions' ? 'rail' : 'transcript')
+  if (pluginHints.length) groups.push(pluginHints)
   const segs: InlineTextSegment[] = []
   // A pending prefix takes over the bar: the chord is modal, so the only keys
   // that matter right now are its own.

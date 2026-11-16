@@ -17,7 +17,7 @@ import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapsho
 import { recordModDiagnostic } from './modDiagnostics'
 import { isPluginEnabled } from './enablement'
 import { blockPatternProblem } from '../blockRegistry'
-import { PLUGIN_API_VERSION, type PluginBlockSpec, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
+import { PLUGIN_API_VERSION, type PluginHintSpec, type PluginBlockSpec, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
 export const LOCAL_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
@@ -193,6 +193,15 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     // Namespaced so a mod's theme can never take a built-in's id.
     themes.push({ id: `${id}-${theme.id}`, label: typeof theme.label === 'string' && theme.label.trim() ? theme.label.trim().slice(0, 40) : theme.id, category: theme.category, ...(typeof theme.icon === 'string' && theme.icon.trim() ? { icon: theme.icon.trim().slice(0, 2) } : {}), ...(typeof css === 'string' ? { css: css.trim() } : {}), ...(tui ? { tui: { swatch: Object.fromEntries(swatchKeys.map(key => [key, tui[key] as string])) as NonNullable<NonNullable<PluginThemeSpec['tui']>['swatch']> } } : {}) })
   }
+  const hints: PluginHintSpec[] = []
+  if (value.hints !== undefined && !Array.isArray(value.hints)) problems.push('hints must be a list')
+  for (const [index, entry] of (Array.isArray(value.hints) ? value.hints : []).entries()) {
+    const hint = entry as Record<string, unknown>
+    if (hint?.context !== 'rail' && hint?.context !== 'transcript' && hint?.context !== 'composer') { problems.push(`hints[${index}].context must be rail, transcript or composer`); continue }
+    if (typeof hint.key !== 'string' || !hint.key.trim() || hint.key.length > 8 || typeof hint.label !== 'string' || !hint.label.trim() || hint.label.length > 24) { problems.push(`hints[${index}] needs a key (8 characters at most) and a label (24 at most)`); continue }
+    if (hint.order !== undefined && (typeof hint.order !== 'number' || !Number.isFinite(hint.order))) { problems.push(`hints[${index}].order must be finite`); continue }
+    hints.push({ context: hint.context, key: hint.key.trim(), label: hint.label.trim(), ...(typeof hint.order === 'number' ? { order: hint.order } : {}) })
+  }
   const blocks: PluginBlockSpec[] = []
   if (value.blocks !== undefined && !Array.isArray(value.blocks)) problems.push('blocks must be a list')
   for (const [index, entry] of (Array.isArray(value.blocks) ? value.blocks : []).entries()) {
@@ -238,7 +247,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
     else views.push({ id: 'mod-config', title: `${title} settings` })
   }
-  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0 && blocks.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views, blocks or provider')
+  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0 && blocks.length === 0 && hints.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views, blocks, hints or provider')
   for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views], ['themes', themes], ['transcriptViews', transcriptViews], ['blocks', blocks.map(block => ({ id: block.kind }))]] as const) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
   }
@@ -257,7 +266,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(blocks.length ? { blocks } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(blocks.length ? { blocks } : {}), ...(hints.length ? { hints } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }

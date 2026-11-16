@@ -33,6 +33,7 @@ export const manifest = {
     renderers: ['web', 'tui'],
     tuiKey: { name: 'u', shift: true },
     tuiKeyLabel: '⇧U',
+    sessionMenu: true,
     keywords: ['checkpoint', 'snapshot', 'restore', 'undo', 'turn', 'review', 'hunk', 'commit'],
   }],
 } as const satisfies PluginManifest

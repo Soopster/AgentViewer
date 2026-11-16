@@ -16,6 +16,7 @@ to run, so `plugin.json` needs no `server.mjs` (`localManifestNeedsServer`).
 | `transcriptViews[]` | `{ id, name, base, overrides }` | `tui/opentui/shell/pluginTranscriptViews.ts` → `tui/viewSpec.ts` |
 | `blocks[]` | `{ kind, pattern, flags?, title, lines?, tone? }` | `lib/plugins/blockContributions*.ts` → `lib/blockRegistry.ts` |
 | `group` | plugin-manager heading | `lib/plugins/managerCategories.ts` |
+| `hints[]` | `{ context: rail \| transcript \| composer, key, label, order? }` — a key hint in the terminal status bar | `lib/plugins/footerHints.ts` → `tui/opentui/app/derived/footer.ts` |
 
 - **Themes**: see the `agent-viewer-themes` skill. `css` is bare declarations
   (a mod's is refused if it has `{ } < > @`, backslashes or `url(`); `rules` is
@@ -32,6 +33,15 @@ to run, so `plugin.json` needs no `server.mjs` (`localManifestNeedsServer`).
   so a bundled plugin's blocks need a bundled-code registration there).
   Threaded-transcript caches are not invalidated when a parser changes; a
   parser change takes effect for transcripts read afterwards.
+
+- **Hints** advertise a key the plugin already handles (a `tuiKey`, a ⌃K chord, a
+  surface's own keys); they bind nothing. They sit after the host's groups, so a
+  narrow bar drops them first. Key at most 8 characters, label at most 24.
+  Terminal only: the Web has no status bar.
+- **Session menu**: every session-scoped command is offered in the terminal's
+  session context menu; a repository-scoped command joins it with
+  `sessionMenu: true` (shown when the session has a folder). The Web's rail
+  menu does not list plugin commands yet.
 
 ## Registrations (bundled code)
 

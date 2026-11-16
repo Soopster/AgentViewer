@@ -4739,8 +4739,13 @@ function OpenTuiWorkspace() {
       if (command.requires !== 'session' || !isPluginEnabled(command.pluginId)) continue
       items.push({ label: command.label, hint: command.tuiKeyLabel, run: () => runPluginCommand(command, session) })
     }
-    const checkpoints = getPluginCommand('checkpoints')
-    if (session.cwd && checkpoints && isPluginEnabled(checkpoints.pluginId)) items.push({ label: checkpoints.label, hint: checkpoints.tuiKeyLabel, run: () => runPluginCommand(checkpoints, session) })
+    // A repository-scoped command that asks to be in the menu (`sessionMenu`) is offered for a session with a folder.
+    if (session.cwd) {
+      for (const command of listPluginCommands('tui')) {
+        if (!command.sessionMenu || command.requires === 'session' || !isPluginEnabled(command.pluginId)) continue
+        items.push({ label: command.label, hint: command.tuiKeyLabel, run: () => runPluginCommand(command, session) })
+      }
+    }
     if (source === 'tab' && isPluginEnabled('tab-manager')) {
       items.push(
         { label: readPinnedTabs().has(key) ? 'Unpin tab' : 'Pin tab', run: () => toggleSessionTabPin(session) },

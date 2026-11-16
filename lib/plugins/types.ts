@@ -106,6 +106,8 @@ type PluginCommandCommon = {
   readonly webReader?: string
   readonly webReaderAction?: 'open' | 'toggle'
   readonly webViewMenuLabel?: string
+  /** Also offered in a session's context menu when the session has a working directory (a repository-scoped command about that session's folder). Session-scoped commands are always offered there. */
+  readonly sessionMenu?: boolean
   /** A composer action button which dispatches this command through the host. */
   readonly webComposerLabel?: string
   readonly webComposerGlyph?: string
@@ -191,6 +193,13 @@ export type PluginManifest = {
    * every renderer. Data only, so a mod can ship them (lib/blockRegistry.ts).
    */
   readonly blocks?: readonly PluginBlockSpec[]
+  /**
+   * Key hints the terminal's status bar adds while the focused pane matches
+   * `context`. They are the first thing the bar drops when it is narrow, never
+   * ahead of the host's own keys. A hint advertises a key the plugin already
+   * handles (a `tuiKey`, a chord, a surface's own keys); it binds nothing.
+   */
+  readonly hints?: readonly PluginHintSpec[]
   /** Themes this plugin contributes while enabled: bare CSS-variable declarations, never code. */
   readonly themes?: readonly PluginThemeSpec[]
   /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
@@ -246,6 +255,17 @@ export type PluginTuiTheme = {
   readonly description?: string
   /** `omz` lists it under the prompt-theme group instead of light or dark. */
   readonly menu?: 'omz'
+}
+
+export type PluginHintSpec = {
+  /** `rail`: the session list has focus; `transcript`: the reader does; `composer`: the composer is active. */
+  readonly context: 'rail' | 'transcript' | 'composer'
+  /** At most 8 characters, shown as the key. */
+  readonly key: string
+  /** At most 24 characters. */
+  readonly label: string
+  /** Lower first; default 100. */
+  readonly order?: number
 }
 
 export type PluginBlockSpec = {

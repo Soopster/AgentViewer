@@ -7,6 +7,7 @@ import type { SetStateAction } from 'react'
 import type { RefObject } from 'react'
 import React, { useCallback, useMemo } from 'react'
 import { isPluginEnabled } from '../../../../lib/plugins/enablement'
+import { useDisabledPlugins } from '../../../../lib/plugins/useDisabledPlugins'
 import { toast } from '../../toastStore'
 import { formatProviderLabel, formatSessionTitle } from '../../../format'
 import { writeTuiSidebarWidth, type TuiSessionDetail } from '../../../../lib/tui/service'
@@ -85,11 +86,13 @@ export function useFooterSegmentsGroup(ctx: UseFooterSegmentsGroupContext) {
   // Status bar: grouped keybindings rendered as colored inline segments —
   // keys pop in the accent color, labels stay muted, groups split by a dim
   // divider so the bar scans at a glance instead of reading as one dim wall.
+  // A plugin turned on or off changes which hints the bar may show.
+  const pluginHintsEpoch = useDisabledPlugins()
   const footerSegments = useMemo(() => runFooterSegments({
     composerActive, composerKeysTargetTurn, effectiveFocus, sidebarView, isScrollbackView,
     scrollbackExpanded, commandChordPending, theme, splitChordPending, attentionNeedsInputCount,
     width, statusBarInDock, composerDockTextareaWidth,
-  }), [width, attentionNeedsInputCount, commandChordPending, composerActive, composerDockTextareaWidth, composerKeysTargetTurn, isScrollbackView, scrollbackExpanded, splitChordPending, splitFocusIndex, statusBarInDock, effectiveFocus, sidebarView, theme])
+  }), [width, attentionNeedsInputCount, commandChordPending, composerActive, composerDockTextareaWidth, composerKeysTargetTurn, isScrollbackView, scrollbackExpanded, splitChordPending, splitFocusIndex, statusBarInDock, effectiveFocus, sidebarView, theme, pluginHintsEpoch])
 
   const composerStatusMessage = visibleComposerError
     ? visibleComposerError

@@ -70,6 +70,9 @@ aligned across renderers while using their native controls.
   `agent-viewer-themes` skill. Plugins that only add themes appear under
   **Themes** in the plugin managers; any plugin may set `group` to choose its
   heading.
+- To advertise a key in the terminal's status bar, declare `hints` for the pane
+  it applies to; to list a repository command in a session's context menu, set
+  `sessionMenu: true` on it.
 - For a terminal transcript preset, declare `transcriptViews` (a built-in `base`
   plus ViewSpec overrides); they show read-only beside the user's own views.
 - To recognise something in message text and draw it as a card on every
