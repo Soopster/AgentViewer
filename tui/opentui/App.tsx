@@ -326,7 +326,6 @@ import { SessionDragOverlay } from './app/overlays/SessionDragOverlay'
 import { SplitDividerLabel } from './app/overlays/SplitDividerLabel'
 import { ComposerStatusMessage } from './app/overlays/ComposerStatusMessage'
 import { FloatingWindowLayer } from './app/overlays/FloatingWindowLayer'
-import { ThemeMenuOverlay } from './app/overlays/ThemeMenuOverlay'
 import { BordersContext, SectionFrame } from './app/borders'
 import { CommandPaletteOverlay } from './app/overlays/CommandPaletteOverlay'
 import { ChordHelpOverlay } from './app/overlays/ChordHelpOverlay'
@@ -691,8 +690,7 @@ function OpenTuiWorkspace() {
     loadingSessions, setLoadingSessions, refreshingSessions, setRefreshingSessions, loadingDetail,
     setLoadingDetail, error, setError, toasts, focusedPane, setFocusedPane, providerMenuOpen,
     setProviderMenuOpen, providerMenuIndex, setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen,
-    themeMenuIndex, setThemeMenuIndex, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
-    setThemeMenuQuery, transcriptViewMenuOpen, setTranscriptViewMenuOpen, transcriptViewMenuIndex,
+    transcriptViewMenuOpen, setTranscriptViewMenuOpen, transcriptViewMenuIndex,
     setTranscriptViewMenuIndex, commandPaletteOpen, setCommandPaletteOpen, commandPaletteQuery,
     setCommandPaletteQuery, commandPaletteIndex, setCommandPaletteIndex, exitConfirmOpen,
     setExitConfirmOpen, exitCleanupInProgress, setExitCleanupInProgress, folderPickerKeyHandlerRef,
@@ -843,7 +841,7 @@ function OpenTuiWorkspace() {
     loadingDetailRef, foregroundLoadInFlightRef, pendingForegroundLoadRef, navSelectStartRef,
     navPaintedKeyRef, navDetailSetAtRef, backgroundRefreshInFlightRef, sessionDetailMtimeRef,
     selectedSessionKeyRef, openTabSessionsRef, runningSessionsRef, tabsEnabledRef,
-    themeMenuOriginRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
+    themeMenuOriginRef, themeMenuKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
     exitInProgressRef, densityRef, showToolCallsRef, transcriptDiffHoverTimeoutRef,
     composerActiveRef, composerDraftRef, searchModeRef, sessionSearchModeRef, teammatesOpen,
     teammatesKeyHandlerRef, windowedPopoverKinds, teammatesModalOpen, remoteCoordinatorTarget,
@@ -2491,7 +2489,7 @@ function OpenTuiWorkspace() {
     setSearchMatchIndex, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys,
     setCollapsedCardKeys, setExpandedCardKeys, setProviderMenuIndex, providerInstances, provider,
     providerInstanceId, setProviderMenuOpen, setProviderInstances, themeMenuOriginRef, themeMode,
-    setThemeMenuIndex, setThemeMenuGroup, setThemeMenuQuery, setThemeMenuOpen, setThemeMode,
+    setThemeMenuOpen, setThemeMode,
     themeSlotsRef, themeFollowsTerminalRef, setThemeFollowsTerminal,
   })
 
@@ -2537,7 +2535,6 @@ function OpenTuiWorkspace() {
     if (!next) return
     if (renderer.themeMode) {
       applyTerminalThemeMode(renderer.themeMode)
-      setThemeMenuGroup(renderer.themeMode === 'light' ? 'light' : 'dark')
     } else {
       showNotice('info', 'This terminal has not reported a light or dark background; the theme stays as it is')
     }
@@ -5266,7 +5263,12 @@ function OpenTuiWorkspace() {
       watchRun: watchCoordinatorRun,
       copyJoinCommand: copyCoordinationJoinCommand,
     },
-    themes: { mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme },
+    themes: {
+      mode: themeMode, light: isLightThemeMode(themeMode), choose: choosePluginTheme,
+      origin: themeMenuOriginRef.current, preview: setThemeMode, cancel: closeThemeMenu,
+      following: themeFollowsTerminal, toggleFollow: toggleThemeFollowsTerminal,
+      showBorders, toggleBorders, toggleRoundedBorders,
+    },
     playbooks: tuiPlaybooks,
     bookmarks: tuiBookmarks,
     schedules: tuiSchedules,
@@ -6522,9 +6524,7 @@ function OpenTuiWorkspace() {
       closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut, setModelPickerOpen,
       modelPickerFocus, setModelPickerFocus, setModelPickerIndex, filteredModelPickerOptions,
       modelPickerTarget, modelPickerOptions, modelPickerIndex, setTuiCopilotContextTierByKey,
-      themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery, themeMenuOriginRef,
-      setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-      toggleThemeFollowsTerminal, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
+      themeMenuOpen, themeMenuKeyHandlerRef, transcriptViewMenuOpen, closeTranscriptViewMenu,
       toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
       filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
       transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -7123,20 +7123,8 @@ function OpenTuiWorkspace() {
         modelPickerFocusedLabel={modelPickerFocusedLabel}
         modelPickerFocusedOption={modelPickerFocusedOption}
         modelPickerFocusedDescription={modelPickerFocusedDescription}
-        themeMenuOpen={themeMenuOpen}
-        themeMenuOriginRef={themeMenuOriginRef}
-        themeMenuGroup={themeMenuGroup}
-        themeMenuQuery={themeMenuQuery}
-        themeMenuIndex={themeMenuIndex}
         focusMode={focusMode}
-        setThemeMenuQuery={setThemeMenuQuery}
-        setThemeMenuIndex={setThemeMenuIndex}
-        setThemeMode={setThemeMode}
-        chooseTheme={chooseTheme}
-        themeFollowsTerminal={themeFollowsTerminal}
         showBorders={showBorders}
-        toggleBorders={toggleBorders}
-        toggleRoundedBorders={toggleRoundedBorders}
         transcriptViewMenuOpen={transcriptViewMenuOpen}
         viewMenuItems={viewMenuItems}
         tabDisplay={tabDisplay}
@@ -7744,6 +7732,23 @@ function OpenTuiWorkspace() {
           onClose={closeInteractiveCoordinator}
           onDetach={offerTeammatesPlacement}
           onKeyHandlerReady={registerTeammatesKeys}
+        />
+      ) : null}
+
+      {themeMenuOpen ? (
+        // The theme-picker plugin: this host keeps whether the menu is open and the theme to restore.
+        <PluginSurfaceHost
+          surfaceId="theme-picker"
+          placement="overlay"
+          scrim={false}
+          provided={pluginServices}
+          runCommand={runCommandForPlugin}
+          theme={theme}
+          width={width}
+          height={height}
+          focused
+          onClose={closeThemeMenu}
+          onKeyHandlerReady={(handler) => { themeMenuKeyHandlerRef.current = handler }}
         />
       ) : null}
 

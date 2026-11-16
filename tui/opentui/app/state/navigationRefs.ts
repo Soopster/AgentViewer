@@ -25,6 +25,8 @@ export function useNavigationRefs() {
   const runningSessionsRef = useRef<RunningSessionRef[]>([])
   const tabsEnabledRef = useRef(true)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
+  // The theme-picker plugin registers its keys here while its menu is open.
+  const themeMenuKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>(null)
   const transcriptViewMenuOriginRef = useRef<TuiTranscriptView | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
   const exitConfirmOpenRef = useRef(false)
@@ -44,7 +46,7 @@ export function useNavigationRefs() {
     loadingDetailRef, foregroundLoadInFlightRef, pendingForegroundLoadRef, navSelectStartRef,
     navPaintedKeyRef, navDetailSetAtRef, backgroundRefreshInFlightRef, sessionDetailMtimeRef,
     selectedSessionKeyRef, openTabSessionsRef, runningSessionsRef, tabsEnabledRef,
-    themeMenuOriginRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
+    themeMenuOriginRef, themeMenuKeyHandlerRef, transcriptViewMenuOriginRef, currentThemeRef, exitConfirmOpenRef,
     exitInProgressRef, densityRef, showToolCallsRef, transcriptDiffHoverTimeoutRef,
     composerActiveRef, composerDraftRef, searchModeRef, sessionSearchModeRef,
   }

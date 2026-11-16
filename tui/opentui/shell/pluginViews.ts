@@ -33,6 +33,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   browser: async () => (await import('../../../plugins/browser/tui')).module,
   coordination: async () => (await import('../../../plugins/coordination/tui')).module,
   desk: async () => (await import('../../../plugins/desk/tui')).module,
+  'theme-picker': async () => (await import('../../../plugins/theme-picker/tui')).module,
   github: async () => (await import('../../../plugins/github/tui')).module,
   'session-insights': async () => (await import('../../../plugins/session-insights/tui')).module,
   'tab-manager': async () => (await import('../../../plugins/tab-manager/tui')).module,

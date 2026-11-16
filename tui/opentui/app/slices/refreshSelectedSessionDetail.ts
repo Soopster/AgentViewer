@@ -18,7 +18,7 @@ import { type ContextUsage, type ProviderSelection, type RunningSessionRef, type
 import { type SidebarEntry } from '../types'
 import { VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP } from '../layoutConstants'
 import { clamp } from '../util'
-import { type ThemeMenuGroup, THEMES, isLightThemeMode, OMZ_MODES } from '../themes'
+import { isLightThemeMode } from '../themes'
 import { sessionKey, sidebarEntrySession, sidebarEntrySessionKey } from '../sessionList'
 import { providerOptionIndex, providerSelectOptions } from '../pickers'
 import { runRefreshSelectedSessionDetail } from '../actions/sessionData'
@@ -101,9 +101,6 @@ export type UseRefreshSelectedSessionDetailGroupContext = {
   setProviderInstances: React.Dispatch<React.SetStateAction<TuiProviderInstanceChoice[]>>
   themeMenuOriginRef: React.RefObject<TuiThemeMode | null>
   themeMode: TuiThemeMode
-  setThemeMenuIndex: React.Dispatch<React.SetStateAction<number>>
-  setThemeMenuGroup: React.Dispatch<React.SetStateAction<ThemeMenuGroup>>
-  setThemeMenuQuery: React.Dispatch<React.SetStateAction<string>>
   setThemeMenuOpen: React.Dispatch<React.SetStateAction<boolean>>
   setThemeMode: React.Dispatch<React.SetStateAction<TuiThemeMode>>
   themeSlotsRef: React.RefObject<{ light: TuiThemeMode; dark: TuiThemeMode; }>
@@ -131,7 +128,7 @@ export function useRefreshSelectedSessionDetailGroup(ctx: UseRefreshSelectedSess
     setSearchMatchIndex, transcriptView, isChatLikeView, expandedCardKeys, collapsedCardKeys,
     setCollapsedCardKeys, setExpandedCardKeys, setProviderMenuIndex, providerInstances, provider,
     providerInstanceId, setProviderMenuOpen, setProviderInstances, themeMenuOriginRef, themeMode,
-    setThemeMenuIndex, setThemeMenuGroup, setThemeMenuQuery, setThemeMenuOpen, setThemeMode,
+    setThemeMenuOpen, setThemeMode,
     themeSlotsRef, themeFollowsTerminalRef, setThemeFollowsTerminal,
   } = ctx
 
@@ -306,32 +303,22 @@ export function useRefreshSelectedSessionDetailGroup(ctx: UseRefreshSelectedSess
     setProviderMenuOpen(false)
   }, [])
 
+  // The theme menu is the theme-picker plugin; the host keeps whether it is open and the theme to
+  // restore if it is cancelled (the terminal's light/dark report moves that too).
   const openThemeMenu = useStableEvent(() => {
     themeMenuOriginRef.current = themeMode
-    setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
-    setThemeMenuGroup(
-      isLightThemeMode(themeMode) ? 'light' : OMZ_MODES.includes(themeMode) ? 'omz' : 'dark',
-    )
-    setThemeMenuQuery('')
     setThemeMenuOpen(true)
   })
 
   const closeThemeMenu = useStableEvent(() => {
     const originTheme = themeMenuOriginRef.current
     setThemeMenuOpen(false)
-    setThemeMenuQuery('')
-    if (originTheme) {
-      setThemeMode(originTheme)
-      setThemeMenuIndex(Math.max(THEMES.indexOf(originTheme), 0))
-    } else {
-      setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
-    }
+    if (originTheme) setThemeMode(originTheme)
     themeMenuOriginRef.current = null
   })
 
   const chooseTheme = useCallback((nextTheme: TuiThemeMode) => {
     setThemeMode(nextTheme)
-    setThemeMenuIndex(Math.max(THEMES.indexOf(nextTheme), 0))
     themeMenuOriginRef.current = null
     // A theme picked by name is the choice; it is also what following the
     // terminal will switch to on that side once it is turned back on.
@@ -357,7 +344,6 @@ export function useRefreshSelectedSessionDetailGroup(ctx: UseRefreshSelectedSess
     // Mid-preview, closing the menu restores its origin: move that too.
     if (themeMenuOriginRef.current) themeMenuOriginRef.current = target
     setThemeMode(target)
-    setThemeMenuIndex(Math.max(THEMES.indexOf(target), 0))
   })
 
   return {

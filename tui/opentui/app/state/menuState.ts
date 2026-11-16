@@ -4,7 +4,6 @@ import { type PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import { useWorkspaceState } from '../../workspaceContext'
 import { type AgentProvider, type Session } from '../../../../lib/types'
 import { type PaneFocus } from '../types'
-import { type ThemeMenuGroup } from '../themes'
 
 export type UseMenuStateContext = {
   workspaceCwd: string
@@ -19,9 +18,6 @@ export function useMenuState(ctx: UseMenuStateContext) {
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
-  const [themeMenuIndex, setThemeMenuIndex] = useState(0)
-  const [themeMenuGroup, setThemeMenuGroup] = useState<ThemeMenuGroup>('dark')
-  const [themeMenuQuery, setThemeMenuQuery] = useState('')
   const [transcriptViewMenuOpen, setTranscriptViewMenuOpen] = useState(false)
   const [transcriptViewMenuIndex, setTranscriptViewMenuIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -55,8 +51,7 @@ export function useMenuState(ctx: UseMenuStateContext) {
 
   return {
     focusedPane, setFocusedPane, providerMenuOpen, setProviderMenuOpen, providerMenuIndex,
-    setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen, themeMenuIndex, setThemeMenuIndex,
-    themeMenuGroup, setThemeMenuGroup, themeMenuQuery, setThemeMenuQuery, transcriptViewMenuOpen,
+    setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen, transcriptViewMenuOpen,
     setTranscriptViewMenuOpen, transcriptViewMenuIndex, setTranscriptViewMenuIndex,
     commandPaletteOpen, setCommandPaletteOpen, commandPaletteQuery, setCommandPaletteQuery,
     commandPaletteIndex, setCommandPaletteIndex, exitConfirmOpen, setExitConfirmOpen,

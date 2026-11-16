@@ -174,6 +174,18 @@ export type TuiPluginServices = {
     /** Whether `mode` is on the light side, as the theme menu groups it. */
     readonly light: boolean
     readonly choose: (mode: TuiThemeMode) => void
+    /** The theme to restore when a preview is cancelled; null outside the theme menu. */
+    readonly origin: TuiThemeMode | null
+    /** Show a theme without choosing it (the menu's arrows). */
+    readonly preview: (mode: TuiThemeMode) => void
+    /** Restore the origin and close the menu. */
+    readonly cancel: () => void
+    /** Whether the theme follows the terminal's light/dark report. */
+    readonly following: boolean
+    readonly toggleFollow: () => void
+    readonly showBorders: boolean
+    readonly toggleBorders: () => void
+    readonly toggleRoundedBorders: () => void
   }
 }
 

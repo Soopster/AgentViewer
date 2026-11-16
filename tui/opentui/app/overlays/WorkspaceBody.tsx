@@ -31,10 +31,8 @@ import { type ProviderSelection, type Session } from '../../../../lib/types'
 import { fitText } from '../../textLayout'
 import { type ChordMap, type ChordHelpState } from '../../chordHelp'
 import { type MenuPoint, type WindowItem, type SidebarEntry, type ModelPickerOption, type PaneFocus, type TuiCopilotContextTier, type ModelPickerFocus, type PaletteRow, type NoticeTone } from '../types'
-import { type ThemeMenuGroup } from '../themes'
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, type SplitPaneHandle } from '../SplitTranscriptPane'
-import { ThemeMenuOverlay } from './ThemeMenuOverlay'
 import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
 import type { TabDisplay } from '../../../viewSpec'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
@@ -194,20 +192,8 @@ type WorkspaceBodyProps = {
   modelPickerFocusedLabel: 'APPROVALS' | 'PERMISSIONS' | 'MODEL' | 'EFFORT'
   modelPickerFocusedOption: SelectOption
   modelPickerFocusedDescription: string
-  themeMenuOpen: boolean
-  themeMenuOriginRef: React.RefObject<TuiThemeMode | null>
-  themeMenuGroup: ThemeMenuGroup
-  themeMenuQuery: string
-  themeMenuIndex: number
   focusMode: boolean
-  setThemeMenuQuery: React.Dispatch<React.SetStateAction<string>>
-  setThemeMenuIndex: React.Dispatch<React.SetStateAction<number>>
-  setThemeMode: React.Dispatch<React.SetStateAction<TuiThemeMode>>
-  chooseTheme: (nextTheme: TuiThemeMode) => void
-  themeFollowsTerminal: boolean
   showBorders: boolean
-  toggleBorders: () => void
-  toggleRoundedBorders: () => void
   transcriptViewMenuOpen: boolean
   viewMenuItems: ViewMenuItem[]
   /** How the session tab strip draws (the view's Tabs settings). */
@@ -266,9 +252,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
     modelPickerEffortIndex, setModelPickerEffortIndex, applyModelPickerEffort,
     compactModelPickerPermissionOptions, modelPickerPermissionIndex, setModelPickerPermissionIndex,
     applyModelPickerPermission, modelPickerFocusedLabel, modelPickerFocusedOption,
-    modelPickerFocusedDescription, themeMenuOpen, themeMenuOriginRef, themeMenuGroup,
-    themeMenuQuery, themeMenuIndex, focusMode, setThemeMenuQuery, setThemeMenuIndex, setThemeMode,
-    chooseTheme, themeFollowsTerminal, showBorders, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, viewMenuItems, tabDisplay, editedBuiltinViews, viewMenuOriginKey,
+    modelPickerFocusedDescription, focusMode, showBorders, transcriptViewMenuOpen, viewMenuItems, tabDisplay, editedBuiltinViews, viewMenuOriginKey,
     transcriptViewMenuIndex, setTranscriptViewMenuIndex, previewViewMenuItem, chooseViewMenuItem,
     lightweightWindows, commandPaletteOpen, filteredCommands, paletteDisplayRows,
     commandPaletteIndex, commandPaletteBodyRows, commandPaletteTopOffset, commandPaletteQuery, commandPaletteMouse, chordHelpMouse,
@@ -530,7 +514,6 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
 
         <SelectMenusOverlay themeMode={themeMode} theme={theme} providerMenuOpen={providerMenuOpen} presentationFocusMode={presentationFocusMode} providerOptions={providerOptions} providerMenuIndex={providerMenuIndex} setProviderMenuIndex={setProviderMenuIndex} chooseProvider={chooseProvider} modelPickerOpen={modelPickerOpen} width={width} height={height} composerAccentColor={composerAccentColor} modelPickerTarget={modelPickerTarget} modelPickerPermissionLabel={modelPickerPermissionLabel} modelPickerOptions={modelPickerOptions} modelPickerIndex={modelPickerIndex} composerCopilotContextTier={composerCopilotContextTier} modelPickerFocus={modelPickerFocus} filteredModelPickerOptions={filteredModelPickerOptions} modelPickerLoading={modelPickerLoading} modelPickerError={modelPickerError} modelPickerQuery={modelPickerQuery} setModelPickerQuery={setModelPickerQuery} setModelPickerIndex={setModelPickerIndex} applyModelPickerOption={applyModelPickerOption} compactModelPickerEffortOptions={compactModelPickerEffortOptions} modelPickerEffortIndex={modelPickerEffortIndex} setModelPickerEffortIndex={setModelPickerEffortIndex} applyModelPickerEffort={applyModelPickerEffort} compactModelPickerPermissionOptions={compactModelPickerPermissionOptions} modelPickerPermissionIndex={modelPickerPermissionIndex} setModelPickerPermissionIndex={setModelPickerPermissionIndex} applyModelPickerPermission={applyModelPickerPermission} modelPickerFocusedLabel={modelPickerFocusedLabel} modelPickerFocusedOption={modelPickerFocusedOption} modelPickerFocusedDescription={modelPickerFocusedDescription} />
 
-        <ThemeMenuOverlay themeMenuOpen={themeMenuOpen} themeMenuOriginRef={themeMenuOriginRef} height={height} themeMenuGroup={themeMenuGroup} themeMenuQuery={themeMenuQuery} themeMenuIndex={themeMenuIndex} focusMode={focusMode} setThemeMenuQuery={setThemeMenuQuery} setThemeMenuIndex={setThemeMenuIndex} setThemeMode={setThemeMode} chooseTheme={chooseTheme} themeFollowsTerminal={themeFollowsTerminal} showBorders={showBorders} toggleBorders={toggleBorders} toggleRoundedBorders={toggleRoundedBorders} />
 
         <TranscriptViewMenuOverlay transcriptViewMenuOpen={transcriptViewMenuOpen} width={width} height={height} viewMenuItems={viewMenuItems} editedBuiltinViews={editedBuiltinViews} viewMenuOriginKey={viewMenuOriginKey} focusMode={focusMode} theme={theme} transcriptViewMenuIndex={transcriptViewMenuIndex} setTranscriptViewMenuIndex={setTranscriptViewMenuIndex} previewViewMenuItem={previewViewMenuItem} chooseViewMenuItem={chooseViewMenuItem} lightweightWindows={lightweightWindows} />
 

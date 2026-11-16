@@ -22,8 +22,7 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
   const notificationToasts = useToasts()
   const {
     focusedPane, setFocusedPane, providerMenuOpen, setProviderMenuOpen, providerMenuIndex,
-    setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen, themeMenuIndex, setThemeMenuIndex,
-    themeMenuGroup, setThemeMenuGroup, themeMenuQuery, setThemeMenuQuery, transcriptViewMenuOpen,
+    setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen, transcriptViewMenuOpen,
     setTranscriptViewMenuOpen, transcriptViewMenuIndex, setTranscriptViewMenuIndex,
     commandPaletteOpen, setCommandPaletteOpen, commandPaletteQuery, setCommandPaletteQuery,
     commandPaletteIndex, setCommandPaletteIndex, exitConfirmOpen, setExitConfirmOpen,
@@ -58,8 +57,7 @@ export function useLoadingSessionsGroup(ctx: UseLoadingSessionsGroupContext) {
     loadingSessions, setLoadingSessions, refreshingSessions, setRefreshingSessions, loadingDetail,
     setLoadingDetail, error, setError, toasts, focusedPane, setFocusedPane, providerMenuOpen,
     setProviderMenuOpen, providerMenuIndex, setProviderMenuIndex, themeMenuOpen, setThemeMenuOpen,
-    themeMenuIndex, setThemeMenuIndex, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
-    setThemeMenuQuery, transcriptViewMenuOpen, setTranscriptViewMenuOpen, transcriptViewMenuIndex,
+    transcriptViewMenuOpen, setTranscriptViewMenuOpen, transcriptViewMenuIndex,
     setTranscriptViewMenuIndex, commandPaletteOpen, setCommandPaletteOpen, commandPaletteQuery,
     setCommandPaletteQuery, commandPaletteIndex, setCommandPaletteIndex, exitConfirmOpen,
     setExitConfirmOpen, exitCleanupInProgress, setExitCleanupInProgress, folderPickerKeyHandlerRef,

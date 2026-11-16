@@ -39,9 +39,8 @@ export function handleOverlayAndMenuKeys({
   providerMenuOpen, closeProviderMenu, requestExit, modelPickerOpen, isModelEffortShortcut,
   setModelPickerOpen, modelPickerFocus, setModelPickerFocus, setModelPickerIndex,
   filteredModelPickerOptions, modelPickerTarget, modelPickerOptions, modelPickerIndex,
-  setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuGroup, setThemeMenuGroup, themeMenuQuery,
-  themeMenuOriginRef, setThemeMenuIndex, setThemeMode, themeMenuIndex, chooseTheme, closeThemeMenu,
-  toggleThemeFollowsTerminal, toggleBorders, toggleRoundedBorders, transcriptViewMenuOpen, closeTranscriptViewMenu,
+  setTuiCopilotContextTierByKey, themeMenuOpen, themeMenuKeyHandlerRef,
+  transcriptViewMenuOpen, closeTranscriptViewMenu,
   toggleLightweightWindows, commandPaletteOpen, closeCommandPalette, setCommandPaletteIndex,
   filteredCommands, commandPaletteIndex, executeCommandPalette, setCommandPaletteQuery,
   transcriptDiffDraft, setTranscriptDiffDraft, setTranscriptDiffNotes, openModelPicker,
@@ -101,18 +100,7 @@ export function handleOverlayAndMenuKeys({
   modelPickerIndex: number
   setTuiCopilotContextTierByKey: React.Dispatch<React.SetStateAction<Record<string, TuiCopilotContextTier>>>
   themeMenuOpen: boolean
-  themeMenuGroup: ThemeMenuGroup
-  setThemeMenuGroup: React.Dispatch<React.SetStateAction<ThemeMenuGroup>>
-  themeMenuQuery: string
-  themeMenuOriginRef: React.RefObject<TuiThemeMode | null>
-  setThemeMenuIndex: React.Dispatch<React.SetStateAction<number>>
-  setThemeMode: React.Dispatch<React.SetStateAction<TuiThemeMode>>
-  themeMenuIndex: number
-  chooseTheme: (nextTheme: TuiThemeMode) => void
-  closeThemeMenu: () => void
-  toggleThemeFollowsTerminal: () => void
-  toggleBorders: () => void
-  toggleRoundedBorders: () => void
+  themeMenuKeyHandlerRef: React.RefObject<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean | void) | null>
   transcriptViewMenuOpen: boolean
   closeTranscriptViewMenu: () => void
   toggleLightweightWindows: () => void
@@ -343,76 +331,11 @@ export function handleOverlayAndMenuKeys({
       return true
     }
 
+    // The menu is the theme-picker plugin; its keys are its own, except the exit confirmation.
     if (themeMenuOpen) {
-      if (key.name === 'left' || key.name === 'right') {
-        handled(() => {
-          const currentGroupIndex = THEME_GROUPS.findIndex((g) => g.key === themeMenuGroup)
-          const nextGroupIndex = key.name === 'left'
-            ? Math.max(currentGroupIndex - 1, 0)
-            : Math.min(currentGroupIndex + 1, THEME_GROUPS.length - 1)
-          const newGroup = THEME_GROUPS[nextGroupIndex].key
-          setThemeMenuGroup(newGroup)
-          const groupThemes = filterThemeModes(themeGroupModes(newGroup), themeMenuQuery)
-          const origin = themeMenuOriginRef.current
-          const target = (origin && groupThemes.includes(origin)) ? origin : groupThemes[0]
-          if (target) {
-            setThemeMenuIndex(THEMES.indexOf(target))
-            setThemeMode(target)
-          }
-        })
-        return true
-      }
-      if (key.name === 'up' || key.name === 'down') {
-        handled(() => {
-          const groupThemes = filterThemeModes(
-            themeGroupModes(themeMenuGroup),
-            themeMenuQuery,
-          )
-          if (groupThemes.length === 0) return
-          const currentTheme = THEMES[themeMenuIndex]
-          const currentLocalIndex = currentTheme ? groupThemes.indexOf(currentTheme) : -1
-          const nextLocalIndex = key.name === 'up'
-            ? Math.max((currentLocalIndex < 0 ? 0 : currentLocalIndex) - 1, 0)
-            : Math.min((currentLocalIndex < 0 ? -1 : currentLocalIndex) + 1, groupThemes.length - 1)
-          const target = groupThemes[nextLocalIndex]
-          if (target) {
-            setThemeMenuIndex(THEMES.indexOf(target))
-            setThemeMode(target)
-          }
-        })
-        return true
-      }
-      if (key.name === 'return') {
-        handled(() => {
-          const groupThemes = filterThemeModes(
-            themeGroupModes(themeMenuGroup),
-            themeMenuQuery,
-          )
-          const currentTheme = THEMES[themeMenuIndex]
-          const target = currentTheme && groupThemes.includes(currentTheme) ? currentTheme : groupThemes[0]
-          if (target) chooseTheme(target)
-        })
-        return true
-      }
-      if (key.name === 'escape') {
-        handled(closeThemeMenu)
-        return true
-      }
-      if (key.name === 'tab') {
-        handled(toggleThemeFollowsTerminal)
-        return true
-      }
-      if (isCtrl('b')) {
-        handled(toggleBorders)
-        return true
-      }
-      if (isCtrl('r')) {
-        handled(toggleRoundedBorders)
-        return true
-      }
-      if (isCtrl('c')) {
-        handled(requestExit)
-      }
+      if (isCtrl('c')) handled(requestExit)
+      // A key the menu uses is consumed; the rest (typing) must reach its search field.
+      else if (themeMenuKeyHandlerRef.current?.(key) === true) handled(() => {})
       return true
     }
 
