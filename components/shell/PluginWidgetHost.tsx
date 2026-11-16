@@ -3,6 +3,7 @@
 import { modAppStore } from '../../lib/plugins/modApp'
 import { webPlanReview } from './planReviewService'
 import { webProof } from './proofService'
+import { webSchedules } from './schedulesService'
 
 // A Web shell slot for plugin widgets. Each widget has its own error boundary:
 // a throwing widget disappears from the slot, the rest and the app stay up.
@@ -38,7 +39,7 @@ export function PluginWidgetHost({ slot }: { slot: Exclude<PluginWidgetSlot, 'to
     <div data-plugin-widget-slot={slot} style={SLOT_STYLE[slot]}>
       {widgets.map(({ pluginId, id, view: Widget }) => (
         <div key={`${pluginId}:${id}`} data-plugin-widget={`${pluginId}:${id}`} style={{ pointerEvents: 'auto' }}>
-          <WidgetBoundary id={`${pluginId}:${id}`}><Widget slot={slot} services={{ notifications: webNotifications.service, 'plan-review': webPlanReview, proof: webProof, repository }} /></WidgetBoundary>
+          <WidgetBoundary id={`${pluginId}:${id}`}><Widget slot={slot} services={{ notifications: webNotifications.service, 'plan-review': webPlanReview, proof: webProof, schedules: webSchedules, repository }} /></WidgetBoundary>
         </div>
       ))}
       {local.map(entry => (

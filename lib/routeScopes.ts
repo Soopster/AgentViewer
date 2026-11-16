@@ -100,6 +100,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/views': { GET: 'read', PUT: 'write' },
   // Listing is a read; every action (create, run-now, delete) starts or changes work, so POST is write.
   '/api/schedules': { GET: 'read', POST: 'write' },
+  '/api/chief-of-staff': { GET: 'read', POST: 'write' },
   '/api/sidebar-preferences': { GET: 'read', PATCH: 'write' },
   '/api/provider/instances': { GET: 'read' },
 

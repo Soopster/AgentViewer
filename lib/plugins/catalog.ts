@@ -42,6 +42,7 @@ import { manifest as whatsNew } from '../../plugins/whats-new/manifest'
 import { manifest as handoff } from '../../plugins/handoff/manifest'
 import { manifest as bookmarks } from '../../plugins/bookmarks/manifest'
 import { manifest as schedules } from '../../plugins/schedules/manifest'
+import { manifest as chiefOfStaff } from '../../plugins/chief-of-staff/manifest'
 import { manifest as skillPicker } from '../../plugins/skill-picker/manifest'
 import { manifest as provenance } from '../../plugins/provenance/manifest'
 import { manifest as remoteAccess } from '../../plugins/remote-access/manifest'
@@ -54,7 +55,7 @@ import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

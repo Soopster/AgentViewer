@@ -214,6 +214,8 @@ export type PluginServiceId =
   | 'bookmarks'
   /** Recurring prompts: list, pause, run now, delete. */
   | 'schedules'
+  /** A repository's Chief of Staff: read it, start it, hand it a request. */
+  | 'chief-of-staff'
   /** Open a session in the reader, optionally at a message. */
   | 'session-navigation'
   /** What a session wrote, and which sessions wrote a file's current lines. */

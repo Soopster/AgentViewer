@@ -29,6 +29,8 @@ import type { TuiPluginCapture, TuiPluginKeyHandler, TuiProvidedPluginServices, 
 import { WorkspaceViewContext, useWorkspaceContext } from '../workspaceContext'
 import { workspacePluginState } from '../windowViewState'
 import { tuiPluginViews } from './pluginViews'
+import { PopoverDetachButton } from '../dockedPopover'
+import { AUTO_DETACH_BUTTON_ID, readOverlayDetachAnchor, type DetachAnchor } from './overlayDetach'
 
 type KeyHandler = TuiPluginKeyHandler
 
@@ -228,6 +230,22 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
   const registerKeys = useCallback((handler: KeyHandler | null) => { viewKeys.current = handler }, [])
 
   const overlay = placement === 'overlay'
+  const { onDetach } = props
+  // Every popover can become a window. A view that draws its own `⧉ window` button keeps it; any other
+  // gets one on its top border, found from where it laid itself out, so a new plugin needs no code for it.
+  const offersWindow = overlay && Boolean(onDetach) && surface.placements.includes('window') && !surface.placements.includes('panel')
+  const frame = useRef<unknown>(null)
+  const [anchor, setAnchor] = useState<DetachAnchor | null>(null)
+  useEffect(() => {
+    if (!offersWindow) { setAnchor(null); return }
+    const read = () => setAnchor(previous => {
+      const next = readOverlayDetachAnchor(frame.current, width)
+      return previous?.left === next?.left && previous?.top === next?.top && previous?.width === next?.width ? previous : next
+    })
+    const first = setTimeout(read, 0)
+    const timer = setInterval(read, 400)
+    return () => { clearTimeout(first); clearInterval(timer) }
+  }, [offersWindow, width, height, attempt])
   const scrim = overlay && props.scrim !== false ? <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={zIndex - 1} /> : null
 
   if (failure) {
@@ -257,12 +275,21 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     focused: props.focused, zIndex, useState: useState_, onDispose, registerKeys, setCapture, runCommand, close: onClose,
     ...(overlay && props.onDetach ? { detach: props.onDetach } : {}),
   }
+  const detach = offersWindow && anchor && onDetach
+    ? <box position="absolute" top={anchor.top} left={anchor.left} width={anchor.width} height={1} zIndex={zIndex + 1}><PopoverDetachButton id={AUTO_DETACH_BUTTON_ID} theme={theme} inside onPress={onDetach} /></box>
+    : null
   return (
     <>
       {scrim}
-      <PluginErrorBoundary key={attempt} onError={setFailure}>
-        <Component {...viewProps} />
-      </PluginErrorBoundary>
+      {offersWindow
+        ? (
+          // Same origin and layer as before; only here so the view's frame can be measured.
+          <box ref={frame as never} position="absolute" top={0} left={0} width={width} height={height} zIndex={zIndex}>
+            <PluginErrorBoundary key={attempt} onError={setFailure}><Component {...viewProps} /></PluginErrorBoundary>
+            {detach}
+          </box>
+        )
+        : <PluginErrorBoundary key={attempt} onError={setFailure}><Component {...viewProps} /></PluginErrorBoundary>}
     </>
   )
 }

@@ -2753,8 +2753,9 @@ Recurring prompts: a trigger (own 5-field cron with time zone, or `every <n><m|h
 - **The send path loads only when something fires** (`engine.ts` imports it lazily); browsing never loads it.
 - **A plugin may declare `schedules[]`**, which `syncDeclaredSchedules` registers *disabled* and never rewrites once the
   user has touched them; one the plugin stops declaring is removed. A plugin must not start recurring spend by itself.
-- Failed runs raise a viewer-attention note on the target session. `plugin-command` actions are not runnable
-  unattended yet and record a failed run saying so.
+- Failed runs raise a viewer-attention note on the target session. A `plugin-command` action runs unattended only if it
+  is listed in `lib/schedules/pluginCommands.ts` (server work, loaded when it fires); any other records a failed run
+  saying so. A corner widget (`plugins/schedules/{tui,web}/widget.tsx`) shows the next enabled run.
 
 `npm run schedules:smoke` (cron, engine incl. a real second process contending for the lease, declared, slash, CLI) and
 `tui/opentui/schedulesViewSmoke.tsx`. Not verified live: a real turn fired by the daemon, and mutation checks on the new smokes.
@@ -2785,6 +2786,35 @@ Recurring prompts: a trigger (own 5-field cron with time zone, or `every <n><m|h
   and `/skill <search>` opens the picker with that query.
 
 `npm run skillpicker:smoke` and `tui/opentui/skillPickerSmoke.tsx`.
+
+### Chief of Staff (`lib/chiefOfStaff/`, `plugins/chief-of-staff`) (load-bearing)
+
+One standing chat per repository that splits requests into workstreams and delegates them with `coord_delegate`. `/cos <request>`,
+the palette or the panel start it (`startChiefOfStaff`): it reuses the stored session (`.agent-viewer-data/chief-of-staff.json`,
+repo root → session), else creates one, ships assets, and calls `configureInteractiveCoordinator({ autoContinue, useWorktrees })`.
+
+- **Rules are guidance the model reads, and what the code guarantees is that the guidance is true.** `.agent-viewer/chief-of-staff.json`
+  (`{ rules: [{ match, provider, instance?, model?, effort?, role?, worktree? }] }`, comments and trailing commas allowed) is checked with
+  `validateCoordinatorSelection`; a rule naming a model its provider does not advertise is left out of the table and **listed under "NOT applied"**
+  in every turn and in the panel, never dropped silently. Problems keep the rule's position in the file. Validation asks provider catalogs, so it
+  is cached per file content for 5 minutes (`readValidatedRules`), not run per turn.
+- **The hook touches only the Chief of Staff's session** (`plugins/chief-of-staff/server.ts`, found by `cosEntryForSession`). `beforeTurn` appends a
+  `<chief_of_staff_context>` block (charter, routing table, board digest from `digestBoard`: bounded, with a needs-you list) and skips slash
+  commands and messages that already carry it. `permission` is `policy` mode and denies edit/write tools with a message pointing at `coord_delegate`.
+  **The denial only fires when the provider asks for permission**: a session in a bypass mode never asks, so the guard is not absolute.
+- **Assets are shipped once and never overwritten** (`installChiefOfStaffAssets`: `.agents/skills/chief-of-staff/SKILL.md`, `.agent-viewer/roles/chief-of-staff.json`).
+- **Standing schedules are declared and off** (`schedules[]`: morning digest, hourly stale check, end-of-day). They run as `plugin-command`s
+  (`chief-of-staff:morning|stale|eod`), which send the digest to **every** repository's Chief of Staff; with none started the run is a skip, not a success.
+- **The panel edits the rules and shows the latest report.** Tab (TUI) moves to the rules list: `a` add, `e`/⏎ edit as one line
+  (`match | provider[:instance] | model | effort | role | no-worktree`), `x` twice deletes; the web has a form per rule. Saving
+  (`saveChiefOfStaffRules`) refuses a rule nothing can read (unknown provider, no match) and leaves the file untouched, rewrites the file whole
+  (**comments in a hand-edited file do not survive an edit made here**), and returns the revalidated state — a rule with an unadvertised model *is* saved and
+  then shown with its problem, so it can be fixed. The latest report is the Chief of Staff's own newest reply, kept by its `afterTurn` hook
+  (`setCosReport`, capped, never replaced by an empty reply); the panel shows 12 lines and says how many more are in the chat.
+- State reaches the panel through the `chief-of-staff` service (in-process, or `/api/chief-of-staff` attached/web): needs-you first, workstreams, rules, report.
+
+`npm run chiefofstaff:smoke` and `tui/opentui/chiefOfStaffViewSmoke.tsx`. Not verified live: a real `/cos` delegation to a teammate and a real
+Edit denial. Not checked by mutation: the new smokes.
 
 ### Remote access
 

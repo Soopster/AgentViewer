@@ -20,6 +20,7 @@ export const manifest = {
     services: ['schedules'],
     optionalServices: ['notices'],
   }],
+  widgets: [{ id: 'next-run', slot: 'corner' }],
   commands: [{
     id: 'schedules-open',
     label: 'Schedules',

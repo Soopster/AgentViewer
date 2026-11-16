@@ -37,6 +37,7 @@ const BUNDLED_BEHAVIORS: Record<string, () => Promise<PluginBehaviorModule>> = {
   'project-memory': async () => (await import('../../plugins/project-memory/server')).behavior,
   'adaptive-ui': async () => (await import('../../plugins/adaptive-ui/server')).behavior,
   'plan-review': async () => (await import('../../plugins/plan-review/server')).behavior,
+  'chief-of-staff': async () => (await import('../../plugins/chief-of-staff/server')).behavior,
   'composer-context': async () => (await import('../../plugins/composer-context/server')).behavior,
 }
 

@@ -5,6 +5,7 @@ import { modAppStore } from '../../../lib/plugins/modApp'
 // takes no clicks. Each widget has its own error boundary.
 import { tuiPlanReview } from './planReviewService'
 import { tuiProof } from './proofService'
+import { tuiSchedules } from './schedulesService'
 import { tuiNotifications } from '../../../lib/plugins/notifications'
 import React, { memo, useSyncExternalStore } from 'react'
 import { usePluginWidgets } from '../../../lib/plugins/usePluginWidgets'
@@ -61,14 +62,14 @@ export const PluginWidgetHost = memo(function PluginWidgetHost({ slot, theme, wi
     </box>
   })
   if (slot === 'viewport') return <>
-    {widgets.map(({ pluginId, id, view: Widget }) => <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}><Widget services={{ notifications: tuiNotifications.service, 'plan-review': tuiPlanReview, proof: tuiProof, repository }} slot={slot} theme={theme} width={width} height={height} zIndex={zIndex} runCommand={runCommand} /></WidgetBoundary>)}
+    {widgets.map(({ pluginId, id, view: Widget }) => <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}><Widget services={{ notifications: tuiNotifications.service, 'plan-review': tuiPlanReview, proof: tuiProof, schedules: tuiSchedules, repository }} slot={slot} theme={theme} width={width} height={height} zIndex={zIndex} runCommand={runCommand} /></WidgetBoundary>)}
     {localCards.length ? <box id="plugin-widget-slot:viewport-local" position="absolute" top={1} left={Math.max(0, width - slotWidth - 2)} width={slotWidth} zIndex={zIndex} flexDirection="column">{localCards}</box> : null}
   </>
   return (
     <box id={`plugin-widget-slot:${slot}`} position="absolute" top={slot === 'top-center' ? 0 : 1} left={slot === 'top-center' ? Math.max(0, Math.floor((width - slotWidth) / 2)) : Math.max(0, width - slotWidth - 2)} width={slotWidth} zIndex={zIndex} flexDirection="column" alignItems={slot === 'top-center' ? 'center' : undefined}>
       {widgets.map(({ pluginId, id, view: Widget }) => (
         <WidgetBoundary key={`${pluginId}:${id}`} id={`${pluginId}:${id}`}>
-          <Widget services={{ notifications: tuiNotifications.service, 'plan-review': tuiPlanReview, proof: tuiProof, repository }} runCommand={runCommand} slot={slot} theme={theme} width={slotWidth} height={height} />
+          <Widget services={{ notifications: tuiNotifications.service, 'plan-review': tuiPlanReview, proof: tuiProof, schedules: tuiSchedules, repository }} runCommand={runCommand} slot={slot} theme={theme} width={slotWidth} height={height} />
         </WidgetBoundary>
       ))}
       {localCards}

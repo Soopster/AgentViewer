@@ -316,6 +316,7 @@ import { createTuiRunLaunchService } from './shell/runLaunchService'
 import { tuiHandoff } from './shell/handoffService'
 import { tuiBookmarks } from './shell/bookmarksService'
 import { tuiSchedules } from './shell/schedulesService'
+import { tuiChiefOfStaff } from './shell/chiefOfStaffService'
 import { tuiProvenance } from './shell/provenanceService'
 import { tuiCheckpoints } from './shell/checkpointsService'
 import { tuiSessionInsights } from './shell/sessionInsightsService'
@@ -5259,6 +5260,7 @@ function OpenTuiWorkspace() {
     playbooks: tuiPlaybooks,
     bookmarks: tuiBookmarks,
     schedules: tuiSchedules,
+    'chief-of-staff': tuiChiefOfStaff,
     'session-navigation': { open: openSessionAtMessage },
     provenance: tuiProvenance,
     checkpoints: tuiCheckpoints,

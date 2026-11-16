@@ -66,7 +66,7 @@ export function acquireScheduleLease(now = Date.now()): boolean {
 async function defaultRunner(schedule: Schedule): Promise<ScheduleFireResult> {
   const { action } = schedule
   if (action.kind === 'plugin-command') {
-    return { outcome: 'failed', error: `Plugin command "${action.command}" cannot run unattended yet` }
+    return (await import('./pluginCommands')).runUnattendedPluginCommand(action.command)
   }
   if (action.kind === 'playbook') {
     const { startProtocolRun } = await import('../agentCoordination')

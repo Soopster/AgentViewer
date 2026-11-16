@@ -29,3 +29,17 @@ export function describeSchedule(schedule: Schedule): string {
     : action.command
   return `${describeTrigger(schedule.trigger)} → ${target}`
 }
+
+/** The enabled schedule that fires soonest, with how many others are waiting; null when none is. */
+export function nextScheduledRun(schedules: readonly Schedule[]): { schedule: Schedule; others: number } | null {
+  const waiting = schedules.filter(schedule => schedule.enabled && schedule.nextRunAt !== undefined)
+  if (waiting.length === 0) return null
+  const schedule = waiting.reduce((best, next) => (next.nextRunAt! < best.nextRunAt! ? next : best))
+  return { schedule, others: waiting.length - 1 }
+}
+
+/** "Standup in 12m (+2)" — the corner widget's single line. */
+export function nextRunLine(next: { schedule: Schedule; others: number }, now = Date.now()): string {
+  const countdown = formatCountdown(next.schedule.nextRunAt, now)
+  return `${next.schedule.name} ${countdown === 'due' ? 'is due' : countdown}${next.others ? ` (+${next.others})` : ''}`
+}

@@ -31,6 +31,7 @@ export type WebPluginServices = {
   'file-history'?: { readonly open: (path: string) => void }
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../lib/plugins/schedules').PluginSchedulesService
+  'chief-of-staff'?: import('../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
   /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */
   'session-fleet'?: {
@@ -116,5 +117,5 @@ export type WebPluginViewProps = {
 export type WebPluginView = ComponentType<WebPluginViewProps>
 
 /** What a Web widget receives: the slot it sits in. Widgets read their own state. */
-export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'plan-review' | 'repository' | 'shell-overview'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'plan-review' | 'repository' | 'shell-overview' | 'schedules'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
 export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

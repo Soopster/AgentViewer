@@ -32,6 +32,7 @@ export type TuiPluginServices = {
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../../lib/plugins/schedules').PluginSchedulesService
+  'chief-of-staff'?: import('../../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
   'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService
@@ -237,7 +238,7 @@ export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
 export type TuiPluginWidgetProps = {
   readonly zIndex?: number
   readonly runCommand?: (id: string) => void
-  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'plan-review' | 'repository'>
+  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'plan-review' | 'repository' | 'schedules'>
   readonly theme: TuiThemePalette
   readonly width: number
   readonly height: number

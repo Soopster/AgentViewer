@@ -7,6 +7,7 @@ export const webPluginWidgets = createPluginWidgetRegistry<WebPluginWidget>('web
   'dynamic-island': async () => (await import('../../plugins/dynamic-island/web')).widgets,
   'plan-review': async () => (await import('../../plugins/plan-review/web/widget')).widgets,
   proof: async () => (await import('../../plugins/proof/web')).widgets,
+  schedules: async () => (await import('../../plugins/schedules/web/widget')).widgets,
   'pi-activity': async () => (await import('../../plugins/pi-activity/web')).widgets,
   'omni-bar': async () => (await import('../../plugins/omni-bar/web')).widgets,
   toasts: async () => (await import('../../plugins/toasts/web')).widgets,

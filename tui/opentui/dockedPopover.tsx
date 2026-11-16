@@ -27,10 +27,10 @@ export function popoverFrameCells(docked: boolean): number {
  * sits on the top border; `inside` puts it on the first row instead, for a
  * frame that clips (a clipping frame does not paint what is on its border).
  */
-export function PopoverDetachButton({ theme, onPress, inside = false }: { theme: TuiThemePalette; onPress: () => void; inside?: boolean }) {
+export function PopoverDetachButton({ theme, onPress, inside = false, id = 'popover-detach' }: { theme: TuiThemePalette; onPress: () => void; inside?: boolean; id?: string }) {
   return (
     <box position="absolute" top={inside ? 0 : -1} right={2} height={1} flexDirection="row" zIndex={3}>
-      <WindowButton id="popover-detach" label=" ⧉ window " theme={theme} onPress={onPress} />
+      <WindowButton id={id} label=" ⧉ window " theme={theme} onPress={onPress} />
     </box>
   )
 }
