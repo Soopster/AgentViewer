@@ -1,4 +1,4 @@
-import { DEFAULT_OMNI_LAYOUT, type OmniItemId, type OmniLayout } from './layout'
+import { DEFAULT_OMNI_LAYOUT, omniGlyph, type OmniItemId, type OmniLayout } from './layout'
 import type { GitSummary } from '../../lib/gitProvider'
 import type { PluginShellOverview, ShellOverviewAction, ShellOverviewSnapshot } from '../../lib/plugins/shellOverview'
 
@@ -54,10 +54,10 @@ export function overviewSegments(snapshot: ShellOverviewSnapshot, git: GitSummar
   const enabled = layout.filter(item => item.enabled).map(item => item.id)
   const attention: OmniSegment = {
     action: 'attention',
-    text: width < 60 ? `! ${snapshot.attentionCount}` : `${snapshot.runningCount} running · ${snapshot.attentionCount} needs input`,
+    text: `${omniGlyph('attention')}${width < 60 ? snapshot.attentionCount : ' ' + `${snapshot.runningCount} running · ${snapshot.attentionCount} needs input`}`,
   }
   // Command access is the way back to everything else: always present, always last.
-  const commandsSegment: OmniSegment = { action: 'commands', text: width < 40 ? 'Cmds' : 'Commands…' }
+  const commandsSegment: OmniSegment = { action: 'commands', text: `${omniGlyph('commands')} ${width < 40 ? 'Cmds' : 'Commands…'}` }
   if (width < 60) return [...(enabled.includes('attention') ? [attention] : []), commandsSegment]
   const changes = git ? git.modified + git.untracked : 0
   const repository = width >= 100 && git
@@ -66,11 +66,11 @@ export function overviewSegments(snapshot: ShellOverviewSnapshot, git: GitSummar
   const elapsed = snapshot.running ? elapsedLabel(snapshot.startedAt, now) : ''
   const label = (id: OmniCommandId) => OMNI_COMMAND_SHORTCUTS.find(shortcut => shortcut.id === id)!.text
   const candidate = (id: OmniItemId): OmniSegment | null => {
-    if (id === 'repository') return { action: 'repository', text: repository }
-    if (id === 'session') return width >= 100 ? { action: 'session', text: [snapshot.provider, snapshot.sessionTitle, `${snapshot.running ? '● ' : ''}${snapshot.activity}`, elapsed].filter(Boolean).join(' · ') } : null
+    if (id === 'repository') return { action: 'repository', text: `${omniGlyph('repository')} ${repository}` }
+    if (id === 'session') return width >= 100 ? { action: 'session', text: `${omniGlyph('session')} ` + [snapshot.provider, snapshot.sessionTitle, `${snapshot.running ? '● ' : ''}${snapshot.activity}`, elapsed].filter(Boolean).join(' · ') } : null
     if (id === 'attention') return attention
     if (id === 'new-session') return { action: 'new-session', text: '+ New' }
-    return commands.includes(id) ? { action: id, text: label(id) } : null
+    return commands.includes(id) ? { action: id, text: `${omniGlyph(id)} ${label(id)}` } : null
   }
   // Repository, activity, attention and commands are kept; shortcuts take what is left after those, in the user's order.
   let budget = width - attention.text.length - commandsSegment.text.length - 4 - 90

@@ -2,19 +2,23 @@ import { useSyncExternalStore } from 'react'
 
 /** Everything the bar can show, in its default order. `commands` is not here: it is the bar's way back to everything else, so it is always last and always on. */
 export const OMNI_ITEMS = [
-  { id: 'repository', label: 'Repository and Git status', on: true },
-  { id: 'session', label: 'Selected session and activity', on: true },
-  { id: 'new-session', label: 'New session', on: true },
-  { id: 'files', label: 'Files', on: true },
-  { id: 'processes', label: 'Terminal', on: true },
-  { id: 'index-search', label: 'Search', on: true },
-  { id: 'editor', label: 'Editor', on: false },
-  { id: 'pull-requests', label: 'Pull requests', on: false },
-  { id: 'github', label: 'GitHub', on: false },
-  { id: 'checkpoints', label: 'Checkpoints', on: false },
-  { id: 'analytics', label: 'Analytics', on: false },
-  { id: 'attention', label: 'Running and needs-input counts', on: true },
+  { id: 'repository', label: 'Repository and Git status', glyph: '⎇', on: true },
+  { id: 'session', label: 'Selected session and activity', glyph: '◈', on: true },
+  { id: 'new-session', label: 'New session', glyph: '+', on: true },
+  { id: 'files', label: 'Files', glyph: '▤', on: true },
+  { id: 'processes', label: 'Terminal', glyph: '❯', on: true },
+  { id: 'index-search', label: 'Search', glyph: '⌕', on: true },
+  { id: 'editor', label: 'Editor', glyph: '✎', on: false },
+  { id: 'pull-requests', label: 'Pull requests', glyph: '⇄', on: false },
+  { id: 'github', label: 'GitHub', glyph: '◎', on: false },
+  { id: 'checkpoints', label: 'Checkpoints', glyph: '◷', on: false },
+  { id: 'analytics', label: 'Analytics', glyph: '▥', on: false },
+  { id: 'attention', label: 'Running and needs-input counts', glyph: '▲', on: true },
 ] as const
+/** Glyphs outside the items: the command palette and this settings view. All BMP, so Windows terminals keep them. */
+const EXTRA_GLYPHS: Record<string, string> = { commands: '⌘', 'omni-bar-settings': '⚙' }
+export const omniGlyph = (id: string): string => OMNI_ITEMS.find(item => item.id === id)?.glyph ?? EXTRA_GLYPHS[id] ?? '·'
+
 export type OmniItemId = typeof OMNI_ITEMS[number]['id']
 export type OmniLayoutItem = { readonly id: OmniItemId; readonly enabled: boolean }
 export type OmniLayout = readonly OmniLayoutItem[]

@@ -4,7 +4,7 @@ import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } fr
 import type { GitSummary } from '../../../lib/gitProvider'
 import { fitText, MODAL_CONTENT_Z_INDEX, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
 import { availableActions, overviewSegments, runOmniAction } from '../model'
-import { moveLayoutItem, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
+import { moveLayoutItem, omniGlyph, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
 import { omniLayoutStore } from './storage'
 
 export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
@@ -44,7 +44,10 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
   const contextWidth = Math.max(0, width - fixedWidth)
   const flexibleCount = segments.filter(flexible).length
   let flexibleIndex = 0
-  return <box id="omni-bar" width={width} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface2} overflow="hidden">
+  // A right click anywhere on the bar (segments let it bubble) opens its customization.
+  const customize = () => { if (overview.commands?.ids.includes('omni-bar-settings')) overview.commands.run('omni-bar-settings') }
+  return <box id="omni-bar" width={width} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface2} overflow="hidden"
+    onMouseDown={event => { if (event.button === 2) { event.stopPropagation(); customize() } }}>
     {segments.map(segment => {
       const cells = flexible(segment)
         ? Math.floor(contextWidth / flexibleCount) + (flexibleIndex++ === 0 ? contextWidth % flexibleCount : 0)
@@ -86,7 +89,7 @@ export function OmniActions({ services, theme, width, height, registerKeys, clos
       const index = start + offset
       return <box key={action.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
       onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); activate(index) } }}>
-      <text fg={selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} ${action.label}`, popWidth - 2)}</text>
+      <text fg={selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} ${omniGlyph(action.id)} ${action.label}`, popWidth - 2)}</text>
       </box>
     })}
     <text fg={theme.dim} wrapMode="none">{fitText(' ↑↓ select · Enter open · Esc close', popWidth - 2)}</text>
@@ -126,7 +129,7 @@ export function OmniSettings({ theme, width, height, registerKeys, close }: TuiP
       const index = start + offset
       return <box key={item.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(index); omniLayoutStore.set(toggleLayoutItem(layout, index)) } }}>
-        <text fg={!item.enabled ? theme.dim : selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} [${item.enabled ? 'x' : ' '}] ${omniItemLabel(item.id)}`, popWidth - 2)}</text>
+        <text fg={!item.enabled ? theme.dim : selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} [${item.enabled ? 'x' : ' '}] ${omniGlyph(item.id)} ${omniItemLabel(item.id)}`, popWidth - 2)}</text>
       </box>
     })}
     <text fg={theme.dim} wrapMode="none">{fitText(' ↑↓ select · Space toggle · ⇧↑↓ move · r reset · Esc', popWidth - 2)}</text>

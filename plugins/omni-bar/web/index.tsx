@@ -9,7 +9,7 @@ import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } fr
 import type { WebPluginView, WebPluginViewProps, WebPluginWidget, WebPluginWidgetProps } from '@/components/shell/pluginTypes'
 import type { GitSummary } from '@/lib/gitProvider'
 import { availableActions, overviewSegments, runOmniAction } from '../model'
-import { moveLayoutItem, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
+import { moveLayoutItem, omniGlyph, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
 import { omniLayoutStore } from './storage'
 
 /** The bar's width in the model's units (characters), from the window. */
@@ -57,7 +57,8 @@ function OmniBar({ services }: WebPluginWidgetProps) {
   if (!overview) return null
   const segments = overviewSegments(overview.snapshot, git?.cwd === cwd ? git.summary : null, columns, now, overview.commands?.ids, layout)
   return (
-    <nav id="omni-bar" aria-label="Omni bar" style={{ display: 'flex', alignItems: 'center', gap: 2, height: 28, padding: '0 8px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+    <nav id="omni-bar" aria-label="Omni bar" title="Right-click to customize"
+      onContextMenu={event => { event.preventDefault(); if (overview.commands?.ids.includes('omni-bar-settings')) overview.commands.run('omni-bar-settings') }} style={{ display: 'flex', alignItems: 'center', gap: 2, height: 28, padding: '0 8px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden' }}>
       {segments.map(segment => {
         const context = segment.action === 'repository' || segment.action === 'session'
         const tone = segment.action === 'attention' && overview.snapshot.attentionCount ? 'var(--amber, #d29922)' : segment.action === 'commands' ? 'var(--cyan, #39c5cf)' : context ? 'var(--text)' : 'var(--text-2)'
@@ -100,7 +101,7 @@ function OmniActions({ services, close }: WebPluginViewProps) {
         {actions.map((action, index) => (
           <button key={action.id} type="button" data-omni-action={action.id} onMouseEnter={() => setCursor(index)} onClick={() => activate(index)}
             style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 12px', border: 'none', background: index === selected ? 'var(--surface-3)' : 'transparent', color: index === selected ? 'var(--cyan, #39c5cf)' : 'var(--text)', cursor: 'pointer', fontSize: 13 }}>
-            {index === selected ? '› ' : '  '}{action.label}
+            {index === selected ? '› ' : '  '}{omniGlyph(action.id)} {action.label}
           </button>
         ))}
         <div style={{ padding: '6px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-3)', fontSize: 11 }}>↑↓ select · Enter open · Esc close</div>
@@ -128,7 +129,7 @@ function OmniSettings({ close }: WebPluginViewProps) {
           <div key={item.id} data-omni-item={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', opacity: item.enabled ? 1 : 0.55 }}>
             <label style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={item.enabled} onChange={() => omniLayoutStore.set(toggleLayoutItem(layout, index))} />
-              {omniItemLabel(item.id)}
+              {omniGlyph(item.id)} {omniItemLabel(item.id)}
             </label>
             <button type="button" aria-label={`Move ${omniItemLabel(item.id)} earlier`} disabled={index === 0} onClick={() => omniLayoutStore.set(moveLayoutItem(layout, index, -1))} style={small}>↑</button>
             <button type="button" aria-label={`Move ${omniItemLabel(item.id)} later`} disabled={index === layout.length - 1} onClick={() => omniLayoutStore.set(moveLayoutItem(layout, index, 1))} style={small}>↓</button>

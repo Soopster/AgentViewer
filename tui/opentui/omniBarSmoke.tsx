@@ -78,6 +78,11 @@ try {
     assert.equal(commands.at(-1), id)
   }
   assert(!screen().includes('PRs') && !screen().includes('Checkpoints'), 'a shortcut for a disabled plugin was shown')
+  assert(screen().includes('⎇') && screen().includes('✎ Editor') && screen().includes('⌘ Commands'), 'glyphs missing from the bar')
+  const editorNode = setup.renderer.root.findDescendantById('omni-bar:editor')!
+  await act(async () => { await setup.mockMouse.pressDown(editorNode.x + 2, editorNode.y, 2 as never) })
+  await act(async () => { await setup.mockMouse.release(editorNode.x + 2, editorNode.y, 2 as never) })
+  assert.equal(commands.at(-1), 'omni-bar-settings', 'right click did not open customization')
   const newSession = setup.renderer.root.findDescendantById('omni-bar:new-session')!
   await act(async () => { await setup.mockMouse.click(newSession.x + 1, newSession.y) })
   assert.equal(actions.at(-1), 'new-session')
