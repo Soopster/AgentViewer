@@ -75,3 +75,31 @@ the composer. The host fences late writes after target changes or disablement.
 `plugins/better` is a complete example. `scripts/pluginComposerSlashSmoke.ts`
 registers an unrelated plugin and verifies discovery, captured arguments,
 enablement, row allocation and background-key routing in both renderers.
+
+## Passive footer hints
+
+Bundled composer accessories may declare `placement: 'footer'` to render below
+input/status rather than above the input. Omission (or `input`) keeps the
+existing position. Register the adapter in the normal composer loader lists;
+report zero rows when hidden and one row for a single-line hint. The shell
+reserves reported rows from the transcript without shrinking the draft.
+
+`props.turn`, when available, is a read-only `ComposerTurnContext` containing
+`id`, `startedAt`, `running` and `needsAttention`. Its ID includes the qualified
+session identity and runtime start timestamp. No timestamp means no turn
+context: do not invent a new turn on each poll. This metadata grants no send or
+interrupt capability. Observe `visible` and the owner-scoped `signal`, and keep
+timers and selection in the plugin. Passive hints should not register keys.
+
+The bundled **Tips** plugin is enabled by default in Web and OpenTUI. Disable
+it in Plugins. Each new visible working turn has a 25% chance of showing one tip
+after eight seconds, for up to 20 seconds, with a five-minute cooldown shared
+across sessions in that app instance. Late observations, hidden composers,
+errors, interruption, approvals and questions skip or dismiss the tip; it does
+not replay when returning. Tips rotate through available enabled features
+before repeating and use renderer-specific command labels. History and cooldown
+are in memory and reset on app reload. Tips never call providers or alter drafts.
+
+Validation: `bun scripts/tipsSmoke.ts`, `bun tui/opentui/tipsSmoke.tsx`, and
+`node scripts/tipsBrowserSmoke.mjs`. The renderer checks exercise the real footer
+accessory hosts with fixtures; they do not claim live-provider validation.

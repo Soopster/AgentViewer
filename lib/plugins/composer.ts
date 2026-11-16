@@ -4,6 +4,13 @@ import type { PLUGIN_API_VERSION } from './types'
 export type ComposerAccessoryPresentation = { readonly rows: number; readonly modal?: boolean; readonly backgroundKeys?: boolean; readonly summary?: string | null }
 export type ComposerAccessoryKey = { name: string; ctrl: boolean; shift: boolean; meta?: boolean; sequence: string }
 export type ComposerAccessoryKeyResult = boolean | 'input'
+/** Passive context only; this grants no session control capabilities. */
+export type ComposerTurnContext = {
+  readonly id: string
+  readonly startedAt: number
+  readonly running: boolean
+  readonly needsAttention: boolean
+}
 export type ComposerAccessoryServices = {
   readonly composer?: {
     readonly sendDraft: (text: string) => void | Promise<void>
@@ -19,6 +26,7 @@ export type ComposerAccessoryProps = {
   readonly draft: string
   readonly disabled: boolean
   readonly visible: boolean
+  readonly turn?: ComposerTurnContext
   readonly signal: AbortSignal
   readonly invocation?: import('./commands').PluginCommandInput
   readonly openRequest: number

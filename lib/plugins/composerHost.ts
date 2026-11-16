@@ -6,7 +6,7 @@ import type { ComposerAccessoryKey, ComposerAccessoryKeyResult, ComposerAccessor
 export function listComposerAccessories(renderer: PluginRenderer, manifests: readonly PluginManifest[]) {
   const ids = new Set<string>()
   return manifests.filter(manifest => manifest.renderers.includes(renderer)).flatMap(manifest => (manifest.composer ?? []).map(spec => {
-    if (ids.has(spec.id) || !Number.isInteger(spec.maxRows) || spec.maxRows < 1 || spec.maxRows > 4) throw new Error(`Invalid composer accessory: ${spec.id}`)
+    if (ids.has(spec.id) || !Number.isInteger(spec.maxRows) || spec.maxRows < 1 || spec.maxRows > 4 || (spec.placement !== undefined && spec.placement !== 'input' && spec.placement !== 'footer')) throw new Error(`Invalid composer accessory: ${spec.id}`)
     ids.add(spec.id)
     return { ...spec, pluginId: manifest.id }
   })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id.localeCompare(b.id))

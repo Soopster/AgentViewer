@@ -159,6 +159,8 @@ export type PluginManifest = {
   readonly composer?: readonly {
     readonly id: string
     readonly title: string
+    /** Omitted accessories keep their existing position above the input. */
+    readonly placement?: 'input' | 'footer'
     readonly order?: number
     readonly maxRows: number
     readonly services: readonly 'composer'[]

@@ -1,3 +1,4 @@
+import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import type { AgentProvider } from '../../lib/types'
 import { Fragment, useMemo } from 'react'
@@ -276,6 +277,7 @@ export function ComposerShell(props: ComposerShellProps) {
     const next = mergeComposerRewrite(current, original, text)
     setInputText(next); inputTextRef.current = next; resizeComposer(); textareaRef.current?.focus()
   } } }), [attachments, setInputText, inputTextRef, setAttachments, resizeComposer, sendMessage, textareaRef])
+  const accessoryTurn = useComposerTurnContext(session, sendState === 'sending', pendingPermissions.length > 0 || Boolean(sendError) || Boolean(sessionActionError) || ['blocked', 'offline', 'error', 'interrupting'].includes(composerRuntime.phase))
   return (
     !isProject && !composerCollapsed && <div
         className="av-web-composer-shell"
@@ -1150,7 +1152,7 @@ export function ComposerShell(props: ComposerShellProps) {
                   })}
                 </div>
               )}
-              <ComposerAccessoryHost key={`accessories:${composerDraftKey}`} session={session} draft={inputText} disabled={sendBusy || !canSubmitMessage}
+              <ComposerAccessoryHost key={`accessories:${composerDraftKey}`} turn={accessoryTurn} session={session} draft={inputText} disabled={sendBusy || !canSubmitMessage}
                 controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={accessoryServices} />
               <ContextComposer
                 key={composerDraftKey}
@@ -1435,6 +1437,8 @@ export function ComposerShell(props: ComposerShellProps) {
                 ) : null}
               </span>
             </div>
+            <ComposerAccessoryHost key={`footer:${composerDraftKey}`} placement="footer" visible={!teammatesTab || composerTab === 'chat'} turn={accessoryTurn} session={session} draft={inputText} disabled={sendBusy || !canSubmitMessage}
+              controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={accessoryServices} />
           </CardContent>
             </TabsContent>
             {session && teammatesTab ? <TabsContent value="teammates" forceMount className="av-composer-dock-pane">

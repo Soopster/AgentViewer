@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
 import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../lib/plugins/composerSlash'
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import { useModAppHost } from '../../lib/plugins/useModAppHost'
@@ -5059,6 +5060,10 @@ function OpenTuiWorkspace() {
     setComposerDraft(next)
     setComposerActive(true)
   })
+  const accessoryTurn = useComposerTurnContext(composerTargetSession ?? selectedSession,
+    (visibleComposerSending || reattachedRunning) && !visibleAwaitingPersistedTurn,
+    pendingPermissions.length > 0 || Boolean(visibleComposerError) || composerInterruptPendingRef.current,
+    composerSendStartedAt)
   const composerAccessoryServices = useMemo(() => ({ composer: { sendDraft: sendAccessoryDraft, stageDraft: stageAccessoryDraft } }), [sendAccessoryDraft, stageAccessoryDraft])
   const executeSessionPluginAction = usePluginCommands('tui', tuiPluginCommands, composerOwnerKey)
   const executeApplicationPluginAction = usePluginCommands('tui', tuiPluginCommands, 'application')
@@ -7175,7 +7180,7 @@ function OpenTuiWorkspace() {
 
       <QuestionPickerOverlay pendingPermissions={pendingPermissions} width={width} questionPickerPlan={questionPickerPlan} questionFocusIndex={questionFocusIndex} theme={theme} questionSelections={questionSelections} questionOptionIndex={questionOptionIndex} questionFreeformAnswers={questionFreeformAnswers} questionFreeformEditing={questionFreeformEditing} permissionActionLoading={permissionActionLoading} permissionOptionIndex={permissionOptionIndex} resolvePermissionOptionIndex={resolvePermissionOptionIndex} />
 
-      <ComposerAccessoryHost key={composerOwnerKey} session={composerTargetSession ?? selectedSession}
+      <ComposerAccessoryHost key={composerOwnerKey} turn={accessoryTurn} session={composerTargetSession ?? selectedSession}
         draft={composerDraft} disabled={composerSendState === 'sending'} visible={!composerWindowOpen && !composerHidden && !presentationHidesComposer}
         controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={composerAccessoryServices}
         theme={theme} width={composerAreaWidth} viewportWidth={width} height={height} marginLeft={composerAreaOffset} />
@@ -7281,6 +7286,11 @@ function OpenTuiWorkspace() {
         composerDockSendingHintSegments={composerDockSendingHintSegments}
         composerDockFooterHint={composerDockFooterHint}
       />
+
+      <ComposerAccessoryHost key={`footer:${composerOwnerKey}`} placement="footer" turn={accessoryTurn} session={composerTargetSession ?? selectedSession}
+        draft={composerDraft} disabled={composerSendState === 'sending'} visible={!composerWindowOpen && !composerHidden && !presentationHidesComposer}
+        controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={composerAccessoryServices}
+        theme={theme} width={composerAreaWidth} viewportWidth={width} height={height} marginLeft={composerAreaOffset} />
 
       {!searchMode && !fullscreenMode && !statusBarInDock ? (
         <box backgroundColor={theme.surface2} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
