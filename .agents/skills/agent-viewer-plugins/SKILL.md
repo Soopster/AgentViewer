@@ -70,6 +70,9 @@ aligned across renderers while using their native controls.
   `agent-viewer-themes` skill. Plugins that only add themes appear under
   **Themes** in the plugin managers; any plugin may set `group` to choose its
   heading.
+- For things people can `@`-mention in the terminal composer (tickets, docs,
+  environments), declare `mentions`; for a key that applies only to the session
+  list, a reader or the composer, set `tuiKeyContext` on the command's `tuiKey`.
 - To advertise a key in the terminal's status bar, declare `hints` for the pane
   it applies to; to list a repository command in a session's context menu, set
   `sessionMenu: true` on it.

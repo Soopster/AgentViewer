@@ -78,7 +78,8 @@ export type TuiLiveToolActivity = {
 }
 export type TuiMentionResult = { kind: 'file'; path: string; basename: string}  |
 { kind: 'agent'; name: string; description?: string; mode?: string} |
-{ kind: 'terminal'; name: string; handle: string; detail: string }
+{ kind: 'terminal'; name: string; handle: string; detail: string } |
+{ kind: 'plugin'; provider: string; name: string; detail?: string; insert: string }
 // Stable content-equality check for the sessions list. The sidebar refresh
 // fires every 5s and the running-session poll every 1.5s — returning the
 // same array reference when nothing materially changed avoids invalidating

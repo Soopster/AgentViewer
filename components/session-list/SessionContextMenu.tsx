@@ -6,6 +6,11 @@ import type { Session } from '@/lib/types'
 import { currentSessionInbox, updateSessionInbox } from './useSessionInbox'
 import { getSessionTitle } from './presentation'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
+import { listPluginCommands } from '@/lib/plugins/catalog'
+import { dispatchPluginCommandWhenShown } from '@/lib/plugins/commandBus'
+import { isPluginEnabled } from '@/lib/plugins/enablement'
+import { useDisabledPlugins } from '@/lib/plugins/useDisabledPlugins'
+import { LEGACY_SESSION_PROVIDER } from '@/lib/extensions/providers/catalog'
 
 export type SessionMenuState = { session: Session; x: number; y: number }
 
@@ -25,6 +30,15 @@ export function SessionContextMenu({ menu, onClose, onOpen, onRename }: {
     return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', close) }
   }, [onClose])
   const { session } = menu
+  useDisabledPlugins()
+  // Plugin commands about this session: the ones the session toolbar offers. The session is opened first and the
+  // command then runs in its view, which resolves the target itself. A repository command (`sessionMenu`) is not
+  // offered here: the app host runs those against the folder in view, which is the old one until the open settles.
+  const pluginItems = listPluginCommands('web')
+    .filter(command => !command.webDashboard && !command.webReader && isPluginEnabled(command.pluginId)
+      && (!command.providers || command.providers.includes(session.provider ?? LEGACY_SESSION_PROVIDER))
+      && command.requires === 'session' && command.webToolbarLabel)
+    .map(command => ({ label: command.webToolbarLabel ?? command.label, run: () => { onOpen(session); dispatchPluginCommandWhenShown(command.id, session) } }))
   const inbox = currentSessionInbox(session)
   const copy = (text: string) => { void navigator.clipboard?.writeText(text).catch(() => {}) }
   // The same command the TUI's menu copies.
@@ -40,6 +54,7 @@ export function SessionContextMenu({ menu, onClose, onOpen, onRename }: {
     { label: 'Copy session ID', run: () => copy(session.sessionId) },
     ...(command ? [{ label: 'Copy CLI resume command', run: () => copy(command) }] : []),
     ...(session.cwd ? [{ label: 'Copy working directory', run: () => copy(session.cwd!) }] : []),
+    ...(pluginItems.length ? [null, ...pluginItems] : []),
   ]
   const top = Math.min(menu.y, (typeof window === 'undefined' ? 800 : window.innerHeight) - 24 * items.length - 40)
   return (

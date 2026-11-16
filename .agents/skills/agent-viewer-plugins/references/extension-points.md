@@ -16,6 +16,7 @@ to run, so `plugin.json` needs no `server.mjs` (`localManifestNeedsServer`).
 | `transcriptViews[]` | `{ id, name, base, overrides }` | `tui/opentui/shell/pluginTranscriptViews.ts` → `tui/viewSpec.ts` |
 | `blocks[]` | `{ kind, pattern, flags?, title, lines?, tone? }` | `lib/plugins/blockContributions*.ts` → `lib/blockRegistry.ts` |
 | `group` | plugin-manager heading | `lib/plugins/managerCategories.ts` |
+| `mentions[]` | `{ id, items: [{ name, detail?, insert? }] }` — things offered in the composer's `@` menu (≤ 200 items; inserts `@<insert> ` as plain text, no attachment) | `lib/plugins/mentionProviders.ts` ← `mentionContributions.ts` (TUI) |
 | `hints[]` | `{ context: rail \| transcript \| composer, key, label, order? }` — a key hint in the terminal status bar | `lib/plugins/footerHints.ts` → `tui/opentui/app/derived/footer.ts` |
 
 - **Themes**: see the `agent-viewer-themes` skill. `css` is bare declarations
@@ -40,8 +41,20 @@ to run, so `plugin.json` needs no `server.mjs` (`localManifestNeedsServer`).
   Terminal only: the Web has no status bar.
 - **Session menu**: every session-scoped command is offered in the terminal's
   session context menu; a repository-scoped command joins it with
-  `sessionMenu: true` (shown when the session has a folder). The Web's rail
-  menu does not list plugin commands yet.
+  `sessionMenu: true` (shown when the session has a folder).
+
+- **Mentions** are matched by substring on name or detail, eight results per
+  provider at most; an `insert` has spaces turned into dashes. Bundled code can
+  call `registerMentionProvider({ id, search(query) })` (sync or async; a throw
+  or rejection contributes nothing). Terminal composer only; the Web composer's
+  `@` menu is not extensible yet.
+- **Keys**: `tuiKey` + `tuiKeyContext` (`navigation`, `rail`, `transcript`,
+  `composer`; unset = everywhere). A `composer` key must be a ⌃ chord. Mods bind
+  keys through `tuiChord` only: a mod's bare key would shadow the host's own
+  letters, which are not table-driven yet.
+- **Web session menu**: the rail's right-click menu lists session-scoped commands
+  that have a `webToolbarLabel`; it opens the session, then dispatches through
+  `dispatchPluginCommandWhenShown`. Repository commands are not listed there.
 
 ## Registrations (bundled code)
 

@@ -17,7 +17,7 @@ import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapsho
 import { recordModDiagnostic } from './modDiagnostics'
 import { isPluginEnabled } from './enablement'
 import { blockPatternProblem } from '../blockRegistry'
-import { PLUGIN_API_VERSION, type PluginHintSpec, type PluginBlockSpec, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
+import { PLUGIN_API_VERSION, type PluginMentionSpec, type PluginHintSpec, type PluginBlockSpec, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
 export const LOCAL_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
@@ -193,6 +193,19 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     // Namespaced so a mod's theme can never take a built-in's id.
     themes.push({ id: `${id}-${theme.id}`, label: typeof theme.label === 'string' && theme.label.trim() ? theme.label.trim().slice(0, 40) : theme.id, category: theme.category, ...(typeof theme.icon === 'string' && theme.icon.trim() ? { icon: theme.icon.trim().slice(0, 2) } : {}), ...(typeof css === 'string' ? { css: css.trim() } : {}), ...(tui ? { tui: { swatch: Object.fromEntries(swatchKeys.map(key => [key, tui[key] as string])) as NonNullable<NonNullable<PluginThemeSpec['tui']>['swatch']> } } : {}) })
   }
+  const mentions: PluginMentionSpec[] = []
+  if (value.mentions !== undefined && !Array.isArray(value.mentions)) problems.push('mentions must be a list')
+  for (const [index, entry] of (Array.isArray(value.mentions) ? value.mentions : []).entries()) {
+    const mention = entry as Record<string, unknown>
+    if (typeof mention?.id !== 'string' || !LOCAL_PLUGIN_ID.test(mention.id)) { problems.push(`mentions[${index}].id is invalid`); continue }
+    if (!Array.isArray(mention.items) || !mention.items.length || mention.items.length > 200) { problems.push(`mentions[${index}].items must list 1-200 items`); continue }
+    const items: PluginMentionSpec['items'][number][] = []
+    for (const item of mention.items as Record<string, unknown>[]) {
+      if (typeof item?.name !== 'string' || !item.name.trim() || item.name.length > 60 || (item.insert !== undefined && (typeof item.insert !== 'string' || !item.insert.trim() || item.insert.length > 80)) || (item.detail !== undefined && (typeof item.detail !== 'string' || item.detail.length > 120))) { problems.push(`mentions[${index}] has an item with no valid name (60 characters at most), insert (80) or detail (120)`); break }
+      items.push({ name: item.name.trim(), ...(typeof item.detail === 'string' && item.detail ? { detail: item.detail } : {}), ...(typeof item.insert === 'string' ? { insert: item.insert.trim().replace(/\s+/g, '-') } : {}) })
+    }
+    if (items.length === mention.items.length) mentions.push({ id: mention.id, items })
+  }
   const hints: PluginHintSpec[] = []
   if (value.hints !== undefined && !Array.isArray(value.hints)) problems.push('hints must be a list')
   for (const [index, entry] of (Array.isArray(value.hints) ? value.hints : []).entries()) {
@@ -247,7 +260,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
     else views.push({ id: 'mod-config', title: `${title} settings` })
   }
-  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0 && blocks.length === 0 && hints.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views, blocks, hints or provider')
+  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0 && blocks.length === 0 && hints.length === 0 && mentions.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views, blocks, hints, mentions or provider')
   for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views], ['themes', themes], ['transcriptViews', transcriptViews], ['blocks', blocks.map(block => ({ id: block.kind }))]] as const) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
   }
@@ -266,7 +279,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(blocks.length ? { blocks } : {}), ...(hints.length ? { hints } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(blocks.length ? { blocks } : {}), ...(hints.length ? { hints } : {}), ...(mentions.length ? { mentions } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }

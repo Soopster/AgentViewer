@@ -18,7 +18,7 @@ import { type WindowItem, type PaneFocus, type NoticeTone } from '../types'
 import { TASK_PANEL_RESIZE_STEP } from '../layoutConstants'
 import { sessionKey } from '../sessionList'
 import { type SplitPaneHandle } from '../SplitTranscriptPane'
-import { TUI_KEYED_PLUGIN_COMMANDS } from '../pluginCommands'
+import { TUI_KEYED_PLUGIN_COMMANDS, pluginKeyContextLive } from '../pluginCommands'
 
 /** Returns true when one of these branches handled the key. */
 export function handleGlobalChordKeys({
@@ -301,7 +301,7 @@ export function handleGlobalChordKeys({
     // A shifted letter is matched as the host's own ⇧ bindings are (isShiftedKey), so
     // terminals that report `M` rather than shift+`m` still reach it.
     const pluginChord = TUI_KEYED_PLUGIN_COMMANDS.find(command => {
-      if (command.tuiKeyContext === 'navigation' && composerActive) return false
+      if (!pluginKeyContextLive(command.tuiKeyContext, { composerActive, effectiveFocus })) return false
       const { tuiKey } = command
       return tuiKey.ctrl
         ? (tuiKey.shift ? isCtrlShift(tuiKey.name) : isCtrl(tuiKey.name))

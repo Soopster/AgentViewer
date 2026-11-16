@@ -1,3 +1,4 @@
+import { searchMentionProviders } from '../../../../lib/plugins/mentionProviders'
 import type { AgentProvider } from '../../../../lib/types'
 import { listComposerTerminals, terminalHandle } from '../../terminalPrompt'
 import type { ComposerSessions } from '../../../../lib/composerSessions'
@@ -261,6 +262,7 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
     : []
   const cwd = composerMentionCwd
   let cancelled = false
+  const pluginMatches = () => searchMentionProviders(composerMention.query)
   const terminalMatches = async (): Promise<TuiMentionResult[]> => {
     if (!mentionAddressesTerminals) return []
     const query = composerMention.query.toLowerCase()
@@ -276,6 +278,7 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
   if (!cwd) {
     setComposerMentionResults(agentMatches)
     setComposerMentionIndex(0)
+    void pluginMatches().then((plugin) => { if (!cancelled && plugin.length > 0) setComposerMentionResults((current) => [...current, ...plugin]) })
     if (mentionAddressesTerminals) void terminalMatches().then((terminals) => { if (!cancelled && terminals.length > 0) { setComposerMentionResults([...terminals, ...agentMatches]); setComposerMentionIndex(0) } })
     return () => { cancelled = true }
   }
@@ -302,6 +305,7 @@ export function runComposerMentionSearchEffect(ctx: ComposerMentionSearchEffectC
         const matches: TuiMentionResult[] = [
           ...await terminalMatches(),
           ...agentMatches,
+          ...await pluginMatches(),
           ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
         ]
         setComposerMentionResults(matches)

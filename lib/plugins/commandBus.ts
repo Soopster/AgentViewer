@@ -20,3 +20,20 @@ export function subscribePluginCommands(listener: Listener): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }
+
+/**
+ * Dispatches a command at a session whose view may not be on screen yet (a rail
+ * menu selects the session, then asks for the command): retried briefly until the
+ * view that owns the target has mounted and handles it. Returns a cancel function.
+ */
+export function dispatchPluginCommandWhenShown(commandId: string, target: SessionIdentity, input?: PluginCommandInput, attempts = 40, intervalMs = 50): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let left = attempts
+  const attempt = () => {
+    timer = null
+    if (dispatchPluginCommand(commandId, input, target) || --left <= 0) return
+    timer = setTimeout(attempt, intervalMs)
+  }
+  attempt()
+  return () => { if (timer) clearTimeout(timer); left = 0 }
+}

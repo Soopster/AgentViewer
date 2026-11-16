@@ -97,7 +97,12 @@ type PluginCommandCommon = {
    */
   readonly tuiChord?: { readonly key: string; readonly short: string; readonly label?: string; readonly hint?: false }
   /** Navigation shortcuts leave typed characters with an active composer. */
-  readonly tuiKeyContext?: 'navigation'
+  /**
+   * Where `tuiKey` is live. Unset: everywhere. `navigation`: not while the composer is active.
+   * `rail`: the session list has focus. `transcript`: a reader has focus. `composer`: the composer is
+   * active, which only a ⌃ chord may bind (a bare letter would swallow typing).
+   */
+  readonly tuiKeyContext?: 'navigation' | 'rail' | 'transcript' | 'composer'
   /** Web: a labelled button in the session toolbar. */
   readonly webToolbarLabel?: string
   /** Web dashboard destination, declared by this plugin's dashboards metadata. */
@@ -200,6 +205,12 @@ export type PluginManifest = {
    * handles (a `tuiKey`, a chord, a surface's own keys); it binds nothing.
    */
   readonly hints?: readonly PluginHintSpec[]
+  /**
+   * Things a person can mention in the composer with `@`: fixed lists of named
+   * items, matched by what is typed. A mention inserts plain text; it attaches
+   * nothing. Data only, so a mod can ship them (lib/plugins/mentionProviders.ts).
+   */
+  readonly mentions?: readonly PluginMentionSpec[]
   /** Themes this plugin contributes while enabled: bare CSS-variable declarations, never code. */
   readonly themes?: readonly PluginThemeSpec[]
   /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
@@ -255,6 +266,13 @@ export type PluginTuiTheme = {
   readonly description?: string
   /** `omz` lists it under the prompt-theme group instead of light or dark. */
   readonly menu?: 'omz'
+}
+
+export type PluginMentionSpec = {
+  /** Names the list; the provider id is `<plugin>.<id>`. */
+  readonly id: string
+  /** At most 200 items. */
+  readonly items: readonly { readonly name: string; readonly detail?: string; /** What follows the `@`; defaults to `name`. Spaces become dashes. */ readonly insert?: string }[]
 }
 
 export type PluginHintSpec = {

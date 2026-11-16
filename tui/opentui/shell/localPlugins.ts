@@ -13,6 +13,7 @@ import { localPluginDiscovery } from '../../../lib/plugins/localPlugins'
 import { decodeModView, readModComponentViews, setModViewService } from '../../../lib/plugins/modViews'
 import { installTuiPluginThemes } from './pluginThemes'
 import { installPluginBlocks } from '../../../lib/plugins/blockContributionsHost'
+import { installPluginMentions } from '../../../lib/plugins/mentionContributions'
 import { installTuiPluginTranscriptViews } from './pluginTranscriptViews'
 import { pathToFileURL } from 'node:url'
 import { statSync } from 'node:fs'
@@ -30,6 +31,7 @@ export function installTuiLocalPlugins(): void {
   registerLocalPluginManifests(discovery.plugins.map(plugin => plugin.manifest))
   installTuiPluginThemes()
   installPluginBlocks()
+  installPluginMentions()
   installTuiPluginTranscriptViews()
   setLocalCommandRunner(async (request, signal) => {
     const { runLocalPluginCommand } = await import('../../../lib/plugins/localPluginRuntime')
