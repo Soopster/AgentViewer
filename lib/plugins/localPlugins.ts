@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PLUGIN_MANIFESTS } from './catalog'
-import { parseLocalPluginManifest, type LocalPluginManifest } from './localManifest'
+import { parseLocalPluginManifest, localManifestNeedsServer, type LocalPluginManifest } from './localManifest'
 
 const SERVER_ENTRIES = ['server.mjs', 'server.js', 'server.ts']
 
@@ -46,7 +46,7 @@ function discoverDirectories(dir: string, directories: readonly string[], revisi
     }
     const { manifest, problems } = parseLocalPluginManifest(raw, reserved)
     const entry = SERVER_ENTRIES.map(file => path.join(pluginDir, file)).find(file => existsSync(file)) ?? null
-    if (manifest && !entry) problems.push(`no server module (${SERVER_ENTRIES.join(', ')})`)
+    if (manifest && !entry && localManifestNeedsServer(manifest)) problems.push(`no server module (${SERVER_ENTRIES.join(', ')})`)
     if (!manifest || problems.length) { refused.push({ dir: pluginDir, id: manifest?.id ?? (typeof (raw as { id?: unknown })?.id === 'string' ? (raw as { id: string }).id : null), problems }); continue }
     reserved.add(manifest.id)
     plugins.push({ manifest, dir: pluginDir, entry })

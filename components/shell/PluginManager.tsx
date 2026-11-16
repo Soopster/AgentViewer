@@ -6,6 +6,7 @@
 import { useModDiagnostics } from '../../lib/plugins/useModDiagnostics'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, Search, X } from 'lucide-react'
+import { groupPluginEntries } from '@/lib/plugins/managerCategories'
 import { filterPluginManagerEntries, matchesPluginSearch, PLUGIN_ENABLEMENT_FILTERS, type PluginEnablementFilter } from '@/lib/plugins/managerSearch'
 import { allPluginManifests, localPluginsVersion, subscribeLocalPlugins } from '@/lib/plugins/catalog'
 import { isLocalManifest } from '@/lib/plugins/localManifest'
@@ -29,7 +30,8 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
   const [filter, setFilter] = useState<PluginEnablementFilter>('all')
   const search = useRef<HTMLInputElement>(null)
   const entries = [...allPluginManifests(), ...PROVIDER_PLUGINS]
-  const matches = filterPluginManagerEntries(entries, query, filter, disabled)
+  const groups = groupPluginEntries(filterPluginManagerEntries(entries, query, filter, disabled))
+  const matches = groups.flatMap(group => group.entries)
   const refused = localReport?.refused.filter(entry => filter === 'all' && matchesPluginSearch(query, [entry.id, entry.dir, 'local mod not loaded', ...entry.problems]))
     .sort((a, b) => (a.id ?? a.dir).localeCompare(b.id ?? b.dir)) ?? []
 
@@ -100,7 +102,10 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
         </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 8, overflowY: 'auto' }}>
           {matches.length === 0 && refused.length === 0 ? <li style={{ padding: '16px 8px', color: 'var(--text-2)', fontSize: 12 }}>No matching plugins.</li> : null}
-          {matches.map((manifest: PluginManifest | ProviderPlugin) => {
+          {groups.map(group => <li key={`category:${group.category}`} role="presentation" style={{ listStyle: 'none' }}>
+            <div role="heading" aria-level={3} data-plugin-category={group.category} style={{ padding: '8px 8px 2px', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3, var(--text-2))' }}>{group.category} · {group.entries.length}</div>
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {group.entries.map((manifest: PluginManifest | ProviderPlugin) => {
             const enabled = !disabled.has(manifest.id)
             const switchId = `plugin-switch-${manifest.id}`
             return (
@@ -131,6 +136,8 @@ export default function PluginManager({ open, onClose }: { open: boolean; onClos
               </li>
             )
           })}
+            </ul>
+          </li>)}
           {refused.map(entry => (
             <li key={`refused:${entry.dir}`} data-plugin-refused={entry.id ?? entry.dir} style={{ padding: '10px 8px' }}>
               <div style={{ fontWeight: 600, color: 'var(--text)' }}>{entry.id ?? entry.dir} <span style={{ color: 'var(--red, #e5484d)', fontWeight: 400 }}>not loaded</span></div>

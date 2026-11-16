@@ -21,7 +21,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
 import type { ContextUsage, Session } from '../../../lib/types'
 import type { TuiTranscriptCard } from '../../../tui/format'
-import { BLOOMBERG_THEME } from '../../../tui/theme'
 import {
   DEFAULT_PANEL_FUNCTIONS,
   DESK_FUNCTIONS,
@@ -54,27 +53,28 @@ import {
   type DeskTone,
 } from './deskModel'
 
+// The desk's colours are its own, not the app theme's: the Bloomberg terminal's black, amber and signal colours.
 export const DESK_COLORS = {
-  bg: BLOOMBERG_THEME.bg,
+  bg: '#000000',
   panel: '#000000',
   stripe: '#0b0b0b',
   chrome: '#1a1a1a',
   header: '#141414',
-  amber: BLOOMBERG_THEME.violet,
+  amber: '#fb8b1e',
   white: '#ffffff',
-  text: BLOOMBERG_THEME.text,
+  text: '#f2f2f2',
   flat: '#bdbdbd',
   dim: '#6b6b6b',
-  up: BLOOMBERG_THEME.green,
-  down: BLOOMBERG_THEME.red,
-  yellow: BLOOMBERG_THEME.amber,
-  blue: BLOOMBERG_THEME.cyan,
+  up: '#4af6c3',
+  down: '#ff433d',
+  yellow: '#ffd100',
+  blue: '#4aa8ff',
   security: '#1c3f8f',
   redBar: '#a3161c',
   goGreen: '#00a651',
   cancelRed: '#d7191f',
   border: '#3a3a3a',
-  focusBorder: BLOOMBERG_THEME.amber,
+  focusBorder: '#ffd100',
   key: '#d9822b',
 } as const
 

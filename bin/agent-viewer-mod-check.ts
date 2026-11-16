@@ -4,7 +4,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { parseLocalPluginManifest, decodeLocalWidgetContent } from '../lib/plugins/localManifest'
+import { parseLocalPluginManifest, decodeLocalWidgetContent, localManifestNeedsServer } from '../lib/plugins/localManifest'
 import { PLUGIN_MANIFESTS } from '../lib/plugins/catalog'
 import { decodeModView, readModComponentViews } from '../lib/plugins/modViews'
 import { EMPTY_MOD_APP, freezeSnapshot } from '../lib/plugins/modApp'
@@ -22,7 +22,7 @@ try {
   manifest = parsed.manifest
   problems.push(...parsed.problems)
   entry = ['server.mjs', 'server.js', 'server.ts'].find(file => existsSync(path.join(dir, file)))
-  if (!entry) problems.push('Missing server.mjs, server.js or server.ts')
+  if (!entry && (!manifest || localManifestNeedsServer(manifest))) problems.push('Missing server.mjs, server.js or server.ts')
 } catch (error) { problems.push(error instanceof Error ? error.message : String(error)) }
 const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<Record<string, unknown>>
 const fixture = freezeSnapshot({ ...EMPTY_MOD_APP, instanceId: 'web-check', cwd: '/fixture', selectedKey: 'claude:fixture', sessions: [{ key: 'claude:fixture', title: 'Fixture session', cwd: '/fixture', activity: 'running', target: { provider: 'claude', sessionId: 'fixture' } }] })

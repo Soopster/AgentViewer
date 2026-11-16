@@ -279,7 +279,7 @@ import { NATIVE_OSC_ENABLED, RECENT_WRITE_ACTIVE_MS, SYNC_FORMAT_CARD_LIMIT, AWA
 import { FLOATING_PANE_INDEX, READER_CARD_WINDOW, DEFAULT_SIDEBAR_WIDTH, TASK_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_WIDTH, SURFACE_PANEL_DEFAULT_ROWS, SUBAGENT_SUMMARY_CACHE_LIMIT, COMPOSER_DOCK_CHROME_HEIGHT, CHAT_COMPOSER_MIN_HEIGHT, CHAT_COMPOSER_CHROME_HEIGHT, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT, SURFACE_PANEL_MIN_ROWS, SURFACE_PANEL_READER_MIN_ROWS, TASK_PANEL_MIN_WIDTH, MIN_READER_WIDTH, SURFACE_PANEL_MIN_WIDTH, MIN_SIDEBAR_WIDTH, SPLIT_TREE_LIMITS, ZOOM_TREE_LIMITS, SPLIT_PANE_MAX, SPLIT_PANE_ARRANGED_MAX, SPLIT_PANE_MIN_WIDTH, SPLIT_PANE_MIN_ROWS, MIN_READER_ROWS, FULLSCREEN_PANE_INDEX, COMPOSER_WINDOW_MAX_WIDTH, COMPOSER_WINDOW_MAX_HEIGHT, VELOCITY_SCROLL_RESET_MS, VELOCITY_SCROLL_RAMP_MS, VELOCITY_SCROLL_MAX_STEP, WORKTREE_TASK_CWD_SEGMENT, TASK_PANEL_RESIZE_STEP, TERMINAL_SELECTION_COPY_WINDOW_MS, MULTI_INSTANCE_SURFACES, SURFACE_POPOVER_KINDS, SIDEBAR_RESIZE_STEP, SURFACE_PANEL_ROW_STEP, SURFACE_PANEL_RESIZE_STEP, SURFACE_PANEL_MAX_WIDTH, COMPOSER_SHELL_CURSOR, COMPOSER_PROMPT_CURSOR } from './app/layoutConstants'
 import { clamp } from './app/util'
 import { PERF_LOG, PERF_LOG_PATH, CARD_PROFILE, noteRootRender, FRAME_TIMING_NEEDED, recordFramePerf, sameJson } from './app/perf'
-import { type ThemeMenuGroup, THEMES, isLightThemeMode, OMZ_MODES, TERMINAL_PALETTE_MODE, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from './app/themes'
+import { subscribePluginThemes, type ThemeMenuGroup, THEMES, isLightThemeMode, OMZ_MODES, TERMINAL_PALETTE_MODE, THEME_GROUPS, filterThemeModes, themeGroupModes, THEME_LABELS, THEME_DESCRIPTIONS } from './app/themes'
 import { pastedImageDisplayName, isComposerDraftSnapshot, isQueuedComposerSend, type ComposerDraftShape, composerDraftLineCount, activeMentionAttachments, composerSnapshotText, attachmentCountLabel, computeComposerDraftShape, sameComposerDraftShape, detectMentionAtCursor, imageAttachmentCount, pasteImageMimeType, inferPastedImageMimeType, composerKeyBindings, compactComposerEntryText, composerEntryLineCount } from './app/composerInput'
 import { cardClipboardText, writeClipboard, normalizePastedFilePath, pastedFileMimeTypeForPath, readClipboardImage, readClipboardText, isWslRuntime } from './app/clipboard'
 import { type InlineTextSegment, renderInlineTextSegments, renderInlineMarkdownSpans, LIVE_PREVIEW_HEIGHT, wrapLivePreviewTail, LIVE_PREVIEW_BODY_LINES, inlineSegmentIndexAt, inlineSegmentActionAt, composerSendingHintSegments, DraftLengthSpans, LivePreviewCard } from './app/inlineText'
@@ -351,7 +351,7 @@ import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } fr
 const NO_WORKTREES: readonly string[] = []
 import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
 import { ViewStudioOverlay, VIEW_STUDIO_WIDTH, type ViewStudioKeyHandler } from './app/overlays/ViewStudioOverlay'
-import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
+import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, isPluginViewId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
 import { handleModalDialogKeys } from './app/keys/dialogKeys'
 import { handleWindowControlKeys } from './app/keys/windowControlKeys'
 import { openModelPicker as openModelPickerAction } from './app/actions/modelPicker'
@@ -540,7 +540,7 @@ function OpenTuiWorkspace() {
     transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
     agentToolCursorByGroupKey, setAgentToolCursorByGroupKey, transcriptView, setTranscriptView,
     viewAppTabs, viewContextSidebar, isChatLikeView, isScrollbackView, isStreamView,
-    customViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
+    customViews, allCustomViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
     builtinViewEdits, setBuiltinViewEdits,
     viewSpec, viewStyle, globalLightweightWindows, globalDensity,
     scrollbackExpanded, setScrollbackExpanded, embeddedComposer, transcriptWidth,
@@ -906,6 +906,8 @@ function OpenTuiWorkspace() {
     return () => clearTimeout(timer)
   }, [composerActive, composerFocusBlocked, renderer])
   useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
+  // A plugin turned on or off changes which palettes exist, and a stored theme may be waiting for its plugin.
+  useEffect(() => subscribePluginThemes(() => setTerminalPaletteEpoch((epoch) => epoch + 1)), [setTerminalPaletteEpoch])
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode, terminalPaletteEpoch])
@@ -2559,7 +2561,7 @@ function OpenTuiWorkspace() {
 
   // The `v` menu lists the built-ins, the user's views and "New view…".
   // Arrowing previews; Esc returns to the view it opened on.
-  const viewMenuItems = useMemo(() => buildViewMenuItems(customViews), [customViews])
+  const viewMenuItems = useMemo(() => buildViewMenuItems(allCustomViews), [allCustomViews])
   const editedBuiltinViews = useMemo(() => new Set(Object.keys(builtinViewEdits)), [builtinViewEdits])
   const viewMenuOriginRef = useRef<{ view: TuiTranscriptView; customId: string | null } | null>(null)
   const currentViewMenuIndex = () => Math.max(viewMenuItems.findIndex((item) => item.key === viewMenuItemKey(transcriptView, customViewId)), 0)
@@ -2657,10 +2659,12 @@ function OpenTuiWorkspace() {
       showNotice('info', Object.keys(viewDraft.overrides).length ? `Saved ${viewDraft.name}` : `${viewDraft.name} is back to its defaults`, 2500)
       return
     }
-    const editing = viewDraft.builtin || customViews.some((view) => view.id === viewDraft.id)
+    // A plugin's view is read-only: saving one always makes the user a copy of their own.
+    const fromPlugin = isPluginViewId(viewDraft.id)
+    const editing = viewDraft.builtin || fromPlugin || customViews.some((view) => view.id === viewDraft.id)
     const name = viewDraft.name.trim() || 'My view'
     const { builtin: _builtin, ...draftView } = viewDraft
-    const saved: CustomView = asNew && editing
+    const saved: CustomView = (asNew || fromPlugin) && editing
       ? { ...draftView, id: newCustomViewId(customViews), name: `${name} copy`.slice(0, CUSTOM_VIEW_NAME_MAX) }
       : { ...draftView, name }
     const views = customViews.some((view) => view.id === saved.id)
@@ -2686,6 +2690,7 @@ function OpenTuiWorkspace() {
       showNotice('info', `${viewDraft.name} is back to its defaults`, 2500)
       return
     }
+    if (isPluginViewId(viewDraft.id)) { showNotice('info', `"${viewDraft.name}" comes from a plugin; disable the plugin to remove it`, 3500); return }
     const deleted = viewDraft
     const views = customViews.filter((view) => view.id !== deleted.id)
     setCustomViews(views)
@@ -2856,8 +2861,8 @@ function OpenTuiWorkspace() {
 
   const filteredCommands = useMemo(() => {
     // One entry per custom view, so a view is reachable by name.
-    const withViews = customViews.length
-      ? [...COMMANDS, ...customViews.map((view): PaletteCommand => ({ id: `view:${view.id}`, label: `View: ${view.name}`, key: '', category: 'View' }))]
+    const withViews = allCustomViews.length
+      ? [...COMMANDS, ...allCustomViews.map((view): PaletteCommand => ({ id: `view:${view.id}`, label: `View: ${view.name}`, key: '', category: 'View' }))]
       : COMMANDS
     const enabledCommands = disabledPlugins.size
       ? withViews.filter((cmd) => { const plugin = getPluginCommand(cmd.id)?.pluginId; return !plugin || !disabledPlugins.has(plugin) })
@@ -2877,7 +2882,7 @@ function OpenTuiWorkspace() {
       ))
     }
     return availableCommands.filter((cmd) => `${cmd.label} ${cmd.key} ${cmd.category}`.toLowerCase().includes(q))
-  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery, disabledPlugins, customViews])
+  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery, disabledPlugins, allCustomViews])
 
   useEffect(() => runExitConfirmOpenEffect({
     currentThemeRef, themeMode,
@@ -6182,7 +6187,7 @@ function OpenTuiWorkspace() {
     if (id === 'view-studio-clone') { closeCommandPalette(); openViewStudio(viewMenuItems.find((item) => item.key === viewMenuItemKey(transcriptView, customViewId)) ?? null, false); return }
     if (id.startsWith('view:')) {
       closeCommandPalette()
-      const view = customViews.find((candidate) => `view:${candidate.id}` === id)
+      const view = allCustomViews.find((candidate) => `view:${candidate.id}` === id)
       if (view) chooseCustomView(view)
       return
     }
@@ -7153,7 +7158,7 @@ function OpenTuiWorkspace() {
       />
       {viewDraft ? (
         <ViewStudioOverlay theme={theme} top={focusMode ? 1 : 4} width={Math.min(VIEW_STUDIO_WIDTH, Math.max(width - 4, 30))} height={Math.max(height - (focusMode ? 1 : 4) - 1, 16)}
-          draft={viewDraft} saved={viewDraft.builtin ? { ...viewDraft, overrides: builtinViewEdits[viewDraft.base] ?? {} } : customViews.find((view) => view.id === viewDraft.id) ?? null} globalDensity={globalDensity}
+          draft={viewDraft} saved={viewDraft.builtin ? { ...viewDraft, overrides: builtinViewEdits[viewDraft.base] ?? {} } : allCustomViews.find((view) => view.id === viewDraft.id) ?? null} globalDensity={globalDensity}
           onChange={changeViewDraft} onSave={saveViewDraft} onDiscard={discardViewDraft} onDelete={deleteViewDraft}
           keyHandlerRef={viewStudioKeyHandlerRef} />
       ) : null}

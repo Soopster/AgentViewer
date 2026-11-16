@@ -11,6 +11,7 @@ import { PLUGIN_MANIFESTS, listLocalPluginManifests } from '@/lib/plugins/catalo
 import * as React from 'react'
 import { decodeModView, readModComponentViews, setModViewService } from '@/lib/plugins/modViews'
 import { isPluginEnabled } from '@/lib/plugins/enablement'
+import { installPluginThemes } from '@/lib/plugins/themeContributions'
 
 export type WebLocalPluginReport = { dir: string; refused: { id: string | null; dir: string; problems: string[] }[] }
 let modRevision: string | null = null
@@ -105,3 +106,5 @@ export function applyWebLocalPlugins(value: unknown): void {
       ? [{ id: typeof item.id === 'string' ? item.id : null, dir: item.dir, problems: Array.isArray(item.problems) ? item.problems.filter((p): p is string => typeof p === 'string') : [] }] : []),
   }
 }
+
+installPluginThemes()

@@ -9,7 +9,7 @@ import { PLUGIN_MANIFESTS } from '../lib/plugins/catalog'
 import { randomUUID } from 'node:crypto'
 import { localPluginDiscovery } from '../lib/plugins/localPlugins'
 import { readModConfigValues, writeModConfig } from '../lib/plugins/modConfigStore'
-import { parseLocalPluginManifest, LOCAL_PLUGIN_ID } from '../lib/plugins/localManifest'
+import { parseLocalPluginManifest, localManifestNeedsServer, LOCAL_PLUGIN_ID } from '../lib/plugins/localManifest'
 import { createModHarness, loadModTestModule } from '../lib/plugins/modTesting'
 
 const [verb, name, ...args] = process.argv.slice(2)
@@ -63,7 +63,7 @@ See the installed agent-viewer-plugins skill, references/mod-sdk.md, for the API
       const raw = JSON.parse(readFileSync(path.join(dir, 'plugin.json'), 'utf8'))
       const parsed = parseLocalPluginManifest(raw, new Set(PLUGIN_MANIFESTS.map(manifest => manifest.id)))
       if (!parsed.manifest) throw new Error(parsed.problems.join('; '))
-      if (!['server.mjs', 'server.js', 'server.ts'].some(file => existsSync(path.join(dir, file)))) throw new Error('Missing server module')
+      if (localManifestNeedsServer(parsed.manifest) && !['server.mjs', 'server.js', 'server.ts'].some(file => existsSync(path.join(dir, file)))) throw new Error('Missing server module')
       developmentDirs = [dir]
     }
     console.log(JSON.stringify({ ok: true, ...requestModReload(developmentDirs), message: 'Live instances apply this revision on their next heartbeat (normally within five seconds).' }))

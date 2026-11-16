@@ -32,7 +32,8 @@ export default function ThemeToggle() {
     setOpen(false)
   }
 
-  const meta = THEME_META[theme]
+  // A saved theme whose plugin is off or not yet loaded has no entry; show the default's.
+  const meta = THEME_META[theme] ?? THEME_META.dark
 
   return (
     <div ref={ref} style={{ position: 'relative', flex: '1 1 auto', minWidth: 0 }}>

@@ -197,7 +197,7 @@ function GitFileTreePane({
   onSelectFile: (path: string) => void
 }) {
   const themeName = useSyncExternalStore<Theme>(subscribeTheme, getCurrentTheme, () => 'dark')
-  const isDarkTheme = THEME_META[themeName].category === 'dark'
+  const isDarkTheme = (THEME_META[themeName]?.category ?? 'dark') === 'dark'
   const filePaths = useMemo(() => data.status.map((entry) => entry.path), [data.status])
   const preparedInput = useMemo(
     () => prepareFileTreeInput(filePaths, { flattenEmptyDirectories: true, sort: 'default' }),

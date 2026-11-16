@@ -3,7 +3,7 @@ import React, { useState } from 'react'
 import { testRender, act } from './testRender'
 import { usePaste } from '@opentui/react'
 import { NEW_SESSION_LOADING_FRAMES, NewSessionModal } from './NewSessionModal'
-import { CYBER_THEME } from '../theme'
+import { DARK_THEME as CYBER_THEME } from '../theme'
 
 function assertFrameIncludes(frame: string, text: string): void {
   if (!frame.includes(text)) {

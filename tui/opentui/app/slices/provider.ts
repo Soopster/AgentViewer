@@ -2,7 +2,7 @@
 import { type WindowPresentation } from '../../windowPresentation'
 import React, { useMemo, useRef } from 'react'
 import { useAppState, useWorkspaceState } from '../../workspaceContext'
-import { resolveViewSpec, viewCardStyle, type BuiltinViewOverrides, type CustomView } from '../../../viewSpec'
+import { getPluginViews, resolveViewSpec, subscribePluginViews, viewCardStyle, type BuiltinViewOverrides, type CustomView } from '../../../viewSpec'
 import { coordinatorWindowBadges } from '../../coordinatorWorkspace'
 import { useCoordinatorWorkspace } from '../../useCoordinatorWorkspace'
 import { type TuiTranscriptWidth } from '../../../../lib/tui/service'
@@ -36,7 +36,9 @@ export function useProviderGroup() {
   const [viewDraft, setViewDraft] = useAppState<CustomView | null>('viewDraft', null)
   // Edits to the built-ins themselves (`e` on a built-in in the v menu).
   const [builtinViewEdits, setBuiltinViewEdits] = useAppState<BuiltinViewOverrides>('builtinViewEdits', {})
-  const activeCustomView = viewDraft ?? (customViewId ? customViews.find((view) => view.id === customViewId) ?? null : null)
+  const pluginViews = React.useSyncExternalStore(subscribePluginViews, getPluginViews, getPluginViews)
+  const allCustomViews = React.useMemo(() => pluginViews.length ? [...customViews, ...pluginViews] : customViews, [customViews, pluginViews])
+  const activeCustomView = viewDraft ?? (customViewId ? allCustomViews.find((view) => view.id === customViewId) ?? null : null)
   const viewSpec = resolveViewSpec(transcriptView, activeCustomView, builtinViewEdits)
   const viewStyle = viewCardStyle(viewSpec)
   const viewAppTabs = viewSpec.appTabs
@@ -124,7 +126,7 @@ export function useProviderGroup() {
     transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey,
     agentToolCursorByGroupKey, setAgentToolCursorByGroupKey, transcriptView, setTranscriptView,
     viewAppTabs, viewContextSidebar, isChatLikeView, isScrollbackView, isStreamView,
-    customViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
+    customViews, allCustomViews, setCustomViews, customViewId, setCustomViewId, viewDraft, setViewDraft, activeCustomView,
     builtinViewEdits, setBuiltinViewEdits,
     viewSpec, viewStyle, globalLightweightWindows, globalDensity,
     scrollbackExpanded, setScrollbackExpanded, embeddedComposer, transcriptWidth,

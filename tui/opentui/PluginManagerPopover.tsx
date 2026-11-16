@@ -10,6 +10,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import { allPluginManifests } from '../../lib/plugins/catalog'
 import { filterPluginManagerEntries, matchesPluginSearch, PLUGIN_ENABLEMENT_FILTERS, type PluginEnablementFilter } from '../../lib/plugins/managerSearch'
 import { isLocalManifest } from '../../lib/plugins/localManifest'
+import { groupPluginEntries } from '../../lib/plugins/managerCategories'
 import { localPluginDiscovery } from '../../lib/plugins/localPlugins'
 import { applyPluginSettings, readPluginSettings, withPluginEnabled } from '../../lib/plugins/enablement'
 import { useDisabledPlugins } from '../../lib/plugins/useDisabledPlugins'
@@ -51,7 +52,9 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<PluginEnablementFilter>('all')
   const [searching, setSearching] = useState(false)
-  const matches = filterPluginManagerEntries(manifests, query, filter, disabled)
+  const groups = groupPluginEntries(filterPluginManagerEntries(manifests, query, filter, disabled))
+  // The cursor walks the list in the order it is drawn, headings aside.
+  const matches = groups.flatMap(group => group.entries)
   const refused = local.refused.filter(entry => filter === 'all' && matchesPluginSearch(query, [entry.id, entry.dir, 'local mod not loaded', ...entry.problems]))
     .sort((a, b) => (a.id ?? a.dir).localeCompare(b.id ?? b.dir))
   const [cursor, setCursor] = useState(0)
@@ -107,7 +110,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
 
   const panelWidth = Math.min(Math.max(width - 6, 40), 76)
   // Allow descriptions and command summaries to wrap inside the scroll area.
-  const panelHeight = Math.min(height - 2, (manifests.length + local.refused.length) * 3 + 8)
+  const panelHeight = Math.min(height - 2, (manifests.length + local.refused.length) * 3 + groups.length + 8)
   const footer = searching ? 'Type to filter · enter browse · ctrl+u clear · esc done' : '/ search · ↑↓ move · space toggle · ctrl+u clear · esc close'
   const footerRows = Math.ceil(footer.length / Math.max(1, panelWidth - 4))
   return (
@@ -139,7 +142,11 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       <text height={1} flexShrink={0} fg={theme.dim} wrapMode="none" selectable={false}>{`${matches.length + refused.length} of ${manifests.length + local.refused.length} plugins`}</text>
       <scrollbox id="plugin-manager-scroll" ref={scroll} height={Math.max(1, panelHeight - 5 - footerRows)} flexShrink={0} scrollY viewportCulling>
       {matches.length === 0 && refused.length === 0 ? <text fg={theme.dim}>No matching plugins.</text> : null}
-      {matches.map((manifest, index) => {
+      {groups.map(group => (
+        <box key={`category:${group.category}`} id={`plugin-category:${group.category}`} flexDirection="column" flexShrink={0}>
+        <text fg={theme.cyan} height={1} wrapMode="none" selectable={false}>{`${group.category.toUpperCase()} · ${group.entries.length}`}</text>
+        {group.entries.map((manifest) => {
+        const index = matches.indexOf(manifest)
         const on = !disabled.has(manifest.id)
         const selected = index === selectedIndex
         return (
@@ -154,7 +161,9 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
             <text fg={theme.dim} width="100%" wrapMode="word" selectable={false}>{`  ${pluginSummary(manifest)}`}</text>
           </box>
         )
-      })}
+        })}
+        </box>
+      ))}
       {refused.map(entry => (
         <box key={`refused:${entry.dir}`} flexDirection="column" flexShrink={0}>
           <text width="100%" wrapMode="word" selectable={false}><span fg={theme.red}>✕ </span><span fg={theme.text}>{entry.id ?? entry.dir}</span><span fg={theme.red}>  not loaded</span></text>

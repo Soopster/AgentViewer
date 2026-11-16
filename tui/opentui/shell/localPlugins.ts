@@ -11,6 +11,8 @@ import { setLocalCommandRunner, setLocalWidgetReader } from '../../../lib/plugin
 import { isPluginEnabled } from '../../../lib/plugins/enablement'
 import { localPluginDiscovery } from '../../../lib/plugins/localPlugins'
 import { decodeModView, readModComponentViews, setModViewService } from '../../../lib/plugins/modViews'
+import { installTuiPluginThemes } from './pluginThemes'
+import { installTuiPluginTranscriptViews } from './pluginTranscriptViews'
 import { pathToFileURL } from 'node:url'
 import { statSync } from 'node:fs'
 
@@ -25,6 +27,8 @@ export function installTuiLocalPlugins(): void {
     writeAppInspection({ ...value, modRevision: discovery.revision, permissionHistory: readPluginPermissionHistory(), runtimeCapabilities: Object.fromEntries(value.app.sessions.map(session => session.target.provider).filter((provider): provider is NonNullable<typeof provider> => !!provider).map(provider => [provider, pluginRuntimeCapabilities(provider)])), refused: discovery.refused })
   })
   registerLocalPluginManifests(discovery.plugins.map(plugin => plugin.manifest))
+  installTuiPluginThemes()
+  installTuiPluginTranscriptViews()
   setLocalCommandRunner(async (request, signal) => {
     const { runLocalPluginCommand } = await import('../../../lib/plugins/localPluginRuntime')
     return runLocalPluginCommand(request, signal)

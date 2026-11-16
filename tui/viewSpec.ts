@@ -551,3 +551,29 @@ export function webSettingsFromSpec(spec: ViewSpec): WebViewSettings {
     rightPanelOpen: spec.contextSidebar ? true : null,
   }
 }
+
+// Views contributed by plugins (a manifest's `transcriptViews`). They are
+// read-only custom views kept apart from the user's own, so they are never
+// written to tui.json and vanish with their plugin. A plugin view's id is
+// `<plugin>.<view>`: a dot never appears in a user view's id, which is what
+// keeps the two namespaces from colliding.
+const PLUGIN_VIEW_ID = /^[a-z0-9-]+\.[a-z0-9-]+$/
+export function isPluginViewId(id: string): boolean { return PLUGIN_VIEW_ID.test(id) }
+
+let pluginViews: readonly CustomView[] = []
+const pluginViewListeners = new Set<() => void>()
+const pluginViewsByOwner = new Map<string, readonly CustomView[]>()
+export function getPluginViews(): readonly CustomView[] { return pluginViews }
+export function subscribePluginViews(listener: () => void): () => void { pluginViewListeners.add(listener); return () => { pluginViewListeners.delete(listener) } }
+
+/** The plugin's views, validated like stored ones (unknown fields and values dropped, base must be a built-in). */
+export function normalizePluginViews(pluginId: string, raw: unknown): CustomView[] {
+  return normalizeCustomViews(raw).map(view => ({ ...view, id: `${pluginId}.${view.id}` }))
+}
+
+/** Replaces everything `pluginId` contributes; an empty list withdraws it. */
+export function setPluginViews(pluginId: string, views: readonly CustomView[]): void {
+  if (views.length) pluginViewsByOwner.set(pluginId, views); else if (!pluginViewsByOwner.delete(pluginId)) return
+  pluginViews = [...pluginViewsByOwner.values()].flat()
+  for (const listener of pluginViewListeners) listener()
+}

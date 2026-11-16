@@ -1,6 +1,7 @@
 import type { PluginManifest } from './types'
 import type { ProviderPlugin } from './providerPlugins'
 import { isLocalManifest } from './localManifest'
+import { pluginCategory } from './managerCategories'
 
 export const PLUGIN_ENABLEMENT_FILTERS = [
   { id: 'all', label: 'All' },
@@ -19,7 +20,7 @@ export function matchesPluginSearch(query: string, fields: readonly (string | un
 /** Search metadata only; never activate a plugin to find it. */
 export function filterPluginManagerEntries<T extends PluginManifest | ProviderPlugin>(entries: readonly T[], query: string, filter: PluginEnablementFilter = 'all', disabled: ReadonlySet<string> = NO_DISABLED): T[] {
   return entries.filter(entry => (filter === 'all' || disabled.has(entry.id) === (filter === 'disabled')) && matchesPluginSearch(query, [
-    entry.id, entry.title, entry.description,
+    entry.id, entry.title, entry.description, pluginCategory(entry),
     ...('renderers' in entry ? [
       ...entry.renderers,
       isLocalManifest(entry) ? 'local mod' : 'bundled',

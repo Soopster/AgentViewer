@@ -16,7 +16,7 @@ import { parseModPackageMetadata, type ModPackageMetadata } from './modPackageMe
 import { applyModAppEffects, decodeModAppEffect, modAppStore, type ModAppSnapshot, type ModAppEffect } from './modApp'
 import { recordModDiagnostic } from './modDiagnostics'
 import { isPluginEnabled } from './enablement'
-import { PLUGIN_API_VERSION, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
+import { PLUGIN_API_VERSION, type PluginTranscriptViewSpec, type PluginThemeSpec, type PluginCommandServiceId, type PluginCommandSpec, type PluginManifest, type PluginPlacement, type PluginWidgetSlot } from './types'
 import type { PluginCommandModule, PluginCommandTarget } from './commands'
 
 export const LOCAL_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
@@ -81,6 +81,15 @@ export function setLocalWidgetReader(next: LocalWidgetReader): void {
 }
 export function subscribeLocalWidgetReader(listener: () => void): () => void { widgetReaderListeners.add(listener); return () => { widgetReaderListeners.delete(listener) } }
 export function localWidgetReader(): LocalWidgetReader | null { return widgetReader }
+
+/**
+ * A mod that only declares data (themes, transcript views) has nothing to run,
+ * so it needs no server module; anything with hooks, commands, tools, widgets,
+ * views or a provider does.
+ */
+export function localManifestNeedsServer(manifest: LocalPluginManifest): boolean {
+  return Boolean(manifest.behavior || manifest.tools?.length || manifest.localWidgets?.length || manifest.localProvider || manifest.localViews?.length || manifest.commands.some(command => command.handler))
+}
 
 export function isLocalManifest(manifest: PluginManifest): manifest is LocalPluginManifest {
   return (manifest as { source?: unknown }).source === 'local'
@@ -168,6 +177,30 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     const refresh = typeof widget.refreshMs === 'number' && Number.isFinite(widget.refreshMs) ? widget.refreshMs : LOCAL_WIDGET_REFRESH_MS
     widgets.push({ id: widget.id, slot: (widget.slot ?? 'corner') as LocalWidgetSlot, ...(typeof widget.order === 'number' ? { order: widget.order } : {}), refreshMs: Math.max(LOCAL_WIDGET_MIN_REFRESH_MS, Math.min(refresh, 600_000)) })
   }
+  const themes: PluginThemeSpec[] = []
+  if (value.themes !== undefined && !Array.isArray(value.themes)) problems.push('themes must be a list')
+  for (const [index, entry] of (Array.isArray(value.themes) ? value.themes : []).entries()) {
+    const theme = entry as Record<string, unknown>
+    if (typeof theme?.id !== 'string' || !LOCAL_PLUGIN_ID.test(theme.id)) { problems.push(`themes[${index}].id is invalid`); continue }
+    if (theme.category !== 'dark' && theme.category !== 'light') { problems.push(`themes[${index}].category must be dark or light`); continue }
+    const css = theme.css
+    if (css !== undefined && (typeof css !== 'string' || !css.trim() || css.length > 8_000 || /[{}<>@\\]/.test(css) || /url\s*\(|expression\s*\(/i.test(css))) { problems.push(`themes[${index}].css must be bare CSS-variable declarations (no braces, @-rules, url() or backslashes)`); continue }
+    const tui = theme.tui as Record<string, unknown> | undefined
+    const swatchKeys = ['bg', 'text', 'muted', 'accent', 'warm'] as const
+    if (tui !== undefined && (!tui || typeof tui !== 'object' || swatchKeys.some(key => typeof tui[key] !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(tui[key] as string)))) { problems.push(`themes[${index}].tui must give ${swatchKeys.join(', ')} as #rrggbb`); continue }
+    if (css === undefined && tui === undefined) { problems.push(`themes[${index}] needs css (Web), tui (terminal) or both`); continue }
+    // Namespaced so a mod's theme can never take a built-in's id.
+    themes.push({ id: `${id}-${theme.id}`, label: typeof theme.label === 'string' && theme.label.trim() ? theme.label.trim().slice(0, 40) : theme.id, category: theme.category, ...(typeof theme.icon === 'string' && theme.icon.trim() ? { icon: theme.icon.trim().slice(0, 2) } : {}), ...(typeof css === 'string' ? { css: css.trim() } : {}), ...(tui ? { tui: { swatch: Object.fromEntries(swatchKeys.map(key => [key, tui[key] as string])) as NonNullable<NonNullable<PluginThemeSpec['tui']>['swatch']> } } : {}) })
+  }
+  const transcriptViews: PluginTranscriptViewSpec[] = []
+  if (value.transcriptViews !== undefined && !Array.isArray(value.transcriptViews)) problems.push('transcriptViews must be a list')
+  for (const [index, entry] of (Array.isArray(value.transcriptViews) ? value.transcriptViews : []).entries()) {
+    const view = entry as Record<string, unknown>
+    if (typeof view?.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(view.id)) { problems.push(`transcriptViews[${index}].id is invalid`); continue }
+    if (typeof view.base !== 'string' || !view.base) { problems.push(`transcriptViews[${index}].base must name a built-in view`); continue }
+    if (view.overrides !== undefined && (!view.overrides || typeof view.overrides !== 'object' || Array.isArray(view.overrides))) { problems.push(`transcriptViews[${index}].overrides must be an object`); continue }
+    transcriptViews.push({ id: view.id, name: typeof view.name === 'string' && view.name.trim() ? view.name.trim().slice(0, 24) : view.id, base: view.base, overrides: (view.overrides ?? {}) as Record<string, unknown> })
+  }
   let localProvider: { displayName: string } | undefined
   if (value.provider !== undefined) {
     const spec = value.provider as { displayName?: unknown } | null
@@ -190,8 +223,8 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
     if (views.some(view => view.id === 'mod-config')) problems.push('mod-config is reserved for generated configuration')
     else views.push({ id: 'mod-config', title: `${title} settings` })
   }
-  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0) problems.push('declares no behavior hooks, commands, widgets, views or provider')
-  for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views]] as const) {
+  if (!behavior && toolSpecs.specs.length === 0 && commands.length === 0 && widgets.length === 0 && !localProvider && views.length === 0 && themes.length === 0 && transcriptViews.length === 0) problems.push('declares no behavior hooks, commands, widgets, views, themes, transcript views or provider')
+  for (const [kind, entries] of [['commands', commands], ['widgets', widgets], ['views', views], ['themes', themes], ['transcriptViews', transcriptViews]] as const) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) problems.push(`${kind} contains duplicate ids`)
   }
   if (problems.length) return { manifest: null, problems }
@@ -209,7 +242,7 @@ export function parseLocalPluginManifest(raw: unknown, reserved: ReadonlySet<str
   return {
     manifest: {
       apiVersion: PLUGIN_API_VERSION, id, title, description, ...packageMetadata, renderers: ['web', 'tui'], stateVersion: 1,
-      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
+      surfaces, commands: [...commands, ...viewCommands], ...(behavior ? { behavior } : {}), ...(toolSpecs.specs.length ? { tools: toolSpecs.specs } : {}), ...(widgets.length ? { widgets, localWidgets: widgets } : {}), ...(themes.length ? { themes } : {}), ...(transcriptViews.length ? { transcriptViews } : {}), ...(localProvider ? { localProvider } : {}), ...(views.length ? { localViews: views } : {}), source: 'local', ...(config ? { config } : {}), ...(appServices.length ? { appServices: [...new Set(appServices)] as ('data' | 'navigation')[] } : {}),
     },
     problems,
   }

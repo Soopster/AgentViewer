@@ -138,6 +138,8 @@ export type PluginManifest = {
   readonly title: string
   /** One sentence for the plugin manager. */
   readonly description: string
+  /** The plugin manager's heading for this plugin (lib/plugins/managerCategories.ts); unset falls back to the built-in map. */
+  readonly group?: string
   readonly renderers: readonly PluginRenderer[]
   readonly surfaces: readonly PluginSurfaceSpec[]
   readonly commands: readonly PluginCommandSpec[]
@@ -171,6 +173,13 @@ export type PluginManifest = {
    * slot host loads it at boot, so a widget module must stay small.
    */
   readonly widgets?: readonly { readonly id: string; readonly slot: PluginWidgetSlot; readonly order?: number }[]
+  /**
+   * Terminal transcript views this plugin offers: a built-in `base` plus the
+   * fields to change (tui/viewSpec.ts). Shown read-only beside the user's own.
+   */
+  readonly transcriptViews?: readonly PluginTranscriptViewSpec[]
+  /** Themes this plugin contributes while enabled: bare CSS-variable declarations, never code. */
+  readonly themes?: readonly PluginThemeSpec[]
   /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
   readonly tools?: readonly import('./pluginTools').PluginToolSpec[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
@@ -187,6 +196,52 @@ export type PluginManifest = {
   }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number
+}
+
+/**
+ * A contributed theme, data only. `css` (Web) is the declarations for its CSS
+ * variables, which the host scopes to the theme's own selector; `tui` (terminal)
+ * is its palette. A theme names the renderers it supports by which it carries.
+ */
+export type PluginThemeSpec = {
+  readonly id: string
+  readonly label: string
+  readonly category: 'dark' | 'light'
+  readonly icon?: string
+  /** Web: declarations for the theme's CSS variables. */
+  readonly css?: string
+  /** Web, bundled plugins only: further rules for this theme (a body backdrop, a restyled message list). A mod's `rules` is ignored. */
+  readonly rules?: string
+  readonly tui?: PluginTuiTheme
+}
+
+/** The 19 colours of a terminal palette (tui/theme.ts TuiThemePalette). */
+export type PluginTuiPalette = {
+  readonly bg: string; readonly surface: string; readonly surface2: string; readonly surface3: string
+  readonly diffAddBg: string; readonly diffRemoveBg: string; readonly diffMetaBg: string
+  readonly border: string; readonly border2: string; readonly text: string; readonly muted: string; readonly dim: string
+  readonly violet: string; readonly cyan: string; readonly green: string; readonly red: string; readonly amber: string; readonly pink: string
+  readonly userBg: string
+}
+
+/** A terminal theme: a whole `palette`, or five `swatch`es every other colour is derived from. */
+export type PluginTuiTheme = {
+  readonly palette?: PluginTuiPalette
+  readonly swatch?: { readonly bg: string; readonly text: string; readonly muted: string; readonly accent: string; readonly warm: string }
+  /** Menu label; defaults to the theme's label in capitals. */
+  readonly label?: string
+  readonly description?: string
+  /** `omz` lists it under the prompt-theme group instead of light or dark. */
+  readonly menu?: 'omz'
+}
+
+export type PluginTranscriptViewSpec = {
+  readonly id: string
+  readonly name: string
+  /** A built-in view id (not `engineering`). */
+  readonly base: string
+  /** ViewSpec fields to change; unknown fields and values are dropped when loaded. */
+  readonly overrides: Readonly<Record<string, unknown>>
 }
 
 /**

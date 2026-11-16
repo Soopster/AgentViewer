@@ -2,173 +2,16 @@ import { readFile } from 'node:fs/promises'
 import { copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import { PROCEDURAL_THEME_NAMES } from '../tui/theme'
+
+const isStoredTheme = (value: unknown): value is string => VALID_TUI_THEMES.includes(value)
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
-import { normalizeBuiltinViewOverrides, normalizeCustomViews, type BuiltinViewOverrides, type CustomView } from '../tui/viewSpec'
+import { isPluginViewId, normalizeBuiltinViewOverrides, normalizeCustomViews, type BuiltinViewOverrides, type CustomView } from '../tui/viewSpec'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
-const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
-  ...PROCEDURAL_THEME_NAMES,
-  'terminal-palette',
-  'light',
-  'paper',
-  'solarized-light',
-  'github-light',
-  'gruvbox-light',
-  'catppuccin-latte',
-  'rose-pine-dawn',
-  'ayu-light',
-  'one-light',
-  'everforest-light',
-  'tokyo-night-day',
-  'quiet-light',
-  'horizon-light',
-  'flexoki-light',
-  'bloomberg-light',
-  'oled-light',
-  'nord-light',
-  'vitesse-light',
-  'iceberg-light',
-  'material-lighter',
-  'min-light',
-  'alabaster',
-  'bone-china',
-  'cold-pressed',
-  'sunlit-alabaster',
-  'brushed-aluminium',
-  'light-owl',
-  'papercolor-light',
-  'tomorrow',
-  'white',
-  'stripe',
-  'claude-cream',
-  'supabase',
-  'posthog',
-  'replicate',
-  'notion',
-  'figma',
-  'miro',
-  'apple',
-  'nike',
-  'pinterest',
-  'playstation',
-  'nvidia',
-  'mongodb',
-  'slack',
-  'cohere',
-  'mistral',
-  'cursor',
-  'airbnb',
-  'intercom',
-  'imessage',
-  'dark',
-  'solarized-dark',
-  'solar-flare',
-  'nord',
-  'gruvbox-dark',
-  'dracula',
-  'fancy-dracula',
-  'tokyo-night',
-  'catppuccin-mocha',
-  'one-dark',
-  'monokai',
-  'kanagawa',
-  'everforest-dark',
-  'obsidian',
-  'true-black',
-  'grove-dark',
-  'grove-light',
-  'ocean-dark',
-  'ocean-light',
-  'ember-dark',
-  'ember-light',
-  'iris-dark',
-  'iris-light',
-  't3-chat-dark',
-  't3-chat-light',
-  't3-code-dark',
-  't3-code-light',
-  'github-dark',
-  'ayu-dark',
-  'rose-pine',
-  'synthwave',
-  'palenight',
-  'night-owl',
-  'flexoki-dark',
-  'cobalt',
-  'vitesse-dark',
-  'iceberg',
-  'zenburn',
-  'material-darker',
-  'claude-code',
-  'oceanic-next',
-  'papercolor-dark',
-  'snazzy',
-  'slack-dark',
-  'tomorrow-night',
-  'ethereal',
-  'hackerman',
-  'lumon',
-  'matte-black',
-  'miasma',
-  'osaka-jade',
-  'retro-82',
-  'ristretto',
-  'vantablack',
-  'orchestrator',
-  'anodised-obsidian',
-  'dark-ceramic',
-  'carbon-surface',
-  'smoked-glass',
-  'metalterm',
-  'graphite',
-  'ember',
-  'abyss',
-  'orchid',
-  'phosphor',
-  'bloomberg-dark',
-  'oled-dark',
-  'nocturne',
-  'slate',
-  'solstice',
-  'dune',
-  'grape',
-  'repo',
-  'cappuccino',
-  'linear',
-  'sentry',
-  'raycast',
-  'framer',
-  'ferrari',
-  'resend',
-  'cyber',
-  'cyber-wave',
-  'willow-dream',
-  'agnoster',
-  'robbyrussell',
-  'af-magic',
-  'bira',
-  'avit',
-  'gentoo',
-  'candy',
-  'eastwood',
-  'fishy',
-  'frisk',
-  'gnzh',
-  'kennethreitz',
-  'arrow',
-  'bureau',
-  'dogenpunk',
-  'dst',
-  'fox',
-  'funky',
-  'juanghurtado',
-  'kolo',
-  'lambda',
-  'muse',
-  'nanotech',
-  'pygmalion',
-]
+// Any theme id: the host's own, or one a plugin registers (plugins/themes-*). An id nothing
+// provides falls back to the light default when it is resolved, and is kept in the file
+// so the choice returns when its plugin does.
+const VALID_TUI_THEMES = { includes: (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9][a-z0-9_+-]{0,99}$/.test(value) }
 
 type TuiState = {
   theme?: unknown
@@ -306,9 +149,7 @@ async function writeTuiState(update: Partial<TuiState>): Promise<void> {
 export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
   const parsed = await readTuiState()
   if (parsed.theme === 'cyber' || parsed.theme === 'lazygit') return 'cyber'
-  return VALID_TUI_THEMES.includes(parsed.theme as TuiThemeMode)
-    ? parsed.theme as TuiThemeMode
-    : 'light'
+  return isStoredTheme(parsed.theme) ? parsed.theme : 'light'
 }
 
 export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> {
@@ -329,7 +170,7 @@ export type TuiThemeFollow = {
 
 export async function getConfiguredTuiThemeFollow(): Promise<TuiThemeFollow> {
   const parsed = await readTuiState()
-  const themeOrNull = (value: unknown) => VALID_TUI_THEMES.includes(value as TuiThemeMode) ? value as TuiThemeMode : null
+  const themeOrNull = (value: unknown) => isStoredTheme(value) ? value : null
   return {
     // Nobody has chosen a theme yet, so match the terminal rather than assume
     // light. A stored theme with no flag is a choice made before this existed.
@@ -463,7 +304,8 @@ export type TuiCustomViewState = { views: CustomView[]; activeId: string | null;
 export async function getConfiguredTuiCustomViews(): Promise<TuiCustomViewState> {
   const parsed = await readTuiState()
   const views = normalizeCustomViews(parsed.customViews)
-  const activeId = typeof parsed.customViewId === 'string' && views.some((view) => view.id === parsed.customViewId) ? parsed.customViewId : null
+  // A plugin view's id (<plugin>.<view>) is kept before its plugin has registered; the lookup falls back until then.
+  const activeId = typeof parsed.customViewId === 'string' && (views.some((view) => view.id === parsed.customViewId) || isPluginViewId(parsed.customViewId)) ? parsed.customViewId : null
   return { views, activeId, builtins: normalizeBuiltinViewOverrides(parsed.builtinViewEdits) }
 }
 

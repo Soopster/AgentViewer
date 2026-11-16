@@ -11,7 +11,9 @@ const { PluginManagerPopover } = await import('./PluginManagerPopover')
 const { PLUGIN_MANIFESTS } = await import('../../lib/plugins/catalog')
 const { PROVIDER_PLUGINS } = await import('../../lib/plugins/providerPlugins')
 const { filterPluginManagerEntries } = await import('../../lib/plugins/managerSearch')
-const sorted = filterPluginManagerEntries([...PLUGIN_MANIFESTS, ...PROVIDER_PLUGINS], '')
+const { groupPluginEntries } = await import('../../lib/plugins/managerCategories')
+// The list is drawn under category headings; the cursor walks it in that order.
+const sorted = groupPluginEntries(filterPluginManagerEntries([...PLUGIN_MANIFESTS, ...PROVIDER_PLUGINS], '')).flatMap(group => group.entries)
 const { isPluginEnabled, readPluginSettings } = await import('../../lib/plugins/enablement')
 for (const width of [52, 90]) {
   let key!: (key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void
@@ -29,11 +31,11 @@ for (const width of [52, 90]) {
     assert.ok(list().scrollTop > start, 'wheel moves through plugins')
     await act(async () => { key({ name: 'end', sequence: '', ctrl: false, shift: false }) })
     await settle()
-    assert.ok(setup.captureCharFrame().includes(sorted.at(-1)!.title), 'keyboard reveals final alphabetical row')
+    assert.ok(setup.captureCharFrame().includes(sorted.at(-1)!.title), 'keyboard reveals final row')
     assert.ok(setup.captureCharFrame().includes('esc close'), 'footer stays visible')
     await act(async () => { key({ name: 'home', sequence: '', ctrl: false, shift: false }) })
     await settle()
-    assert.ok(setup.captureCharFrame().includes(sorted[0].title), 'home restores first alphabetical plugin')
+    assert.ok(setup.captureCharFrame().includes(sorted[0].title), 'home restores first plugin')
     const first = setup.renderer.root.findDescendantById(`plugin-row:${sorted[0].id}`)!
     const enabled = isPluginEnabled(sorted[0].id)
     await act(async () => { await setup.mockMouse.click(first.x + 3, first.y, 2) })
