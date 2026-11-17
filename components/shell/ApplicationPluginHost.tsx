@@ -13,10 +13,13 @@ import { getPluginCommand, isPluginSurfaceId, type PluginSurfaceId } from '../..
 import { subscribePluginCommands } from '../../lib/plugins/commandBus'
 import { isPluginEnabled } from '../../lib/plugins/enablement'
 import type { WebPluginServices } from './pluginTypes'
-import { useWebShellOverview, type WebShellActions } from './shellOverviewService'
+import { useWebShellOverview, readGit, type WebShellActions } from './shellOverviewService'
+import { webProof } from './proofService'
 
 const NO_SHELL_ACTIONS: WebShellActions = { openPalette: () => {}, newSession: () => {} }
 import type { PluginApplicationServices } from '../../lib/plugins/application'
+import type { PendingPermission } from '../../lib/permissions'
+import { pluginPendingAsks } from '../../lib/plugins/runtimeActivity'
 import type { PluginSessionRef } from '../../lib/plugins/bookmarks'
 import { NotificationFallback } from './NotificationFallback'
 import { webNotifications } from '../../lib/plugins/notifications'
@@ -27,7 +30,9 @@ import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
 import { webPluginCommands } from './pluginCommands'
 
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
-export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet, shellActions }: {
+export function ApplicationPluginHost({ teamAttention, sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet, shellActions }: {
+  /** Teammates waiting on the lead per conversation (`provider:sessionId`), from the page's one poll. */
+  teamAttention?: Readonly<Record<string, { waiting: number; finished: number }>>
   sessions: readonly Session[]
   selectedSession: Session | null
   cwd?: string | null
@@ -50,9 +55,20 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
     webNotifications.service.show('error', text)
   }, [])
   const [overlay, setOverlay] = useState<{ surface: PluginSurfaceId; cwd: string | null; session: Session | null; path?: string } | null>(null)
-  const context = useRef({ sessions, selectedSession })
-  context.current = { sessions, selectedSession }
-  const services = useMemo<PluginApplicationServices>(() => ({ activity: webActivityFeed, notifications: {
+  const teamAttentionRef = useRef(teamAttention)
+  teamAttentionRef.current = teamAttention
+  const context = useRef<{ sessions: readonly Session[]; selectedSession: Session | null; cwd: string | null }>({ sessions, selectedSession, cwd })
+  context.current = { sessions, selectedSession, cwd }
+  const services = useMemo<PluginApplicationServices>(() => ({ activity: webActivityFeed, repository: { readGit, readProof: (cwd, signal) => webProof.read(cwd, signal) }, permissions: {
+    respond: async (target, permissionId, response) => {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/actions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'respondPermission', permissionId, response, provider: target.provider, providerInstanceId: target.providerInstanceId }),
+      })
+      const data = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok || data.error) throw new Error(data.error ?? 'Failed to respond to permission')
+    },
+  }, notifications: {
     ...webNotifications.service,
     notice: showNotice,
     desktop: (title, body) => {
@@ -75,13 +91,15 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
   }, [])
   const executeCommand = usePluginCommands('web', webPluginCommands, 'application')
   const executeRepositoryCommand = usePluginCommands('web', webPluginCommands, cwd)
-  const acceptActivity = useCallback((activity: ReadonlyMap<string, PluginSessionActivity>) => {
+  const acceptActivity = useCallback((activity: ReadonlyMap<string, PluginSessionActivity>, pending?: ReadonlyMap<string, readonly PendingPermission[]>, started?: ReadonlyMap<string, number>) => {
     setModActivity(previous => JSON.stringify([...previous]) === JSON.stringify([...activity]) ? previous : activity)
     const current = context.current
     publish({ activity, now: Date.now(),
       sessions: current.sessions.map(session => ({ key: sessionIdentityKey(session), title: session.customTitle || session.summary || session.firstPrompt || session.sessionId, target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
       selectedKey: current.selectedSession ? sessionIdentityKey(current.selectedSession) : null,
       focused: document.visibilityState !== 'hidden' && document.hasFocus(),
+      cwd: current.cwd, ...(pending ? { pending } : {}), ...(started ? { started } : {}),
+      teams: new Map(current.sessions.flatMap(session => { const mark = teamAttentionRef.current?.[`${session.provider ?? 'claude'}:${session.sessionId}`]; return mark ? [[sessionIdentityKey(session), mark] as const] : [] })),
     })
   }, [publish])
   useEffect(() => {
@@ -97,9 +115,9 @@ export function ApplicationPluginHost({ sessions, selectedSession, cwd = null, i
         const body = await response.json()
         const activity = pluginRuntimeActivity(body)
         if (cancelled || controller.signal.aborted) return
-        acceptActivity(activity)
         const since = new Map<string, number>((Array.isArray(body?.running) ? body.running : []).flatMap((entry: { sessionId?: string; provider?: string; providerInstanceId?: string; startedAt?: number }) =>
           typeof entry.sessionId === 'string' && typeof entry.startedAt === 'number' ? [[sessionIdentityKey({ sessionId: entry.sessionId, provider: entry.provider as Session['provider'], providerInstanceId: entry.providerInstanceId }), entry.startedAt] as const] : []))
+        acceptActivity(activity, pluginPendingAsks(body), since)
         setRunningSince(previous => JSON.stringify([...previous]) === JSON.stringify([...since]) ? previous : since)
       } catch { /* retain observer baseline through transient failures */ }
       finally { inFlight = false }

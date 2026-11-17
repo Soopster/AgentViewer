@@ -3541,11 +3541,29 @@ function OpenTuiWorkspace() {
   // focused so a terminal without focus reporting is not spammed.
   const terminalFocusedRef = useRef<boolean | null>(null)
   const applicationNotice = useStableEvent((text: string) => showNotice('info', text, 6000))
-  const applicationServices = useMemo<PluginApplicationServices>(() => ({ activity: tuiActivityFeed, notifications: {
+  const applicationServices = useMemo<PluginApplicationServices>(() => ({ activity: tuiActivityFeed, repository: { readGit: cwd => readGitSummaryCached(cwd), readProof: async (cwd, signal) => (await import('./shell/proofService')).tuiProof.read(cwd, signal) }, permissions: {
+    respond: async (target, permissionId, response) => {
+      await runTuiSessionAction({ sessionId: target.sessionId, provider: target.provider, providerInstanceId: target.providerInstanceId } as Session,
+        { action: 'respondPermission', permissionId, response, provider: target.provider })
+      // The ask is answered; drop it now rather than waiting for the next registry poll.
+      setPendingPermissions(prev => prev.filter(entry => entry.id !== permissionId))
+      setBackgroundPrompts(prev => prev.filter(entry => entry.id !== permissionId))
+    },
+  }, notifications: {
     ...tuiNotifications.service,
     notice: applicationNotice,
     desktop: notifyTeamEvent,
   } }), [applicationNotice, notifyTeamEvent])
+  const pendingAsksByKey = useMemo(() => {
+    const byKey = new Map<string, PendingPermission[]>()
+    for (const ask of [...pendingPermissions, ...backgroundPrompts]) {
+      if (!ask.sessionId || !ask.provider) continue
+      const key = sessionKey({ sessionId: ask.sessionId, provider: ask.provider, providerInstanceId: ask.providerInstanceId } as Session)
+      const list = byKey.get(key) ?? []
+      if (!list.some(entry => entry.id === ask.id)) byKey.set(key, [...list, ask])
+    }
+    return byKey
+  }, [pendingPermissions, backgroundPrompts])
   const { publish: publishApplicationActivity, observesActivity } = useApplicationPlugins('tui', tuiApplicationPlugins, applicationServices)
   useEffect(() => {
     if (!runningRegistryReady || !observesActivity) return
@@ -3553,8 +3571,9 @@ function OpenTuiWorkspace() {
       now: Date.now(), activity: sidebarSessionActivity,
       sessions: [...sessions, ...openTabSessions].map(session => ({ key: sessionKey(session), title: formatSessionTitle(session), target: { provider: session.provider ?? 'claude', providerInstanceId: session.providerInstanceId, sessionId: session.sessionId } })),
       selectedKey: selectedSessionKey, focused: terminalFocusedRef.current,
+      cwd: gitRepoCwd || workspaceCwd || null, pending: pendingAsksByKey, teams: teamAttention,
     })
-  }, [runningRegistryReady, observesActivity, sidebarSessionActivity, sessions, openTabSessions, selectedSessionKey, publishApplicationActivity])
+  }, [runningRegistryReady, observesActivity, sidebarSessionActivity, sessions, openTabSessions, selectedSessionKey, publishApplicationActivity, pendingAsksByKey, teamAttention, gitRepoCwd, workspaceCwd])
 
   useEffect(() => runRendererListenersEffect({
     terminalFocusedRef, renderer, showNotice, notifyTeamEvent,

@@ -43,3 +43,8 @@
 @media (prefers-reduced-motion: reduce) {
   .activity-island-pill, .activity-island-dialog { animation: none; transition: none; }
 }
+
+.activity-island-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.activity-island-actions button[data-tone="primary"] { font-weight: 600; }
+.activity-island-actions button[data-tone="danger"] { color: var(--red, #c0392b); }
+.activity-island-error { font-size: 11px; color: var(--red, #c0392b); }

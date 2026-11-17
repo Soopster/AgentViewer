@@ -11,6 +11,27 @@ reader's existing data, with computation in a worker on OpenTUI. They do not sca
 unopened transcripts. Progress appears only when supplied by a producer. Leaving
 the running registry says "Turn ended", without claiming a successful outcome.
 
+## Insights and actions
+
+Beyond activity, the island raises rows a person can act on. A row has a `kind`
+and optional `actions`; within one status, approvals sort first, then team,
+checks, repo, health and tasks.
+
+| Kind | Raised when | Actions |
+|---|---|---|
+| `approval` | A session has an unanswered permission ask. One row per ask, replacing the session's generic "Needs input". | Reject, Approve (web buttons; terminal `r` / `a`). Reject leads when the provider marks the ask `defaultToDeny`. |
+| `question` | An ask that needs the transcript's picker: a question, plan or elicitation. | Open session only. |
+| `team` | Teammates are waiting on the lead (after this client's reviewed markers). Finished results alone raise nothing. | Open session. |
+| `checks` | The latest finished Proof run has failing checks (error) or only stale ones. | Open session. |
+| `repo` | The selected project has uncommitted changes and no turn is running in it. | Open session. |
+| `health` | A running turn has lasted 20 minutes or more (host start time, else first seen). | Open session. |
+
+Enter and `o` only ever open a session, so one stray key cannot approve. Replies go
+through the `permissions` application service, which sends the same
+`respondPermission` action the transcript's approval card sends. Project state
+(`repository` service) is read at most every 30 seconds, only while the app is
+focused and only for the selected conversation's directory.
+
 The **Toast notifications** plugin independently presents the same TUI
 notifications. Enable either plugin or both in Plugins. Disabling presentation
 never stops agents, startup operations or notification producers. Web uses its

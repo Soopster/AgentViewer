@@ -54,7 +54,7 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
           if (!current.observer) {
             const notifications = declared.includes('notifications') ? offered.notifications : undefined
             // Late completions cannot deliver notifications after this activation ends.
-            const services: PluginApplicationServices = { ...(declared.includes('activity') && offered.activity ? { activity: { publish: input => { if (!current.scope.signal.aborted) offered.activity!.publish(input) }, remove: offered.activity.remove, removeSource: offered.activity.removeSource } } : {}), ...(notifications ? { notifications: {
+            const services: PluginApplicationServices = { ...(declared.includes('repository') && offered.repository ? { repository: { readGit: cwd => offered.repository!.readGit(cwd), readProof: (cwd, signal) => offered.repository!.readProof(cwd, signal) } } : {}), ...(declared.includes('permissions') && offered.permissions ? { permissions: { respond: (target, id, response) => current.scope.signal.aborted ? Promise.reject(new Error('Plugin deactivated')) : offered.permissions!.respond(target, id, response) } } : {}), ...(declared.includes('activity') && offered.activity ? { activity: { publish: input => { if (!current.scope.signal.aborted) offered.activity!.publish(input) }, remove: offered.activity.remove, removeSource: offered.activity.removeSource, replaceSource: (source, items) => { if (!current.scope.signal.aborted) offered.activity!.replaceSource(source, items) } } } : {}), ...(notifications ? { notifications: {
               show: (kind, text, options) => current.scope.signal.aborted ? '' : notifications.show(kind, text, options),
               dismiss: id => { if (!current.scope.signal.aborted) notifications.dismiss(id) },
               notice: text => { if (!current.scope.signal.aborted) notifications.notice(text) },
@@ -97,7 +97,9 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
 }
 
 function copySnapshot(snapshot: PluginActivitySnapshot): PluginActivitySnapshot {
-  return Object.freeze({ ...snapshot, activity: new Map(snapshot.activity), sessions: snapshot.sessions.map(session => Object.freeze({ ...session, ...(session.target ? { target: Object.freeze({ ...session.target }) } : {}) })) })
+  return Object.freeze({ ...snapshot, activity: new Map(snapshot.activity), sessions: snapshot.sessions.map(session => Object.freeze({ ...session, ...(session.target ? { target: Object.freeze({ ...session.target }) } : {}) })),
+    ...(snapshot.cwd !== undefined ? { cwd: snapshot.cwd } : {}), ...(snapshot.teams ? { teams: new Map(snapshot.teams) } : {}), ...(snapshot.started ? { started: new Map(snapshot.started) } : {}),
+    ...(snapshot.pending ? { pending: new Map([...snapshot.pending].map(([key, asks]) => [key, Object.freeze([...asks])])) } : {}) })
 }
 
 function assertSynchronous(value: unknown, id: string): void {

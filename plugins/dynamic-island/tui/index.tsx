@@ -62,6 +62,7 @@ function IslandSurface({ services, theme, width, height, registerKeys, close }: 
   const items = useExpandedActivity(feed)
   useEffect(() => tuiNotifications.hold(), [])
   const [cursor, setCursor] = useState(0)
+  const [failure, setFailure] = useState<string | null>(null)
   const selected = Math.min(cursor, Math.max(0, items.length - 1))
   const popWidth = Math.max(1, Math.min(width - 2, 64))
   const rows = Math.max(1, Math.floor((height - 6) / 2))
@@ -71,9 +72,19 @@ function IslandSurface({ services, theme, width, height, registerKeys, close }: 
     const item = items[index]
     if (item?.target && services['session-navigation']) { close(); services['session-navigation'].open(item.target, item.messageUuid) }
   }
+  // a/r run the row's approve/reject; Enter only ever opens, so one stray key cannot approve.
+  const act = (index: number, actionId: string) => {
+    const action = items[index]?.actions?.find(entry => entry.id === actionId)
+    if (!action) return
+    setFailure(null)
+    Promise.resolve().then(() => action.run()).catch(error => setFailure(error instanceof Error ? error.message : 'Action failed'))
+  }
   useEffect(() => {
     registerKeys(key => {
       if (key.name === 'escape') close()
+      else if (key.sequence === 'a') act(selected, 'approve')
+      else if (key.sequence === 'r') act(selected, 'reject')
+      else if (key.sequence === 'o') open(selected)
       else if (key.name === 'down') setCursor(value => Math.min(items.length - 1, value + 1))
       else if (key.name === 'up') setCursor(value => Math.max(0, value - 1))
       else if (key.name === 'return') open(selected)
@@ -89,9 +100,9 @@ function IslandSurface({ services, theme, width, height, registerKeys, close }: 
     {visible.map((item, index) => <box key={item.id} height={2} flexShrink={0} flexDirection="column" backgroundColor={start + index === selected ? theme.surface2 : theme.surface}
       onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(start + index); open(start + index) } }}>
       <text fg={item.status === 'error' ? theme.red : item.status === 'needs-input' ? theme.amber : theme.text} wrapMode="none" selectable={false}>{fitText(toBmpSafe(` ${start + index === selected ? '›' : ' '} ${item.title}`), popWidth - 2)}</text>
-      <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(toBmpSafe(`   ${item.status}${item.progress !== undefined ? ` ${Math.round(item.progress * 100)}%` : ''}${item.detail ? ` · ${item.detail.replace(/\s+/g, ' ')}` : ''}`), popWidth - 2)}</text>
+      <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(toBmpSafe(`   ${item.status}${item.progress !== undefined ? ` ${Math.round(item.progress * 100)}%` : ''}${start + index === selected && item.actions?.length ? ` [${item.actions.map(action => `${action.id === 'approve' ? 'a' : action.id === 'reject' ? 'r' : '?'} ${action.label}`).join(' · ')}]` : ''}${item.detail ? ` · ${item.detail.replace(/\s+/g, ' ')}` : ''}`), popWidth - 2)}</text>
     </box>)}
-    <text fg={theme.dim} wrapMode="none">{fitText(' ↑↓ select · Enter open · d dismiss · Esc close', popWidth - 2)}</text>
+    <text fg={theme.dim} wrapMode="none">{fitText(failure ? ` ${failure}` : ' ↑↓ select · Enter/o open · a approve · r reject · d dismiss · Esc', popWidth - 2)}</text>
   </box>
 }
 

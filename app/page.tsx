@@ -417,7 +417,7 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <ApplicationPluginHost sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} sessionTabs={sessionTabs} sessionFleet={dashboardServices['session-fleet']} shellActions={shellActions} />
+    <ApplicationPluginHost teamAttention={teamAttention} sessions={sessions} selectedSession={selectedSession} cwd={activeProjectDir} insertText={insertTextToComposer} openSession={openSessionFromPlugin} sessionTabs={sessionTabs} sessionFleet={dashboardServices['session-fleet']} shellActions={shellActions} />
     <SidebarProvider defaultOpen>
       <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         {!isMessageViewMaximized && <Sidebar variant="inset">

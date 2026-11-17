@@ -13,7 +13,7 @@ import type { PluginShellOverview, ShellOverviewAction } from '../../lib/plugins
 /** What only the page can do: open its palette and start a session. */
 export type WebShellActions = { readonly openPalette: () => void; readonly newSession: () => void }
 
-async function readGit(cwd: string): Promise<GitSummary | null> {
+export async function readGit(cwd: string): Promise<GitSummary | null> {
   const response = await fetch(`/api/git?${new URLSearchParams({ cwd, action: 'summary' })}`)
   if (!response.ok) return null
   const body = await response.json().catch(() => ({}))

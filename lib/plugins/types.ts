@@ -225,7 +225,7 @@ export type PluginManifest = {
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]
-    readonly services: readonly ('notifications' | 'activity')[]
+    readonly services: readonly ('notifications' | 'activity' | 'permissions' | 'repository')[]
   }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number

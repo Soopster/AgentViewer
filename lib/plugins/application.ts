@@ -8,10 +8,31 @@ export type PluginActivitySnapshot = {
   readonly sessions: readonly { readonly key: string; readonly title: string; readonly target?: import('./bookmarks').PluginSessionRef }[]
   readonly selectedKey: string | null
   readonly focused: boolean | null
+  /** Unanswered asks by session key. Absent when the host cannot read them. */
+  /** Teammates waiting on the lead (after this client's reviewed markers), by session key. */
+  readonly teams?: ReadonlyMap<string, { readonly waiting: number; readonly finished: number }>
+  /** When each running turn began, by session key, where the host knows. */
+  readonly started?: ReadonlyMap<string, number>
+  /** The selected conversation's project directory, when it has one. */
+  readonly cwd?: string | null
+  readonly pending?: ReadonlyMap<string, readonly import('../permissions').PendingPermission[]>
+}
+
+export type PluginPermissionsService = {
+  /** Answers one ask on the session that raised it. Rejects when the ask is gone or the reply fails. */
+  readonly respond: (target: import('./bookmarks').PluginSessionRef, permissionId: string, response: 'once' | 'reject') => Promise<void>
+}
+
+/** Read-only project state for the selected conversation; either read may answer null when unavailable. */
+export type PluginRepositoryService = {
+  readonly readGit: (cwd: string) => Promise<import('../gitProvider').GitSummary | null>
+  readonly readProof: (cwd: string, signal: AbortSignal) => Promise<import('./proof').ProofSnapshot | null>
 }
 
 export type PluginApplicationServices = {
-  readonly activity?: Pick<import('./activityFeed').PluginActivityFeed, 'publish' | 'remove' | 'removeSource'>
+  readonly repository?: PluginRepositoryService
+  readonly permissions?: PluginPermissionsService
+  readonly activity?: Pick<import('./activityFeed').PluginActivityFeed, 'publish' | 'remove' | 'removeSource' | 'replaceSource'>
   readonly notifications?: import('./notifications').PluginNotifications & {
     readonly notice: (text: string) => void
     /** The host decides availability. Calling this never asks for permission. */

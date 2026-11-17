@@ -69,6 +69,22 @@ try {
   await press('d')
   assert(!screen().includes('Needs review'), 'dismiss removes the selected presentation row')
   await press('escape')
+  // Inline approvals: a/r act on the selected row; Enter opens and never approves.
+  const decisions: string[] = []
+  await act(async () => { tuiActivityFeed.publish({ id: 'approval:fixture', source: 'approvals', kind: 'approval', status: 'needs-input', title: 'Work needs approval', detail: 'Bash: rm -rf build', target,
+    actions: [{ id: 'reject', label: 'Reject', tone: 'danger', run: () => { decisions.push('reject') } }, { id: 'approve', label: 'Approve', tone: 'primary', run: () => { decisions.push('approve') } }] }) })
+  await act(async () => { show(true) })
+  await waitFor('approval row leads with its actions', () => screen().includes('Work needs approval') && screen().includes('a Approve') && screen().includes('r Reject'))
+  await press('return')
+  assert.deepEqual(decisions, [], 'Enter opens the session and never approves')
+  await act(async () => { show(true) })
+  await waitFor('reopened with approval', () => screen().includes('Work needs approval'))
+  await press('a')
+  assert.deepEqual(decisions, ['approve'])
+  await press('r')
+  assert.deepEqual(decisions, ['approve', 'reject'])
+  await press('escape')
+  await act(async () => { tuiActivityFeed.remove('approval:fixture') })
   await act(async () => { resize(24) })
   await settle()
   assert(screen().includes('READER CONTENT'), 'narrow geometry preserves the reader')

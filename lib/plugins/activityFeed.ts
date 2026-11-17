@@ -1,7 +1,17 @@
 import type { PluginSessionRef } from './bookmarks'
 
 export type ActivityStatus = 'needs-input' | 'error' | 'running' | 'waiting' | 'success' | 'info'
+export type ActivityKind = 'approval' | 'question' | 'team' | 'repo' | 'checks' | 'health' | 'task' | 'session'
+/** An in-process closure the island runs for a row. Never serialized, so it stays out of the fingerprint. */
+export type ActivityAction = {
+  readonly id: string
+  readonly label: string
+  readonly tone?: 'primary' | 'danger'
+  readonly run: () => Promise<void> | void
+}
 export type AppActivity = {
+  readonly kind?: ActivityKind
+  readonly actions?: readonly ActivityAction[]
   readonly id: string
   readonly source: string
   readonly title: string
@@ -15,6 +25,9 @@ export type AppActivity = {
 }
 export type ActivityInput = Omit<AppActivity, 'updatedAt'> & { readonly updatedAt?: number }
 const PRIORITY: Record<ActivityStatus, number> = { 'needs-input': 0, error: 1, running: 2, waiting: 3, success: 4, info: 4 }
+/** Within one status, what the person must decide outranks what merely informs. */
+const KIND_PRIORITY: Record<ActivityKind, number> = { approval: 0, question: 0, team: 1, checks: 2, repo: 3, health: 4, task: 5, session: 6 }
+const kindRank = (item: AppActivity) => KIND_PRIORITY[item.kind ?? 'session']
 const EMPTY: readonly AppActivity[] = []
 
 /** One feed per renderer host, containing data only. No SDK or presentation imports. */
@@ -28,7 +41,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
   let holds = 0
   let heldOrder: string[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
-  const fingerprint = (item: AppActivity) => JSON.stringify([item.source, item.status, item.title, item.detail, item.progress, item.target, item.messageUuid])
+  const fingerprint = (item: AppActivity) => JSON.stringify([item.source, item.kind, item.status, item.title, item.detail, item.progress, item.target, item.messageUuid, item.actions?.map(action => [action.id, action.label, action.tone])])
   const schedule = () => {
     clearTimeout(timer)
     timer = undefined
@@ -42,7 +55,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
   }
   const emit = () => {
     snapshot = [...entries.values()].filter(item => dismissed.get(item.id) !== fingerprint(item))
-      .sort((a, b) => PRIORITY[a.status] - PRIORITY[b.status] || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+      .sort((a, b) => PRIORITY[a.status] - PRIORITY[b.status] || kindRank(a) - kindRank(b) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
     if (holds) {
       const positions = new Map(heldOrder.map((id, index) => [id, index]))
       snapshot = [...snapshot].sort((a, b) => (positions.get(a.id) ?? heldOrder.length) - (positions.get(b.id) ?? heldOrder.length))
@@ -95,8 +108,10 @@ export function createActivityFeed(clock: () => number = Date.now) {
       if (removed) emit()
     },
     removeSource(source: string) {
-      for (const [id, item] of entries) if (item.source === source) { entries.delete(id); dismissed.delete(id) }
-      emit()
+      let removed = false
+      for (const [id, item] of entries) if (item.source === source) { entries.delete(id); dismissed.delete(id); removed = true }
+      // Removing nothing must not mint a new snapshot: observers call this on every poll.
+      if (removed) emit()
     },
     dismiss(id: string) {
       const item = entries.get(id)
