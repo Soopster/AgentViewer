@@ -25,6 +25,12 @@ export type AppActivity = {
   readonly updatedAt: number
   readonly expiresAt?: number
 }
+export type ActivityDismissal = { readonly id: string; readonly key: string; readonly at: number }
+/** Where a host keeps dismissals between launches. Synchronous: it holds a handful of short rows. */
+export type ActivityDismissalStore = { load(): readonly ActivityDismissal[]; save(rows: readonly ActivityDismissal[]): void }
+const DISMISSAL_GRACE_MS = 60_000
+const DISMISSAL_TTL_MS = 14 * 24 * 60 * 60 * 1000
+const DISMISSAL_LIMIT = 200
 export type ActivityInput = Omit<AppActivity, 'updatedAt'> & { readonly updatedAt?: number }
 const PRIORITY: Record<ActivityStatus, number> = { 'needs-input': 0, error: 1, running: 2, waiting: 3, success: 4, info: 4 }
 /** Within one status, what the person must decide outranks what merely informs. */
@@ -35,7 +41,32 @@ const EMPTY: readonly AppActivity[] = []
 /** One feed per renderer host, containing data only. No SDK or presentation imports. */
 export function createActivityFeed(clock: () => number = Date.now) {
   const entries = new Map<string, AppActivity>()
-  const dismissed = new Map<string, string>()
+  // A dismissal outlives its row: it is forgotten only once its source has stopped raising the row
+  // for DISMISSAL_GRACE_MS (a resolved item may recur), never because a poll skipped it for a moment
+  // or the app restarted before the first poll.
+  const dismissed = new Map<string, { key: string; at: number; absentSince?: number }>()
+  let store: ActivityDismissalStore | undefined
+  let saveTimer: ReturnType<typeof setTimeout> | undefined
+  const persist = () => {
+    if (!store) return
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      const cutoff = clock() - DISMISSAL_TTL_MS
+      const rows = [...dismissed].filter(([, value]) => value.at >= cutoff).slice(-DISMISSAL_LIMIT)
+      try { store?.save(rows.map(([id, value]) => ({ id, key: value.key, at: value.at }))) } catch { /* presentation state; a failed write only re-shows rows */ }
+    }, 250)
+    if (typeof saveTimer === 'object' && 'unref' in saveTimer) saveTimer.unref()
+  }
+  const retire = (id: string) => {
+    const entry = dismissed.get(id)
+    if (entry && entry.absentSince === undefined) entry.absentSince = clock()
+  }
+  const reap = () => {
+    const now = clock()
+    let changed = false
+    for (const [id, entry] of dismissed) if (entry.absentSince !== undefined && now - entry.absentSince >= DISMISSAL_GRACE_MS) { dismissed.delete(id); changed = true }
+    if (changed) persist()
+  }
   const listeners = new Set<() => void>()
   const presentationListeners = new Set<() => void>()
   let snapshot: readonly AppActivity[] = EMPTY
@@ -57,7 +88,8 @@ export function createActivityFeed(clock: () => number = Date.now) {
     }
   }
   const emit = () => {
-    snapshot = [...entries.values()].filter(item => dismissed.get(item.id) !== dismissal(item))
+    reap()
+    snapshot = [...entries.values()].filter(item => dismissed.get(item.id)?.key !== dismissal(item))
       .sort((a, b) => PRIORITY[a.status] - PRIORITY[b.status] || kindRank(a) - kindRank(b) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
     if (holds) {
       const positions = new Map(heldOrder.map((id, index) => [id, index]))
@@ -72,14 +104,14 @@ export function createActivityFeed(clock: () => number = Date.now) {
     let changed = false
     for (const [id, item] of entries) {
       if (item.expiresAt !== undefined && item.expiresAt <= clock()) {
-        entries.delete(id); dismissed.delete(id); changed = true
+        entries.delete(id); retire(id); changed = true
       }
     }
     if (changed) emit()
     else schedule()
   }
   const remove = (id: string) => {
-    dismissed.delete(id)
+    retire(id)
     if (entries.delete(id)) emit()
   }
   const feed = {
@@ -90,13 +122,17 @@ export function createActivityFeed(clock: () => number = Date.now) {
       return () => { listeners.delete(listener); schedule() }
     },
     publish(input: ActivityInput) {
+      // A dismissal whose row has been gone long enough is forgotten before this row can claim it.
+      reap()
       const previous = entries.get(input.id)
       const item: AppActivity = Object.freeze({ ...input, ...(input.target ? { target: Object.freeze({ ...input.target }) } : {}), progress: input.progress === undefined ? undefined : Math.max(0, Math.min(1, input.progress)), updatedAt: input.updatedAt ?? clock() })
       if (previous && fingerprint(previous) === fingerprint(item) && previous.expiresAt === item.expiresAt) return
       entries.set(item.id, item)
+      const back = dismissed.get(item.id)
+      if (back) back.absentSince = undefined
       // Bound transient notices without dropping ongoing work or unresolved errors.
       const transient = [...entries.values()].filter(row => row.expiresAt !== undefined)
-      for (const old of transient.slice(0, Math.max(0, transient.length - 50))) { entries.delete(old.id); dismissed.delete(old.id) }
+      for (const old of transient.slice(0, Math.max(0, transient.length - 50))) { entries.delete(old.id); retire(old.id) }
       emit()
     },
     remove,
@@ -105,21 +141,21 @@ export function createActivityFeed(clock: () => number = Date.now) {
       let removed = false
       // Include dismissed entries: a source resolving an item resets its dismissal.
       for (const [id, item] of entries) if (item.source === source && !ids.has(id)) {
-        entries.delete(id); dismissed.delete(id); removed = true
+        entries.delete(id); retire(id); removed = true
       }
       for (const item of items) feed.publish({ ...item, source })
       if (removed) emit()
     },
     removeSource(source: string) {
       let removed = false
-      for (const [id, item] of entries) if (item.source === source) { entries.delete(id); dismissed.delete(id); removed = true }
+      for (const [id, item] of entries) if (item.source === source) { entries.delete(id); retire(id); removed = true }
       // Removing nothing must not mint a new snapshot: observers call this on every poll.
       if (removed) emit()
     },
     dismiss(id: string) {
       const item = entries.get(id)
       if (!item) return
-      dismissed.set(id, dismissal(item)); emit()
+      dismissed.set(id, { key: dismissal(item), at: clock() }); persist(); emit()
     },
     hold() {
       if (!holds) heldOrder = snapshot.map(item => item.id)
@@ -136,9 +172,19 @@ export function createActivityFeed(clock: () => number = Date.now) {
       return () => {
         if (released) return
         released = true; consumers--
-        if (!consumers) { entries.clear(); dismissed.clear(); emit() }
+        if (!consumers) { for (const id of entries.keys()) retire(id); entries.clear(); emit() }
         for (const listener of presentationListeners) listener()
       }
+    },
+    /** Loads saved dismissals and saves each change. Returns the detach. */
+    attachDismissals(next: ActivityDismissalStore) {
+      store = next
+      try {
+        const cutoff = clock() - DISMISSAL_TTL_MS
+        for (const row of next.load()) if (row.at >= cutoff && !dismissed.has(row.id)) dismissed.set(row.id, { key: row.key, at: row.at })
+      } catch { /* unreadable saved state only re-shows rows */ }
+      emit()
+      return () => { if (store === next) store = undefined; clearTimeout(saveTimer) }
     },
     expire,
   }

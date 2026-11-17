@@ -29,7 +29,12 @@ assert.equal(feed.getSnapshot()[0].title, 'New question')
 feed.dismiss('input')
 feed.replaceSource('sessions', [])
 feed.replaceSource('sessions', [{ id: 'input', source: 'sessions', title: 'New question', status: 'needs-input' }])
-assert.equal(feed.getSnapshot()[0].id, 'input', 'a resolved item may recur after its previous dismissal')
+assert(!feed.getSnapshot().some(item => item.id === 'input'), 'a poll that skips a row for a moment does not revive its dismissal')
+feed.replaceSource('sessions', [])
+now += 61_000
+feed.replaceSource('sessions', [])
+feed.replaceSource('sessions', [{ id: 'input', source: 'sessions', title: 'New question', status: 'needs-input' }])
+assert.equal(feed.getSnapshot()[0].id, 'input', 'an item resolved for a while may recur after its previous dismissal')
 const mutableTarget = { provider: 'codex' as const, providerInstanceId: 'work', sessionId: 'same' }
 feed.publish({ id: 'captured', source: 'jobs', title: 'Captured target', status: 'info', target: mutableTarget })
 mutableTarget.providerInstanceId = 'personal'
@@ -42,6 +47,30 @@ assert(feed.getSnapshot().some(item => item.id === 'short'), 'expanded presentat
 release()
 assert(!feed.getSnapshot().some(item => item.id === 'short'))
 assert(feed.getSnapshot().some(item => item.id === 'error'), 'errors do not expire by default')
+
+// Dismissals persist: a restarted host loads them, the same row stays hidden, a changed one returns, and they expire.
+let saved: readonly { id: string; key: string; at: number }[] = []
+const persisted = createActivityFeed(() => now)
+const disk = { load: () => saved, save: (rows: typeof saved) => { saved = rows } }
+persisted.attachDismissals(disk)
+persisted.publish({ id: 'team:x', source: 'team', title: 'Team', status: 'needs-input', dismissKey: 'waiting:2' })
+persisted.dismiss('team:x')
+await new Promise(resolve => setTimeout(resolve, 300))
+assert.deepEqual(saved.map(row => [row.id, row.key]), [['team:x', 'waiting:2']], 'a dismissal is saved')
+const relaunched = createActivityFeed(() => now)
+relaunched.attachDismissals(disk)
+relaunched.publish({ id: 'team:x', source: 'team', title: 'Retitled', status: 'needs-input', dismissKey: 'waiting:2', detail: '3 finished results' })
+assert.equal(relaunched.getSnapshot().length, 0, 'a dismissed row stays dismissed after relaunch')
+relaunched.publish({ id: 'team:x', source: 'team', title: 'Team', status: 'needs-input', dismissKey: 'waiting:3' })
+assert.equal(relaunched.getSnapshot().length, 1, 'a changed condition shows again')
+const stale = createActivityFeed(() => now + 15 * 24 * 60 * 60 * 1000)
+stale.attachDismissals(disk)
+stale.publish({ id: 'team:x', source: 'team', title: 'Team', status: 'needs-input', dismissKey: 'waiting:2' })
+assert.equal(stale.getSnapshot().length, 1, 'old dismissals expire')
+const broken = createActivityFeed(() => now)
+broken.attachDismissals({ load: () => { throw new Error('unreadable') }, save: () => { throw new Error('read-only') } })
+broken.publish({ id: 'a', source: 's', title: 'A', status: 'info' }); broken.dismiss('a')
+assert.equal(broken.getSnapshot().length, 0, 'unusable storage degrades to in-memory dismissal')
 
 const notifications = createNotificationCenter(() => now)
 let first = 0, second = 0

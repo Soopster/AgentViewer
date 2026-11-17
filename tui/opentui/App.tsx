@@ -203,6 +203,7 @@ import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SubagentSummary } from '../../lib/types'
 import { fitText, joinMeta } from './textLayout'
 import { Slot } from './slots'
+import { tuiIslandDismissals } from '../../lib/tui/islandDismissals'
 import { peekGitSummaryCached, readGitSummaryCached } from './gitSummaryCache'
 import './slotRegistrations'
 import { coordinatorSidebarHeaderText, CoordinatorFilters } from './CoordinatorSidebar'
@@ -1148,6 +1149,7 @@ function OpenTuiWorkspace() {
   // store commits only on a changed mark, so this subscription re-renders the
   // root on a change and never on its 5s poll.
   useEffect(() => startTeamAttentionFeed(), [])
+  useEffect(() => tuiActivityFeed.attachDismissals(tuiIslandDismissals), [])
   const teamAttention = useSyncExternalStore(subscribeTeamAttention, getTeamAttention, getTeamAttention)
 
   // A session another process is writing right now — a native CLI, a second

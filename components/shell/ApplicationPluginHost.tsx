@@ -47,6 +47,11 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
   /** The page's palette and new-session actions, for the `shell-overview` service (the Omni bar). */
   shellActions?: WebShellActions
 }) {
+  // Dismissed island rows stay dismissed across reloads; unreadable storage only re-shows them.
+  useEffect(() => webActivityFeed.attachDismissals({
+    load: () => { try { const rows: unknown = JSON.parse(localStorage.getItem('agentViewer:islandDismissed') ?? '[]'); return Array.isArray(rows) ? rows : [] } catch { return [] } },
+    save: rows => { try { localStorage.setItem('agentViewer:islandDismissed', JSON.stringify(rows)) } catch { /* storage unavailable */ } },
+  }), [])
   const shellOverview = useWebShellOverview(shellActions ?? NO_SHELL_ACTIONS)
   const showNotice = useCallback((text: string) => { webNotifications.service.show('info', text) }, [])
   const showError = useCallback((error: unknown) => {
