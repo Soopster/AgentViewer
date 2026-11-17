@@ -1,6 +1,7 @@
 import type { Session } from './types'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath } from './projectPaths'
 import { parseStoredSessionTags } from './sessionTags'
+import { isScratchDir, scratchGroupDir, SCRATCH_PROJECT_LABEL } from './scratchPaths'
 
 type ProjectGroupEntry = {
   projectDir: string
@@ -20,7 +21,9 @@ export type IndexedSession = {
 export function indexSession(session: Session): IndexedSession {
   const tags = parseStoredSessionTags(session.tag)
   const title = session.customTitle ?? session.summary ?? ''
-  const normalizedDir = normalizeProjectPath(session.cwd) || '—'
+  // Every scratch chat has its own directory; they share one group.
+  const scratch = isScratchDir(session.cwd)
+  const normalizedDir = scratch ? scratchGroupDir(normalizeProjectPath(session.cwd)) : normalizeProjectPath(session.cwd) || '—'
   return {
     session,
     tags,
@@ -32,7 +35,7 @@ export function indexSession(session: Session): IndexedSession {
       session.firstPrompt ?? '',
     ].join('\n').toLowerCase(),
     normalizedProjectDir: normalizedDir,
-    projectName: pathBasename(normalizedDir) || '—',
+    projectName: scratch ? SCRATCH_PROJECT_LABEL : pathBasename(normalizedDir) || '—',
   }
 }
 

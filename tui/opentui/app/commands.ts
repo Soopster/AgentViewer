@@ -87,6 +87,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'composer-stash-pop', label: 'Pop composer stash', key: '', category: 'Session' },
   { id: 'composer-stash-list', label: 'List composer stash', key: '', category: 'Session' },
   { id: 'new', label: 'New agent session', key: '⇧N', category: 'Session' },
+  { id: 'new-scratch', label: 'New scratch chat (no repository)', key: '', category: 'Session' },
   { id: 'rename', label: 'Rename session', key: '⌃R', category: 'Session' },
   { id: 'cli', label: 'Copy CLI resume command', key: '', category: 'Session' },
   { id: 'transcript-pager', label: 'Open transcript in pager/editor', key: '⌃K v', category: 'Transcript' },

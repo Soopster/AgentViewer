@@ -47,7 +47,7 @@ export function useSessionCreation() {
         provider: isAgentProvider(data.provider) ? data.provider : target.provider,
         providerInstanceId: typeof data.providerInstanceId === 'string' ? data.providerInstanceId : target.providerInstanceId,
         cwd: typeof data.cwd === 'string' ? data.cwd : target.cwd,
-        createdAt: now, lastModified: now, summary: 'New session', isPending: data.isPending === true,
+        createdAt: now, lastModified: now, summary: target.scratch ? 'Scratch chat' : 'New session', isPending: data.isPending === true,
       }
     } catch (cause) {
       if (!request.abort.signal.aborted && requestRef.current === request && intent.isCurrent()) {

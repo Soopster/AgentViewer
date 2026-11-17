@@ -1,4 +1,5 @@
 import { checkDigest } from './format/checkDigest'
+import { isScratchDir, SCRATCH_PROJECT_LABEL } from '../lib/scratchPaths'
 import { formatRegisteredToolExpanded, formatRegisteredToolPreview } from './format/registry'
 import { summarizeKind, normalizeUnifiedDiff, previewDiff, previewFileChange, synthesizeEditDiff } from './format/diffs'
 import { extractMarkdownContent, extractCodeBlocksFromBlocks } from './format/code'
@@ -1092,6 +1093,7 @@ export function formatSessionTitle(session: Session): string {
 }
 
 export function formatSessionProject(session: Session): string {
+  if (isScratchDir(session.cwd)) return SCRATCH_PROJECT_LABEL
   return truncateLine(pathBasename(session.cwd) || 'no-project', 28)
 }
 

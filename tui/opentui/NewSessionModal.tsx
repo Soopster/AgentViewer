@@ -22,8 +22,8 @@ export function enabledNewSessionProviders(): readonly AgentProvider[] {
   return on.length > 0 ? on : NEW_SESSION_PROVIDERS
 }
 
-type Row = 'folder' | 'provider'
-const ROWS: Row[] = ['folder', 'provider']
+type Row = 'folder' | 'provider' | 'scratch'
+const ROWS: Row[] = ['folder', 'provider', 'scratch']
 export const NEW_SESSION_LOADING_FRAMES = ['◐', '◓', '◑', '◒'] as const
 
 type Props = {
@@ -32,6 +32,8 @@ type Props = {
   height: number
   provider: AgentProvider
   cwd: string
+  scratch?: boolean
+  onToggleScratch?: () => void
   busy?: boolean
   onCycleProvider: (direction: 1 | -1) => void
   onBrowseFolder: () => void
@@ -54,6 +56,8 @@ export function NewSessionModal({
   height,
   provider,
   cwd,
+  scratch = false,
+  onToggleScratch,
   busy = false,
   onCycleProvider,
   onBrowseFolder,
@@ -76,6 +80,7 @@ export function NewSessionModal({
     if (busy) return
     if (key.name === 'escape' || key.sequence === 'q') { onClose(); return }
     if (key.name === 'return') { onCreate(); return }
+    if (key.sequence === ' ' || key.name === 'space') { onToggleScratch?.(); return }
     if (key.sequence === 'b') { onBrowseFolder(); return }
     if (key.name === 'up' || key.sequence === 'k') {
       setRow((current) => ROWS[Math.max(0, ROWS.indexOf(current) - 1)]!)
@@ -87,19 +92,21 @@ export function NewSessionModal({
     }
     if (key.name === 'left' || key.sequence === 'h') {
       if (row === 'provider') onCycleProvider(-1)
+      else if (row === 'scratch') onToggleScratch?.()
       return
     }
     if (key.name === 'right' || key.sequence === 'l') {
       if (row === 'provider') onCycleProvider(1)
+      else if (row === 'scratch') onToggleScratch?.()
       else onBrowseFolder()
       return
     }
-  }, [busy, onBrowseFolder, onClose, onCreate, onCycleProvider, row])
+  }, [busy, onBrowseFolder, onClose, onCreate, onCycleProvider, onToggleScratch, row])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
   const popW = Math.min(Math.max(48, width - 8), 72)
-  const popH = 9
+  const popH = 10
   const labelW = 10
   const valueW = Math.max(8, popW - labelW - 6)
 
@@ -137,8 +144,9 @@ export function NewSessionModal({
       titleColor={theme.cyan}
     >
       <box height={1} />
-      {renderRow('folder', 'Folder', cwd, '→/b browse')}
+      {renderRow('folder', 'Folder', scratch ? '(none — scratch chat)' : cwd, scratch ? '' : '→/b browse')}
       {renderRow('provider', 'Provider', formatProviderLabel(provider), '←→ change')}
+      {renderRow('scratch', 'Scratch', scratch ? 'on — no repository' : 'off', 'space toggle')}
       <box flexGrow={1} />
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">

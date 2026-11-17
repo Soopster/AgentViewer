@@ -1305,13 +1305,16 @@ export async function createTuiSession(params: {
   providerInstanceId?: string
   cwd?: string
   title?: string
+  /** A chat tied to no repository: runs in a fresh directory, `cwd` is ignored. */
+  scratch?: boolean
 }): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean; providerInstanceId?: string }> {
   const finishLoading = beginProviderLoading(params.provider)
   try {
     if (isRemoteAttached()) {
       return await remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
     }
-    const { providerInstanceId, ...rest } = params
+    const { providerInstanceId, scratch, ...local } = params
+    const rest = scratch ? { ...local, cwd: await (await import('../scratchSessions')).createScratchDir() } : local
     const { withProviderInstance } = await import('../providerInstances')
     if (params.provider !== 'acp') {
       if (!params.provider || !providerInstanceId || providerInstanceId === params.provider) return await (await sendPath()).createNewViewSession(rest)

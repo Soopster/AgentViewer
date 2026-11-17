@@ -34,6 +34,7 @@ export type SessionListProps = {
   canOpenGit: boolean
   onOpenGit: () => void
   onNewSession?: () => void
+  onNewScratchSession?: () => void
   creatingSession?: boolean
 }
 

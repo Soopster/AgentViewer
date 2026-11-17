@@ -3314,7 +3314,12 @@ function OpenTuiWorkspace() {
     return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, measure) }
   }, [composerWindowOpen, renderer])
 
+  // A chat tied to no repository (lib/scratchSessions.ts): the dialog's Scratch row.
+  const [newSessionScratch, setNewSessionScratch] = useState(false)
+  useEffect(() => { if (!newSessionModalOpen) setNewSessionScratch(false) }, [newSessionModalOpen])
+
   const openNewSessionModal = useStableEvent(() => {
+    setNewSessionScratch(false)
     const defaultProvider: AgentProvider = provider === 'all'
       ? (selectedSession?.provider ?? 'claude')
       : provider
@@ -3324,6 +3329,11 @@ function OpenTuiWorkspace() {
     setNewSessionBusy(false)
     setFolderPickerForNewSession(false)
     setNewSessionModalOpen(true)
+  })
+
+  const openNewScratchSession = useStableEvent(() => {
+    openNewSessionModal()
+    setNewSessionScratch(true)
   })
 
   const cycleNewSessionProvider = useStableEvent((direction: 1 | -1) => {
@@ -3378,7 +3388,7 @@ function OpenTuiWorkspace() {
 
   const submitNewSession = useStableEvent(() => {
     if (newSessionBusy) return
-    void startFreshSession(newSessionProvider, newSessionCwd.trim() || workspaceCwd)
+    void startFreshSession(newSessionProvider, newSessionCwd.trim() || workspaceCwd, newSessionScratch)
   })
 
   const pendingForkSendRef = useRef<{ key: string; text: string } | null>(null)
@@ -3432,11 +3442,11 @@ function OpenTuiWorkspace() {
 
   // Create a session and open it with the composer focused — the New Session
   // dialog's action, and what /clear and /new do, as in the native CLIs.
-  const startFreshSession = useStableEvent(async (targetProvider: AgentProvider, cwd: string) => runStartFreshSession({
+  const startFreshSession = useStableEvent(async (targetProvider: AgentProvider, cwd: string, scratch?: boolean) => runStartFreshSession({
     setWorkspaceHasSession, setWorkspaceLaunched, newSessionBusy, setNewSessionBusy,
     selectedSession, provider, providerInstances, providerInstanceId, openCreatedSession,
     setNewSessionModalOpen, showNotice, setError,
-  }, targetProvider, cwd))
+  }, targetProvider, cwd, scratch))
 
   // /handoff <provider>: continue this conversation on another provider. A new
   // session opens in the same folder with the handoff — the brief plus the recent
@@ -6219,7 +6229,7 @@ function OpenTuiWorkspace() {
     return runExecuteCommandPalette({
     isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
-    runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
+    runPluginCommand, selectedSession, openNewSessionModal, openNewScratchSession, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
     toggleSurfacePanelPlacement, setWindowPickerOpen,
@@ -7363,11 +7373,13 @@ function OpenTuiWorkspace() {
           height={height}
           provider={newSessionProvider}
           cwd={newSessionCwd}
+          scratch={newSessionScratch}
+          onToggleScratch={() => setNewSessionScratch((current) => !current)}
           busy={newSessionBusy}
           onCycleProvider={cycleNewSessionProvider}
           onBrowseFolder={openNewSessionFolderPicker}
           onCreate={submitNewSession}
-          onClose={() => setNewSessionModalOpen(false)}
+          onClose={() => { setNewSessionModalOpen(false); setNewSessionScratch(false) }}
           onKeyHandlerReady={(handler) => { newSessionKeyHandlerRef.current = handler }}
         />
       ) : null}

@@ -719,7 +719,7 @@ export type StartFreshSessionContext = {
   setError: React.Dispatch<React.SetStateAction<string | null>>
 }
 
-export async function runStartFreshSession(ctx: StartFreshSessionContext, targetProvider: AgentProvider, cwd: string) {
+export async function runStartFreshSession(ctx: StartFreshSessionContext, targetProvider: AgentProvider, cwd: string, scratch = false) {
   const {
     setWorkspaceHasSession, setWorkspaceLaunched, newSessionBusy, setNewSessionBusy,
     selectedSession, provider, providerInstances, providerInstanceId, openCreatedSession,
@@ -734,7 +734,7 @@ export async function runStartFreshSession(ctx: StartFreshSessionContext, target
       // one the selected session belongs to.
       const fromAgent = selectedSession?.provider === targetProvider ? selectedSession : null
       const pickedInstance = targetProvider === provider ? providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId) : undefined
-      const result = await createTuiSession({ provider: targetProvider, cwd, providerInstanceId: pickedInstance?.providerInstanceId ?? fromAgent?.providerInstanceId })
+      const result = await createTuiSession({ provider: targetProvider, cwd, ...(scratch ? { scratch: true } : {}), providerInstanceId: pickedInstance?.providerInstanceId ?? fromAgent?.providerInstanceId })
       await openCreatedSession({
         sessionId: result.sessionId,
         provider: result.provider,
@@ -743,7 +743,7 @@ export async function runStartFreshSession(ctx: StartFreshSessionContext, target
         cwd: result.cwd,
         createdAt: Date.now(),
         lastModified: Date.now(),
-        summary: 'New session',
+        summary: scratch ? 'Scratch chat' : 'New session',
         isPending: result.isPending,
       })
       setNewSessionModalOpen(false)

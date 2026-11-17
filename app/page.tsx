@@ -335,16 +335,18 @@ export default function Home() {
     clearActive: clearTranscripts,
   }), [removeSession, isActiveTab, clearTranscripts])
 
-  const handleNewSession = useCallback(async () => {
+  const startNewSession = useCallback(async (scratch: boolean) => {
     const isCurrent = captureIntent()
     const target = sessionCreationTarget({
-      ...currentProviderTarget(), session: currentSession(), projectDir: currentProjectDir(),
+      ...currentProviderTarget(), session: currentSession(), projectDir: scratch ? null : currentProjectDir(),
     })
-    const draft = await createSession(target, { isCurrent })
+    const draft = await createSession(scratch ? { ...target, cwd: undefined, scratch: true } : target, { isCurrent })
     if (!draft) return
     if (isCurrent()) await selectSession(draft)
     else addNavigationTab(draft)
   }, [captureIntent, currentProviderTarget, currentSession, currentProjectDir, createSession, selectSession, addNavigationTab])
+  const handleNewSession = useCallback(() => startNewSession(false), [startNewSession])
+  const handleNewScratchSession = useCallback(() => startNewSession(true), [startNewSession])
   // The page's own actions, for the Omni bar's `shell-overview` service.
   const shellActions = useMemo(() => ({ openPalette: openCommandPalette, newSession: () => { void handleNewSession() } }), [openCommandPalette, handleNewSession])
 
@@ -448,6 +450,7 @@ export default function Home() {
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
             onNewSession={handleNewSession}
+            onNewScratchSession={handleNewScratchSession}
             creatingSession={creatingNewSession}
           />
         </Sidebar>}

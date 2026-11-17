@@ -1,6 +1,6 @@
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 
-export type SessionCreationTarget = { provider: AgentProvider; providerInstanceId: string; cwd?: string }
+export type SessionCreationTarget = { provider: AgentProvider; providerInstanceId: string; cwd?: string; /** A chat tied to no repository (lib/scratchSessions.ts). */ scratch?: boolean }
 export function sessionCreationTarget({ provider, providerInstanceId, session, projectDir }: {
   provider: ProviderSelection; providerInstanceId: string; session: Session | null; projectDir: string | null
 }): SessionCreationTarget {

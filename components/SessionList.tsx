@@ -75,6 +75,7 @@ function SessionListInner({
   canOpenGit,
   onOpenGit,
   onNewSession,
+  onNewScratchSession,
   creatingSession = false,
 }: SessionListProps) {
   const pluginDashboards = usePluginDashboards()
@@ -949,6 +950,24 @@ className={cn(providerSelectClassName, switchingProvider ? 'cursor-not-allowed o
                     >
                       <span aria-hidden="true">{creatingSession ? '…' : '+'}</span>
                       <span>New</span>
+                    </Button>
+                  )}
+                  {onNewScratchSession && (
+                    <Button
+                      onClick={onNewScratchSession}
+                      disabled={creatingSession}
+                      variant="outline"
+                      size="sm"
+                      title="New scratch chat — not tied to a repository"
+                      aria-label="Start a scratch chat, not tied to a repository"
+                      className="av-hover-control"
+                      style={{
+                        ...sidebarHeaderPrimaryActionStyle,
+                        cursor: creatingSession ? 'not-allowed' : 'pointer',
+                        opacity: creatingSession ? 0.55 : 1,
+                      }}
+                    >
+                      <span>Scratch</span>
                     </Button>
                   )}
                   <div

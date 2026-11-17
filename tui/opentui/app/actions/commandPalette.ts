@@ -55,6 +55,7 @@ export type ExecuteCommandPaletteContext = {
   runPluginCommand: (command: ResolvedPluginCommand, session?: Session | null) => void
   selectedSession: Session | null
   openNewSessionModal: () => void
+  openNewScratchSession: () => void
   openProviderMenu: () => void
   setAttentionOpen: React.Dispatch<React.SetStateAction<boolean>>
   jumpToNextAttention: () => void
@@ -208,7 +209,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
   const persistPreference = (write: () => Promise<unknown>) => ctx.isolatedView ? Promise.resolve() : write()
   const {
     focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
-    runPluginCommand, selectedSession, openNewSessionModal, openProviderMenu,
+    runPluginCommand, selectedSession, openNewSessionModal, openNewScratchSession, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,
     toggleSurfacePanelPlacement, setWindowPickerOpen,

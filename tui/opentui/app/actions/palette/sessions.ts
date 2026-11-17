@@ -6,11 +6,14 @@ import { formatSessionTitle } from '../../../../format'
 import { TASK_PANEL_RESIZE_STEP } from '../../layoutConstants'
 import { sessionKey } from '../../sessionList'
 
-registerHostCommand(['new'], (ctx, id, locals) => {
-    const { openNewSessionModal } = ctx
+registerHostCommand(['new', 'new-scratch'], (ctx, id, locals) => {
+    const { openNewSessionModal, openNewScratchSession } = ctx
     switch (id) {
       case 'new':
         openNewSessionModal()
+        break
+      case 'new-scratch':
+        openNewScratchSession()
         break
     }
 })
