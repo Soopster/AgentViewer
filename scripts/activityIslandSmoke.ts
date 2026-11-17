@@ -126,6 +126,15 @@ assert.equal(observed.getSnapshot().filter(item => item.kind === 'approval').len
 await host.publish(event([['codex@work:same', 'needs-input']]))
 assert.equal(observed.getSnapshot().filter(item => item.kind === 'approval').length, 0)
 assert(observed.getSnapshot().some(item => item.id === 'session:codex@work:same'), 'a session with no listed ask keeps its generic row')
+// Plain session rows: dismissed per state, so a retitle does not revive one.
+await host.publish(event([['codex@work:same', 'running']]))
+const sessionRow = observed.getSnapshot().find(item => item.id === 'session:codex@work:same')!
+observed.dismiss(sessionRow.id)
+await host.publish({ ...event([['codex@work:same', 'running']]), sessions: [{ key: 'codex@work:same', title: 'Renamed again', target }] })
+assert(!observed.getSnapshot().some(item => item.id === sessionRow.id), 'a retitled running session stays dismissed')
+await host.publish(event([['codex@work:same', 'needs-input']]))
+assert(observed.getSnapshot().some(item => item.id === sessionRow.id), 'a new state shows again')
+await host.publish(event([]))
 // Team: only waiting teammates raise a row; finished results alone are history.
 await host.publish({ ...event([]), teams: new Map([['codex@work:same', { waiting: 2, finished: 1 }], ['codex@personal:same', { waiting: 0, finished: 3 }]]) })
 const team = observed.getSnapshot().filter(item => item.kind === 'team')

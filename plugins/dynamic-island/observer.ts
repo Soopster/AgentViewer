@@ -55,13 +55,15 @@ export const application: PluginApplicationModule = {
           const session = sessions.get(key)
           const label = status === 'needs-input' ? 'Needs input' : status === 'waiting' ? 'Waiting' : 'Running'
           feed.publish({ id: `session:${key}`, source: 'sessions', status,
-            title: session?.title || 'Agent session', detail: label, target: session?.target })
+            title: session?.title || 'Agent session', detail: label, target: session?.target,
+            // Dismissed per state, so a retitle does not revive it but needing input after running does.
+            dismissKey: status })
         }
         for (const key of previous.keys()) {
           if (snapshot.activity.has(key)) continue
           const session = sessions.get(key)
           feed.publish({ id: `session:${key}`, source: 'sessions', status: 'info',
-            title: session?.title || 'Agent session', detail: 'Turn ended', target: session?.target, expiresAt: snapshot.now + 6000 })
+            title: session?.title || 'Agent session', detail: 'Turn ended', target: session?.target, expiresAt: snapshot.now + 6000, dismissKey: 'ended' })
         }
         previous = new Map(snapshot.activity)
       },
