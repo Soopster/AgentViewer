@@ -11,7 +11,7 @@ import { type TextareaRenderable } from '@opentui/core'
 import { type ThreadedMessage } from '../../../../lib/threading'
 import { clearComposerQueueTarget, restoreComposerDraftPayload, selectComposerQueueTarget } from '../../../../lib/composerAttachments'
 import { interruptTuiSessionTurn } from '../../../../lib/tui/service'
-import { type RunningSessionRef, type SendAttachment, type SendState, type Session } from '../../../../lib/types'
+import { type ProviderSelection, type RunningSessionRef, type SendAttachment, type SendState, type Session } from '../../../../lib/types'
 import { type PendingPermission } from '../../../../lib/permissions'
 import { join } from 'node:path'
 import { type ComposerPromptPart, type QueuedComposerSend, type TuiLiveToolActivity, type SteeredComposerSend } from '../types'
@@ -29,7 +29,8 @@ import { activeMentionAttachments } from '../composerInput'
 import { type ComposerDraftSnapshot } from '../types'
 import { type TuiSessionDetail } from '../../../../lib/tui/service'
 import { type ProviderComposerConfig } from '../../../../lib/providerComposer'
-import { type TuiThemePalette } from '../../../theme'
+import { getProviderAccent, type TuiThemePalette } from '../../../theme'
+import { TextAttributes } from '@opentui/core'
 import { composerProjectLabel } from '../../engineeringLayout'
 import { type InlineTextSegment } from '../inlineText'
 import { readTuiComposerAffordancesAsync } from '../../sessionDetailWorkerClient'
@@ -556,6 +557,8 @@ export type BuildComposerStatsSegmentsContext = {
   composerConfig: ProviderComposerConfig
   theme: TuiThemePalette
   composerAccentColor: string
+  /** The provider chip is drawn like the session rail's: provider accent, bold, upper-case. */
+  composerProvider: ProviderSelection | null
   composerAttachmentLabel: string | null
   composerKnobSegments: InlineTextSegment[]
   composerLocationSegments: InlineTextSegment[]
@@ -564,12 +567,12 @@ export type BuildComposerStatsSegmentsContext = {
 
 export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsContext, lineCount: number, draftLength: number) {
   const {
-    composerConfig, theme, composerAccentColor, composerAttachmentLabel, composerKnobSegments,
+    composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
     composerLocationSegments, composerWorkingDirectory,
   } = ctx
   const segments: InlineTextSegment[] = []
   if (draftLength === 0) {
-    segments.push({ text: ` ${composerConfig.label} `, fg: theme.surface, bg: composerAccentColor })
+    segments.push({ text: ` ${composerConfig.label.toUpperCase()} `, fg: theme.bg, bg: getProviderAccent(composerProvider ?? 'claude'), attributes: TextAttributes.BOLD })
   } else {
     segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
     segments.push({ text: ` · ${draftLength} chars`, fg: theme.text })

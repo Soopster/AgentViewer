@@ -1703,7 +1703,7 @@ function OpenTuiWorkspace() {
     return parts
   }, [composerGitBranch, composerGitSummary, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
   const buildComposerStatsSegments = (lineCount: number, draftLength: number) => runBuildComposerStatsSegments({
-    composerConfig, theme, composerAccentColor, composerAttachmentLabel, composerKnobSegments,
+    composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
     composerLocationSegments, composerWorkingDirectory,
   }, lineCount, draftLength)
   const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
