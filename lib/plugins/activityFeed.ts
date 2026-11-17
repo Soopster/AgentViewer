@@ -11,6 +11,8 @@ export type ActivityAction = {
 }
 export type AppActivity = {
   readonly kind?: ActivityKind
+  /** What a dismissal answers. Wording, titles and counts that merely drift must not revive a dismissed row; absent means any change does. */
+  readonly dismissKey?: string
   readonly actions?: readonly ActivityAction[]
   readonly id: string
   readonly source: string
@@ -42,6 +44,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
   let heldOrder: string[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
   const fingerprint = (item: AppActivity) => JSON.stringify([item.source, item.kind, item.status, item.title, item.detail, item.progress, item.target, item.messageUuid, item.actions?.map(action => [action.id, action.label, action.tone])])
+  const dismissal = (item: AppActivity) => item.dismissKey ?? fingerprint(item)
   const schedule = () => {
     clearTimeout(timer)
     timer = undefined
@@ -54,7 +57,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
     }
   }
   const emit = () => {
-    snapshot = [...entries.values()].filter(item => dismissed.get(item.id) !== fingerprint(item))
+    snapshot = [...entries.values()].filter(item => dismissed.get(item.id) !== dismissal(item))
       .sort((a, b) => PRIORITY[a.status] - PRIORITY[b.status] || kindRank(a) - kindRank(b) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
     if (holds) {
       const positions = new Map(heldOrder.map((id, index) => [id, index]))
@@ -116,7 +119,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
     dismiss(id: string) {
       const item = entries.get(id)
       if (!item) return
-      dismissed.set(id, fingerprint(item)); emit()
+      dismissed.set(id, dismissal(item)); emit()
     },
     hold() {
       if (!holds) heldOrder = snapshot.map(item => item.id)

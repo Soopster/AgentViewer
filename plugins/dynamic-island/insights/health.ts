@@ -32,7 +32,7 @@ export function healthActivities(
       id: `health:long:${key}`, source: HEALTH_SOURCE, kind: 'health', status: 'waiting',
       title: `${titles.get(key) || 'Agent session'} has run ${formatDuration(elapsed)}`,
       detail: 'Long turn — check it is progressing rather than stuck',
-      target: targets.get(key), updatedAt: began,
+      target: targets.get(key), updatedAt: began, dismissKey: `long:${began}`,
     })
   }
   return rows

@@ -19,6 +19,8 @@ export function teamActivities(
       title: `${title}: ${mark.waiting} teammate${mark.waiting === 1 ? '' : 's'} waiting on you`,
       detail: mark.finished > 0 ? `${mark.finished} finished result${mark.finished === 1 ? '' : 's'} to review` : 'Open the conversation, then Teammates, to answer',
       target: targets.get(key), updatedAt: now,
+      // Dismissed until MORE teammates wait; reviewing results or a retitled session must not bring it back.
+      dismissKey: `waiting:${mark.waiting}`,
     })
   }
   return rows
