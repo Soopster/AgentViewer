@@ -96,6 +96,7 @@ export type UseSubmitComposerFromDockGroupContext = {
   fleetStripVisible: boolean
   error: string | null
   showToolCalls: boolean
+  toolCallsPinnedBy: string | null
   normalizedSearchQuery: string
   providerAccent: string
   showTabs: boolean
@@ -140,7 +141,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
     visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted,
     presentationFocusMode, isStreamView, viewIdleTicker, contextUsage, selectedSession, contextUsageStatus,
     followTail, isScrollbackView, pendingNewCount, viewAppTabs, fleetStripVisible, error,
-    showToolCalls, normalizedSearchQuery, providerAccent, showTabs, transcriptView, readerTitle,
+    showToolCalls, toolCallsPinnedBy, normalizedSearchQuery, providerAccent, showTabs, transcriptView, readerTitle,
     readerContextMeta, fleetStripSegments, setShowToolCalls, setError, searchQuery, searchMatches,
     searchMatchIndex, visibleTranscriptCards, turnRunningForComposer, chatTurnStatusRows,
     densityState, composerSendStartedAt, composerWaitingStatusSeed, composerWaitingSuffix,
@@ -216,7 +217,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
   const tailBannerShown = !followTail && (!isScrollbackView || pendingNewCount > 0)
   const readerHeaderChrome: WindowChrome = runReaderHeaderChrome({
     presentationFocusMode, viewAppTabs, isStreamView, contextRowShown, fleetStripVisible, error,
-    showToolCalls, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
+    showToolCalls, toolCallsPinnedBy, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
     transcriptView, followTail, readerTitle, readerContextMeta, contextUsage, selectedSession,
     contextUsageStatus, fleetStripSegments, setShowToolCalls, setError, isScrollbackView,
     pendingNewCount, searchQuery, searchMatches, searchMatchIndex,

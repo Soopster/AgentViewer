@@ -34,6 +34,8 @@ export type ReaderHeaderChromeContext = {
   fleetStripVisible: boolean
   error: string | null
   showToolCalls: boolean
+  /** Name of the view that pins tool calls hidden; null when the global setting decides. */
+  toolCallsPinnedBy: string | null
   tailBannerShown: boolean
   normalizedSearchQuery: string
   theme: TuiThemePalette
@@ -59,7 +61,7 @@ export type ReaderHeaderChromeContext = {
 export function runReaderHeaderChrome(ctx: ReaderHeaderChromeContext) {
   const {
     presentationFocusMode, viewAppTabs, isStreamView, contextRowShown, fleetStripVisible, error,
-    showToolCalls, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
+    showToolCalls, toolCallsPinnedBy, tailBannerShown, normalizedSearchQuery, theme, providerAccent, showTabs,
     transcriptView, followTail, readerTitle, readerContextMeta, contextUsage, selectedSession,
     contextUsageStatus, fleetStripSegments, setShowToolCalls, setError, isScrollbackView,
     pendingNewCount, searchQuery, searchMatches, searchMatchIndex,
@@ -139,13 +141,13 @@ return {
         height={1}
         paddingX={1}
         onMouseDown={(event) => {
-          if (event.button !== 0) return
+          if (event.button !== 0 || toolCallsPinnedBy) return
           event.stopPropagation()
           setShowToolCalls(true)
           void writeTuiShowToolCalls(true).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
         }}
       >
-        <text fg={theme.amber} wrapMode="none">{fitText('TOOLS HIDDEN · Click or Shift+X to show file and tool activity', chromeWidth - 4)}</text>
+        <text fg={theme.amber} wrapMode="none">{fitText(toolCallsPinnedBy ? `TOOLS HIDDEN · pinned by view "${toolCallsPinnedBy}" · v → e → Pins to change` : 'TOOLS HIDDEN · Click or Shift+X to show file and tool activity', chromeWidth - 4)}</text>
       </box>
     ) : null}
 
