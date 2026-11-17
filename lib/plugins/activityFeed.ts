@@ -1,7 +1,7 @@
 import type { PluginSessionRef } from './bookmarks'
 
 export type ActivityStatus = 'needs-input' | 'error' | 'running' | 'waiting' | 'success' | 'info'
-export type ActivityKind = 'approval' | 'question' | 'team' | 'repo' | 'checks' | 'health' | 'task' | 'session'
+export type ActivityKind = 'approval' | 'question' | 'plan' | 'team' | 'repo' | 'checks' | 'health' | 'task' | 'session'
 /** An in-process closure the island runs for a row. Never serialized, so it stays out of the fingerprint. */
 export type ActivityAction = {
   readonly id: string
@@ -28,7 +28,7 @@ export type AppActivity = {
 export type ActivityInput = Omit<AppActivity, 'updatedAt'> & { readonly updatedAt?: number }
 const PRIORITY: Record<ActivityStatus, number> = { 'needs-input': 0, error: 1, running: 2, waiting: 3, success: 4, info: 4 }
 /** Within one status, what the person must decide outranks what merely informs. */
-const KIND_PRIORITY: Record<ActivityKind, number> = { approval: 0, question: 0, team: 1, checks: 2, repo: 3, health: 4, task: 5, session: 6 }
+const KIND_PRIORITY: Record<ActivityKind, number> = { approval: 0, question: 0, team: 1, plan: 1, checks: 2, repo: 3, health: 4, task: 5, session: 6 }
 const kindRank = (item: AppActivity) => KIND_PRIORITY[item.kind ?? 'session']
 const EMPTY: readonly AppActivity[] = []
 
