@@ -346,6 +346,7 @@ import { handleOverlayAndMenuKeys } from './app/keys/overlayKeys'
 import { SIDEBAR_ACTIVITY_OPTIONS, filterSessionsByActivity, isDateBucketCollapsedByDefault, popularSessionTags } from '../../lib/sessionSidebarModel'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '../../lib/sessionTags'
 const NO_WORKTREES: readonly string[] = []
+const NO_PROVIDERS: ProviderSelection[] = []
 import { viewMenuItems as buildViewMenuItems, viewMenuItemKey, type ViewMenuItem } from './app/overlays/TranscriptViewMenuOverlay'
 import { VIEW_STUDIO_WIDTH } from './app/viewStudioLayout'
 import { CUSTOM_VIEW_NAME_MAX, VIEW_SPEC_BASES, builtinDraftId, isPluginViewId, newCustomViewId, registerViewSidePanelSurfaces, viewTabDisplay, type CustomView } from '../viewSpec'
@@ -499,6 +500,7 @@ function OpenTuiWorkspace() {
     workspaceLaunched, setWorkspaceLaunched, workspaceHasSession, setWorkspaceHasSession,
     spacesMenuOpen, setSpacesMenuOpen, spacesMenuSelection, spacesCloseId, spacesKeyRef,
     openSpaces, allProjects, setAllProjects, readWorkspaceDraft, writeWorkspaceDraft, includeWorktrees, setIncludeWorktrees, sidebarTag, setSidebarTag,
+    liftAcrossSpaces, setLiftAcrossSpaces,
     readWorkspaceDraftParts, writeWorkspaceDraftParts,
   } = useWorkspaceContextGroup()
 
@@ -644,8 +646,27 @@ function OpenTuiWorkspace() {
   const sidebarPinnedKeys = useMemo(() => {
     const keys = new Set(legacySidebarPinnedKeys)
     for (const session of sessions) if (session.inbox?.pinnedAt !== undefined) keys.add(sessionKey(session))
+    // Other Spaces' older workspace pins count too when their pinned sessions are lifted here.
+    if (liftAcrossSpaces && workspacesEnabled) {
+      for (const space of spacesState.spaces) for (const workspace of space.workspaces) {
+        const pinned = (workspace.values['sidebar:preferences'] as { pinned?: unknown } | undefined)?.pinned
+        if (Array.isArray(pinned)) for (const key of pinned) if (typeof key === 'string') keys.add(key)
+      }
+    }
     return keys
-  }, [legacySidebarPinnedKeys, sessions])
+  }, [legacySidebarPinnedKeys, sessions, liftAcrossSpaces, workspacesEnabled, spacesState.spaces])
+  // Each Space has its own provider; lifting another Space's pinned and running sessions means reading its provider too.
+  const otherSpaceProviders = useMemo(() => {
+    if (!liftAcrossSpaces || !workspacesEnabled) return NO_PROVIDERS
+    const found = new Set<ProviderSelection>()
+    for (const space of spacesState.spaces) for (const workspace of space.workspaces) {
+      const value = workspace.values.provider
+      if (typeof value === 'string' && value !== provider && value !== 'all') found.add(value as ProviderSelection)
+    }
+    return [...found].sort()
+  }, [liftAcrossSpaces, workspacesEnabled, spacesState.spaces, provider])
+  const otherSpaceProvidersRef = useRef<ProviderSelection[]>(otherSpaceProviders)
+  otherSpaceProvidersRef.current = otherSpaceProviders
   // Snooze and the linked pull request, optimistic like a pin: the row changes now, the inbox file after.
   const changeSessionInbox = useStableEvent((session: Session, action: 'snooze' | 'unsnooze' | 'unlink-pr') => {
     const key = sessionKey(session)
@@ -1405,6 +1426,19 @@ function OpenTuiWorkspace() {
     setWorkspaceHasSession, setSelectedSessionKey, setError,
   }, session))
 
+  const toggleLiftAcrossSpaces = useCallback(() => {
+    if (!workspacesEnabled) { showNotice('info', 'Enable workspaces with Ctrl+B, Shift+W'); return }
+    showToggleOutcome('Other Spaces\' pinned/running/needs-you:', liftAcrossSpaces ? 'hidden' : 'shown')
+    setLiftAcrossSpaces(!liftAcrossSpaces)
+  }, [workspacesEnabled, liftAcrossSpaces])
+  // The list was read without (or with) the other Spaces' providers: read it again once that set changes.
+  const otherSpaceProvidersKey = otherSpaceProviders.join(',')
+  const otherSpaceProvidersSeenRef = useRef(otherSpaceProvidersKey)
+  useEffect(() => {
+    if (otherSpaceProvidersSeenRef.current === otherSpaceProvidersKey) return
+    otherSpaceProvidersSeenRef.current = otherSpaceProvidersKey
+    void refreshSessions(provider, true, false)
+  }, [otherSpaceProvidersKey])
   const toggleHideScratch = useCallback(() => {
     setHideScratch((current) => {
       const next = !current
@@ -1428,7 +1462,7 @@ function OpenTuiWorkspace() {
     toggleSidebarSort, resolvedExpandedKeys, normalizedSearchQuery, deferredSearchQuery,
     searchMatches, readCursorIndex, unreadBoundaryIndex, readerTitle, readerModel, gitRepoCwd,
     gitSessionId, shouldEnableSyntaxHighlighting, syntaxStyle, handoffBriefSyntaxStyle,
-    normalizedSessionQuery, spaceSessions, scratchFilter, settledFilter,
+    normalizedSessionQuery, spaceSessions, isLiftedFromOtherSpace, scratchFilter, settledFilter,
     filteredSessionsForSidebar, setCollapsedSubagentParents, collapsedSubagentSet,
     subagentTranscriptSelection, setSubagentTranscriptSelection, toggleSidebarSubagents,
     providerSubagentSummaries, setProviderSubagentSummaries, subagentSummariesReadRef,
@@ -1438,6 +1472,7 @@ function OpenTuiWorkspace() {
     transcriptIndexByKey, unreadBoundaryKey, sessionDetail, selectedSession,
     focusedSplitPaneSession, workspaceCwd, sessions, composerSendState, composerLiveText, theme,
     renderer, sessionSearchQuery, allProjects, worktreePaths: includeWorktrees ? worktreePaths : NO_WORKTREES, sidebarTag, hideScratch: sidebarActivity === 'settled' ? false : hideScratch, selectedSessionKey,
+    liftAcrossSpaces: liftAcrossSpaces && workspacesEnabled, sidebarPinnedKeys,
     sidebarSessionActivity, recentlyWrittenSessions, teamAttention, showSettled: showSettled || sidebarActivity === 'settled',
   })
   useEffect(() => runProviderSubagentSummariesEffect({
@@ -2443,7 +2478,7 @@ function OpenTuiWorkspace() {
     setTranscriptDiffRowCursorForCard, setTranscriptDiffSelectionAnchorForCard,
     setAgentToolCursorByGroupKey, sessionRequestRef, setLoadingSessions, setRefreshingSessions,
     providerSwitchRef, setError, providerInstanceIdRef, pendingInboxEditsRef,
-    selectedSessionKeyRef, sessionsRef, setSessions, setSelectedSessionKey, openTabSessionsRef,
+    selectedSessionKeyRef, sessionsRef, setSessions, setSelectedSessionKey, openTabSessionsRef, otherSpaceProvidersRef,
     setRunningSessions, runningSessionsRef, tabsEnabledRef, composerTargetSessionRef,
     sessionContextUsageCacheRef, sessionMetadataFetchedAtRef, sessionDetailCacheRef,
     sessionMetadataInFlightRef, setContextUsageStatus, setTuiReportedModelByKey, setContextUsage,
@@ -3696,11 +3731,11 @@ function OpenTuiWorkspace() {
   }, [sessions])
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
     pinnedSessionKeys: sidebarPinnedKeys, toggleSessionPin: toggleSidebarPin, sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
-    showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
+    showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor, isLiftedFromOtherSpace,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
-  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, isLiftedFromOtherSpace, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -6280,7 +6315,7 @@ function OpenTuiWorkspace() {
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
     setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleSidebarSort, sidebarSort,
-    toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
+    toggleHideScratch, toggleLiftAcrossSpaces, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
   }, id)
   })
@@ -7021,6 +7056,7 @@ function OpenTuiWorkspace() {
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
           tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
+          liftAcrossSpaces={liftAcrossSpaces} onLiftAcrossSpaces={workspacesEnabled ? setLiftAcrossSpaces : undefined}
           />}
         coordinatorControls={<CoordinatorFilters theme={theme} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onSubmit={() => setSessionSearchMode(false)} />}

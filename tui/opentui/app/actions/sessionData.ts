@@ -515,13 +515,16 @@ export type RefreshSessionsContext = {
   setSessions: React.Dispatch<React.SetStateAction<Session[]>>
   setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   openTabSessionsRef: React.RefObject<Session[]>
+  /** Providers of the other Spaces, read too while this Space lifts their pinned and running sessions. */
+  otherSpaceProvidersRef: React.RefObject<ProviderSelection[]>
+  runningSessionsRef: React.RefObject<RunningSessionRef[]>
 }
 
 export async function runRefreshSessions(ctx: RefreshSessionsContext, nextProvider: ProviderSelection, preserveSelection?: boolean | undefined, foreground?: boolean) {
   const {
     sessionRequestRef, setLoadingSessions, setRefreshingSessions, providerSwitchRef, setError,
     providerInstanceIdRef, pendingInboxEditsRef, selectedSessionKeyRef, sessionsRef, setSessions,
-    setSelectedSessionKey, openTabSessionsRef,
+    setSelectedSessionKey, openTabSessionsRef, otherSpaceProvidersRef, runningSessionsRef,
   } = ctx
   if (preserveSelection === undefined) preserveSelection = true
   if (foreground === undefined) foreground = true
@@ -543,10 +546,20 @@ export async function runRefreshSessions(ctx: RefreshSessionsContext, nextProvid
   if (!providerSwitchRef.current) setError(null)
 
   try {
-    const nextSessions = withPendingInboxEdits(
-      await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined),
-      pendingInboxEditsRef.current,
-    )
+    const ownSessions = await readTuiSessionsAsync(nextProvider, providerInstanceIdRef.current ?? undefined)
+    // A Space lists only its own provider's sessions; another Space's pinned and running ones live elsewhere.
+    const otherProviders = nextProvider === 'all' ? [] : otherSpaceProvidersRef.current.filter(other => other !== nextProvider && other !== 'all')
+    const lifted: Session[] = []
+    if (otherProviders.length) {
+      const runningKeys = new Set(runningSessionsRef.current.map(ref => sessionKey(ref)))
+      const own = new Set(ownSessions.map(sessionKey))
+      const lists = await Promise.all(otherProviders.map(other => readTuiSessionsAsync(other).catch(() => [] as Session[])))
+      for (const session of lists.flat()) {
+        const key = sessionKey(session)
+        if (!own.has(key) && (session.inbox?.pinnedAt !== undefined || runningKeys.has(key))) lifted.push(session)
+      }
+    }
+    const nextSessions = withPendingInboxEdits(lifted.length ? [...ownSessions, ...lifted] : ownSessions, pendingInboxEditsRef.current)
     if (requestId !== sessionRequestRef.current) return
     // Avoid scheduling a transition at all when a background poll returns
     // the same list and the current selection is still valid. React will

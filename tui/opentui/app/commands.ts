@@ -106,6 +106,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'provider', label: 'Switch provider', key: 'p', category: 'Session' },
   { id: 'sort', label: 'Toggle sidebar sort', key: '⇧S', category: 'Session' },
   { id: 'scratch', label: 'Hide/show scratch sessions', key: '⇧Y', category: 'Session' },
+  { id: 'lift-spaces', label: 'Show pinned/running/needs-you from all Spaces', key: '', category: 'Session' },
   { id: 'settle', label: 'Settle/reopen session', key: 'x', category: 'Session' },
   { id: 'settled', label: 'Show/hide settled sessions', key: '', category: 'Session' },
   { id: 'sidebar-view', label: 'Switch sidebar view', key: 'a', category: 'Session' },

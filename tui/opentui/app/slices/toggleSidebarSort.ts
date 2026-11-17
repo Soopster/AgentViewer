@@ -49,6 +49,9 @@ export type UseToggleSidebarSortGroupContext = {
   /** The rail's tag chip, or null for any tag. */
   sidebarTag: string | null
   hideScratch: boolean
+  /** Pinned, running and needs-input sessions of every Space join this rail's lifted groups. */
+  liftAcrossSpaces: boolean
+  sidebarPinnedKeys: ReadonlySet<string>
   selectedSessionKey: string | null
   sidebarSessionActivity: Map<string, 'waiting' | 'needs-input' | 'running'>
   recentlyWrittenSessions: { keys: ReadonlySet<string>; signature: string; nextExpiry: number | null; }
@@ -63,6 +66,7 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
     transcriptIndexByKey, unreadBoundaryKey, sessionDetail, selectedSession,
     focusedSplitPaneSession, workspaceCwd, sessions, composerSendState, composerLiveText, theme,
     renderer, sessionSearchQuery, allProjects, worktreePaths, sidebarTag, hideScratch, selectedSessionKey,
+    liftAcrossSpaces, sidebarPinnedKeys,
     sidebarSessionActivity, recentlyWrittenSessions, teamAttention, showSettled,
   } = ctx
 
@@ -157,19 +161,29 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
     [syntaxStyle, theme, renderer],
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
-  const spaceSessions = useMemo(() => {
-    const tagged = sidebarTag ? sessions.filter(session => sessionHasTag(session, sidebarTag)) : sessions
-    if (allProjects) return tagged
+  const projectScope = useMemo(() => {
     const paths = new Map<string, string>()
     const project = canonicalSpacePath(workspaceCwd)
     const worktrees = worktreePaths.map(canonicalSpacePath)
-    return tagged.filter(session => {
+    return (session: Session) => {
       if (!session.cwd) return false
       let cwd = paths.get(session.cwd)
       if (!cwd) { cwd = canonicalSpacePath(session.cwd); paths.set(session.cwd, cwd) }
       return sessionInProjectScope(cwd, project, worktrees)
-    })
-  }, [sessions, allProjects, workspaceCwd, worktreePaths, sidebarTag])
+    }
+  }, [workspaceCwd, worktreePaths])
+  // Another Space's pinned, running and needs-input sessions stay reachable from here.
+  const isLiftedFromOtherSpace = useCallback((session: Session) => {
+    if (!liftAcrossSpaces || allProjects) return false
+    const key = sessionKey(session)
+    const activity = sidebarSessionActivity.get(key)
+    return (sidebarPinnedKeys.has(key) || activity === 'running' || activity === 'needs-input') && !projectScope(session)
+  }, [liftAcrossSpaces, allProjects, sidebarPinnedKeys, sidebarSessionActivity, projectScope])
+  const spaceSessions = useMemo(() => {
+    const tagged = sidebarTag ? sessions.filter(session => sessionHasTag(session, sidebarTag)) : sessions
+    if (allProjects) return tagged
+    return tagged.filter(session => projectScope(session) || isLiftedFromOtherSpace(session))
+  }, [sessions, allProjects, sidebarTag, projectScope, isLiftedFromOtherSpace])
   const searchSidebarSessions = useMemo(() => createSidebarSessionSearch(spaceSessions), [spaceSessions])
   const searchedSessionsForSidebar = useMemo(
     () => searchSidebarSessions(normalizedSessionQuery),
@@ -220,7 +234,7 @@ export function useToggleSidebarSortGroup(ctx: UseToggleSidebarSortGroupContext)
     toggleSidebarSort, resolvedExpandedKeys, normalizedSearchQuery, deferredSearchQuery,
     searchMatches, readCursorIndex, unreadBoundaryIndex, readerTitle, readerModel, gitRepoCwd,
     gitSessionId, shouldEnableSyntaxHighlighting, syntaxStyle, handoffBriefSyntaxStyle,
-    normalizedSessionQuery, spaceSessions, scratchFilter, settledFilter,
+    normalizedSessionQuery, spaceSessions, isLiftedFromOtherSpace, scratchFilter, settledFilter,
     filteredSessionsForSidebar, setCollapsedSubagentParents, collapsedSubagentSet,
     subagentTranscriptSelection, setSubagentTranscriptSelection, toggleSidebarSubagents,
     providerSubagentSummaries, setProviderSubagentSummaries, subagentSummariesReadRef,

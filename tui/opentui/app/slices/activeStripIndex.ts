@@ -72,6 +72,7 @@ export type UseActiveStripIndexGroupContext = {
   setSessions: React.Dispatch<React.SetStateAction<Session[]>>
   setSelectedSessionKey: React.Dispatch<React.SetStateAction<string | null>>
   openTabSessionsRef: React.RefObject<Session[]>
+  otherSpaceProvidersRef: React.RefObject<ProviderSelection[]>
   setRunningSessions: React.Dispatch<React.SetStateAction<RunningSessionRef[]>>
   runningSessionsRef: React.RefObject<RunningSessionRef[]>
   tabsEnabledRef: React.RefObject<boolean>
@@ -101,7 +102,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
     setTranscriptDiffRowCursorForCard, setTranscriptDiffSelectionAnchorForCard,
     setAgentToolCursorByGroupKey, sessionRequestRef, setLoadingSessions, setRefreshingSessions,
     providerSwitchRef, setError, providerInstanceIdRef, pendingInboxEditsRef,
-    selectedSessionKeyRef, sessionsRef, setSessions, setSelectedSessionKey, openTabSessionsRef,
+    selectedSessionKeyRef, sessionsRef, setSessions, setSelectedSessionKey, openTabSessionsRef, otherSpaceProvidersRef,
     setRunningSessions, runningSessionsRef, tabsEnabledRef, composerTargetSessionRef,
     sessionContextUsageCacheRef, sessionMetadataFetchedAtRef, sessionDetailCacheRef,
     sessionMetadataInFlightRef, setContextUsageStatus, setTuiReportedModelByKey, setContextUsage,
@@ -188,7 +189,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   const refreshSessions = useCallback(async (nextProvider: ProviderSelection, preserveSelection = true, foreground = true) => runRefreshSessions({
     sessionRequestRef, setLoadingSessions, setRefreshingSessions, providerSwitchRef, setError,
     providerInstanceIdRef, pendingInboxEditsRef, selectedSessionKeyRef, sessionsRef, setSessions,
-    setSelectedSessionKey, openTabSessionsRef,
+    setSelectedSessionKey, openTabSessionsRef, otherSpaceProvidersRef, runningSessionsRef,
   }, nextProvider, preserveSelection, foreground), [])
 
   const markSessionRunning = useCallback((ref: RunningSessionRef) => {

@@ -30,7 +30,7 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
   const context: BuildSidebarRowContext = {
     sessionInsightsOn: false, toggleDateGroup: key => { collapsed = key }, coordinatorRunGoals: new Map(),
     sidebarEntries: entries, sidebarInnerWidth: width - 5, firstSidebarEntryKey: entries[0].key, theme,
-    sidebarSessionActivity: new Map([[sessionKey(sessions[1]), 'needs-input']]), showProviderInSessionRows: false,
+    sidebarSessionActivity: new Map([[sessionKey(sessions[1]), 'needs-input']]), showProviderInSessionRows: false, isLiftedFromOtherSpace: () => false,
     selectSidebarSession: session => { chosen = session.sessionId }, setSidebarSubagentCursor: () => {},
     setSubagentTranscriptSelection: () => {}, setPluginOverlay: () => {}, recentlyWrittenKeys: new Set(),
     teamAttention: new Map(), density, renameSessionKey: null, childrenByParentId: new Map(),

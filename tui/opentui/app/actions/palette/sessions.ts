@@ -164,6 +164,10 @@ registerHostCommand(['scratch'], (ctx, id, locals) => {
     }
 })
 
+registerHostCommand(['lift-spaces'], (ctx) => {
+    ctx.toggleLiftAcrossSpaces()
+})
+
 registerHostCommand(['settle'], (ctx, id, locals) => {
     const { toggleSelectedSessionSettled } = ctx
     switch (id) {

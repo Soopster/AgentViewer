@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import path from 'node:path'
 import { sidebarQuietColor } from '../SidebarChrome'
 import { parseStoredSessionTags } from '../../../../lib/sessionTags'
 import { retitleCoordinatorSession } from '../../../../lib/coordinatorSessionTitle'
@@ -36,6 +37,8 @@ export type BuildSidebarRowContext = {
   theme: TuiThemePalette
   sidebarSessionActivity: Map<string, 'needs-input' | 'running' | 'waiting'>
   showProviderInSessionRows: boolean
+  /** A pinned/running/needs-input session lifted in from another Space: its row says which project. */
+  isLiftedFromOtherSpace: (session: Session) => boolean
   selectSidebarSession: (session: Session) => void
   setSidebarSubagentCursor: React.Dispatch<React.SetStateAction<string | null>>
   setSubagentTranscriptSelection: React.Dispatch<React.SetStateAction<{ parent: Session; agent: SubagentSummary; } | null>>
@@ -57,7 +60,7 @@ export type BuildSidebarRowContext = {
 export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEntry, selected: boolean) {
   const {
     sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
-    showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor,
+    showProviderInSessionRows, isLiftedFromOtherSpace, selectSidebarSession, setSidebarSubagentCursor,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
@@ -170,6 +173,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
     activity === 'needs-input' ? 'Needs input'
       : activity === 'running' || activity === 'active' ? 'Working'
       : activity === 'waiting' ? 'Waiting' : null,
+    isLiftedFromOtherSpace(entry.session) ? `↗ ${path.basename(entry.session.cwd ?? '')}` : null,
     showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
     ago,
   ])
@@ -180,7 +184,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   // Comfortable keeps a separate metadata row; balanced and dense align
   // activity and age alongside the title to fit more sessions.
   const singleRow = density !== 'comfortable' && sessionKey(entry.session) !== renameSessionKey
+  const otherSpaceLabel = isLiftedFromOtherSpace(entry.session) ? `↗ ${path.basename(entry.session.cwd ?? '')}` : null
   const rowMeta = joinMeta([
+    otherSpaceLabel,
     showProviderInSessionRows ? sessionProviderLabel(entry.session) : null,
     ago,
   ])

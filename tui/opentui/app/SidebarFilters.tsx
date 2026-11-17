@@ -14,7 +14,7 @@ const SCOPES = [['repo', 'This project'], ['all', 'All projects']] as const
 const ACTIVITIES = SIDEBAR_ACTIVITY_OPTIONS
 
 /** One filter surface across views; the shell owns its dropdowns and keyboard routing. */
-export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees }: {
+export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees, liftAcrossSpaces, onLiftAcrossSpaces }: {
   idPrefix: string; theme: TuiThemePalette; query: string; searchFocused: boolean
   onSearchFocus: () => void; onQuery: (query: string) => void; onSubmit: () => void
   scope: 'repo' | 'all'; activity: SidebarActivity
@@ -27,6 +27,9 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
   /** Project scope takes in the project's other worktrees (the web's "worktrees" box). */
   includeWorktrees?: boolean
   onIncludeWorktrees?: (value: boolean) => void
+  /** Pinned, running and needs-input sessions of every Space join this rail's lifted groups. */
+  liftAcrossSpaces?: boolean
+  onLiftAcrossSpaces?: (value: boolean) => void
   /** What is narrowing the list ("1 settled hidden · Running"); a click clears the tag and activity filters. */
 }) {
   const activityLabel = ACTIVITIES.find(([value]) => value === (activity ?? 'all'))![1]
@@ -47,6 +50,9 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
           })),
           ...(onIncludeWorktrees ? [{
             id: `${idPrefix}-scope:worktrees`, label: `${includeWorktrees ? '☑' : '☐'} Include worktrees`, run: () => onIncludeWorktrees(!includeWorktrees),
+          }] : []),
+          ...(onLiftAcrossSpaces ? [{
+            id: `${idPrefix}-scope:spaces`, label: `${liftAcrossSpaces ? '☑' : '☐'} Pinned · running · needs you from all Spaces`, run: () => onLiftAcrossSpaces(!liftAcrossSpaces),
           }] : []),
         ] })
       }}>{chip(scope === 'repo' ? 'This project' : 'All projects', scope !== 'repo')}</box>

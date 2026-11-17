@@ -187,6 +187,7 @@ export type ExecuteCommandPaletteContext = {
   toggleSidebarSort: () => void
   sidebarSort: TuiSidebarSort
   toggleHideScratch: () => void
+  toggleLiftAcrossSpaces: () => void
   toggleSelectedSessionSettled: () => void
   toggleShowSettled: () => void
   setSidebarView: React.Dispatch<React.SetStateAction<'sessions' | 'coordinator'>>
@@ -241,7 +242,7 @@ export function runExecuteCommandPalette(ctx: ExecuteCommandPaletteContext, id: 
     openComposerStashList, setThinkingMode, setComposerEnableWorkflow, setPluginManagerOpen,
     setRenameSessionKey, setRenameDraft, copyCliCommand,
     toggleSidebarSort, sidebarSort,
-    toggleHideScratch, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
+    toggleHideScratch, toggleLiftAcrossSpaces, toggleSelectedSessionSettled, toggleShowSettled, setSidebarView,
     refreshSessions, provider, selectedSessionTarget, refreshSelectedSessionDetail, requestExit,
   } = ctx
   const focusedSession = focusedWindowItem?.kind === 'session' ? focusedWindowItem.session : composerTargetSession
