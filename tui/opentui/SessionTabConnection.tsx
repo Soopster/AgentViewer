@@ -178,8 +178,10 @@ export function SessionTabConnection(props: {
         } else if (hoverStyle === 'tint') {
           // A flat fill across the whole tab: no half-block caps, which a font
           // draws with seams and which left the pill looking sunk into the strip.
-          drawText(' '.repeat(hover.right - hover.left + 1), hover.left, hover.tabY, hoverForeground, hoverBackground)
-          drawText(hoverName, hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          // Boxed tabs keep their walls: the fill stays inside them.
+          if (style === 'boxed') drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          else drawText(' '.repeat(hover.right - hover.left + 1), hover.left, hover.tabY, hoverForeground, hoverBackground)
+          drawText(hoverName.slice(0, hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
         } else if (hoverStyle === 'raise') {
           // The active tab's outline in the muted colour, standing on the border rather than opening into it.
           drawText('╭' + '─'.repeat(hover.right - hover.left - 1) + '╮', hover.left, hover.topY, inactiveForeground, inactiveBackground)
@@ -217,17 +219,30 @@ export function SessionTabConnection(props: {
       }
       const inner = connection.right - connection.left - 1
       if (style === 'boxed') {
-        // Every tab outlined, inactive ones in the muted colour, standing on the border.
+        // Every tab outlined, inactive ones in the muted colour, standing on the
+        // border. Neighbours share one wall: a tab draws its left side only when
+        // it is the first shown (otherwise the tab before supplies it), and its
+        // right side only when the next is not the active tab, which draws its
+        // own. Two inactive walls meeting at the top join as ┬.
+        const visible = (index: number) => index >= offset && (index - offset + 1) * tabWidth <= tabs.width
         for (let index = offset; index < tabs.options.length; index++) {
-          if ((index - offset + 1) * tabWidth > tabs.width) break
+          if (!visible(index)) break
           if (index === selected) continue
           const tab = tabConnectionGeometry(tabs, frame, index, offset, tabWidth)
           if (!tab) continue
-          drawText('╭' + '─'.repeat(tab.right - tab.left - 1) + '╮', tab.left, tab.topY, inactiveForeground, inactiveBackground)
-          drawText('│', tab.left, tab.tabY, inactiveForeground, inactiveBackground)
-          drawText('│', tab.right, tab.tabY, inactiveForeground, inactiveBackground)
-          drawText(tab.flushLeft ? '├' : '┴', tab.left, tab.borderY, foreground, background)
-          drawText('┴', tab.right, tab.borderY, foreground, background)
+          const drawLeft = index === offset
+          const drawRight = index + 1 !== selected
+          const joinsNext = drawRight && index + 1 < tabs.options.length && visible(index + 1)
+          const top = (drawLeft ? '╭' : '─') + '─'.repeat(tab.right - tab.left - 1) + (drawRight ? (joinsNext ? '┬' : '╮') : '─')
+          drawText(top, tab.left, tab.topY, inactiveForeground, inactiveBackground)
+          if (drawLeft) {
+            drawText('│', tab.left, tab.tabY, inactiveForeground, inactiveBackground)
+            drawText(tab.flushLeft ? '├' : '┴', tab.left, tab.borderY, foreground, background)
+          }
+          if (drawRight) {
+            drawText('│', tab.right, tab.tabY, inactiveForeground, inactiveBackground)
+            drawText('┴', tab.right, tab.borderY, foreground, background)
+          }
         }
       }
       if (style === 'chrome' || style === 'boxed') {

@@ -168,9 +168,13 @@ for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal', 'windows'] as 
       assert.deepEqual(bgAt(30, 1), parseColor('#225577'), 'the pill is filled')
       assert.equal(rows[0].trim(), '', 'pills raise no tab')
     } else if (tabStyle === 'boxed') {
-      assert.equal(rows[0].slice(0, 24), `╭${'─'.repeat(22)}╮`, 'an inactive tab is outlined too')
+      // Neighbours share one wall: no doubled sides beside the active tab.
+      assert.equal(rows[0].slice(0, 24), `╭${'─'.repeat(23)}`, 'the first tab is outlined, its right wall left to the active tab')
       assert.equal(rows[0].slice(24, 48), `╭${'─'.repeat(22)}╮`, 'the active tab is outlined')
-      assert.equal(rows[2][23], '┴', 'an inactive tab stands on the border')
+      assert.equal(rows[0].slice(48, 72), `${'─'.repeat(23)}╮`, 'the last tab takes its left wall from the active tab')
+      assert.equal(rows[1][0] + rows[1][23] + rows[1][24] + rows[1][47] + rows[1][48] + rows[1][71], '│ ││ │', 'one wall between each pair of tabs')
+      assert.equal(rows[2][23] + rows[2][48], '──', 'no doubled feet beside the active tab')
+      assert.equal(rows[2][71], '┴', 'an inactive tab stands on the border')
     } else if (tabStyle === 'windows') {
       // Windows Terminal: the active tab is the window's colour, one row, no outline, opening into the window.
       assert.equal(rows[0].slice(24, 48), `╭${'─'.repeat(22)}╮`, 'an accent edge tops the active tab')
@@ -193,6 +197,33 @@ for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal', 'windows'] as 
       assert.equal(rows[0].trim(), '', 'minimal draws no outline')
       assert.ok(!rows[2].slice(24, 48).includes('━') && !rows[1].includes('▐'), 'minimal draws no marks')
     }
+  } finally {
+    await act(async () => setup.renderer.destroy())
+  }
+}
+// Boxed with the first tab active: two inactive tabs meet on one wall, joined at the top.
+{
+  const tabs = createRef<TabSelectRenderable>()
+  const frame = createRef<BoxRenderable>()
+  const options = ['Alpha', 'Bravo', 'Charlie'].map((label, index) => ({ name: tabStripName(label, 24, '', index === 0), value: `tab:${index}`, description: '' }))
+  const setup = await testRender(<box flexDirection="column" width={100}>
+    <box height={2} paddingTop={1} paddingRight={1} backgroundColor="#101010">
+      <tab-select ref={tabs} options={options} width={76} height={1} tabWidth={24}
+        backgroundColor="#101010" focusedBackgroundColor="#101010" textColor="#aaaaaa"
+        selectedBackgroundColor="#202020" selectedTextColor="#00aaff" showDescription={false} showUnderline={false} />
+    </box>
+    <box ref={frame} width={100} height={4} border borderStyle="rounded" borderColor="#00aaff" backgroundColor="#202020" />
+    <SessionTabConnection tabs={tabs} readWindow={() => frame.current} ownerKey="tab:0" enabled
+      foreground="#00aaff" background="#202020" inactiveForeground="#555555" inactiveBackground="#101010"
+      hoverForeground="#eeeeee" hoverBackground="#181818" tabStyle="boxed" separators />
+  </box>, { width: 100, height: 6 })
+  try {
+    await act(async () => { tabs.current!.setSelectedIndex(0); tabs.current!.focus() })
+    await setup.flush()
+    const rows = setup.captureCharFrame().split('\n')
+    assert.equal(rows[0].slice(24, 72), `${'─'.repeat(23)}┬${'─'.repeat(23)}╮`, 'two inactive tabs share a wall, joined at the top')
+    assert.equal(rows[1][47] + rows[1][48], '│ ', 'one wall between them')
+    assert.equal(rows[2][24], '─', 'the tab after the active one adds no foot of its own')
   } finally {
     await act(async () => setup.renderer.destroy())
   }
