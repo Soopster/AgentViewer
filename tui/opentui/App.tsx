@@ -4285,8 +4285,8 @@ function OpenTuiWorkspace() {
   // the next tick puts the frame back. Applying one immediately is what keeps
   // that invisible.
   useEffect(() => runOptionsEffect({
-    tabSelectRef, runningTabKeys, tabOptions, tabWidth,
-  }), [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth])
+    tabSelectRef, runningTabKeys, tabOptions, tabWidth, activity: tabDisplay.tabActivity, truncate: tabDisplay.tabTruncate,
+  }), [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth, tabDisplay.tabActivity, tabDisplay.tabTruncate])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]

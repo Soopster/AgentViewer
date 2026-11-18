@@ -312,7 +312,8 @@ const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
   liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
   sessionRail: 'rail', sidebarView: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
-  tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip', focusMode: 'header',
+  tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip',
+  tabStripFill: 'tabstrip', tabHover: 'tabstrip', tabAccent: 'tabstrip', tabActivity: 'tabstrip', tabOverflow: 'tabstrip', tabTruncate: 'tabstrip', focusMode: 'header',
   borders: 'frame', fleetStrip: 'fleet', taskPanel: 'taskpanel', sidePanel: 'sidepanel', sidePanelPlacement: 'sidepanel',
 }
 function regionOf(key: ViewSpecKey | null): MockRegion | null {
@@ -476,7 +477,7 @@ function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiTheme
     return (text.length > budget ? `${text.slice(0, budget - 1)}…` : text.padEnd(budget)) + close
   }
   const parts = MOCK_TABS.map((tab, index) => ({ text: label(tab, index, index === 0), active: index === 0 }))
-  const sep = spec.tabSeparators && spec.tabStyle !== 'boxed' ? '│' : ' '
+  const sep = spec.tabSeparators && spec.tabStyle !== 'boxed' && spec.tabStyle !== 'windows' ? '│' : ' '
   const underline = spec.tabStyle === 'underline' ? `${' '.repeat(indent + 1)}${'━'.repeat(parts[0]!.text.length + 2)}` : null
   return (
     <>
@@ -485,13 +486,14 @@ function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiTheme
         {parts.map((part, index) => {
           const active = part.active
           const fg = active ? theme.cyan : theme.muted
-          const body = spec.tabStyle === 'pills' && active ? <span fg={theme.text} bg={theme.surface3}>{` ${part.text} `}</span>
+          const body = spec.tabStyle === 'windows' && active ? <span fg={theme.cyan} bg={theme.surface}>{` ${part.text} `}</span>
+            : spec.tabStyle === 'pills' && active ? <span fg={theme.text} bg={theme.surface3}>{` ${part.text} `}</span>
             : spec.tabStyle === 'chrome' && active ? <span fg={fg}>{`╭${part.text}╮`}</span>
             : spec.tabStyle === 'boxed' ? <span fg={active ? theme.cyan : theme.border2}>{'│'}<span fg={fg}>{part.text}</span>{'│'}</span>
             : <span fg={fg} attributes={active && spec.tabStyle === 'minimal' ? TextAttributes.BOLD : undefined}>{` ${part.text} `}</span>
           return <span key={index}>{body}{index < parts.length - 1 && !(active || parts[index + 1]!.active) ? <span fg={theme.border2}>{sep}</span> : ' '}</span>
         })}
-        <span fg={theme.dim}> +</span>
+        {spec.tabStyle === 'windows' ? <span fg={theme.dim}>{' +  ▾'}</span> : <span fg={theme.dim}> +</span>}
       </text>
       {underline ? <text fg={theme.cyan} wrapMode="none">{underline}</text> : null}
     </>

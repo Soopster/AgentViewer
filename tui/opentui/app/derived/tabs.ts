@@ -8,6 +8,39 @@ import { type Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
 import { sessionProviderLabel } from '../pickers'
 import { DEFAULT_TAB_DISPLAY, type TabDisplay } from '../../../viewSpec'
+import { mixHexColor } from '../transcriptStyle'
+import { getProviderAccent, type TuiThemePalette } from '../../../theme'
+
+/**
+ * The strip behind inactive tabs. `bg` alone read as a dark gutter cut into the
+ * window area, since every frame and the rail are `surface`; `blend` keeps the
+ * active tab a step above its neighbours without that band.
+ */
+export function tabStripColor(theme: TuiThemePalette, fill: TabDisplay['tabStripFill']): string {
+  if (fill === 'surface') return theme.surface
+  if (fill === 'bg') return theme.bg
+  if (fill === 'raised') return mixHexColor(theme.surface2, theme.surface, 0.6) ?? theme.surface2
+  if (fill === 'tinted') return mixHexColor(theme.cyan, theme.bg, 0.1) ?? theme.surface2
+  if (fill === 'deep') return mixHexColor('#000000', theme.bg, isLightThemeColor(theme.bg) ? 0.06 : 0.3) ?? theme.bg
+  return mixHexColor(theme.surface, theme.bg, 0.5) ?? theme.surface2
+}
+
+/** An inactive tab under the pointer: most of the way from the strip to the active tab's surface, never a coloured tint. */
+export function tabHoverColor(theme: TuiThemePalette, strip: string): string {
+  if (strip === theme.surface) return mixHexColor(theme.surface2, strip, 0.7) ?? theme.surface2
+  return mixHexColor(theme.surface, strip, 0.6) ?? theme.surface2
+}
+
+function isLightThemeColor(hex: string): boolean {
+  const value = Number.parseInt(hex.replace('#', '').slice(0, 6), 16)
+  if (!Number.isFinite(value)) return false
+  return ((value >> 16 & 255) * 299 + (value >> 8 & 255) * 587 + (value & 255) * 114) / 1000 > 140
+}
+
+/** The colour a tab is drawn in under `tabAccent`: its provider's, or the theme's accent. */
+export function tabAccentColor(theme: TuiThemePalette, display: TabDisplay, session: Session | null | undefined): string {
+  return display.tabAccent !== 'off' && session?.provider ? getProviderAccent(session.provider) : theme.cyan
+}
 
 /** A session's tab title as the view asks for it: its title, its folder, or both. */
 export function tabTitleText(session: Session, display: TabDisplay): string {
@@ -74,7 +107,7 @@ return (
       // tab-select draws a name in tabWidth - 2 cells from its second column,
       // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
       // Only the selected tab carries it (tabCloseHit agrees).
-      name: tabStripName(label, tabWidth, '', tabClosable(display, !shownPopoverTab && selectedSessionKey === sessionKey(s))),
+      name: tabStripName(label, tabWidth, '', tabClosable(display, !shownPopoverTab && selectedSessionKey === sessionKey(s)), display.tabTruncate),
       description: isPreviewMode && selectedSessionKey === sessionKey(s)
         ? 'Preview tab'
         : inSplit
@@ -88,6 +121,6 @@ return (
   const pinned = windowSurfaceMeta[id]?.session
   const pinnedSession = pinned ? openTabByKey.get(pinned) ?? sessions.find((entry) => sessionKey(entry) === pinned) : null
   const label = `${number(visibleTabSessions.length + popoverIndex)}${surfaceTitle(id)}${pinnedSession ? ` · ${formatSessionTitle(pinnedSession)}` : ''}`
-  return { name: tabStripName(label, tabWidth, '', tabClosable(display, id === shownPopoverTab)), description: 'popover tab', value: `popover:${id}` }
+  return { name: tabStripName(label, tabWidth, '', tabClosable(display, id === shownPopoverTab), display.tabTruncate), description: 'popover tab', value: `popover:${id}` }
 }))
 }

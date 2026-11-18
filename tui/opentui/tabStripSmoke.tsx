@@ -4,7 +4,7 @@ import { createRef } from 'react'
 import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
 import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
-import { tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
+import { fitTextMiddle, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 
 for (const paneWidth of [100, 160, 170, 200]) {
   const stripWidth = tabStripWidth(paneWidth)
@@ -107,9 +107,9 @@ for (const selected of [0, 1, 2]) {
         for (const span of hoverSpans.lines[y].spans) { if (x < column + span.width) return span.bg; column += span.width }
         throw new Error(`Missing cell ${x},${y}`)
       }
-      for (const [x, y] of [[49, 1], [50, 1], [70, 1]]) assert.deepEqual(bgAt(x, y), parseColor('#181818'), `hovered tab cell ${x},${y}`)
-      assert.equal(hoverRows[1][48] + hoverRows[1][71], '▐▌', 'the pill has rounded ends')
-      assert.deepEqual(bgAt(48, 0), parseColor('#101010'), 'the pill keeps to the label row')
+      for (const [x, y] of [[48, 1], [49, 1], [50, 1], [70, 1], [71, 1]]) assert.deepEqual(bgAt(x, y), parseColor('#181818'), `hovered tab cell ${x},${y}`)
+      assert.ok(!hoverRows[1].includes('▐') && !hoverRows[1].includes('▌'), 'the tint is flat, with no half-block caps')
+      assert.deepEqual(bgAt(48, 0), parseColor('#101010'), 'the tint keeps to the label row')
       assert.ok(hoverRows[1].slice(48, 72).includes('Charlie'), 'the hovered tab keeps its label')
       assert.equal(hoverRows[1][47], ' ', 'no separator beside the hovered tab')
       assert.deepEqual(bgAt(30, 1), parseColor('#101010'), 'other inactive tabs stay flat')
@@ -138,7 +138,7 @@ for (const selected of [0, 1, 2]) {
   }
 }
 // The view's tab styles, on the middle tab.
-for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal'] as const) {
+for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal', 'windows'] as const) {
   const tabs = createRef<TabSelectRenderable>()
   const frame = createRef<BoxRenderable>()
   const options = ['Alpha', 'Bravo', 'Charlie'].map((label, index) => ({ name: tabStripName(label, 24, '', index === 1), value: `tab:${index}`, description: '' }))
@@ -152,7 +152,7 @@ for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal'] as const) {
     <SessionTabConnection tabs={tabs} readWindow={() => frame.current} ownerKey="tab:1" enabled
       foreground="#00aaff" background="#202020" inactiveForeground="#555555" inactiveBackground="#101010"
       hoverForeground="#eeeeee" hoverBackground="#181818" pillForeground="#ffffff" pillBackground="#225577"
-      tabStyle={tabStyle} separators />
+      windowsBackground="#334455" windowsInactiveBackground="#151515" inactiveLabel="#aaaaaa" tabStyle={tabStyle} separators />
   </box>, { width: 100, height: 6 })
   try {
     await act(async () => { tabs.current!.setSelectedIndex(1); tabs.current!.focus() })
@@ -171,6 +171,24 @@ for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal'] as const) {
       assert.equal(rows[0].slice(0, 24), `╭${'─'.repeat(22)}╮`, 'an inactive tab is outlined too')
       assert.equal(rows[0].slice(24, 48), `╭${'─'.repeat(22)}╮`, 'the active tab is outlined')
       assert.equal(rows[2][23], '┴', 'an inactive tab stands on the border')
+    } else if (tabStyle === 'windows') {
+      // Windows Terminal: the active tab is the window's colour, one row, no outline, opening into the window.
+      assert.equal(rows[0].slice(24, 48), `╭${'─'.repeat(22)}╮`, 'an accent edge tops the active tab')
+      assert.deepEqual(spans.lines[0].spans.find((span) => span.text.includes('─'))?.fg, parseColor('#00aaff'), 'in the accent')
+      assert.equal(rows[1][24] + rows[1][47], '││', 'the edge turns down into the sides')
+      assert.deepEqual(bgAt(25, 1), parseColor('#334455'), 'the active tab is filled')
+      assert.deepEqual(bgAt(24, 1), parseColor('#334455'), 'its sides on the fill')
+      assert.ok(rows[1].includes('Bravo'), 'the filled tab keeps its label')
+      assert.equal(rows[2].slice(24, 48), `╯${' '.repeat(22)}╰`, 'the border turns down inside the tab\'s own columns, under the edge\'s ends')
+      assert.equal(rows[2][23] + rows[2][48], '──', 'nothing turns outside the tab')
+      assert.deepEqual(bgAt(2, 1), parseColor('#151515'), 'an inactive tab is a faint block')
+      assert.deepEqual(bgAt(22, 1), parseColor('#151515'))
+      assert.deepEqual(bgAt(23, 1), parseColor('#101010'), 'its last cell is a strip-coloured gap')
+      assert.ok(rows[1].includes('Alpha') && rows[1].includes('Charlie'), 'inactive labels survive the fill')
+      const fgAt = (x: number, y: number) => { let column = 0; for (const span of spans.lines[y].spans) { if (x < column + span.width) return span.fg; column += span.width } return null }
+      assert.deepEqual(fgAt(1, 1), parseColor('#aaaaaa'), 'inactive labels keep the strip\'s text colour, not the border\'s')
+      assert.equal(rows[0].slice(0, 24).trim() + rows[0].slice(48).trim(), '', 'only the active tab is outlined')
+      assert.equal(rows[1][23] + rows[1][48], '  ', 'no separators')
     } else {
       assert.equal(rows[0].trim(), '', 'minimal draws no outline')
       assert.ok(!rows[2].slice(24, 48).includes('━') && !rows[1].includes('▐'), 'minimal draws no marks')
@@ -179,5 +197,61 @@ for (const tabStyle of ['underline', 'pills', 'boxed', 'minimal'] as const) {
     await act(async () => setup.renderer.destroy())
   }
 }
-console.log('Tab strip passed: Chrome-style raised active tab, underline/pills/boxed/minimal styles, inactive separators, hover lift, flush-left join, active-only close, scrolling and row bounds')
+// Hover styles and provider initials, hovering the last tab with the first selected.
+for (const hover of ['raise', 'underline', 'pill', 'text', 'accent', 'none'] as const) {
+  const tabs = createRef<TabSelectRenderable>()
+  const frame = createRef<BoxRenderable>()
+  const options = ['C Alpha', 'X Bravo', 'O Charlie'].map((label, index) => ({ name: tabStripName(label, 24, '', index === 0), value: `tab:${index}`, description: '' }))
+  const setup = await testRender(<box flexDirection="column" width={100}>
+    <box height={2} paddingTop={1} paddingRight={1} backgroundColor="#101010">
+      <tab-select ref={tabs} options={options} width={76} height={1} tabWidth={24}
+        backgroundColor="#101010" focusedBackgroundColor="#101010" textColor="#aaaaaa"
+        selectedBackgroundColor="#202020" selectedTextColor="#00aaff" showDescription={false} showUnderline={false}
+        onMouseMove={(event) => noteTabStripHover(tabs.current, event.x)} />
+    </box>
+    <box ref={frame} width={100} height={4} border borderStyle="rounded" borderColor="#00aaff" backgroundColor="#202020" />
+    <SessionTabConnection tabs={tabs} readWindow={() => frame.current} ownerKey="tab:0" enabled
+      foreground="#00aaff" background="#202020" inactiveForeground="#555555" inactiveBackground="#101010"
+      hoverForeground="#eeeeee" hoverBackground="#181818" hover={hover}
+      initialColors={new Map([['tab:1', '#ff8800'], ['tab:2', '#00ff88']])} />
+  </box>, { width: 100, height: 6 })
+  try {
+    await act(async () => { tabs.current!.setSelectedIndex(0); tabs.current!.focus() })
+    await act(async () => { await setup.mockMouse.moveTo(50, 1) })
+    await setup.flush()
+    const rows = setup.captureCharFrame().split('\n')
+    const spans = setup.captureSpans()
+    const at = (x: number, y: number) => { let column = 0; for (const span of spans.lines[y].spans) { if (x < column + span.width) return span; column += span.width } throw new Error(`Missing cell ${x},${y}`) }
+    if (hover === 'raise') {
+      assert.equal(rows[0].slice(48, 72), `╭${'─'.repeat(22)}╮`, 'raise outlines the hovered tab')
+      assert.deepEqual(at(48, 0).fg, parseColor('#555555'), 'in the muted colour')
+      assert.equal(rows[2].slice(49, 71), '─'.repeat(22), 'a raised hover does not open into the window')
+    } else if (hover === 'underline') {
+      assert.equal(rows[2].slice(48, 72), '━'.repeat(24), 'underline rules the border under the hovered tab')
+      assert.equal(rows[0].slice(48, 72).trim(), '', 'and raises nothing')
+    } else if (hover === 'pill') {
+      assert.equal(rows[1][48] + rows[1][71], '▐▌', 'the pill has rounded ends')
+      assert.deepEqual(at(48, 1).bg, parseColor('#101010'), 'its caps sit on the strip colour')
+      assert.deepEqual(at(50, 1).bg, parseColor('#181818'))
+    } else if (hover === 'text' || hover === 'accent') {
+      assert.deepEqual(at(50, 1).bg, parseColor('#101010'), 'a label hover adds no fill')
+      assert.deepEqual(at(52, 1).fg, parseColor(hover === 'accent' ? '#00aaff' : '#eeeeee'), 'the label changes colour')
+    } else {
+      assert.deepEqual(at(50, 1).bg, parseColor('#101010'), 'no hover mark at all')
+      assert.equal(rows[0].slice(48, 72).trim(), '')
+    }
+    // Initials: inactive tabs' provider letter in its colour; the active label keeps its own.
+    assert.equal(rows[1][25] + rows[1][49], 'XO')
+    assert.deepEqual(at(25, 1).fg, parseColor('#ff8800'), 'an inactive tab\'s initial is in its provider colour')
+    assert.deepEqual(at(49, 1).fg, parseColor('#00ff88'), 'the hovered tab\'s initial too')
+    assert.deepEqual(at(2, 1).fg, parseColor('#00aaff'), 'the active tab is drawn in the accent, not its initial')
+  } finally {
+    await act(async () => setup.renderer.destroy())
+  }
+}
+// Middle truncation keeps a title's last words.
+assert.equal(fitTextMiddle('agentViewer · Add agent viewer plugin skill', 21), 'agentViewe…ugin skill')
+assert.equal(tabStripName('agentViewer · Add agent viewer plugin skill', 25, '', true, 'middle'), 'agentViewe…ugin skill ×')
+assert.equal(fitTextMiddle('short', 8), 'short   ')
+console.log('Tab strip passed: Chrome-style raised active tab, underline/pills/boxed/minimal/windows styles, tint/pill/raise/underline/text/accent/none hover, provider initials, middle truncation, inactive separators, hover lift, flush-left join, active-only close, scrolling and row bounds')
 process.exit(0)

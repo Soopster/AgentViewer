@@ -17,6 +17,8 @@ import { PinnedTabRow } from '../../PinnedTabRow'
 import { WindowButton } from '../../WindowButton'
 import { TAB_STRIP_BUTTON_WIDTH, tabStripTabsWidth, tabStripWidth } from '../../tabStrip'
 import { SessionTabConnection, noteTabStripHover } from '../../SessionTabConnection'
+import { tabAccentColor, tabHoverColor, tabStripColor } from '../derived/tabs'
+import { getProviderAccent } from '../../../theme'
 import { mixHexColor } from '../transcriptStyle'
 import React from 'react'
 import { surfaceTitle, type WindowSurfaceKind } from '../../windowSurfaceNames'
@@ -260,6 +262,20 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
   } = props
   // The selected tab is on the pinned row: the strip below then highlights none of its own.
   const activeInPinnedRow = pinnedRowCount > 0 && activeStripIndex >= 0 && activeStripIndex < pinnedRowCount
+  // The strip's colours, from the view's Tabs fields.
+  const stripFill = tabStripColor(theme, tabDisplay.tabStripFill)
+  const tabAccent = tabAccentColor(theme, tabDisplay, selectedSession)
+  const windowsStyle = tabDisplay.tabStyle === 'windows'
+  // Windows Terminal's active tab is the window's own colour.
+  const windowsTabFill = theme.surface
+  const tabInitialColors = tabDisplay.tabAccent === 'all' && tabDisplay.tabIcons === 'provider'
+    ? new Map(visibleTabSessions.flatMap((session) => session.provider ? [[sessionKey(session), getProviderAccent(session.provider)] as const] : []))
+    : null
+  // `more`: the tabs that do not fit are counted on a button that opens the tab list.
+  const stripTabsWidth = tabStripTabsWidth(readerAreaWidth)
+  const fittingTabs = Math.max(1, Math.floor(stripTabsWidth / Math.max(1, tabWidth)))
+  const hiddenTabCount = tabDisplay.tabOverflow === 'more' && props.onOpenTabManager ? Math.max(0, tabOptions.length - fittingTabs) : 0
+  const moreLabel = hiddenTabCount > 0 ? ` +${hiddenTabCount} ▾ ` : ''
   return (
     (
 <box
@@ -305,6 +321,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
               selectedKey={selectedSessionKey}
               running={runningTabKeys}
               theme={theme}
+              background={stripFill}
               width={tabStripWidth(readerAreaWidth)}
               onSelect={selectTabSession}
               onMenu={(session, point) => splitPaneActions.sessionMenu(session, 'tab', point)}
@@ -322,33 +339,36 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
               flexDirection="row"
               paddingRight={1}
               overflow="hidden"
-              backgroundColor={theme.bg}
+              backgroundColor={stripFill}
             >
-              {/* Chrome's strip: the tab list before the tabs, a new tab after the last one. */}
-              <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
-                {props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={theme.bg} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
-              </box>
+              {/* Chrome's strip: the tab list before the tabs, a new tab after the last one.
+                  Windows Terminal's puts both after the tabs, as one button group. */}
+              {windowsStyle ? null : (
+                <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
+                  {props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
+                </box>
+              )}
               <tab-select
                 id="session-tabs"
                 ref={tabSelectRef}
                 options={tabOptions}
                 // As wide as its tabs, so the + follows the last one.
-                width={Math.max(1, Math.min(tabStripTabsWidth(readerAreaWidth), tabWidth * Math.max(1, tabOptions.length)))}
+                width={Math.max(1, Math.min(stripTabsWidth - moreLabel.length, tabWidth * Math.max(1, tabOptions.length)))}
                 flexShrink={0}
                 height={1}
                 tabWidth={tabWidth}
-                backgroundColor={theme.bg}
-                focusedBackgroundColor={theme.bg}
+                backgroundColor={stripFill}
+                focusedBackgroundColor={stripFill}
                 textColor={theme.muted}
                 focusedTextColor={theme.text}
                 // Chrome and boxed raise the active tab onto the window's surface;
                 // the flat styles leave it on the strip (pills are painted over it).
-                selectedBackgroundColor={activeInPinnedRow || (tabDisplay.tabStyle !== 'chrome' && tabDisplay.tabStyle !== 'boxed') ? theme.bg : theme.surface}
-                selectedTextColor={activeInPinnedRow ? theme.muted : theme.cyan}
+                selectedBackgroundColor={activeInPinnedRow ? stripFill : windowsStyle ? windowsTabFill : (tabDisplay.tabStyle !== 'chrome' && tabDisplay.tabStyle !== 'boxed') ? stripFill : theme.surface}
+                selectedTextColor={activeInPinnedRow ? theme.muted : tabAccent}
                 selectedDescriptionColor={theme.dim}
                 showDescription={false}
                 showUnderline={false}
-                showScrollArrows={true}
+                showScrollArrows={hiddenTabCount === 0}
                 wrapSelection={false}
                 // A tab opens on release, and a press that moves drags it onto the
                 // window area, as a rail row does.
@@ -391,8 +411,14 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                 }}
                 onChange={(index: number) => selectStripIndex(index + pinnedRowCount)}
               />
-              <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
-                <WindowButton id="tab-strip-new" label=" + " theme={theme} background={theme.bg} foreground={theme.muted} onPress={() => props.onNewSession()} />
+              {moreLabel ? (
+                <box width={moreLabel.length} flexShrink={0}>
+                  <WindowButton id="tab-strip-more" label={moreLabel} theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} />
+                </box>
+              ) : null}
+              <box width={TAB_STRIP_BUTTON_WIDTH * (windowsStyle ? 2 : 1)} flexShrink={0} flexDirection="row">
+                <WindowButton id="tab-strip-new" label=" + " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onNewSession()} />
+                {windowsStyle && props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
               </box>
             </box>
           ) : showPreviewBar && selectedSession ? (
@@ -475,11 +501,12 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
             ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab && showBorders}
-            foreground={theme.cyan} background={theme.surface}
-            inactiveForeground={theme.border} inactiveBackground={theme.bg}
-            hoverForeground={theme.text} hoverBackground={mixHexColor(theme.cyan, theme.bg, 0.14) ?? theme.surface2}
-            pillForeground={theme.text} pillBackground={mixHexColor(theme.cyan, theme.bg, 0.32) ?? theme.surface3}
-            tabStyle={tabDisplay.tabStyle} separators={tabDisplay.tabSeparators} />
+            foreground={tabAccent} background={theme.surface}
+            inactiveForeground={theme.border} inactiveBackground={stripFill}
+            hoverForeground={theme.text} hoverBackground={tabHoverColor(theme, stripFill)}
+            pillForeground={theme.text} pillBackground={mixHexColor(tabAccent, stripFill, 0.32) ?? theme.surface3}
+            windowsBackground={windowsTabFill} windowsInactiveBackground={mixHexColor(theme.surface, stripFill, 0.45) ?? stripFill} inactiveLabel={theme.muted} initialColors={tabInitialColors}
+            tabStyle={tabDisplay.tabStyle} separators={tabDisplay.tabSeparators} hover={tabDisplay.tabHover} />
 
           </box>
         </box>

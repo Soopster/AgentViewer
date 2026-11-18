@@ -27,7 +27,7 @@ export type ViewToolRows = 'default' | 'dim' | 'shell-bold' | 'dollar-shell'
 export type ViewTextWidth = 'measure' | 'full'
 export type ViewTranscriptWidth = 'readable' | 'centered' | 'full'
 export type ViewDiffLayout = 'stack' | 'split'
-export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal'
+export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows'
 export type ViewTabWidth = 'fill' | 'fit' | 'compact' | 'wide'
 
 export type ViewSpec = {
@@ -93,6 +93,18 @@ export type ViewSpec = {
   tabIcons: 'status' | 'provider' | 'none'
   tabSeparators: boolean
   tabTitle: 'title' | 'folder' | 'folder-title'
+  /** What the strip behind inactive tabs is painted: halfway to the window surface, the surface, or the app background. */
+  tabStripFill: 'blend' | 'surface' | 'bg' | 'raised' | 'tinted' | 'deep'
+  /** How an inactive tab under the pointer is marked. */
+  tabHover: 'tint' | 'pill' | 'raise' | 'underline' | 'text' | 'accent' | 'none'
+  /** Draw the active tab (or every tab's provider initial) in its provider's colour. */
+  tabAccent: 'off' | 'active' | 'all'
+  /** A mark on tabs whose turn is running or finished unread. */
+  tabActivity: 'spinner' | 'dot' | 'off'
+  /** Tabs past the strip: scroll arrows, or a +N button that opens the tab list. */
+  tabOverflow: 'scroll' | 'more'
+  /** Where a long title is cut. */
+  tabTruncate: 'end' | 'middle'
   // Panels: null keeps whatever the app has. Pins hold while the view is
   // shown; "on entering" values are applied when the view is chosen.
   sessionRail: boolean | null
@@ -135,6 +147,7 @@ const CARDS: ViewSpec = {
   messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
+  tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
   sessionRail: null, sidebarView: null, tabs: null, tabOrientation: null, focusMode: null, borders: null,
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
@@ -292,8 +305,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
   { key: 'tabOrientation', section: 'Tabs', label: 'Tab layout', help: 'Pin tabs along the top or down the side.',
     options: [INHERIT, { value: 'horizontal', label: 'top' }, { value: 'vertical', label: 'side' }] },
-  { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Chrome raises the active tab into the window; underline marks it on the border; pills fill it; boxed outlines every tab; minimal is text alone.',
-    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }] },
+  { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Chrome raises the active tab into the window; underline marks it on the border; pills fill it; boxed outlines every tab; minimal is text alone; windows fills the active tab as Windows Terminal does.',
+    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }, { value: 'windows', label: 'windows' }] },
   { key: 'tabWidth', section: 'Tabs', label: 'Tab width', help: 'Share the strip, fit the longest title, keep tabs narrow, or let them run wide.',
     options: [{ value: 'fill', label: 'fill' }, { value: 'fit', label: 'fit titles' }, { value: 'compact', label: 'compact' }, { value: 'wide', label: 'wide' }] },
   { key: 'tabClose', section: 'Tabs', label: 'Close buttons', help: 'A × on the active tab, on every tab, or on none (middle-click still closes).',
@@ -304,6 +317,18 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'tabSeparators', section: 'Tabs', label: 'Separators', help: 'A thin rule between inactive tabs.', options: ON_OFF },
   { key: 'tabTitle', section: 'Tabs', label: 'Tab title', help: 'The session title, its folder, or both.',
     options: [{ value: 'title', label: 'title' }, { value: 'folder', label: 'folder' }, { value: 'folder-title', label: 'folder · title' }] },
+  { key: 'tabStripFill', section: 'Tabs', label: 'Strip fill', help: 'Behind inactive tabs: a step down from the window, the window\'s surface, the app background, a step above the window, a wash of the accent, or darker than the background.',
+    options: [{ value: 'blend', label: 'blend' }, { value: 'surface', label: 'surface' }, { value: 'bg', label: 'background' }, { value: 'raised', label: 'raised' }, { value: 'tinted', label: 'tinted' }, { value: 'deep', label: 'deep' }] },
+  { key: 'tabHover', section: 'Tabs', label: 'Hover', help: 'An inactive tab under the pointer: a flat tint, a rounded pill, a muted outline, a rule under it, a bold label, the label in the accent, or nothing.',
+    options: [{ value: 'tint', label: 'tint' }, { value: 'pill', label: 'pill' }, { value: 'raise', label: 'raise' }, { value: 'underline', label: 'underline' }, { value: 'text', label: 'bold label' }, { value: 'accent', label: 'accent label' }, { value: 'none', label: 'none' }] },
+  { key: 'tabAccent', section: 'Tabs', label: 'Provider colour', help: 'The active tab in its provider\'s colour, and with "all tabs" every tab\'s provider initial too.',
+    options: [{ value: 'off', label: 'off' }, { value: 'active', label: 'active tab' }, { value: 'all', label: 'all tabs' }] },
+  { key: 'tabActivity', section: 'Tabs', label: 'Activity', help: 'Mark a tab whose turn is running with a spinner, a still dot, or nothing.',
+    options: [{ value: 'spinner', label: 'spinner' }, { value: 'dot', label: 'dot' }, { value: 'off', label: 'off' }] },
+  { key: 'tabOverflow', section: 'Tabs', label: 'Overflow', help: 'Tabs that do not fit: scroll with arrows, or a +N button that opens the tab list.',
+    options: [{ value: 'scroll', label: 'scroll' }, { value: 'more', label: '+N button' }] },
+  { key: 'tabTruncate', section: 'Tabs', label: 'Truncate', help: 'Cut a long title at its end, or in the middle so its last words stay.',
+    options: [{ value: 'end', label: 'end' }, { value: 'middle', label: 'middle' }] },
   // Panels
   { key: 'sessionRail', section: 'Panels', label: 'Session rail', help: 'Pin the sessions rail shown or hidden while this view is on.',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
@@ -518,7 +543,8 @@ export function nestedViewCardStyle(parent: ViewCardStyle): ViewCardStyle {
 
 // ── tabs ───────────────────────────────────────────────────────────────────
 
-export type TabDisplay = Pick<ViewSpec, 'tabStyle' | 'tabWidth' | 'tabClose' | 'tabNumbers' | 'tabIcons' | 'tabSeparators' | 'tabTitle'>
+export type TabDisplay = Pick<ViewSpec, 'tabStyle' | 'tabWidth' | 'tabClose' | 'tabNumbers' | 'tabIcons' | 'tabSeparators' | 'tabTitle'
+  | 'tabStripFill' | 'tabHover' | 'tabAccent' | 'tabActivity' | 'tabOverflow' | 'tabTruncate'>
 const tabDisplayCache = new WeakMap<ViewSpec, TabDisplay>()
 /** The strip's slice of a spec, one object per spec so memos keyed on it hold. */
 export function viewTabDisplay(spec: ViewSpec): TabDisplay {
@@ -527,6 +553,8 @@ export function viewTabDisplay(spec: ViewSpec): TabDisplay {
     display = {
       tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
       tabIcons: spec.tabIcons, tabSeparators: spec.tabSeparators, tabTitle: spec.tabTitle,
+      tabStripFill: spec.tabStripFill, tabHover: spec.tabHover, tabAccent: spec.tabAccent,
+      tabActivity: spec.tabActivity, tabOverflow: spec.tabOverflow, tabTruncate: spec.tabTruncate,
     }
     tabDisplayCache.set(spec, display)
   }

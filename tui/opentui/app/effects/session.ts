@@ -45,15 +45,18 @@ export type OptionsEffectContext = {
   runningTabKeys: Set<string>
   tabOptions: TabSelectOption[]
   tabWidth: number
+  /** The view's running-tab mark (tui/viewSpec.ts `tabActivity`). */
+  activity?: 'spinner' | 'dot' | 'off'
+  truncate?: 'end' | 'middle'
 }
 
 export function runOptionsEffect(ctx: OptionsEffectContext) {
   const {
-    tabSelectRef, runningTabKeys, tabOptions, tabWidth,
+    tabSelectRef, runningTabKeys, tabOptions, tabWidth, activity = 'spinner', truncate = 'end',
   } = ctx
   const instance = tabSelectRef.current
   if (!instance) return undefined
-  if (runningTabKeys.size === 0) {
+  if (runningTabKeys.size === 0 || activity === 'off') {
     // Nothing is running: hand back exactly what React rendered, or the last
     // frame drawn stays frozen on a tab that has finished.
     instance.setOptions(tabOptions)
@@ -65,9 +68,19 @@ export function runOptionsEffect(ctx: OptionsEffectContext) {
     if (!target) return
     target.setOptions(tabOptions.map((option) => (
       option.value != null && runningTabKeys.has(option.value as string)
-        ? { ...option, name: tabStripActivity(option.name, tabWidth, TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length]) }
+        ? { ...option, name: tabStripActivity(option.name, tabWidth, TAB_SPINNER_FRAMES[frame % TAB_SPINNER_FRAMES.length], truncate) }
         : option
     )))
+  }
+  if (activity === 'dot') {
+    // A still mark: one paint, no timer, so a running tab costs nothing per frame.
+    const target = tabSelectRef.current
+    target?.setOptions(tabOptions.map((option) => (
+      option.value != null && runningTabKeys.has(option.value as string)
+        ? { ...option, name: tabStripActivity(option.name, tabWidth, '●', truncate) }
+        : option
+    )))
+    return undefined
   }
   paint()
   const id = setInterval(() => {

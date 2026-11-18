@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useRenderer } from '@opentui/react'
-import { parseColor, type BoxRenderable, type RGBA, type TabSelectRenderable } from '@opentui/core'
+import { TextAttributes, parseColor, type BoxRenderable, type RGBA, type TabSelectRenderable } from '@opentui/core'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -77,9 +77,19 @@ export function SessionTabConnection(props: {
   pillForeground?: string
   pillBackground?: string
   /** How the strip draws (tui/viewSpec.ts `tabStyle`); Chrome's raised tab by default. */
-  tabStyle?: 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal'
+  tabStyle?: 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows'
   /** Thin rules between inactive tabs. */
   separators?: boolean
+  /** How an inactive tab under the pointer is marked (tui/viewSpec.ts `tabHover`). */
+  hover?: 'tint' | 'pill' | 'raise' | 'underline' | 'text' | 'accent' | 'none'
+  /** The active tab's fill in the `windows` style. */
+  windowsBackground?: string
+  /** Inactive tabs' faint fill in the `windows` style; each tab's last cell stays strip, as a gap. */
+  windowsInactiveBackground?: string
+  /** Inactive tabs' label colour when the painter redraws them (the strip's own text colour). */
+  inactiveLabel?: string
+  /** Per tab value, the colour its provider initial is painted in (`tabAccent: 'all'`). */
+  initialColors?: ReadonlyMap<string, string> | null
 }) {
   const renderer = useRenderer()
   const latest = useRef(props)
@@ -88,7 +98,11 @@ export function SessionTabConnection(props: {
     inactiveForeground: parseColor(props.inactiveForeground), inactiveBackground: parseColor(props.inactiveBackground),
     hoverForeground: parseColor(props.hoverForeground), hoverBackground: parseColor(props.hoverBackground),
     pillForeground: parseColor(props.pillForeground ?? props.hoverForeground), pillBackground: parseColor(props.pillBackground ?? props.hoverBackground),
-  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground])
+    windowsBackground: parseColor(props.windowsBackground ?? props.pillBackground ?? props.hoverBackground),
+    windowsInactiveBackground: parseColor(props.windowsInactiveBackground ?? props.inactiveBackground),
+    inactiveLabel: parseColor(props.inactiveLabel ?? props.hoverForeground),
+    initials: new Map([...(props.initialColors ?? new Map<string, string>())].map(([key, color]) => [key, parseColor(color)] as const)),
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground, props.windowsBackground, props.windowsInactiveBackground, props.inactiveLabel, props.initialColors])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -108,16 +122,17 @@ export function SessionTabConnection(props: {
       if (!uncovered) return
       // A floating panel over the strip (the View Studio) keeps its cells: this
       // pass runs after the frame, so without clipping it draws through them.
-      const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA) => {
+      const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA, attributes = 0) => {
         let ranges: Array<[number, number]> = [[x, x + text.length]]
         for (const read of TAB_PAINT_OCCLUDERS) {
           const rect = read()
           if (!rect || y < rect.y || y >= rect.y + rect.height) continue
           ranges = ranges.flatMap(([from, to]): Array<[number, number]> => [[from, Math.min(to, rect.x)], [Math.max(from, rect.x + rect.width), to]].filter(([l, r]) => r > l) as Array<[number, number]>)
         }
-        for (const [from, to] of ranges) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg)
+        for (const [from, to] of ranges) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg, attributes)
       }
-      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, pillForeground, pillBackground } = palette.current
+      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, pillForeground, pillBackground, windowsBackground, windowsInactiveBackground, inactiveLabel, initials } = palette.current
+      const hoverStyle = current.hover ?? 'tint'
       const style = current.tabStyle ?? 'chrome'
       const tabWidth = tabs.getTabWidth()
       // Chrome's strip: inactive tabs have no outline, only a muted separator
@@ -127,9 +142,10 @@ export function SessionTabConnection(props: {
       const selected = tabs.getSelectedIndex()
       drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       const hovered = hoveredTabIndex(tabs)
-      const lifted = hovered !== null && hovered !== selected ? hovered : null
-      // Boxed tabs carry their own sides, so they need no separators.
-      for (let index = offset; current.separators !== false && style !== 'boxed' && index < tabs.options.length - 1; index++) {
+      const lifted = hovered !== null && hovered !== selected && hoverStyle !== 'none' ? hovered : null
+      // Boxed tabs carry their own sides, so they need no separators; Windows
+      // Terminal's strip has none either, the filled tab is the only shape.
+      for (let index = offset; current.separators !== false && style !== 'boxed' && style !== 'windows' && index < tabs.options.length - 1; index++) {
         if ((index - offset + 2) * tabs.getTabWidth() > tabs.width) break
         // Like Chrome, a separator also gives way beside the hovered tab.
         if (index === selected || index + 1 === selected || index === lifted || index + 1 === lifted) continue
@@ -137,13 +153,67 @@ export function SessionTabConnection(props: {
         if (inactive) drawText('│', inactive.right, inactive.tabY, inactiveForeground, inactiveBackground)
       }
       const hover = lifted === null ? null : tabConnectionGeometry(tabs, frame, lifted, offset, tabs.getTabWidth())
-      if (hover && lifted !== null && hover.right - hover.left >= 2) {
-        // Chrome's hover is a pill on the label row, inset from the tab's edges:
-        // half blocks at each end round it, the cells between carry the label.
-        drawText('▐', hover.left, hover.tabY, hoverBackground, inactiveBackground)
-        drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
-        drawText(tabs.options[lifted]?.name ?? '', hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
-        drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
+      const hoverName = lifted === null ? '' : tabs.options[lifted]?.name ?? ''
+      if (style === 'windows') {
+        // Windows Terminal's inactive tabs are faint blocks, one strip-coloured
+        // cell apart, so neighbouring titles do not run together.
+        for (let index = offset; index < tabs.options.length; index++) {
+          if ((index - offset + 1) * tabWidth > tabs.width) break
+          if (index === selected) continue
+          const tab = tabConnectionGeometry(tabs, frame, index, offset, tabWidth)
+          if (!tab || tab.right - tab.left < 2) continue
+          const filled = index === lifted && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise')
+          const fill = filled ? hoverBackground : windowsInactiveBackground
+          drawText(' '.repeat(tab.right - tab.left), tab.left, tab.tabY, inactiveForeground, fill)
+          drawText((tabs.options[index]?.name ?? '').slice(0, tab.right - tab.left - 1), tab.left + 1, tab.tabY, filled ? hoverForeground : inactiveLabel, fill)
+        }
+      }
+      if (hover && lifted !== null && hover.right - hover.left >= 2 && !(style === 'windows' && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise'))) {
+        if ((style === 'pills' && hoverStyle === 'tint') || hoverStyle === 'pill') {
+          // A pill like the active one, its caps on the strip's own colour so the ends stay clean.
+          drawText('▐', hover.left, hover.tabY, hoverBackground, inactiveBackground)
+          drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          drawText(hoverName, hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          drawText('▌', hover.right, hover.tabY, hoverBackground, inactiveBackground)
+        } else if (hoverStyle === 'tint') {
+          // A flat fill across the whole tab: no half-block caps, which a font
+          // draws with seams and which left the pill looking sunk into the strip.
+          drawText(' '.repeat(hover.right - hover.left + 1), hover.left, hover.tabY, hoverForeground, hoverBackground)
+          drawText(hoverName, hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+        } else if (hoverStyle === 'raise') {
+          // The active tab's outline in the muted colour, standing on the border rather than opening into it.
+          drawText('╭' + '─'.repeat(hover.right - hover.left - 1) + '╮', hover.left, hover.topY, inactiveForeground, inactiveBackground)
+          drawText('│', hover.left, hover.tabY, inactiveForeground, inactiveBackground)
+          drawText(' '.repeat(hover.right - hover.left - 1), hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          drawText(hoverName, hover.left + 1, hover.tabY, hoverForeground, hoverBackground)
+          drawText('│', hover.right, hover.tabY, inactiveForeground, inactiveBackground)
+        } else if (hoverStyle === 'text' || hoverStyle === 'accent') {
+          // Only the label changes: brighter and bold, or in the accent colour.
+          drawText(hoverName, hover.left + 1, hover.tabY, hoverStyle === 'accent' ? foreground : hoverForeground, inactiveBackground, hoverStyle === 'text' ? TextAttributes.BOLD : 0)
+        } else if (hoverStyle === 'underline') {
+          drawText('━'.repeat(hover.right - hover.left + 1), hover.left, hover.borderY, inactiveForeground, background)
+          drawText(hoverName, hover.left + 1, hover.tabY, hoverForeground, inactiveBackground)
+        }
+      }
+      // Provider initials in their provider's colour (`tabAccent: 'all'`). The
+      // initial is the first lone capital the label carries: numbers, the pin
+      // and the activity glyph come before it, the title after.
+      if (initials.size > 0) {
+        for (let index = offset; index < tabs.options.length; index++) {
+          if ((index - offset + 1) * tabWidth > tabs.width) break
+          const option = tabs.options[index]
+          const color = option?.value != null ? initials.get(String(option.value)) : undefined
+          // The active tab's whole label already carries the accent.
+          if (!option || !color || index === selected) continue
+          const match = /(?:^|\s)([A-Z]) /.exec(option.name)
+          if (!match || match.index > 8) continue
+          const tab = tabConnectionGeometry(tabs, frame, index, offset, tabWidth)
+          if (!tab) continue
+          const column = tab.left + 1 + match.index + (match[0].length - 2)
+          if (column >= tab.right) continue
+          const cellBackground = index === lifted && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise') ? hoverBackground : style === 'windows' ? windowsInactiveBackground : inactiveBackground
+          drawText(match[1]!, column, tab.tabY, color, cellBackground)
+        }
       }
       const inner = connection.right - connection.left - 1
       if (style === 'boxed') {
@@ -173,6 +243,17 @@ export function SessionTabConnection(props: {
         drawText(' '.repeat(inner), connection.left + 1, connection.tabY, pillForeground, pillBackground)
         drawText(tabs.options[selected]?.name ?? '', connection.left + 1, connection.tabY, pillForeground, pillBackground)
         drawText('▌', connection.right, connection.tabY, pillBackground, inactiveBackground)
+      } else if (style === 'windows' && inner >= 1) {
+        // Windows Terminal: the active tab is the window's own colour, with no
+        // separators around it. Its outline is one line in the accent: the top
+        // edge turns down into the sides, and the sides turn out into the window
+        // border, so tab and window read as one surface.
+        drawText('╭' + '─'.repeat(inner) + '╮', connection.left, connection.topY, foreground, inactiveBackground)
+        drawText(' '.repeat(inner), connection.left + 1, connection.tabY, pillForeground, windowsBackground)
+        drawText(tabs.options[selected]?.name ?? '', connection.left + 1, connection.tabY, pillForeground, windowsBackground)
+        drawText('│', connection.left, connection.tabY, foreground, windowsBackground)
+        drawText('│', connection.right, connection.tabY, foreground, windowsBackground)
+        drawText((connection.flushLeft ? '│' : '╯') + ' '.repeat(inner) + '╰', connection.left, connection.borderY, foreground, background)
       }
       // `minimal`: the label's colour is the only mark.
     }

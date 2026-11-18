@@ -30,13 +30,15 @@ type Props = {
   onPress: (session: Session, event: { x: number; y: number }, onClick: () => void) => void
   onMove: (event: { x: number; y: number }) => void
   onRelease: (event: { x: number; y: number }) => void
+  /** The strip's fill behind unselected chips (the view's `tabStripFill`). */
+  background?: string
 }
 
 /** The dedicated row for pinned tabs: one chip each, `◆ title`, no close button — a pinned tab is closed by unpinning it. */
-export const PinnedTabRow = React.memo(function PinnedTabRow({ sessions, selectedKey, running, theme, width, onSelect, onMenu, onPress, onMove, onRelease }: Props) {
+export const PinnedTabRow = React.memo(function PinnedTabRow({ sessions, selectedKey, running, theme, width, onSelect, onMenu, onPress, onMove, onRelease, background = theme.bg }: Props) {
   const { chipWidth, shown } = pinnedChipLayout(sessions.length, width)
   return (
-    <box id="pinned-tab-row" flexDirection="row" height={1} flexShrink={0} paddingX={1} overflow="hidden" backgroundColor={theme.bg}>
+    <box id="pinned-tab-row" flexDirection="row" height={1} flexShrink={0} paddingX={1} overflow="hidden" backgroundColor={background}>
       {sessions.slice(0, shown).map((session) => {
         const key = sessionIdentityKey(session)
         const selected = key === selectedKey
@@ -46,7 +48,7 @@ export const PinnedTabRow = React.memo(function PinnedTabRow({ sessions, selecte
             id={`pinned-tab:${key}`}
             width={chipWidth}
             marginRight={1}
-            backgroundColor={selected ? theme.surface : theme.bg}
+            backgroundColor={selected ? theme.surface : background}
             onMouseDown={(event) => {
               if (event.button === 2) { event.stopPropagation(); onMenu(session, event); return }
               if (event.button !== 0) return
