@@ -10,6 +10,8 @@ import type { CardLandmark, AgentToolGroupCard } from './types'
 import type { TuiPierreDiffRow, TuiSplitRowSide } from '../pierreDiffView'
 import type { SelectionColors } from '../selectionTree'
 import { fitText } from '../textLayout'
+import { tuiIcon } from '../icons'
+import type { ViewIconSet } from '../../viewSpec'
 
 function findCardIndex(cards: TuiTranscriptCard[], key: string | null): number {
   if (!key) return -1
@@ -256,15 +258,15 @@ export function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePale
       return theme.text
   }
 }
-export function streamLineMarker(line: TuiTranscriptCardLine, role: TuiTranscriptCard['role']): string {
+export function streamLineMarker(line: TuiTranscriptCardLine, role: TuiTranscriptCard['role'], iconSet?: ViewIconSet): string {
   if (role === 'user') return '❯'
   switch (line.tone) {
     case 'result_ok':
-      return '●'
+      return tuiIcon(iconSet, 'success', '●')
     case 'result_error':
-      return '×'
+      return tuiIcon(iconSet, 'error', '×')
     case 'system':
-      return '▲'
+      return tuiIcon(iconSet, 'system', '▲')
     default:
       return '•'
   }

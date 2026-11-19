@@ -1,4 +1,5 @@
 import type { GitSummary } from '../gitProvider'
+import type { ViewIconSet } from '../../tui/viewSpec'
 
 /** Read-only shell context; actions stay with the host that owns focus and navigation. */
 export type ShellOverviewAction = 'repository' | 'session' | 'attention' | 'commands' | 'new-session'
@@ -15,6 +16,8 @@ export type ShellOverviewSnapshot = {
 }
 export type PluginShellOverview = {
   readonly snapshot: ShellOverviewSnapshot
+  /** Icon preference of the active OpenTUI view, including Studio drafts. */
+  readonly terminalIconSet?: ViewIconSet
   readonly readGit: (cwd: string) => Promise<GitSummary | null>
   readonly run: (action: ShellOverviewAction) => void
   /** Enabled, available plugin commands. Widgets choose their own shortcuts. */

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } from '../../../lib/plugins/types'
 import type { GitSummary } from '../../../lib/gitProvider'
-import { fitText, MODAL_CONTENT_Z_INDEX, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
+import { fitText, MODAL_CONTENT_Z_INDEX, tuiIcon, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
 import { availableActions, overviewSegments, runOmniAction } from '../model'
 import { moveLayoutItem, omniGlyph, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
 import { omniLayoutStore } from './storage'
@@ -37,7 +37,9 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
     return () => clearInterval(timer)
   }, [running, startedAt])
   if (!overview) return null
-  const segments = overviewSegments(overview.snapshot, gitState?.cwd === cwd ? gitState.summary : null, width, now, overview.commands?.ids, layout)
+  const powerline = overview.terminalIconSet === 'powerline'
+  const segments = overviewSegments(overview.snapshot, gitState?.cwd === cwd ? gitState.summary : null, width, now, overview.commands?.ids, layout,
+    id => tuiIcon(overview.terminalIconSet, id, omniGlyph(id)))
   // Keep attention and command access intact; the repository/activity share the rest.
   // Attention, commands and the shortcuts keep their own width; the repository and activity share the rest.
   const flexible = (segment: { action: string }) => segment.action === 'repository' || segment.action === 'session'
@@ -45,19 +47,25 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
   const contextWidth = Math.max(0, width - fixedWidth)
   const flexibleCount = segments.filter(flexible).length
   let flexibleIndex = 0
+  const backgrounds = segments.map((segment, index) =>
+    hovered === segment.action || (powerline && index % 2 === 0) ? theme.surface3 : theme.surface2)
   // A right click anywhere on the bar (segments let it bubble) opens its customization.
   const customize = () => { if (overview.commands?.ids.includes('omni-bar-settings')) overview.commands.run('omni-bar-settings') }
   return <box id="omni-bar" width={width} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface2} overflow="hidden"
     onMouseDown={event => { if (event.button === 2) { event.stopPropagation(); customize() } }}>
-    {segments.map(segment => {
+    {segments.map((segment, index) => {
       const cells = flexible(segment)
         ? Math.floor(contextWidth / flexibleCount) + (flexibleIndex++ === 0 ? contextWidth % flexibleCount : 0)
         : Math.min(width, segment.text.length + 2)
       return <box key={segment.action} id={`omni-bar:${segment.action}`} width={cells} height={1} flexShrink={0}
-        backgroundColor={hovered === segment.action ? theme.surface3 : theme.surface2}
+        backgroundColor={backgrounds[index]}
         onMouseOver={() => setHovered(segment.action)} onMouseOut={() => setHovered(current => current === segment.action ? null : current)}
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); runOmniAction(overview, segment.action) } }}>
-        <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' || hovered === segment.action ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${segment.text} `, cells)}</text>
+        <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' || hovered === segment.action ? theme.cyan : theme.text} wrapMode="none" selectable={false}>
+          {cells > 1 && powerline && backgrounds[index] !== (backgrounds[index + 1] ?? theme.surface2)
+            ? <>{fitText(` ${segment.text}`, cells - 1)}<span fg={backgrounds[index]} bg={backgrounds[index + 1] ?? theme.surface2}>{tuiIcon(overview.terminalIconSet, 'powerline-end', ' ')}</span></>
+            : fitText(` ${segment.text} `, cells)}
+        </text>
       </box>
     })}
   </box>

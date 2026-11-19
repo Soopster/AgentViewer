@@ -326,6 +326,8 @@ Workflow guidance for agents lives in the bundled skill, [`.agents/skills/coordi
 
 Hesitating after `⌃B` or `⌃K` shows the available keys. `⌃K` chords and custom commands can be rebound in `~/.config/agent-viewer/keys.json` (or `$AGENT_VIEWER_KEYS_FILE`).
 
+Choose **Nerd Font** or **Powerline** from the `v` menu, or set **Style → Icon set** in View Studio to add icons to a view you already use. Powerline adds connected segments to the Omni Bar. Select a Nerd Font Mono face in your terminal, such as MesloLGM Nerd Font Mono, and check the Studio sample before saving. Choose **Standard** if icons appear as boxes or misalign. [Font installation and terminal setup](https://ohmyposh.dev/docs/installation/fonts)
+
 Rendering knobs: `AGENT_VIEWER_TUI_MAX_FPS` (10–240; default 120, 60 on Windows), `--full-repaint` for terminals that leave stale fragments, `--no-mouse` to hand selection back to the terminal (useful in tmux and over SSH), `AGENT_VIEWER_DISABLE_TERMINAL_BROWSER=1` to open URLs in the desktop browser instead of a `terminal-browser` split. Inside tmux, `⌃B` belongs to tmux — use the command palette or send the prefix through.
 
 ## Remote access

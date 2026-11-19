@@ -5264,6 +5264,7 @@ function OpenTuiWorkspace() {
   const overviewRunning = Boolean(selectedSessionKey && runningSessions.some(session => sessionKey(session) === selectedSessionKey))
   const overviewNeedsInput = attentionItems.some(item => item.sessionKey === selectedSessionKey && attentionItemNeedsInput(item))
   const shellOverview = useMemo((): PluginShellOverview => ({
+    terminalIconSet: viewSpec.iconSet,
     snapshot: {
       cwd: gitRepoCwd || workspaceCwd || process.cwd(),
       sessionKey: selectedSessionKey,
@@ -5285,7 +5286,7 @@ function OpenTuiWorkspace() {
         && (command.requires !== 'repository' || gitRepoCwd || workspaceCwd)).map(command => command.id),
       run: runPluginCommandId,
     },
-  }), [gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction, runPluginCommandId, disabledPlugins])
+  }), [viewSpec.iconSet, gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction, runPluginCommandId, disabledPlugins])
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     ...(subagentTranscriptSelection ? { 'subagent-transcript': {
       label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,

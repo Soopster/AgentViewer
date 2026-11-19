@@ -17,6 +17,7 @@ export type ViewAgentCards = 'none' | 'operational' | 'all'
 export type ViewFoldDefault = 'default' | 'expand-all'
 export type ViewTurnBoundaries = 'rules' | 'summary-only' | 'gaps' | 'none'
 export type ViewMessageLayout = 'markers' | 'continuous'
+export type ViewIconSet = 'standard' | 'nerd-font' | 'powerline'
 export type ViewPromptMarker = '❯' | '›' | '>' | '▸' | '$'
 /** `tone` picks the glyph from the reply's first line (● result, × error, ▲ system, • text) and lights the cursor card ❯. */
 export type ViewReplyMarker = 'tone' | '•' | '●' | '◦' | '·' | '▹'
@@ -62,6 +63,7 @@ export type ViewSpec = {
   /** Day separators and time-gap rules. */
   timeMarkers: boolean
   // Style
+  iconSet: ViewIconSet
   messageLayout: ViewMessageLayout
   promptMarker: ViewPromptMarker
   replyMarker: ViewReplyMarker
@@ -134,7 +136,7 @@ export type ViewSpec = {
 export type ViewSpecKey = keyof ViewSpec
 
 /** What a card needs of a view. Identity is stable per spec (see `viewCardStyle`). */
-export type ViewCardStyle = Pick<ViewSpec, 'messageLayout' | 'promptMarker' | 'replyMarker' | 'markerColor' | 'promptBand' | 'promptRule'
+export type ViewCardStyle = Pick<ViewSpec, 'iconSet' | 'messageLayout' | 'promptMarker' | 'replyMarker' | 'markerColor' | 'promptBand' | 'promptRule'
   | 'userBold' | 'thinking' | 'toolRows' | 'promptTimestamps' | 'replyTimestamps' | 'diffPreview' | 'textWidth'> & {
   /** Turn rules drawn between messages (false drops `turn` landmarks; `break` gaps stay). */
   turnRules: boolean
@@ -148,7 +150,7 @@ const CARDS: ViewSpec = {
   liveText: true, composerTitle: true, composerStatus: 'rail', composerBorder: 'rounded', composerSize: 'auto', composerWidth: 'full',
   cardFilter: 'all', toolGrouping: 'none', agentCards: 'none', foldDefault: 'default', dimAutoFolded: false,
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
-  messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
+  iconSet: 'standard', messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
@@ -290,6 +292,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'diffPreview', section: 'Style', label: 'Diff previews', help: 'A few changed lines under a folded edit, or its heading alone.', options: ON_OFF },
   { key: 'textWidth', section: 'Style', label: 'Prose width', help: 'Keep prose to a readable measure, or use the full width.',
     options: [{ value: 'measure', label: 'measure' }, { value: 'full', label: 'full' }] },
+  { key: 'iconSet', section: 'Style', label: 'Icon set', help: 'Select a Nerd Font Mono in your terminal. Use Standard if icons appear as boxes or misalign.',
+    options: [{ value: 'standard', label: 'Standard' }, { value: 'nerd-font', label: 'Nerd Font' }, { value: 'powerline', label: 'Powerline' }] },
   // Composer
   { key: 'composer', section: 'Composer', label: 'Composer', help: 'Docked under the windows, or inline at the end of the transcript.',
     options: [{ value: 'docked', label: 'docked' }, { value: 'inline', label: 'inline' }] },
@@ -514,7 +518,7 @@ export function viewCardStyle(spec: ViewSpec): ViewCardStyle {
   let style = cardStyleCache.get(spec)
   if (!style) {
     style = {
-      messageLayout: spec.messageLayout, promptMarker: spec.promptMarker, replyMarker: spec.replyMarker, markerColor: spec.markerColor, promptBand: spec.promptBand,
+      iconSet: spec.iconSet, messageLayout: spec.messageLayout, promptMarker: spec.promptMarker, replyMarker: spec.replyMarker, markerColor: spec.markerColor, promptBand: spec.promptBand,
       promptRule: spec.promptRule, userBold: spec.userBold, thinking: spec.thinking, toolRows: spec.toolRows,
       promptTimestamps: spec.promptTimestamps, replyTimestamps: spec.replyTimestamps, diffPreview: spec.diffPreview, textWidth: spec.textWidth,
       turnRules: spec.turnBoundaries === 'rules' || spec.turnBoundaries === 'summary-only',
@@ -539,7 +543,7 @@ export function nestedViewCardStyle(parent: ViewCardStyle): ViewCardStyle {
   if (!style) {
     const continuous = parent.messageLayout === 'continuous'
     style = {
-      ...viewCardStyle(BUILTIN_VIEW_SPECS.stream), messageLayout: parent.messageLayout,
+      ...viewCardStyle(BUILTIN_VIEW_SPECS.stream), iconSet: parent.iconSet, messageLayout: parent.messageLayout,
       promptBand: continuous ? 'continuous' : 'stream', userBold: !continuous, turnRules: !continuous,
     }
     nestedStyleCache.set(parent, style)
@@ -549,7 +553,7 @@ export function nestedViewCardStyle(parent: ViewCardStyle): ViewCardStyle {
 
 // ── tabs ───────────────────────────────────────────────────────────────────
 
-export type TabDisplay = Pick<ViewSpec, 'tabStyle' | 'tabWidth' | 'tabClose' | 'tabNumbers' | 'tabIcons' | 'tabSeparators' | 'tabTitle'
+export type TabDisplay = Pick<ViewSpec, 'iconSet' | 'tabStyle' | 'tabWidth' | 'tabClose' | 'tabNumbers' | 'tabIcons' | 'tabSeparators' | 'tabTitle'
   | 'tabStripFill' | 'tabHover' | 'tabAccent' | 'tabActivity' | 'tabOverflow' | 'tabTruncate'>
 const tabDisplayCache = new WeakMap<ViewSpec, TabDisplay>()
 /** The strip's slice of a spec, one object per spec so memos keyed on it hold. */
@@ -557,7 +561,7 @@ export function viewTabDisplay(spec: ViewSpec): TabDisplay {
   let display = tabDisplayCache.get(spec)
   if (!display) {
     display = {
-      tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
+      iconSet: spec.iconSet, tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
       tabIcons: spec.tabIcons, tabSeparators: spec.tabSeparators, tabTitle: spec.tabTitle,
       tabStripFill: spec.tabStripFill, tabHover: spec.tabHover, tabAccent: spec.tabAccent,
       tabActivity: spec.tabActivity, tabOverflow: spec.tabOverflow, tabTruncate: spec.tabTruncate,

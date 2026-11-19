@@ -5,6 +5,7 @@ import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opent
 import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
 import { fitTextMiddle, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
+import { NERD_FONT_ICONS } from './icons'
 
 for (const paneWidth of [100, 160, 170, 200]) {
   const stripWidth = tabStripWidth(paneWidth)
@@ -21,7 +22,7 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
   const labels = ['Assess TUI and rendering changes', 'Hi', 'Improve tab bar rendering', 'Feature plugin host migration']
   const options = Array.from({ length: count }, (_, i) => ({
     // The selected (last) tab is the closable one, and carries the activity cell.
-    name: i === count - 1 ? tabStripActivity(tabStripName(labels[i % labels.length], tabWidth), tabWidth, '●') : tabStripName(labels[i % labels.length], tabWidth, '', false),
+    name: i === count - 1 ? tabStripActivity(tabStripName(`${NERD_FONT_ICONS.waiting} ${labels[i % labels.length]}`, tabWidth), tabWidth, '●') : tabStripName(labels[i % labels.length], tabWidth, '', false),
     description: '',
   }))
   let tabs: TabSelectRenderable | null = null
@@ -35,6 +36,7 @@ for (const count of [4, 7]) for (const tabWidth of [40, 24, 10]) {
     await act(async () => { tabs!.setSelectedIndex(count - 1) })
     await setup.flush()
     const rows = setup.captureCharFrame().split('\n')
+    assert.ok(rows[0].includes(NERD_FONT_ICONS.waiting), 'a narrow tab keeps its leading status icon')
     assert.equal(rows[0][1 + 3 * tabWidth + tabWidth - 2], '×', `last tab close button remains at its hit target at width ${width}`)
     assert.equal((rows[0].match(/×/g) ?? []).length, 1, 'only the selected tab draws a close button')
     assert.ok(!tabStripName('A long inactive tab title', tabWidth, '', false).includes('×'), 'inactive names have no ×')

@@ -9,8 +9,11 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { measureEditText } from '@opentui/core'
 import { testRender, act } from './testRender'
-import { normalizeCustomViews } from '../viewSpec'
+import { customViewSpec, getPluginViews, normalizeCustomViews, VIEW_SPEC_FIELDS } from '../viewSpec'
+import { NERD_FONT_ICONS } from './icons'
+import { streamLineMarker } from './app/transcriptStyle'
 
 const workdir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-viewer-view-studio-')), 'studio')
 mkdirSync(path.join(workdir, '.agent-viewer-data'), { recursive: true })
@@ -20,10 +23,25 @@ const stateFile = path.join(workdir, '.agent-viewer-data', 'tui.json')
 writeFileSync(stateFile, JSON.stringify({
   transcriptView: 'stream',
   customViewId: 'view-9',
-  customViews: [{ id: 'view-9', name: 'Seeded', base: 'stream', overrides: { markers: 'codex', bogus: 1, promptBand: 'nope' } }],
+  customViews: [{ id: 'view-9', name: 'Seeded', base: 'stream', overrides: { markers: 'codex', bogus: 1, promptBand: 'nope', iconSet: 'invalid' } }],
 }))
-assert.deepEqual(normalizeCustomViews(JSON.parse(readFileSync(stateFile, 'utf8')).customViews)[0]!.overrides, { promptMarker: '›', replyMarker: '•' },
+const [seededView] = normalizeCustomViews(JSON.parse(readFileSync(stateFile, 'utf8')).customViews)
+assert.deepEqual(seededView!.overrides, { promptMarker: '›', replyMarker: '•' },
   'unknown fields and values are dropped on read, and the old markers field becomes the prompt and reply glyphs')
+assert.equal(customViewSpec(seededView!).iconSet, 'standard')
+for (const glyph of Object.values(NERD_FONT_ICONS)) {
+  assert.equal(glyph.length, 1, 'icon must be in the BMP')
+  for (const widthMethod of ['unicode', 'wcwidth'] as const) {
+    assert.equal(measureEditText(glyph, { widthMethod }), 1, 'icon must occupy one terminal cell')
+  }
+}
+for (const [tone, icon, standard] of [
+  ['result_ok', 'success', '●'], ['result_error', 'error', '×'], ['system', 'system', '▲'],
+] as const) {
+  const line = { text: 'Activity', tone }
+  assert.equal(streamLineMarker(line, 'assistant', 'standard'), standard)
+  assert.equal(streamLineMarker(line, 'assistant', 'nerd-font'), NERD_FONT_ICONS[icon])
+}
 
 const { buildThreadedMessages } = await import('../../lib/threading')
 const { formatTranscriptCards } = await import('../format')
@@ -65,6 +83,13 @@ mock.module('../../lib/tui/service', () => ({ ...service,
   readTuiSessionReaderState: async () => null, writeTuiSessionReaderState: async () => {},
 }))
 const { default: App } = await import('./App')
+const { installTuiPluginTranscriptViews } = await import('./shell/pluginTranscriptViews')
+installTuiPluginTranscriptViews()
+for (const iconSet of ['nerd-font', 'powerline'] as const) {
+  const preset = getPluginViews().find(view => view.id === `view-studio.${iconSet}`)
+  assert.ok(preset)
+  assert.equal(customViewSpec(preset).iconSet, iconSet)
+}
 const setup = await testRender(<App />, { width: 150, height: 44, kittyKeyboard: true })
 const settle = async (ms = 250) => {
   await act(async () => {
@@ -83,6 +108,15 @@ const pressEscape = async () => { act(() => { setup.mockInput.pressEscape() }); 
 const promptRow = () => frame().split('\n').find((row) => row.includes('Why does the pool respawn?')) ?? ''
 const stored = () => JSON.parse(readFileSync(stateFile, 'utf8')) as { customViews?: Array<{ id: string; name: string; overrides: Record<string, unknown> }>; customViewId?: string | null; transcriptView?: string }
 const studioOpen = () => frame().includes('VIEW STUDIO')
+const focusIconSet = async () => {
+  await press('3')
+  const index = VIEW_SPEC_FIELDS.filter(field => field.section === 'Style').findIndex(field => field.key === 'iconSet')
+  for (let i = 0; i < index; i += 1) {
+    act(() => { setup.mockInput.pressKey('j') })
+    await settle(30)
+  }
+  if (!frame().includes('preview · icon set')) fail('the Style section did not focus Icon set')
+}
 
 try {
   await settle(2500)
@@ -110,6 +144,12 @@ try {
   if (!/❯ Why does the pool respawn\?/.test(promptRow())) fail('a view from STREAM does not start with STREAM\'s markers')
   await press('l')
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('changing Markers did not change the live transcript')
+  await focusIconSet()
+  if (!/Icon set\s+‹ Standard ›/.test(frame())) fail('the icon set did not default to Standard')
+  await press('l')
+  if (!frame().includes(`${NERD_FONT_ICONS.repository} Git`)) fail('the preview did not render the selected font icons')
+  if (!frame().split('\n')[0]?.includes(NERD_FONT_ICONS.repository)) fail('the draft did not reach the live Omni Bar')
+  if (!/› Why does the pool respawn\?/.test(promptRow())) fail('Nerd Font displaced the explicit prompt marker')
   // Layout → Cursor: none (stored below; the built-in parity smoke covers how it draws).
   await press('1')
   await press('j')
@@ -132,6 +172,8 @@ try {
     assert.equal(state.customViewId, focus.id, 'the saved view is the active one')
     assert.equal(focus.overrides.cursor, 'none')
     assert.equal(focus.overrides.promptMarker, '›', 'the prompt marker change is stored')
+    const reloaded = normalizeCustomViews(state.customViews).find(view => view.id === focus.id)!
+    assert.equal(customViewSpec(reloaded).iconSet, 'nerd-font', 'the saved icon setting survives a reload')
     assert.ok(!('bogus' in (state.customViews?.find((view) => view.id === 'view-9')?.overrides ?? {})), 'the unknown field is not written back')
   }
   await press('v')
@@ -140,13 +182,16 @@ try {
   // ── edit, change, Esc asks, Esc again discards ──
   await press('e')
   if (!studioOpen() || !frame().includes('Focus')) fail('e on a custom row did not open it in the studio')
-  await press('3')
-  await press('j')
+  await focusIconSet()
   await press('l')
+  if (!frame().includes(NERD_FONT_ICONS['powerline-end'])) fail('switching to Powerline did not paint a segment')
+  await press('u')
+  if (!/Icon set\s+‹ Standard ›/.test(frame())) fail('reset did not restore the base icon set')
   await pressEscape()
   if (!frame().includes('Discard changes?')) fail('Esc with unsaved changes did not ask first')
   await pressEscape()
   if (studioOpen()) fail('the second Esc did not discard')
+  if (!frame().split('\n')[0]?.includes(NERD_FONT_ICONS.repository)) fail('discarding did not restore the saved Nerd Font setting')
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('discarding left the edited markers on screen')
   if (stored().customViews?.find((view) => view.name === 'Focus')?.overrides.promptMarker !== '›') fail('discarding changed the stored view')
 
@@ -257,8 +302,20 @@ try {
   if (!/Density\s+‹ global ›/.test(frame())) fail('right-clicking a field did not cycle it back')
   await click(' esc ')
   if (studioOpen()) fail('the esc button did not close an unchanged new view')
+
+  await press('v')
+  if (!frame().includes('Nerd Font') || !frame().includes('Powerline')) fail('the bundled presets are missing from the view menu')
+  const powerlineVisible = () => frame().split('\n')[0]?.includes(NERD_FONT_ICONS['powerline-end'])
+  for (let i = 0; i < 18 && !powerlineVisible(); i += 1) {
+    act(() => { setup.mockInput.pressArrow('down') })
+    await settle(80)
+  }
+  if (!powerlineVisible()) fail('highlighting the Powerline preset did not style the live Omni Bar')
+  await pressEnter()
+  if (stored().customViewId !== 'view-studio.powerline') fail('the view menu did not select and persist the Powerline preset')
+  if (!powerlineVisible()) fail('the Powerline style disappeared after selection')
 } finally {
   await act(async () => setup.renderer.destroy())
 }
-console.log('View studio smoke passed: boot restore, unknown fields dropped, clone, live markers and cursor, rename, save, discard confirm, two-press delete, built-in edit and reset, square dock, hidden scrollbar, numbered and underlined tabs, rail pin, prompts-only filter, mouse')
+console.log('View studio smoke passed: icon widths, Nerd Font and Powerline previews and persistence, boot restore, clone, live markers and cursor, rename, save, discard, delete, built-in reset, chrome settings and mouse')
 process.exit(0)

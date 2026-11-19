@@ -883,7 +883,7 @@ export function TranscriptCardInner({
       : hasCursor
         ? '❯'
         : firstLine
-          ? streamLineMarker(firstLine, card.role)
+          ? streamLineMarker(firstLine, card.role, viewStyle.iconSet)
           : card.role === 'user' ? '❯' : '•'
     const streamMarker = `${streamSubagentArrows}${streamBaseMarker}`
     const streamMarkerColor = hasCursor

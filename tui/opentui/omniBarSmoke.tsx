@@ -15,8 +15,10 @@ import { DEFAULT_OMNI_LAYOUT, moveLayoutItem, normalizeLayout, toggleLayoutItem 
 import { omniLayoutStore } from '../../plugins/omni-bar/tui/storage'
 import type { PluginShellOverview, ShellOverviewAction } from '../../lib/plugins/shellOverview'
 import type { GitSummary } from '../../lib/gitProvider'
+import type { ViewIconSet } from '../viewSpec'
+import { NERD_FONT_ICONS } from './icons'
 
-let update: (cwd: string, width: number, visible?: boolean) => void
+let update: (cwd: string, width: number, visible?: boolean, iconSet?: ViewIconSet) => void
 let setMenu: (open: boolean) => void
 let menuKey: TuiPluginKeyHandler | null = null
 const actions: ShellOverviewAction[] = []
@@ -29,11 +31,12 @@ const readGit = async (cwd: string) => {
   return cwd === '/old-project' ? oldRead : cwd === '/no-git' ? null : { branch: 'fresh-branch', modified: 2, untracked: 1, stashes: 0 }
 }
 function Harness() {
-  const [state, setState] = useState({ cwd: '/old-project', width: 160, visible: true })
+  const [state, setState] = useState({ cwd: '/old-project', width: 160, visible: true, iconSet: 'standard' as ViewIconSet })
   const [menu, updateMenu] = useState(false)
   setMenu = updateMenu
-  update = (cwd, width, visible = true) => setState({ cwd, width, visible })
+  update = (cwd, width, visible = true, iconSet = 'standard') => setState({ cwd, width, visible, iconSet })
   const overview: PluginShellOverview = {
+    terminalIconSet: state.iconSet,
     snapshot: { cwd: state.cwd, sessionKey: 'codex:instance:session', sessionTitle: 'Test', provider: 'codex', activity: 'Editing reader', running: true, startedAt: Date.now() - 124_000, runningCount: 3, attentionCount: 1 },
     readGit, run: action => actions.push(action),
     commands: { ids: ['files', 'processes', 'index-search', 'editor', 'github', 'analytics', 'omni-bar-settings'], run: id => commands.push(id) },
@@ -101,15 +104,22 @@ try {
     await settle()
     assert.equal(actions.at(-1), action)
   }
-  for (const width of [80, 38, 12]) {
-    await act(async () => { update('/new-project', width) })
+  await act(async () => { update('/new-project', 220, true, 'nerd-font') })
+  await settle()
+  assert(screen().includes(`${NERD_FONT_ICONS.editor} Editor`))
+  assert(!screen().includes(NERD_FONT_ICONS['powerline-end']))
+  for (const width of [220, 80, 38, 12]) {
+    await act(async () => { update('/new-project', width, true, 'powerline') })
     await settle()
     const bar = setup.renderer.root.findDescendantById('omni-bar')!
     assert.equal(bar.height, 1)
     assert.equal(bar.width, width)
-    assert(screen().includes(width < 40 ? 'Cmds' : 'Commands…'))
-    const commands = setup.renderer.root.findDescendantById('omni-bar:commands')!
-    assert(commands.x + commands.width <= width, 'narrow layout pushed command access outside its row')
+    assert(screen().includes(`${NERD_FONT_ICONS.commands} ${width < 40 ? 'Cmds' : 'Commands…'}`))
+    assert(screen().includes(NERD_FONT_ICONS['powerline-end']), 'Powerline did not paint a segment boundary')
+    const commandTarget = setup.renderer.root.findDescendantById('omni-bar:commands')!
+    assert(commandTarget.x + commandTarget.width <= width, 'narrow layout pushed command access outside its row')
+    await act(async () => { await setup.mockMouse.click(commandTarget.x + 1, commandTarget.y) })
+    assert.equal(actions.at(-1), 'commands')
     assert.equal(screen().split('\n').findIndex(row => row.includes('Existing pinned prompt')), 1)
   }
   await act(async () => { update('/no-git', 160) })

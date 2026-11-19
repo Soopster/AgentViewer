@@ -17,4 +17,8 @@ export const manifest = {
     keys: 'capture', placements: ['overlay'], services: ['view-studio'],
   }],
   commands: [],
+  transcriptViews: [
+    { id: 'nerd-font', name: 'Nerd Font', base: 'scrollback', overrides: { iconSet: 'nerd-font', tabStyle: 'pills' } },
+    { id: 'powerline', name: 'Powerline', base: 'scrollback', overrides: { iconSet: 'powerline', tabStyle: 'boxed', tabAccent: 'active' } },
+  ],
 } as const satisfies PluginManifest

@@ -7,6 +7,7 @@ export {
 } from '../../viewSpec'
 export { registerTabPaintOccluder, type TabPaintOccluder } from '../SessionTabConnection'
 export { WindowButton } from '../WindowButton'
+export { tuiIcon } from '../icons'
 export { TranscriptCard, type TranscriptCardProps } from '../app/TranscriptCard'
 export { tabStripColor as railFillColor } from '../app/derived/tabs'
 export { densityConfig, streamCompletedTurnHint, streamLandmarkText, transcriptAccent } from '../app/transcriptStyle'

@@ -9,6 +9,7 @@ import { type AgentProvider, type Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
 import { runTabOptions, tabTitleText } from '../derived/tabs'
 import type { TabDisplay } from '../../../viewSpec'
+import { tuiIcon } from '../../icons'
 
 export type UseTranscriptViewportRowsGroupContext = {
   estimatedTranscriptViewportRows: number
@@ -66,22 +67,23 @@ export function useTranscriptViewportRowsGroup(ctx: UseTranscriptViewportRowsGro
   // The sidebar's state glyphs, on the tabs: whether each open conversation is
   // waiting on you, finished unread, or being written by a CLI elsewhere. A turn
   // in flight is not here — the spinner below paints that one.
+  const { iconSet } = tabDisplay
   const tabStateGlyphs = useMemo(() => {
     const doneKeys = new Set(attentionDone.map((done) => done.sessionKey))
     const glyphs = new Map<string, string>()
     for (const s of visibleTabSessions) {
       const key = sessionKey(s)
       const activity = sidebarSessionActivity.get(key)
-      const glyph = activity === 'needs-input' ? '⚠'
-        : activity === 'waiting' ? '◌'
+      const glyph = activity === 'needs-input' ? tuiIcon(iconSet, 'attention', '⚠')
+        : activity === 'waiting' ? tuiIcon(iconSet, 'waiting', '◌')
         : activity === 'running' ? null
-        : recentlyWrittenKeys.has(key) ? '●'
-        : doneKeys.has(key) ? '✓'
+        : recentlyWrittenKeys.has(key) ? tuiIcon(iconSet, 'updated', '●')
+        : doneKeys.has(key) ? tuiIcon(iconSet, 'success', '✓')
         : null
       if (glyph) glyphs.set(key, glyph)
     }
     return glyphs
-  }, [attentionDone, recentlyWrittenKeys, sidebarSessionActivity, visibleTabSessions])
+  }, [attentionDone, iconSet, recentlyWrittenKeys, sidebarSessionActivity, visibleTabSessions])
 
   const tabWidth = useMemo(() => {
     if (verticalTabsWidth > 0) return verticalTabsWidth + 8

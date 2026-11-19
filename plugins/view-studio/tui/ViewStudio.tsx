@@ -11,7 +11,7 @@ import {
   BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, EMPTY_EXPANDED_KEYS, IDLE_TICKER_PHRASES, TRANSCRIPT_VIEW_LABELS, TranscriptCard, VIEW_SPEC_BASES,
   VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WindowButton, buildThreadedMessages, computeAllLandmarks, customViewSpec, cycleViewSpecValue, densityConfig,
   formatTranscriptCards, railFillColor, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
-  usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
+  tuiIcon, usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
   type CustomView, type SessionMessage, type TabPaintOccluder, type TranscriptCardProps, type TuiDensity, type TuiThemePalette,
   type ViewSpec, type ViewSpecField, type ViewSpecKey,
 } from '../../../tui/opentui/shell/sdkViews'
@@ -305,9 +305,10 @@ function ViewSpecimen({ spec, theme, width, density, cursor }: { spec: ViewSpec;
 // turned off, so a value with nothing on screen to change still says where it
 // would be.
 
-type MockRegion = 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
+type MockRegion = 'icons' | 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
   | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel' | 'scrollbar' | 'status' | 'livetext'
 const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
+  iconSet: 'icons',
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
   liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
@@ -364,6 +365,13 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
   )
   return (
     <box flexDirection="column">
+      {marked('icons') ? <MockRow theme={theme} marked>
+        <text id="view-studio-icon-sample" fg={theme.text} wrapMode="none">
+          <span bg={spec.iconSet === 'powerline' ? theme.surface3 : undefined}>{` ${tuiIcon(spec.iconSet, 'repository', '⎇')} Git `}</span>
+          {spec.iconSet === 'powerline' ? <span fg={theme.surface3}>{tuiIcon(spec.iconSet, 'powerline-end', ' ')}</span> : null}
+          {` ${tuiIcon(spec.iconSet, 'files', '▤')} Files  ${tuiIcon(spec.iconSet, 'success', '✓')} Done`}
+        </text>
+      </MockRow> : null}
       {spec.fleetStrip
         ? <MockRow theme={theme} marked={marked('fleet')}><text fg={theme.green} wrapMode="none">● 2 running <span fg={theme.dim}>· build · docs</span></text></MockRow>
         : marked('fleet') ? <Placeholder theme={theme} text={spec.fleetStrip === false ? 'fleet strip hidden' : 'fleet strip: global'} /> : null}
@@ -460,17 +468,18 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
 }
 
 const MOCK_TABS = [
-  { title: 'Why is the build slow?', folder: 'web', provider: 'C', glyph: '' },
-  { title: 'Docs pass', folder: 'docs', provider: 'X', glyph: '✓' },
-  { title: 'Fix flaky test', folder: 'api', provider: 'C', glyph: '◌' },
-]
+  { title: 'Why is the build slow?', folder: 'web', provider: 'C', glyph: '', icon: null },
+  { title: 'Docs pass', folder: 'docs', provider: 'X', glyph: '✓', icon: 'success' },
+  { title: 'Fix flaky test', folder: 'api', provider: 'C', glyph: '◌', icon: 'waiting' },
+] as const
 
 /** The tab strip as the view's Tabs fields draw it, on three sample sessions. */
 function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiThemePalette; indent: number }) {
   const width = spec.tabWidth === 'compact' ? 10 : spec.tabWidth === 'wide' ? 16 : spec.tabWidth === 'fit' ? 0 : 12
   const label = (tab: typeof MOCK_TABS[number], index: number, active: boolean) => {
     const title = spec.tabTitle === 'folder' ? tab.folder : spec.tabTitle === 'folder-title' ? `${tab.folder} · ${tab.title}` : tab.title
-    const icons = spec.tabIcons === 'none' ? '' : `${spec.tabIcons === 'provider' ? `${tab.provider} ` : ''}${tab.glyph ? `${tab.glyph} ` : ''}`
+    const glyph = tab.icon ? tuiIcon(spec.iconSet, tab.icon, tab.glyph) : tab.glyph
+    const icons = spec.tabIcons === 'none' ? '' : `${spec.tabIcons === 'provider' ? `${tab.provider} ` : ''}${glyph ? `${glyph} ` : ''}`
     const close = spec.tabClose === 'all' || (spec.tabClose === 'active' && active) ? ' ×' : ''
     const text = `${spec.tabNumbers ? `${index + 1} ` : ''}${icons}${title}`
     const budget = width ? Math.max(width - close.length, 3) : text.length
