@@ -19,6 +19,6 @@ export const manifest = {
   commands: [],
   transcriptViews: [
     { id: 'nerd-font', name: 'Nerd Font', base: 'scrollback', overrides: { iconSet: 'nerd-font', tabStyle: 'pills' } },
-    { id: 'powerline', name: 'Powerline', base: 'scrollback', overrides: { iconSet: 'powerline', tabStyle: 'boxed', tabAccent: 'active' } },
+    { id: 'powerline', name: 'Powerline', base: 'scrollback', overrides: { iconSet: 'powerline', tabStyle: 'powerline', tabAccent: 'active' } },
   ],
 } as const satisfies PluginManifest

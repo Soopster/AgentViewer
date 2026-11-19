@@ -563,12 +563,13 @@ export type BuildComposerStatsSegmentsContext = {
   composerKnobSegments: InlineTextSegment[]
   composerLocationSegments: InlineTextSegment[]
   composerWorkingDirectory: string | null
+  composerPathIcon?: string
 }
 
 export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsContext, lineCount: number, draftLength: number) {
   const {
     composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
-    composerLocationSegments, composerWorkingDirectory,
+    composerLocationSegments, composerWorkingDirectory, composerPathIcon,
   } = ctx
   const segments: InlineTextSegment[] = []
   if (draftLength === 0) {
@@ -592,7 +593,7 @@ export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsCon
     segments.push({ text: ' · ', fg: theme.dim })
     segments.push(...composerLocationSegments.map((segment) =>
       composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
-        ? { ...segment, text: `${composerProjectLabel(composerWorkingDirectory)}  ` }
+        ? { ...segment, text: `${composerPathIcon ? `${composerPathIcon} ` : ''}${composerProjectLabel(composerWorkingDirectory)}  ` }
         : segment,
     ))
   }

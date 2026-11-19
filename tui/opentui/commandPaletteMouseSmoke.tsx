@@ -24,11 +24,11 @@ await openPalette()
 const palette = node('command-palette')!
 const before = position()?.[1]
 assert.equal(before, '1', 'the palette opens on its first command')
-assert(!screen().includes('▲ '), 'nothing is hidden above at the start')
+assert(!node('command-palette-more-above'), 'nothing is hidden above at the start')
 
 await act(async () => { await setup.mockMouse.scroll(palette.x + 10, palette.y + 1, "down") })
 await settle()
-assert(screen().includes('▲ '), `the wheel did not scroll the list:\n${screen()}`)
+assert(node('command-palette-more-above'), `the wheel did not scroll the list:\n${screen()}`)
 assert.equal(position()?.[1], '1', 'the wheel moved the selection')
 
 const below = node('command-palette-more-below')
@@ -78,7 +78,7 @@ const track = setup.renderer.root.findDescendantById('command-palette-scrollbar'
 assert(track, 'the palette has no scrollbar')
 await act(async () => { await setup.mockMouse.click(track.x, track.y + track.height - 1) })
 await settle()
-assert(!screen().includes('▼ '), 'a press at the bottom of the track did not jump to the end')
+assert(!node('command-palette-more-below'), 'a press at the bottom of the track did not jump to the end')
 console.log('Command palette mouse smoke passed (wheel scroll, ▼ paging, hover select, click outside, click to run, scrollbar)')
 act(() => setup.renderer.destroy())
 process.exit(0)

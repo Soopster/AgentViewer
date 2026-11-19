@@ -5,6 +5,8 @@ import React from 'react'
 import type { TuiThemePalette } from '../../theme'
 import type { ContextMenuItem } from '../ContextMenu'
 import { SEARCH_MAX_CHARS } from './timing'
+import type { ViewIconSet } from '../../viewSpec'
+import { tuiIcon } from '../icons'
 
 export type { SidebarActivity } from '../../../lib/sessionSidebarModel'
 import { SIDEBAR_ACTIVITY_OPTIONS, type SidebarActivity } from '../../../lib/sessionSidebarModel'
@@ -14,9 +16,10 @@ const SCOPES = [['repo', 'This project'], ['all', 'All projects']] as const
 const ACTIVITIES = SIDEBAR_ACTIVITY_OPTIONS
 
 /** One filter surface across views; the shell owns its dropdowns and keyboard routing. */
-export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees, liftAcrossSpaces, onLiftAcrossSpaces }: {
+export function SidebarFilters({ idPrefix, theme, iconSet, query, searchFocused, onSearchFocus, onQuery, onSubmit, scope, activity, onScope, onActivity, onOpenMenu, tags = [], tag = null, onTag, includeWorktrees, onIncludeWorktrees, liftAcrossSpaces, onLiftAcrossSpaces }: {
   idPrefix: string; theme: TuiThemePalette; query: string; searchFocused: boolean
   onSearchFocus: () => void; onQuery: (query: string) => void; onSubmit: () => void
+  iconSet?: ViewIconSet
   scope: 'repo' | 'all'; activity: SidebarActivity
   onScope: (scope: 'repo' | 'all') => void; onActivity: (activity: SidebarActivity) => void
   onOpenMenu: (menu: SidebarFilterMenu) => void
@@ -34,11 +37,11 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
 }) {
   const activityLabel = ACTIVITIES.find(([value]) => value === (activity ?? 'all'))![1]
   // A chip at its default is quiet; one that narrows the list is filled and cyan, so the narrowing is visible.
-  const chip = (label: string, narrowing: boolean) => <SidebarChip theme={theme} label={label} narrowing={narrowing} />
+  const chip = (label: string, narrowing: boolean) => <SidebarChip theme={theme} label={label} narrowing={narrowing} iconSet={iconSet} />
   // Space, not a dot: the carets already mark each chip as a control.
   const separator = <text wrapMode="none" selectable={false}>{'  '}</text>
   return <box flexShrink={0} flexDirection="column">
-    <SidebarSearchRow idPrefix={idPrefix} theme={theme} placeholder="Search sessions  /" query={query} focused={searchFocused}
+    <SidebarSearchRow idPrefix={idPrefix} theme={theme} icon={tuiIcon(iconSet, 'index-search', '⌕')} placeholder="Search sessions  /" query={query} focused={searchFocused}
       onFocus={onSearchFocus} onQuery={onQuery} onSubmit={onSubmit} />
     <box flexShrink={0} flexDirection="row" flexWrap="wrap" paddingX={1}>
       <box id={`${idPrefix}-scope`} height={1} flexShrink={0} onMouseDown={event => {
@@ -82,12 +85,13 @@ export function SidebarFilters({ idPrefix, theme, query, searchFocused, onSearch
 
 /** A glyph so the row reads as an input; the key that jumps to it is in the placeholder, beside the words it refers
  *  to, rather than adrift at the far edge. Shared by both rail tabs. */
-export function SidebarSearchRow({ idPrefix, theme, placeholder, query, focused, onFocus, onQuery, onSubmit }: {
+export function SidebarSearchRow({ idPrefix, theme, icon = '⌕', placeholder, query, focused, onFocus, onQuery, onSubmit }: {
+  icon?: string
   idPrefix: string; theme: TuiThemePalette; placeholder: string; query: string; focused: boolean
   onFocus: () => void; onQuery: (query: string) => void; onSubmit: () => void
 }) {
   return <box height={1} paddingX={1} flexShrink={0} flexDirection="row" onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onFocus() } }}>
-    <text fg={focused ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{'⌕ '}</text>
+    <text fg={focused ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{`${icon} `}</text>
     <box flexGrow={1} height={1}>
       <input id={`${idPrefix}-input:search`} placeholder={placeholder} maxLength={SEARCH_MAX_CHARS} value={query} focused={focused} onInput={onQuery} onSubmit={onSubmit} />
     </box>
@@ -102,7 +106,8 @@ export function SidebarFiltersRule({ idPrefix, theme }: { idPrefix: string; them
 }
 
 /** A dropdown chip: quiet at its default, filled and cyan once it narrows the list. */
-export function SidebarChip({ theme, label, narrowing }: { theme: TuiThemePalette; label: string; narrowing: boolean }) {
+export function SidebarChip({ theme, label, narrowing, iconSet }: { theme: TuiThemePalette; label: string; narrowing: boolean; iconSet?: ViewIconSet }) {
+  const arrow = tuiIcon(iconSet, 'dropdown', '▾')
   return <text fg={narrowing ? theme.cyan : sidebarQuietColor(theme)} bg={narrowing ? theme.surface3 : undefined}
-    wrapMode="none" selectable={false}>{narrowing ? ` ${label} ▾ ` : `${label} ▾`}</text>
+    wrapMode="none" selectable={false}>{narrowing ? ` ${label} ${arrow} ` : `${label} ${arrow}`}</text>
 }

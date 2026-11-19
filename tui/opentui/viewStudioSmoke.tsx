@@ -9,9 +9,9 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { measureEditText } from '@opentui/core'
+import { measureEditText, type TextareaRenderable } from '@opentui/core'
 import { testRender, act } from './testRender'
-import { customViewSpec, getPluginViews, normalizeCustomViews, VIEW_SPEC_FIELDS } from '../viewSpec'
+import { customViewSpec, getPluginViews, normalizeCustomViews, VIEW_SPEC_FIELDS, type ViewSpecKey } from '../viewSpec'
 import { NERD_FONT_ICONS } from './icons'
 import { streamLineMarker } from './app/transcriptStyle'
 
@@ -108,14 +108,15 @@ const pressEscape = async () => { act(() => { setup.mockInput.pressEscape() }); 
 const promptRow = () => frame().split('\n').find((row) => row.includes('Why does the pool respawn?')) ?? ''
 const stored = () => JSON.parse(readFileSync(stateFile, 'utf8')) as { customViews?: Array<{ id: string; name: string; overrides: Record<string, unknown> }>; customViewId?: string | null; transcriptView?: string }
 const studioOpen = () => frame().includes('VIEW STUDIO')
-const focusIconSet = async () => {
-  await press('3')
-  const index = VIEW_SPEC_FIELDS.filter(field => field.section === 'Style').findIndex(field => field.key === 'iconSet')
+const focusIconField = async (key: ViewSpecKey) => {
+  await press('8')
+  const fields = VIEW_SPEC_FIELDS.filter(field => field.section === 'Icons')
+  const index = fields.findIndex(field => field.key === key)
   for (let i = 0; i < index; i += 1) {
     act(() => { setup.mockInput.pressKey('j') })
     await settle(30)
   }
-  if (!frame().includes('preview · icon set')) fail('the Style section did not focus Icon set')
+  if (!frame().includes(`preview · ${fields[index]?.label.toLowerCase()}`)) fail(`the Icons section did not focus ${key}`)
 }
 
 try {
@@ -144,12 +145,28 @@ try {
   if (!/❯ Why does the pool respawn\?/.test(promptRow())) fail('a view from STREAM does not start with STREAM\'s markers')
   await press('l')
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('changing Markers did not change the live transcript')
-  await focusIconSet()
+  await focusIconField('iconSet')
   if (!/Icon set\s+‹ Standard ›/.test(frame())) fail('the icon set did not default to Standard')
   await press('l')
   if (!frame().includes(`${NERD_FONT_ICONS.repository} Git`)) fail('the preview did not render the selected font icons')
   if (!frame().split('\n')[0]?.includes(NERD_FONT_ICONS.repository)) fail('the draft did not reach the live Omni Bar')
   if (!/› Why does the pool respawn\?/.test(promptRow())) fail('Nerd Font displaced the explicit prompt marker')
+  const composer = () => setup.renderer.root.findDescendantById('composer-textarea') as TextareaRenderable
+  const composerPrompt = () => setup.renderer.root.findDescendantById('composer-prompt-icon')
+  const draftInput = composer()
+  if (!draftInput || !composerPrompt() || !frame().includes(`${NERD_FONT_ICONS.model} model:`)) fail('the composer did not inherit Nerd Font icons')
+  await act(async () => { draftInput.setText('Draft retained while changing icons') })
+  await focusIconField('composerIconSet')
+  await press('l')
+  if (!/Composer icons\s+‹ Standard ›/.test(frame())) fail('Studio did not set the composer override')
+  if (composerPrompt() || frame().includes(`${NERD_FONT_ICONS.model} model:`)) fail('the override did not clear composer icons')
+  if (!frame().split('\n')[0]?.includes(NERD_FONT_ICONS.repository)) fail('the composer override changed the toolbar icon set')
+  assert.equal(composer(), draftInput, 'changing icon set keeps the mounted composer')
+  assert.equal(draftInput.plainText, 'Draft retained while changing icons')
+  await act(async () => { draftInput.setText('') })
+  await focusIconField('popupIconSet')
+  await press('l')
+  if (!/Popup icons\s+‹ Standard ›/.test(frame())) fail('Studio did not set the popup override')
   // Layout → Cursor: none (stored below; the built-in parity smoke covers how it draws).
   await press('1')
   await press('j')
@@ -174,15 +191,20 @@ try {
     assert.equal(focus.overrides.promptMarker, '›', 'the prompt marker change is stored')
     const reloaded = normalizeCustomViews(state.customViews).find(view => view.id === focus.id)!
     assert.equal(customViewSpec(reloaded).iconSet, 'nerd-font', 'the saved icon setting survives a reload')
+    assert.equal(customViewSpec(reloaded).composerIconSet, 'standard', 'the saved area override survives a reload')
+    assert.equal(customViewSpec(reloaded).popupIconSet, 'standard', 'the saved popup override survives a reload')
     assert.ok(!('bogus' in (state.customViews?.find((view) => view.id === 'view-9')?.overrides ?? {})), 'the unknown field is not written back')
   }
+  await press('?')
+  if (!frame().includes('> type to filter')) fail('the popup override did not reach the command palette')
+  await pressEscape()
   await press('v')
   if (!frame().includes('★ Focus ✓')) fail('the saved view is not the checked row in the v menu')
 
   // ── edit, change, Esc asks, Esc again discards ──
   await press('e')
   if (!studioOpen() || !frame().includes('Focus')) fail('e on a custom row did not open it in the studio')
-  await focusIconSet()
+  await focusIconField('iconSet')
   await press('l')
   if (!frame().includes(NERD_FONT_ICONS['powerline-end'])) fail('switching to Powerline did not paint a segment')
   await press('u')
@@ -314,6 +336,29 @@ try {
   await pressEnter()
   if (stored().customViewId !== 'view-studio.powerline') fail('the view menu did not select and persist the Powerline preset')
   if (!powerlineVisible()) fail('the Powerline style disappeared after selection')
+  const strip = setup.renderer.root.findDescendantById('session-tabs')
+  const stripRow = strip ? frame().split('\n')[strip.y] : undefined
+  if (!stripRow?.includes(NERD_FONT_ICONS['powerline-start'])) fail('the Powerline preset did not style the live tab strip')
+  const workspaceTabs = setup.renderer.root.findDescendantById('workspace-tabs')
+  if (!workspaceTabs || !frame().split('\n')[workspaceTabs.y]?.includes(NERD_FONT_ICONS['powerline-start'])) fail('the workspace switcher did not follow the session strip style')
+  if (!frame().includes(`${NERD_FONT_ICONS['index-search']} Search sessions`)) fail('the rail did not inherit the icon set')
+  await press('?')
+  if (!frame().includes(`${NERD_FONT_ICONS['index-search']} type to filter`)) fail('popups did not inherit the icon set')
+  await pressEscape()
+  await press('v')
+  await press('c')
+  if (!studioOpen()) fail('the selected preset could not be cloned')
+  await press('5')
+  const workspaceStyleIndex = VIEW_SPEC_FIELDS.filter(field => field.section === 'Tabs').findIndex(field => field.key === 'workspaceTabStyle')
+  for (let i = 0; i < workspaceStyleIndex; i += 1) {
+    act(() => { setup.mockInput.pressKey('j') })
+    await settle(30)
+  }
+  for (let i = 0; i < 3; i += 1) await press('l')
+  if (!frame().split('\n')[workspaceTabs!.y]?.includes(NERD_FONT_ICONS['bubble-start'])) fail('the workspace style override did not paint Bubbles')
+  if (!frame().split('\n')[strip!.y]?.includes(NERD_FONT_ICONS['powerline-start'])) fail('the workspace style override changed the session tabs')
+  await pressEscape()
+  await pressEscape()
 } finally {
   await act(async () => setup.renderer.destroy())
 }

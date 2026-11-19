@@ -15,7 +15,7 @@ import type { Toast } from '../../toastStore'
 import { VerticalTabs } from '../../VerticalTabs'
 import { PinnedTabRow } from '../../PinnedTabRow'
 import { WindowButton } from '../../WindowButton'
-import { TAB_STRIP_BUTTON_WIDTH, tabStripTabsWidth, tabStripWidth } from '../../tabStrip'
+import { TAB_STRIP_BUTTON_WIDTH, tabSegmentCaps, tabStripTabsWidth, tabStripWidth } from '../../tabStrip'
 import { SessionTabConnection, noteTabStripHover } from '../../SessionTabConnection'
 import { tabAccentColor, tabHoverColor, tabStripColor } from '../derived/tabs'
 import { getProviderAccent } from '../../../theme'
@@ -36,7 +36,7 @@ import { type MenuPoint, type WindowItem, type SidebarEntry, type ModelPickerOpt
 import { sessionKey } from '../sessionList'
 import { type WindowSurfaceId, type SplitPaneHandle } from '../SplitTranscriptPane'
 import { TranscriptViewMenuOverlay, type ViewMenuItem } from './TranscriptViewMenuOverlay'
-import type { TabDisplay } from '../../../viewSpec'
+import type { TabDisplay, ViewIconSet } from '../../../viewSpec'
 import { SelectMenusOverlay } from './SelectMenusOverlay'
 import { SessionRail } from './SessionRail'
 import { TaskSidePanelFrame } from './TaskSidePanelFrame'
@@ -83,6 +83,7 @@ type WorkspaceBodyProps = {
   sidebarRowElements: React.ReactNode[]
   /** The rail's palette (`railFill`); the app theme when absent. */
   railTheme?: TuiThemePalette
+  railIconSet?: ViewIconSet
   showTabs: boolean
   verticalTabsWidth: number
   tabOptions: { name: string; description: string; value: string; }[]
@@ -268,6 +269,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
   const stripFill = tabStripColor(theme, tabDisplay.tabStripFill)
   const tabAccent = tabAccentColor(theme, tabDisplay, selectedSession)
   const windowsStyle = tabDisplay.tabStyle === 'windows'
+  const segmentedTabs = tabSegmentCaps(tabDisplay.tabStyle) !== null
   // Windows Terminal's active tab is the window's own colour.
   const windowsTabFill = theme.surface
   const tabInitialColors = tabDisplay.tabAccent === 'all' && tabDisplay.tabIcons === 'provider'
@@ -289,10 +291,10 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
         flexDirection="row"
         backgroundColor={theme.bg}
       >
-        <SessionRail onViewChange={props.onSidebarViewChange} onFocus={props.onSidebarFocus} controls={props.sidebarControls} status={props.sidebarStatus} coordinatorControls={props.coordinatorControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={props.railTheme ?? theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} previewEnabled={effectiveFocus === 'sessions' && !props.windowControlsBlocked} />
+        <SessionRail iconSet={props.railIconSet} onViewChange={props.onSidebarViewChange} onFocus={props.onSidebarFocus} controls={props.sidebarControls} status={props.sidebarStatus} coordinatorControls={props.coordinatorControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={props.railTheme ?? theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} previewEnabled={effectiveFocus === 'sessions' && !props.windowControlsBlocked} />
 
         {showTabs && verticalTabsWidth > 0 ? <VerticalTabs
-          options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys}
+          options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys} iconSet={tabDisplay.iconSet}
           width={verticalTabsWidth} height={mainContentHeight} theme={theme}
           onClose={index => {
             if (index < visibleTabSessions.length) closeSessionTab(visibleTabSessions[index])
@@ -347,7 +349,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   Windows Terminal's puts both after the tabs, as one button group. */}
               {windowsStyle ? null : (
                 <box width={TAB_STRIP_BUTTON_WIDTH} flexShrink={0}>
-                  {props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
+                  {props.onOpenTabManager ? <WindowButton id="tab-strip-list" iconSet={tabDisplay.iconSet} label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
                 </box>
               )}
               <tab-select
@@ -419,8 +421,8 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                 </box>
               ) : null}
               <box width={TAB_STRIP_BUTTON_WIDTH * (windowsStyle ? 2 : 1)} flexShrink={0} flexDirection="row">
-                <WindowButton id="tab-strip-new" label=" + " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onNewSession()} />
-                {windowsStyle && props.onOpenTabManager ? <WindowButton id="tab-strip-list" label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
+                <WindowButton id="tab-strip-new" iconSet={tabDisplay.iconSet} label=" + " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onNewSession()} />
+                {windowsStyle && props.onOpenTabManager ? <WindowButton id="tab-strip-list" iconSet={tabDisplay.iconSet} label=" ▾ " theme={theme} background={stripFill} foreground={theme.muted} onPress={() => props.onOpenTabManager?.()} /> : null}
               </box>
             </box>
           ) : showPreviewBar && selectedSession ? (
@@ -502,11 +504,12 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           )}
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
-            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && !shownPopoverTab && showBorders}
+            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && (segmentedTabs || (!shownPopoverTab && showBorders))}
             foreground={tabAccent} background={theme.surface}
             inactiveForeground={theme.border} inactiveBackground={stripFill}
             hoverForeground={theme.text} hoverBackground={tabHoverColor(theme, stripFill)}
             pillForeground={theme.text} pillBackground={mixHexColor(tabAccent, stripFill, 0.32) ?? theme.surface3}
+            highlightSelected={!activeInPinnedRow} segmentBackground={mixHexColor(tabAccent, stripFill, 0.14) ?? theme.surface2}
             windowsBackground={windowsTabFill} windowsInactiveBackground={mixHexColor(theme.surface, stripFill, 0.45) ?? stripFill} inactiveLabel={theme.muted} initialColors={tabInitialColors}
             tabStyle={tabDisplay.tabStyle} separators={tabDisplay.tabSeparators} hover={tabDisplay.tabHover} />
 

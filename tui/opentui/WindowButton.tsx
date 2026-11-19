@@ -4,6 +4,9 @@
 import { memo, useState } from 'react'
 
 import type { TuiThemePalette } from '../theme'
+import type { ViewIconSet } from '../viewSpec'
+import { useTuiIconSet } from './iconContext'
+import { tuiControlLabel } from './icons'
 
 // Memoized: title bars re-render with the root and with every pane, and these
 // sit in every one of them.
@@ -15,6 +18,7 @@ export const WindowButton = memo(function WindowButton({
   tone = 'normal',
   background,
   foreground,
+  iconSet,
 }: {
   id?: string
   label: string
@@ -26,8 +30,10 @@ export const WindowButton = memo(function WindowButton({
   background?: string
   /** Optional resting color for actions that should remain discoverable. */
   foreground?: string
+  iconSet?: ViewIconSet
 }) {
   const [hovered, setHovered] = useState(false)
+  const inheritedIcons = useTuiIconSet()
   return (
     <box
       id={id}
@@ -45,7 +51,7 @@ export const WindowButton = memo(function WindowButton({
         wrapMode="none"
         selectable={false}
       >
-        {label}
+        {tuiControlLabel(iconSet ?? inheritedIcons, label)}
       </text>
     </box>
   )

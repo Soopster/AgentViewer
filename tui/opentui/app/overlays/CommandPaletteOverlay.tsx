@@ -10,6 +10,8 @@ import { clamp } from '../util'
 import { renderInlineTextSegments } from '../inlineText'
 import { MODAL_CONTENT_Z_INDEX } from '../../layers'
 import { ListScrollbar } from './ListScrollbar'
+import { useTuiPopupIconSet } from '../../iconContext'
+import { tuiIcon } from '../../icons'
 
 /** What the palette asks the root to do from the mouse. Stable callbacks. */
 export type CommandPaletteMouse = {
@@ -39,6 +41,7 @@ export function CommandPaletteOverlay({ commandPaletteOpen, width, height, filte
   // A selection made by hovering is already on screen, so it never moves the
   // window (the wheel moves rows under a still pointer, which hovers them).
   const [wheelStart, setWheelStart] = useState<number | null>(null)
+  const icons = useTuiPopupIconSet()
   // The tab strip's connector is painted after the frame; without this it draws
   // through the panel's top rows wherever the panel sits over the strip.
   const panelRef = useRef<BoxRenderable | null>(null)
@@ -100,7 +103,7 @@ export function CommandPaletteOverlay({ commandPaletteOpen, width, height, filte
         <box paddingX={1} paddingTop={1} paddingBottom={1} backgroundColor={theme.surface2}>
           <text wrapMode="none" selectable={false}>
             {renderInlineTextSegments([
-              { text: '> ', fg: theme.dim },
+              { text: `${tuiIcon(icons, 'index-search', '>')} `, fg: theme.dim },
               { text: commandPaletteQuery || 'type to filter', fg: commandPaletteQuery ? theme.text : theme.dim },
               { text: '█', fg: theme.cyan },
               { text: '  j/k · wheel · ⏎ or click run · esc', fg: theme.dim },
@@ -145,7 +148,7 @@ export function CommandPaletteOverlay({ commandPaletteOpen, width, height, filte
                     mouse?.run(row.cmd.id)
                   }}
                 >
-                  <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? '▎' : ' '}</text>
+                  <text fg={theme.cyan} wrapMode="none" selectable={false}>{isSelected ? tuiIcon(icons, 'prompt', '▎') : ' '}</text>
                   <box flexGrow={1}>
                     <text fg={isSelected ? theme.text : theme.muted} wrapMode="none" selectable={false}>
                       {fitText(row.cmd.label, labelW - 1)}

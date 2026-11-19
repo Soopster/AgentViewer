@@ -7,6 +7,7 @@
 // inside the first would cost two rows and two columns for nothing.
 import type { TuiThemePalette } from '../theme'
 import { WindowButton } from './WindowButton'
+import { useTuiPopupIconSet } from './iconContext'
 
 export type PopoverRect = { top: number; left: number; width: number; height: number }
 
@@ -28,9 +29,10 @@ export function popoverFrameCells(docked: boolean): number {
  * frame that clips (a clipping frame does not paint what is on its border).
  */
 export function PopoverDetachButton({ theme, onPress, inside = false, id = 'popover-detach' }: { theme: TuiThemePalette; onPress: () => void; inside?: boolean; id?: string }) {
+  const iconSet = useTuiPopupIconSet()
   return (
     <box position="absolute" top={inside ? 0 : -1} right={2} height={1} flexDirection="row" zIndex={3}>
-      <WindowButton id={id} label=" ⧉ window " theme={theme} onPress={onPress} />
+      <WindowButton id={id} label=" ⧉ window " theme={theme} onPress={onPress} iconSet={iconSet} />
     </box>
   )
 }

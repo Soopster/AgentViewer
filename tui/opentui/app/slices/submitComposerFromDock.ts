@@ -31,6 +31,7 @@ export type UseSubmitComposerFromDockGroupContext = {
   composerActive: boolean
   windowControlMode: 'identify' | 'manage' | null
   composerPlaceholder: string
+  composerIcon?: string
   composerSyntaxStyle: SyntaxStyle
   theme: TuiThemePalette
   handleComposerContentChange: () => void
@@ -165,7 +166,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
   const composerShellDraft = composerDraft.startsWith('!')
   const renderComposerTextarea = (onSubmit: () => void, options?: { height?: number; width?: number; variant?: 'chat'; background?: string }) => runRenderComposerTextarea({
     composerTextareaRef, composerActive, windowControlMode, composerPlaceholder, composerDraft,
-    composerSyntaxStyle, composerShellDraft, theme, handleComposerContentChange,
+    composerSyntaxStyle, composerShellDraft, theme, handleComposerContentChange, composerIcon: ctx.composerIcon,
     composerChatTextareaStyle, composerBaseTextareaStyle, composerDockTextareaStyle,
   }, onSubmit, options)
   const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => runRenderComposerMentionPanel({
@@ -203,7 +204,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
   // the conversation rather than a docked control.
   const embeddedComposerChrome: WindowChrome | null = runEmbeddedComposerChrome({
     composerWindowOpen, composerHidden, presentationHidesComposer, embeddedComposer,
-    composerDockHeight, theme, chatComposerFocused, composerActive, setComposerActive,
+    composerDockHeight, theme, chatComposerFocused, composerActive, setComposerActive, composerIcon: ctx.composerIcon,
     composerTextareaRef, renderComposerTextarea, submitComposerFromDock,
     composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth, composerSlashHint,
     clickComposerStatus, composerDockStatsFor, composerDraftState, hoverComposerStatus,

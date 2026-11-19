@@ -355,6 +355,7 @@ export type RenderComposerTextareaContext = {
   composerActive: boolean
   windowControlMode: 'identify' | 'manage' | null
   composerPlaceholder: string
+  composerIcon?: string
   composerDraft: string
   composerSyntaxStyle: SyntaxStyle
   composerShellDraft: boolean
@@ -371,29 +372,34 @@ export function runRenderComposerTextarea(ctx: RenderComposerTextareaContext, on
     composerSyntaxStyle, composerShellDraft, theme, handleComposerContentChange,
     composerChatTextareaStyle, composerBaseTextareaStyle, composerDockTextareaStyle,
   } = ctx
-return (
-  <textarea
-    id="composer-textarea"
-    ref={composerTextareaRef}
-    focused={composerActive && !windowControlMode}
-    width={options?.width}
-    height={options?.height}
-    wrapMode="word"
-    placeholder={composerPlaceholder}
-    initialValue={composerDraft}
-    keyBindings={composerKeyBindings}
-    syntaxStyle={composerSyntaxStyle}
-    // The default cursor is white whatever the theme, which is no cursor at
-    // all on a light one.
-    cursorColor={composerShellDraft ? theme.amber : theme.text}
-    cursorStyle={composerShellDraft ? COMPOSER_SHELL_CURSOR : COMPOSER_PROMPT_CURSOR}
-    onContentChange={handleComposerContentChange}
-    onSubmit={onSubmit}
-    style={options?.variant === 'chat'
-      ? composerChatTextareaStyle
-      : options?.background
-      ? { ...composerBaseTextareaStyle, backgroundColor: options.background, focusedBackgroundColor: options.background }
-      : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
-  />
-)
+  const width = options?.width
+  const prefix = options?.variant !== 'chat' && width !== undefined && width > 4 ? ctx.composerIcon : undefined
+  return (
+    <box flexDirection="row" width={width} height={options?.height} backgroundColor={options?.background}>
+      {prefix ? <text id="composer-prompt-icon" width={2} fg={composerActive ? theme.cyan : theme.dim} selectable={false}>{`${prefix} `}</text> : null}
+      <textarea
+        id="composer-textarea"
+        ref={composerTextareaRef}
+        focused={composerActive && !windowControlMode}
+        width={width === undefined ? undefined : width - (prefix ? 2 : 0)}
+        height={options?.height}
+        wrapMode="word"
+        placeholder={composerPlaceholder}
+        initialValue={composerDraft}
+        keyBindings={composerKeyBindings}
+        syntaxStyle={composerSyntaxStyle}
+        // The default cursor is white whatever the theme, which is no cursor at
+        // all on a light one.
+        cursorColor={composerShellDraft ? theme.amber : theme.text}
+        cursorStyle={composerShellDraft ? COMPOSER_SHELL_CURSOR : COMPOSER_PROMPT_CURSOR}
+        onContentChange={handleComposerContentChange}
+        onSubmit={onSubmit}
+        style={options?.variant === 'chat'
+          ? composerChatTextareaStyle
+          : options?.background
+          ? { ...composerBaseTextareaStyle, backgroundColor: options.background, focusedBackgroundColor: options.background }
+          : options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
+      />
+    </box>
+  )
 }

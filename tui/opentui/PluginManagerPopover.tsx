@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useTuiPopupTitle } from './iconContext'
 // The plugin manager: every bundled feature plugin, what it adds, and whether
 // it is on. Host code, not a plugin — turning plugins off must not depend on one.
 // The choice is written to .agent-viewer-data/plugins.json, which the web daemon
@@ -45,6 +46,7 @@ function pluginSummary(manifest: PluginManifest | ProviderPlugin): string {
 }
 
 export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandlerReady, onNotice }: PluginManagerPopoverProps) {
+  const title = useTuiPopupTitle('Plugins', 'popup')
   const diagnostics = useModDiagnostics()
   const manifests: readonly (PluginManifest | ProviderPlugin)[] = [...allPluginManifests(), ...PROVIDER_PLUGINS]
   const local = localPluginDiscovery()
@@ -126,7 +128,7 @@ export function PluginManagerPopover({ theme, width, height, onClose, onKeyHandl
       borderStyle="rounded"
       borderColor={theme.border2}
       backgroundColor={theme.bg}
-      title=" Plugins "
+      title={title}
       flexDirection="column"
       paddingX={1}
     >

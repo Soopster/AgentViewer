@@ -188,6 +188,7 @@ export type EmbeddedComposerChromeContext = {
   composerDockHeight: number
   theme: TuiThemePalette
   chatComposerFocused: boolean
+  composerIcon?: string
   composerActive: boolean
   setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
   composerTextareaRef: React.RefObject<TextareaRenderable | null>
@@ -255,7 +256,7 @@ return !composerWindowOpen && !composerHidden && !presentationHidesComposer && e
           }}
         >
           <text fg={chatComposerFocused ? theme.text : theme.dim} wrapMode="none">
-            {chatComposerFocused ? '❯ ' : '› '}
+            {`${ctx.composerIcon || (chatComposerFocused ? '❯' : '›')} `}
           </text>
           <box flexGrow={1}>
             {renderComposerTextarea(submitComposerFromDock, {

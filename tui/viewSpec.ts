@@ -28,7 +28,7 @@ export type ViewToolRows = 'default' | 'dim' | 'shell-bold' | 'dollar-shell'
 export type ViewTextWidth = 'measure' | 'full'
 export type ViewTranscriptWidth = 'readable' | 'centered' | 'full'
 export type ViewDiffLayout = 'stack' | 'split'
-export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows'
+export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows' | 'powerline' | 'bubbles'
 export type ViewTabWidth = 'fill' | 'fit' | 'compact' | 'wide'
 /** A panel background: halfway to the window surface, the surface, the app background, raised, accent-tinted, or deep. */
 export type ViewSurfaceFill = 'blend' | 'surface' | 'bg' | 'raised' | 'tinted' | 'deep'
@@ -64,6 +64,11 @@ export type ViewSpec = {
   timeMarkers: boolean
   // Style
   iconSet: ViewIconSet
+  toolbarIconSet: ViewIconSet | null
+  transcriptIconSet: ViewIconSet | null
+  windowIconSet: ViewIconSet | null
+  popupIconSet: ViewIconSet | null
+  workspaceIconSet: ViewIconSet | null
   messageLayout: ViewMessageLayout
   promptMarker: ViewPromptMarker
   replyMarker: ViewReplyMarker
@@ -89,8 +94,11 @@ export type ViewSpec = {
   composerSize: 'auto' | 'compact' | 'tall'
   /** The dock spans the terminal, or only the reader column beside the rail. */
   composerWidth: 'full' | 'reader'
+  composerIconSet: ViewIconSet | null
   // Tabs: how the session tab strip draws.
   tabStyle: ViewTabStyle
+  workspaceTabStyle: 'standard' | 'powerline' | 'bubbles' | null
+  tabIconSet: ViewIconSet | null
   tabWidth: ViewTabWidth
   tabClose: 'active' | 'all' | 'never'
   tabNumbers: boolean
@@ -112,6 +120,7 @@ export type ViewSpec = {
   // Panels: null keeps whatever the app has. Pins hold while the view is
   // shown; "on entering" values are applied when the view is chosen.
   sessionRail: boolean | null
+  railIconSet: ViewIconSet | null
   sidebarView: 'sessions' | 'coordinator' | null
   /** What the session rail is painted: the window surface, or one of the strip fills. */
   railFill: ViewSurfaceFill
@@ -152,11 +161,13 @@ const CARDS: ViewSpec = {
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
   iconSet: 'standard', messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
-  tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
+  tabStyle: 'chrome', workspaceTabStyle: null, tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
   sessionRail: null, sidebarView: null, railFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null,
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
+  toolbarIconSet: null, transcriptIconSet: null, windowIconSet: null, popupIconSet: null, workspaceIconSet: null,
+  composerIconSet: null, tabIconSet: null, railIconSet: null,
 }
 const STREAM: ViewSpec = {
   ...CARDS, flow: 'stream', cardFilter: 'no-system', toolGrouping: 'stream', agentCards: 'operational',
@@ -223,8 +234,8 @@ export const VIEW_SPEC_BASES: readonly TuiTranscriptView[] = BUILTIN_VIEWS.filte
 
 // ── the field registry the studio renders ──────────────────────────────────
 
-export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Composer' | 'Tabs' | 'Panels' | 'Pins'
-export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Composer', 'Tabs', 'Panels', 'Pins']
+export type ViewSpecSection = 'Layout' | 'Content' | 'Style' | 'Composer' | 'Tabs' | 'Panels' | 'Pins' | 'Icons'
+export const VIEW_SPEC_SECTIONS: readonly ViewSpecSection[] = ['Layout', 'Content', 'Style', 'Composer', 'Tabs', 'Panels', 'Pins', 'Icons']
 
 export type ViewSpecFieldOption = { value: ViewSpec[ViewSpecKey]; label: string }
 export type ViewSpecField = {
@@ -238,6 +249,9 @@ export type ViewSpecField = {
 const ON_OFF = [{ value: true, label: 'on' }, { value: false, label: 'off' }] as const
 const INHERIT = { value: null, label: 'global' } as const
 const KEEP = { value: null, label: 'leave as is' } as const
+const BASIC_ICONS = [{ value: 'standard', label: 'Standard' }, { value: 'nerd-font', label: 'Nerd Font' }] as const
+const POWERLINE_ICONS = { value: 'powerline', label: 'Powerline' } as const
+const AREA_ICONS = [{ value: null, label: 'inherit view' }, ...BASIC_ICONS] as const
 
 export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   // Layout
@@ -292,8 +306,6 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'diffPreview', section: 'Style', label: 'Diff previews', help: 'A few changed lines under a folded edit, or its heading alone.', options: ON_OFF },
   { key: 'textWidth', section: 'Style', label: 'Prose width', help: 'Keep prose to a readable measure, or use the full width.',
     options: [{ value: 'measure', label: 'measure' }, { value: 'full', label: 'full' }] },
-  { key: 'iconSet', section: 'Style', label: 'Icon set', help: 'Select a Nerd Font Mono in your terminal. Use Standard if icons appear as boxes or misalign.',
-    options: [{ value: 'standard', label: 'Standard' }, { value: 'nerd-font', label: 'Nerd Font' }, { value: 'powerline', label: 'Powerline' }] },
   // Composer
   { key: 'composer', section: 'Composer', label: 'Composer', help: 'Docked under the windows, or inline at the end of the transcript.',
     options: [{ value: 'docked', label: 'docked' }, { value: 'inline', label: 'inline' }] },
@@ -313,8 +325,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
   { key: 'tabOrientation', section: 'Tabs', label: 'Tab layout', help: 'Pin tabs along the top or down the side.',
     options: [INHERIT, { value: 'horizontal', label: 'top' }, { value: 'vertical', label: 'side' }] },
-  { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Chrome raises the active tab into the window; underline marks it on the border; pills fill it; boxed outlines every tab; minimal is text alone; windows fills the active tab as Windows Terminal does.',
-    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }, { value: 'windows', label: 'windows' }] },
+  { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Powerline joins tabs with angled edges. Bubbles gives every tab rounded ends. Both top-strip styles use Nerd Font Mono.',
+    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }, { value: 'windows', label: 'windows' }, { value: 'powerline', label: 'Powerline' }, { value: 'bubbles', label: 'Bubbles' }] },
   { key: 'tabWidth', section: 'Tabs', label: 'Tab width', help: 'Share the strip, fit the longest title, keep tabs narrow, or let them run wide.',
     options: [{ value: 'fill', label: 'fill' }, { value: 'fit', label: 'fit titles' }, { value: 'compact', label: 'compact' }, { value: 'wide', label: 'wide' }] },
   { key: 'tabClose', section: 'Tabs', label: 'Close buttons', help: 'A × on the active tab, on every tab, or on none (middle-click still closes).',
@@ -337,6 +349,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [{ value: 'scroll', label: 'scroll' }, { value: 'more', label: '+N button' }] },
   { key: 'tabTruncate', section: 'Tabs', label: 'Truncate', help: 'Cut a long title at its end, or in the middle so its last words stay.',
     options: [{ value: 'end', label: 'end' }, { value: 'middle', label: 'middle' }] },
+  { key: 'workspaceTabStyle', section: 'Tabs', label: 'Workspace switcher', help: 'Use brackets, angled joins, rounded tabs, or follow the session strip’s Powerline or Bubbles style.',
+    options: [{ value: null, label: 'follow tabs' }, { value: 'standard', label: 'brackets' }, { value: 'powerline', label: 'Powerline' }, { value: 'bubbles', label: 'Bubbles' }] },
   // Panels
   { key: 'sessionRail', section: 'Panels', label: 'Session rail', help: 'Pin the sessions rail shown or hidden while this view is on.',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
@@ -356,6 +370,18 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [KEEP, { value: 'closed', label: 'closed' }] },
   { key: 'sidePanelPlacement', section: 'Panels', label: 'Side panel at', help: 'Pin the side panel beside the reader or under it.',
     options: [INHERIT, { value: 'right', label: 'beside' }, { value: 'bottom', label: 'under' }] },
+  // Icons
+  { key: 'iconSet', section: 'Icons', label: 'Icon set', help: 'Default for the whole view. Select a Nerd Font Mono in your terminal for Nerd Font or Powerline.',
+    options: [...BASIC_ICONS, POWERLINE_ICONS] },
+  { key: 'toolbarIconSet', section: 'Icons', label: 'Toolbar icons', help: 'Choose icons for the Omni Bar. Powerline also adds angled joins.',
+    options: [...AREA_ICONS, POWERLINE_ICONS] },
+  { key: 'tabIconSet', section: 'Icons', label: 'Tab icons', help: 'Choose the glyphs used for session-tab status and controls.', options: AREA_ICONS },
+  { key: 'railIconSet', section: 'Icons', label: 'Rail icons', help: 'Choose icons for the session rail’s search and new-session controls.', options: AREA_ICONS },
+  { key: 'transcriptIconSet', section: 'Icons', label: 'Transcript icons', help: 'Choose icons for automatic transcript markers.', options: AREA_ICONS },
+  { key: 'composerIconSet', section: 'Icons', label: 'Composer icons', help: 'Choose icons for the prompt and composer status labels.', options: AREA_ICONS },
+  { key: 'windowIconSet', section: 'Icons', label: 'Window icons', help: 'Choose icons for shared window controls such as layout, expand and close.', options: AREA_ICONS },
+  { key: 'popupIconSet', section: 'Icons', label: 'Popup icons', help: 'Choose icons for popup controls and menu selection.', options: AREA_ICONS },
+  { key: 'workspaceIconSet', section: 'Icons', label: 'Workspace icons', help: 'Choose icons for workspace switcher controls.', options: AREA_ICONS },
   // Overrides
   { key: 'density', section: 'Pins', label: 'Density', help: 'Pin a density for this view; global follows d.',
     options: [INHERIT, { value: 'comfortable', label: 'comfortable' }, { value: 'balanced', label: 'balanced' }, { value: 'dense', label: 'dense' }] },
@@ -518,7 +544,7 @@ export function viewCardStyle(spec: ViewSpec): ViewCardStyle {
   let style = cardStyleCache.get(spec)
   if (!style) {
     style = {
-      iconSet: spec.iconSet, messageLayout: spec.messageLayout, promptMarker: spec.promptMarker, replyMarker: spec.replyMarker, markerColor: spec.markerColor, promptBand: spec.promptBand,
+      iconSet: spec.transcriptIconSet ?? spec.iconSet, messageLayout: spec.messageLayout, promptMarker: spec.promptMarker, replyMarker: spec.replyMarker, markerColor: spec.markerColor, promptBand: spec.promptBand,
       promptRule: spec.promptRule, userBold: spec.userBold, thinking: spec.thinking, toolRows: spec.toolRows,
       promptTimestamps: spec.promptTimestamps, replyTimestamps: spec.replyTimestamps, diffPreview: spec.diffPreview, textWidth: spec.textWidth,
       turnRules: spec.turnBoundaries === 'rules' || spec.turnBoundaries === 'summary-only',
@@ -561,7 +587,7 @@ export function viewTabDisplay(spec: ViewSpec): TabDisplay {
   let display = tabDisplayCache.get(spec)
   if (!display) {
     display = {
-      iconSet: spec.iconSet, tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
+      iconSet: spec.tabIconSet ?? spec.iconSet, tabStyle: spec.tabStyle, tabWidth: spec.tabWidth, tabClose: spec.tabClose, tabNumbers: spec.tabNumbers,
       tabIcons: spec.tabIcons, tabSeparators: spec.tabSeparators, tabTitle: spec.tabTitle,
       tabStripFill: spec.tabStripFill, tabHover: spec.tabHover, tabAccent: spec.tabAccent,
       tabActivity: spec.tabActivity, tabOverflow: spec.tabOverflow, tabTruncate: spec.tabTruncate,

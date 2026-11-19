@@ -4,8 +4,53 @@ import { createRef } from 'react'
 import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
 import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
-import { fitTextMiddle, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
+import { fitTextMiddle, tabHasClose, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 import { NERD_FONT_ICONS } from './icons'
+
+const nerdClose = tabStripActivity(tabStripName('A long title', 10, '', true, 'end', NERD_FONT_ICONS.error), 10, '●')
+assert.ok(tabHasClose(nerdClose))
+assert.equal(nerdClose[7], NERD_FONT_ICONS.error, 'activity preserves the selected icon at the close target')
+
+for (const style of ['powerline', 'bubbles'] as const) {
+  const tabs = createRef<TabSelectRenderable>()
+  const options = ['Long first title', '中文', 'Third title'].map((label, i) => ({
+    name: tabStripName(label, 10, '', i === 0), value: String(i), description: '',
+  }))
+  const setup = await testRender(<box flexDirection="column">
+    <tab-select ref={tabs} options={options} width={20} height={1} tabWidth={10} showDescription={false} showUnderline={false}
+      onMouseMove={event => noteTabStripHover(tabs.current, event.x)} />
+    <text>Transcript border</text>
+    <SessionTabConnection tabs={tabs} readWindow={() => null} ownerKey={null} enabled tabStyle={style}
+      foreground="#00aaff" background="#101010" inactiveForeground="#555555" inactiveBackground="#101010"
+      hoverForeground="#eeeeee" hoverBackground="#414141" segmentBackground="#222222" windowsInactiveBackground="#161616"
+      pillForeground="#ffffff" pillBackground="#234567" />
+  </box>, { width: 37, height: 5 })
+  try {
+    await setup.flush()
+    const leading = NERD_FONT_ICONS[style === 'powerline' ? 'powerline-start' : 'bubble-start']
+    const trailing = NERD_FONT_ICONS[style === 'powerline' ? 'powerline-end' : 'bubble-end']
+    const row = setup.captureCharFrame().split('\n')[0]!
+    assert.equal(row[0], leading)
+    assert.equal(row[8], '×', 'the close target keeps its column')
+    assert.equal(row[9], trailing)
+    assert.equal(row[10], style === 'powerline' ? ' ' : leading)
+    assert.ok(row.includes('中文'))
+    assert.ok(row.trimEnd().endsWith('›'), 'the overflow arrow stays visible')
+    assert.ok(setup.captureCharFrame().split('\n')[1]?.includes('Transcript border'))
+    await act(async () => { await setup.mockMouse.moveTo(11, 0) })
+    await setup.flush()
+    const hovered = setup.captureSpans().lines[0]!.spans.find(span => span.text.includes('中文'))
+    assert.deepEqual(hovered?.bg, parseColor('#414141'))
+    const remove = registerTabPaintOccluder(() => ({ x: 0, y: 0, width: 2, height: 1 }))
+    try {
+      await act(async () => { tabs.current!.requestRender() })
+      await setup.flush()
+      assert.equal(setup.captureCharFrame().split('\n')[0]![0], ' ', 'the painter leaves covered cells alone')
+    } finally { remove() }
+  } finally {
+    await act(async () => setup.renderer.destroy())
+  }
+}
 
 for (const paneWidth of [100, 160, 170, 200]) {
   const stripWidth = tabStripWidth(paneWidth)

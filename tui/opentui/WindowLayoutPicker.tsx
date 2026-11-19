@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useTuiPopupTitle } from './iconContext'
 // The window layout menu: macOS's "Move & Resize / Fill & Arrange", for the
 // focused pane and its neighbours, plus the layouts saved for this project. Each
 // arrangement is a small picture of the layout it makes; everything is
@@ -101,6 +102,7 @@ export function WindowLayoutPicker({
     ...saved.map((row): Target => ({ kind: 'saved', id: row.id })),
     ...(onSave ? [{ kind: 'save' } as Target] : []),
   ], [onSave, saved])
+  const title = useTuiPopupTitle('Window layout', 'layout')
   const [cursor, setCursor] = useState(() => Math.max(0, ICONS.findIndex((icon) => icon.action === current)))
   const at = Math.min(cursor, targets.length - 1)
   const target = targets[at]
@@ -233,7 +235,7 @@ export function WindowLayoutPicker({
       backgroundColor={theme.surface}
       flexDirection="column"
       paddingX={1}
-      title=" Window layout "
+      title={title}
       titleColor={theme.cyan}
       // A press inside the menu is the menu's; the backdrop behind it closes on any other.
       onMouseDown={(event: { stopPropagation?: () => void }) => event.stopPropagation?.()}

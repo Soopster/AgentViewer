@@ -6,6 +6,8 @@ import { useCallback, useEffect, useState } from 'react'
 import type { TuiThemePalette } from '../theme'
 import { MODAL_CONTENT_Z_INDEX } from './layers'
 import { fitText } from './textLayout'
+import { useTuiPopupIconSet } from './iconContext'
+import { tuiControlLabel, tuiIcon } from './icons'
 
 export type ContextMenuItem = {
   id?: string
@@ -40,6 +42,7 @@ export function ContextMenu({
   onKeyHandlerReady: (handler: (key: Key) => void) => void
 }) {
   const [cursor, setCursor] = useState(0)
+  const icons = useTuiPopupIconSet()
   const [wheelStart, setWheelStart] = useState(0)
   const capacity = Math.max(1, screenHeight - 4)
   const selected = Math.min(cursor, Math.max(0, items.length - 1))
@@ -59,7 +62,9 @@ export function ContextMenu({
   }, [selected, items.length, onClose, pick, capacity, wheelStart])
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
-  const inner = Math.max(...items.map((item) => item.label.length + (item.hint ? item.hint.length + 3 : 0)), (title ?? '').length + 2, 12)
+  const titleIcon = tuiIcon(icons, 'popup', '')
+  const heading = titleIcon && title ? `${titleIcon} ${title}` : title
+  const inner = Math.max(...items.map((item) => item.label.length + (item.hint ? item.hint.length + 3 : 0)), (heading ?? '').length + 2, 12)
   const width = Math.min(inner + 4, Math.max(3, screenWidth))
   const height = Math.min(items.length, capacity) + 2
   // Kept on screen: a click near the right or bottom edge opens the menu toward the middle.
@@ -80,7 +85,7 @@ export function ContextMenu({
       borderColor={theme.border2}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title={title ? ` ${fitText(title, Math.max(1, width - 6)).trimEnd()} ` : undefined}
+      title={heading ? ` ${fitText(heading, Math.max(1, width - 6)).trimEnd()} ` : undefined}
       titleColor={theme.dim}
       // A press inside is the menu's; the backdrop behind it closes on any other.
       onMouseDown={(event: { stopPropagation?: () => void }) => event.stopPropagation?.()}
@@ -110,7 +115,7 @@ export function ContextMenu({
               if (event.button === 0 || event.button === 2) pick(index)
             }}
           >
-            <text fg={item.danger ? theme.red : index === cursor ? theme.text : theme.muted} wrapMode="none" selectable={false}>{fitText(item.label, labelWidth)}</text>
+            <text fg={item.danger ? theme.red : index === cursor ? theme.text : theme.muted} wrapMode="none" selectable={false}>{fitText(tuiControlLabel(icons, item.label), labelWidth)}</text>
             <box flexGrow={1} />
             {hintWidth ? <text fg={theme.dim} wrapMode="none" selectable={false}>{fitText(item.hint!, hintWidth)}</text> : null}
           </box>

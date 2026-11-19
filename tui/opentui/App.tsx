@@ -403,6 +403,8 @@ import { GridSecondDivider } from './app/overlays/GridSecondDivider'
 import { ComposerWindow } from './app/overlays/ComposerWindow'
 import { PluginOverlayHost } from './app/overlays/PluginOverlayHost'
 import { ComposerDock } from './app/overlays/ComposerDock'
+import { tuiIcon } from './icons'
+import { TuiIconSetContext, TuiPopupIconSetContext } from './iconContext'
 import { TerminalTargetStrip } from './app/overlays/TerminalTargetStrip'
 import { ComposerStatusStack } from './app/overlays/ComposerStatusStack'
 import { runReaderHeaderChrome, runEmbeddedComposerChrome, runReaderFooterChrome, runSurfacePanelElement } from './app/derived/readerChrome'
@@ -999,6 +1001,7 @@ function OpenTuiWorkspace() {
     focusedPane, selectedSessionKey, sessions,
   })
   // The rail's own palette: its surface is the view's rail fill.
+  const railIconSet = viewSpec.railIconSet ?? viewSpec.iconSet
   const railTheme = useMemo(() => railThemeFor(theme, viewSpec.railFill), [theme, viewSpec.railFill])
   useEffect(() => {
     sessionsRef.current = sessions
@@ -1681,9 +1684,13 @@ function OpenTuiWorkspace() {
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
     selectedRawMessages: sessionDetail?.rawMessages,
   })
-  const composerKnobSegments = useMemo(() => engineeringLayout.active
-    ? baseComposerKnobSegments.map(segment => segment.text.startsWith('cost:') ? { ...segment, text: segment.text.replace('cost:', 'session cost:') } : segment)
-    : baseComposerKnobSegments, [baseComposerKnobSegments, engineeringLayout.active])
+  const composerIconSet = viewSpec.composerIconSet ?? viewSpec.iconSet
+  const composerPromptIcon = tuiIcon(composerIconSet, 'prompt', '')
+  const composerKnobSegments = useMemo(() => !engineeringLayout.active && composerIconSet === 'standard' ? baseComposerKnobSegments : baseComposerKnobSegments.map(segment => {
+    if (segment.text.startsWith('cost:') && engineeringLayout.active) return { ...segment, text: segment.text.replace('cost:', 'session cost:') }
+    const icon = segment.action === 'model' ? tuiIcon(composerIconSet, segment.text.startsWith('effort:') ? 'effort' : 'model', '') : ''
+    return icon ? { ...segment, text: `${icon} ${segment.text}` } : segment
+  }), [baseComposerKnobSegments, composerIconSet, engineeringLayout.active])
   useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
@@ -1691,7 +1698,8 @@ function OpenTuiWorkspace() {
     const parts: InlineTextSegment[] = []
     if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path' })
     const branch = composerGitSummary?.branch ?? composerGitBranch
-    if (branch) parts.push({ text: branch, fg: theme.green, action: 'git' })
+    const gitIcon = tuiIcon(composerIconSet, 'repository', '')
+    if (branch) parts.push({ text: gitIcon ? `${gitIcon} ${branch}` : branch, fg: theme.green, action: 'git' })
     if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, atomic: true, fg: theme.amber, action: 'git' })
     if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, atomic: true, fg: theme.dim, action: 'git' })
     if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, atomic: true, fg: theme.amber, action: 'git' })
@@ -1703,10 +1711,10 @@ function OpenTuiWorkspace() {
       parts.push({ text: ` · ⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
     }
     return parts
-  }, [composerGitBranch, composerGitSummary, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
+  }, [composerGitBranch, composerGitSummary, composerIconSet, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
   const buildComposerStatsSegments = (lineCount: number, draftLength: number) => runBuildComposerStatsSegments({
     composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
-    composerLocationSegments, composerWorkingDirectory,
+    composerLocationSegments, composerWorkingDirectory, composerPathIcon: tuiIcon(composerIconSet, 'folder', ''),
   }, lineCount, draftLength)
   const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
     && composerSendState === 'sending'
@@ -2022,7 +2030,7 @@ function OpenTuiWorkspace() {
     const attachments = composerPromptParts.length > 0 || composerMentionAttachments.length > 0
       ? attachmentCountLabel(prepareComposerSubmission(text, composerMentionAttachments, composerPromptParts).attachments) ?? ''
       : ''
-    const nextShape = { ...computeComposerDraftShape(text, textareaInnerWidth, composerWindowTextareaWidth, null), lines: composerDraftLineCount(text, virtualLines), attachments }
+    const nextShape = { ...computeComposerDraftShape(text, textareaInnerWidth, composerWindowInputWidth, null), lines: composerDraftLineCount(text, virtualLines), attachments }
     composerDraftRef.current = text
     composerDraftState.write(text, !sameComposerDraftShape(composerDraftShapeRef.current, nextShape))
     if (composerDraftStorageKeyRef.current) writeWorkspaceDraft(composerDraftStorageKeyRef.current, text)
@@ -2385,10 +2393,11 @@ function OpenTuiWorkspace() {
     splitPaneRunningKeys, textareaInnerWidth, rightSidePanelVisible, composerAreaOffset,
     composerAreaWidth, composerDockTextareaWidth, composerWindowWidth, composerWindowHeight,
     composerWindowLeft, composerWindowTop, composerWindowContentWidth, composerWindowTextareaWidth,
-    composerLineCounts,
+    composerLineCounts, composerWindowInputWidth,
   } = useSplitPaneRunningKeysGroup({
     runningSessions, rightPaneWidth, taskPanelVisible, surfacePanelOnRight, showRail, sidebarWidth,
     readerAreaWidth, width, fullscreenMode, height, composerDraft, composerInReaderColumn: viewSpec.composerWidth === 'reader',
+    composerPromptIcon, embeddedComposer,
   })
   composerDraftShapeRef.current = { ...composerLineCounts, lines: composerDraftLines, attachments: '' }
   const composerVisualLineCount = composerLineCounts.dock
@@ -3734,12 +3743,12 @@ function OpenTuiWorkspace() {
     if (ids.length > 0) void requestCoordinatorRunGoals([...new Set(ids)])
   }, [sessions])
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
-    pinnedSessionKeys: sidebarPinnedKeys, toggleSessionPin: toggleSidebarPin, sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme: railTheme, sidebarSessionActivity,
+    pinnedSessionKeys: sidebarPinnedKeys, toggleSessionPin: toggleSidebarPin, sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme: railTheme, iconSet: railIconSet, sidebarSessionActivity,
     showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor, isLiftedFromOtherSpace,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
-  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, railTheme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, isLiftedFromOtherSpace, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, railTheme, railIconSet, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, isLiftedFromOtherSpace, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -5263,8 +5272,10 @@ function OpenTuiWorkspace() {
   const readOverviewGit = useStableEvent((cwd: string) => readGitSummaryCached(cwd))
   const overviewRunning = Boolean(selectedSessionKey && runningSessions.some(session => sessionKey(session) === selectedSessionKey))
   const overviewNeedsInput = attentionItems.some(item => item.sessionKey === selectedSessionKey && attentionItemNeedsInput(item))
+  const toolbarIconSet = viewSpec.toolbarIconSet ?? viewSpec.iconSet
+  const popupIconSet = viewSpec.popupIconSet ?? viewSpec.iconSet
   const shellOverview = useMemo((): PluginShellOverview => ({
-    terminalIconSet: viewSpec.iconSet,
+    terminalIconSet: toolbarIconSet,
     snapshot: {
       cwd: gitRepoCwd || workspaceCwd || process.cwd(),
       sessionKey: selectedSessionKey,
@@ -5286,7 +5297,7 @@ function OpenTuiWorkspace() {
         && (command.requires !== 'repository' || gitRepoCwd || workspaceCwd)).map(command => command.id),
       run: runPluginCommandId,
     },
-  }), [viewSpec.iconSet, gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction, runPluginCommandId, disabledPlugins])
+  }), [toolbarIconSet, gitRepoCwd, workspaceCwd, selectedSessionKey, selectedSession, overviewNeedsInput, overviewRunning, visibleLiveToolActivities, composerActivityVisible, composerSendStartedAt, runningSessions.length, attentionNeedsInputCount, readOverviewGit, runShellOverviewAction, runPluginCommandId, disabledPlugins])
   const pluginServices = useMemo((): TuiProvidedPluginServices => ({
     ...(subagentTranscriptSelection ? { 'subagent-transcript': {
       label: subagentTranscriptSelection.agent.taskDescription || subagentTranscriptSelection.agent.agentId,
@@ -6781,6 +6792,7 @@ function OpenTuiWorkspace() {
     pickSlashInsteadOfSubmit, sendComposerMessage, composerTextareaRef, composerDraft,
     composerTargetSession, rememberComposerCursor, setComposerWindowOpen, composerActive,
     windowControlMode, composerPlaceholder, composerSyntaxStyle, theme,
+    composerIcon: composerPromptIcon,
     handleComposerContentChange, composerChatTextareaStyle, composerBaseTextareaStyle,
     composerDockTextareaStyle, composerMention, composerMentionVisibleCount,
     composerMentionResults, composerMentionIndex, composerAccentColor, composerConfig,
@@ -7013,6 +7025,8 @@ function OpenTuiWorkspace() {
   // Popovers that take the whole screen from its top row, which the spaces bars must not paint over.
   const fullScreenPopoverOpen = Boolean(pluginOverlay && getPluginSurface(pluginOverlay).fullScreen) || folderPickerForNewSession
   return (
+    <TuiPopupIconSetContext.Provider value={popupIconSet}>
+    <TuiIconSetContext.Provider value={viewSpec.windowIconSet ?? viewSpec.iconSet}>
     <BordersContext.Provider value={showBorders}>
     <PaneResizeProvider value={paneResize.context}>
     <box width={terminalWidth} height={terminalHeight} flexDirection="column" backgroundColor={theme.bg}>
@@ -7047,7 +7061,8 @@ function OpenTuiWorkspace() {
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
       {spacesMenuOpen ? <SpacesManager controller={workspaceContext.controller} theme={theme} width={width} height={height} initialId={spacesMenuSelection} closeId={spacesCloseId} onClose={() => { setSpacesMenuOpen(false); setSpacesPickedFolder(undefined) }} onKeyHandlerReady={handler => { spacesKeyRef.current = handler }}
         initialFolder={spacesPickedFolder} onBrowseFolder={browseFolderForSpace} /> : null}
-      {workspacesEnabled && !fullscreenMode ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
+      {workspacesEnabled && !fullscreenMode ? <WorkspaceTabs theme={theme} width={width} onManage={openSpaces} under={fullScreenPopoverOpen}
+        style={viewSpec.workspaceTabStyle ?? viewSpec.tabStyle} iconSet={viewSpec.workspaceIconSet ?? viewSpec.iconSet} /> : null}
       <FloatingWindowLayer presentationActive={Boolean(windowPresentation)} maximized={windowZoom === FLOATING_PANE_INDEX} floatingItem={floatingItem} floatingWindow={floatingWindow} fullscreenMode={fullscreenMode} windowSurfacePeek={windowSurfacePeek} readerAreaWidth={readerAreaWidth} windowAreaHeight={windowAreaHeight} windowAreaRef={windowAreaRef} sidebarWidth={sidebarWidth} verticalTabsWidth={verticalTabsWidth} tabsEnabled={tabsEnabled} theme={theme} rectOf={rectOf} startFloatGesture={startFloatGesture} moveFloatGesture={moveFloatGesture} endFloatGesture={endFloatGesture} renderSplitPane={renderSplitPane} dockFloatingWindow={dockFloatingWindow} />
           {windowPresentation ? <box id="presentation-restore" position="absolute" top={windowAreaRef.current?.y ?? 0} right={rightPanelsWidth} height={1} zIndex={60} backgroundColor={theme.surface2}
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); restoreWindowPresentation() } }}>
@@ -7056,16 +7071,18 @@ function OpenTuiWorkspace() {
       <WorkspaceBody isolatedView={engineeringLayout.active}
         onSidebarFocus={() => { setComposerActive(false); setFocusedPane('sessions') }}
         onSidebarViewChange={view => { setSidebarView(view); setComposerActive(false); setFocusedPane('sessions') }}
+        railIconSet={railIconSet}
         sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={railTheme} query={sessionSearchQuery} searchFocused={sessionSearchMode}
+          iconSet={railIconSet}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onQuery={setSessionSearchQuery}
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
           tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
           liftAcrossSpaces={liftAcrossSpaces} onLiftAcrossSpaces={workspacesEnabled ? setLiftAcrossSpaces : undefined}
           />}
-        coordinatorControls={<CoordinatorFilters theme={railTheme} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
+        coordinatorControls={<CoordinatorFilters theme={railTheme} iconSet={railIconSet} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onSubmit={() => setSessionSearchMode(false)} />}
-        sidebarStatus={<SidebarStatus theme={railTheme} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
+        sidebarStatus={<SidebarStatus theme={railTheme} iconSet={railIconSet} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
         onNewSession={openNewSessionModal}
         onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
@@ -7400,6 +7417,7 @@ function OpenTuiWorkspace() {
       ) : null}
 
 
+      <TuiIconSetContext.Provider value={popupIconSet}>
       {folderPickerForNewSession ? (
         <PluginSurfaceHost
           surfaceId="files"
@@ -7890,6 +7908,7 @@ function OpenTuiWorkspace() {
       ) : null}
 
       <ExitConfirmOverlay exitConfirmOpen={exitConfirmOpen} width={width} composerSendState={composerSendState} runningSessions={runningSessions} exitCleanupInProgress={exitCleanupInProgress} height={height} theme={theme} />
+      </TuiIconSetContext.Provider>
     </box>
     </EngineeringFrame>
     <PluginWidgetHost slot="top-center" theme={theme} width={terminalWidth} height={terminalHeight} zIndex={NAVIGATION_Z_INDEX} runCommand={runPaletteCommand} />
@@ -7897,6 +7916,8 @@ function OpenTuiWorkspace() {
     {paneResize.layer}
     </PaneResizeProvider>
     </BordersContext.Provider>
+    </TuiIconSetContext.Provider>
+    </TuiPopupIconSetContext.Provider>
   )
 }
 

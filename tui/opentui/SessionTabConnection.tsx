@@ -2,6 +2,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useRenderer } from '@opentui/react'
 import { TextAttributes, parseColor, type BoxRenderable, type RGBA, type TabSelectRenderable } from '@opentui/core'
+import type { ViewTabStyle } from '../viewSpec'
+import { tabSegmentCaps } from './tabStrip'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -77,7 +79,9 @@ export function SessionTabConnection(props: {
   pillForeground?: string
   pillBackground?: string
   /** How the strip draws (tui/viewSpec.ts `tabStyle`); Chrome's raised tab by default. */
-  tabStyle?: 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows'
+  tabStyle?: ViewTabStyle
+  highlightSelected?: boolean
+  segmentBackground?: string
   /** Thin rules between inactive tabs. */
   separators?: boolean
   /** How an inactive tab under the pointer is marked (tui/viewSpec.ts `tabHover`). */
@@ -100,9 +104,10 @@ export function SessionTabConnection(props: {
     pillForeground: parseColor(props.pillForeground ?? props.hoverForeground), pillBackground: parseColor(props.pillBackground ?? props.hoverBackground),
     windowsBackground: parseColor(props.windowsBackground ?? props.pillBackground ?? props.hoverBackground),
     windowsInactiveBackground: parseColor(props.windowsInactiveBackground ?? props.inactiveBackground),
+    segmentBackground: parseColor(props.segmentBackground ?? props.hoverBackground),
     inactiveLabel: parseColor(props.inactiveLabel ?? props.hoverForeground),
     initials: new Map([...(props.initialColors ?? new Map<string, string>())].map(([key, color]) => [key, parseColor(color)] as const)),
-  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground, props.windowsBackground, props.windowsInactiveBackground, props.inactiveLabel, props.initialColors])
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground, props.windowsBackground, props.windowsInactiveBackground, props.segmentBackground, props.inactiveLabel, props.initialColors])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -111,25 +116,20 @@ export function SessionTabConnection(props: {
       const current = latest.current
       if (!current.enabled) return
       const tabs = current.tabs.current
-      const frame = current.readWindow()
-      if (!tabs || !frame || !tabs.visible || !frame.visible
-        || tabs.getSelectedOption()?.value !== current.ownerKey) return
-      const connection = tabConnectionGeometry(tabs, frame, tabs.getSelectedIndex(),
-        (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0, tabs.getTabWidth())
-      if (!connection || connection.left < 0 || connection.topY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
-      // A covering overlay must not acquire a hole in its own border/content.
-      const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
-      if (!uncovered) return
+      if (!tabs || !tabs.visible) return
       // A floating panel over the strip (the View Studio) keeps its cells: this
       // pass runs after the frame, so without clipping it draws through them.
-      const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA, attributes = 0) => {
-        let ranges: Array<[number, number]> = [[x, x + text.length]]
+      const paintRanges = (x: number, width: number, y: number) => {
+        let ranges: Array<[number, number]> = [[x, x + width]]
         for (const read of TAB_PAINT_OCCLUDERS) {
           const rect = read()
           if (!rect || y < rect.y || y >= rect.y + rect.height) continue
           ranges = ranges.flatMap(([from, to]): Array<[number, number]> => [[from, Math.min(to, rect.x)], [Math.max(from, rect.x + rect.width), to]].filter(([l, r]) => r > l) as Array<[number, number]>)
         }
-        for (const [from, to] of ranges) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg, attributes)
+        return ranges
+      }
+      const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA, attributes = 0) => {
+        for (const [from, to] of paintRanges(x, text.length, y)) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg, attributes)
       }
       const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, pillForeground, pillBackground, windowsBackground, windowsInactiveBackground, inactiveLabel, initials } = palette.current
       const hoverStyle = current.hover ?? 'tint'
@@ -140,9 +140,63 @@ export function SessionTabConnection(props: {
       // last). Only the selected tab is raised, and it opens into the window.
       const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
       const selected = tabs.getSelectedIndex()
-      drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       const hovered = hoveredTabIndex(tabs)
       const lifted = hovered !== null && hovered !== selected && hoverStyle !== 'none' ? hovered : null
+      const caps = tabSegmentCaps(style)
+      if (caps) {
+        if (tabs.x < 0 || tabs.y < 0 || tabs.y >= buffer.height || tabs.x + tabs.width > buffer.width) return
+        const end = Math.min(tabs.options.length, offset + Math.max(1, Math.floor(tabs.width / tabWidth)))
+        const active = current.highlightSelected === false ? -1 : selected
+        const fill = (index: number) => {
+          if (index === active) return pillBackground
+          if (index === lifted && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise')) return hoverBackground
+          if (caps.joined && index % 2 !== 0) return windowsInactiveBackground
+          return palette.current.segmentBackground
+        }
+        for (let index = offset; index < end; index++) {
+          const x = tabs.x + (index - offset) * tabWidth
+          const width = Math.min(tabWidth, tabs.x + tabs.width - x)
+          if (width < 4) continue
+          const y = tabs.y
+          const bg = fill(index)
+          const fg = index === active ? pillForeground : index === lifted && hoverStyle === 'accent' ? foreground : hoverForeground
+          const option = tabs.options[index]!
+          const previous = index > offset
+          const next = index + 1 < end
+          const right = x + width - 1
+          drawText(' '.repeat(width - 2), x + 1, y, fg, bg)
+          // Keep fitting in terminal cells, including when an overlay clips a wide title.
+          for (const [from, to] of paintRanges(x + 1, width - 2, y)) {
+            buffer.pushScissorRect(from, y, to - from, 1)
+            try { buffer.drawTextFit(option.name, x + 1, y, width - 2, fg, bg, true) }
+            finally { buffer.popScissorRect() }
+          }
+          const provider = index !== active ? initials.get(String(option.value)) : undefined
+          const initial = provider && /(?:^|\s)([A-Z]) /.exec(option.name)
+          if (initial && initial.index <= 8) {
+            const column = x + initial.index + initial[0].length - 1
+            if (column < right) drawText(initial[1]!, column, y, provider!, bg)
+          }
+          if (index === lifted && hoverStyle === 'underline' && y > 0) drawText('━'.repeat(width - 2), x + 1, y - 1, foreground, inactiveBackground)
+          // The native scroll arrows occupy the outermost cells of the strip.
+          if (!(tabs.showScrollArrows && !previous && offset > 0)) {
+            if (caps.joined && previous) drawText(' ', x, y, fg, bg)
+            else drawText(caps.left, x, y, bg, inactiveBackground)
+          }
+          if (!(tabs.showScrollArrows && end < tabs.options.length && right === tabs.x + tabs.width - 1)) {
+            drawText(caps.right, right, y, bg, caps.joined && next ? fill(index + 1) : inactiveBackground)
+          }
+        }
+        return
+      }
+      const frame = current.readWindow()
+      if (!frame || !frame.visible || tabs.getSelectedOption()?.value !== current.ownerKey) return
+      const connection = tabConnectionGeometry(tabs, frame, selected, offset, tabWidth)
+      if (!connection || connection.left < 0 || connection.topY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
+      // A covering overlay must not acquire a hole in its own border/content.
+      const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
+      if (!uncovered) return
+      drawText('─'.repeat(connection.borderEnd - connection.borderStart), connection.borderStart, connection.borderY, foreground, background)
       // Boxed tabs carry their own sides, so they need no separators; Windows
       // Terminal's strip has none either, the filled tab is the only shape.
       for (let index = offset; current.separators !== false && style !== 'boxed' && style !== 'windows' && index < tabs.options.length - 1; index++) {

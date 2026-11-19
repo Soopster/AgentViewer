@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { tabHasClose } from '../../tabStrip'
 import type { ViewSpec } from '../../../viewSpec'
 import type { WindowLayout } from '../../windowLayout'
 import type { SplitRect } from '../../windowSplitTree'
@@ -193,7 +194,8 @@ export function useRenderSurfaceLayerGroup(ctx: UseRenderSurfaceLayerGroupContex
     const instance = tabSelectRef.current
     if (!instance) return false
     const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
-    if (!instance.options[scrollOffset + Math.floor((x - instance.x) / tabWidth)]?.name.endsWith(' ×')) return false
+    const option = instance.options[scrollOffset + Math.floor((x - instance.x) / tabWidth)]
+    if (!option || !tabHasClose(option.name)) return false
     const column = (x - instance.x) % tabWidth
     return column >= tabWidth - 3 && column <= tabWidth - 1
   }

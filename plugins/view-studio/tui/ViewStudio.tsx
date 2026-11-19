@@ -11,7 +11,7 @@ import {
   BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, EMPTY_EXPANDED_KEYS, IDLE_TICKER_PHRASES, TRANSCRIPT_VIEW_LABELS, TranscriptCard, VIEW_SPEC_BASES,
   VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WindowButton, buildThreadedMessages, computeAllLandmarks, customViewSpec, cycleViewSpecValue, densityConfig,
   formatTranscriptCards, railFillColor, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
-  tuiIcon, usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
+  mixHexColor, tabSegmentCaps, tuiIcon, usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
   type CustomView, type SessionMessage, type TabPaintOccluder, type TranscriptCardProps, type TuiDensity, type TuiThemePalette,
   type ViewSpec, type ViewSpecField, type ViewSpecKey,
 } from '../../../tui/opentui/shell/sdkViews'
@@ -106,7 +106,7 @@ export function ViewStudioOverlay(props: Props) {
     if (key.name === 'left' || key.sequence === 'h') { if (focused) cycle(focused, -1); return true }
     if (key.name === 'right' || key.sequence === 'l' || key.name === 'space' || key.name === 'return') { if (focused) cycle(focused, 1); return true }
     if (key.name === 'tab') { switchSection(sectionIndex + (key.shift ? -1 : 1)); return true }
-    if (/^[1-7]$/.test(key.sequence)) { switchSection(Number(key.sequence) - 1); return true }
+    if (/^[1-8]$/.test(key.sequence)) { switchSection(Number(key.sequence) - 1); return true }
     // A built-in keeps its name and is its own base.
     if (key.sequence === 'r') { if (!draft.builtin) setRenaming(true); return true }
     if (key.sequence === 'b') { if (!draft.builtin) cycleBase(1); return true }
@@ -164,10 +164,9 @@ export function ViewStudioOverlay(props: Props) {
       <Rule theme={theme} width={inner} />
       <box id="view-studio-tabs" height={1} paddingX={1} flexDirection="row">
         {VIEW_SPEC_SECTIONS.map((name, index) => (
-          // Seven sections fit across the panel only by name; 1–7 still select them.
-          <box key={name} id={`view-studio-tab:${name}`} marginRight={1} onMouseDown={() => switchSection(index)}>
+          <box key={name} id={`view-studio-tab:${name}`} marginRight={index === VIEW_SPEC_SECTIONS.length - 1 ? 0 : 1} onMouseDown={() => switchSection(index)}>
             <text fg={index === sectionIndex ? theme.cyan : theme.muted} bg={index === sectionIndex ? theme.surface3 : undefined} wrapMode="none">
-              {name}
+              {inner < 54 && name === 'Composer' ? 'Compose' : name}
             </text>
           </box>
         ))}
@@ -305,10 +304,12 @@ function ViewSpecimen({ spec, theme, width, density, cursor }: { spec: ViewSpec;
 // turned off, so a value with nothing on screen to change still says where it
 // would be.
 
-type MockRegion = 'icons' | 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
+type MockRegion = 'icons' | 'popup' | 'window' | 'workspace' | 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
   | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel' | 'scrollbar' | 'status' | 'livetext'
 const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   iconSet: 'icons',
+  toolbarIconSet: 'icons', railIconSet: 'rail', composerIconSet: 'composer', tabIconSet: 'tabstrip',
+  popupIconSet: 'popup', windowIconSet: 'window', workspaceIconSet: 'workspace', workspaceTabStyle: 'workspace',
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
   liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
@@ -356,7 +357,10 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
   const columnWidth = Math.max(width - railWidth - verticalTabsWidth - rightWidth - 3 - scrollbarWidth, 16)
   const hint = useMemo(() => spec.completedTurnHint ? streamCompletedTurnHint(visibleCardsForTranscriptView(specimenSource(), spec)) : null, [spec])
   const sideLabel = sidePanel ? (viewSpecField('sidePanel')?.options.find((option) => option.value === sidePanel)?.label ?? sidePanel) : ''
-  const composerRow = <text fg={theme.muted} wrapMode="none">{'› '}<span fg={theme.dim}>Ask about this session…</span></text>
+  const toolbarIcons = spec.toolbarIconSet ?? spec.iconSet
+  const railIcons = spec.railIconSet ?? spec.iconSet
+  const composerIcons = spec.composerIconSet ?? spec.iconSet
+  const composerRow = <text fg={theme.muted} wrapMode="none">{`${tuiIcon(composerIcons, 'prompt', '›')} `}<span fg={theme.dim}>Ask about this session…</span></text>
   const column = (title: string, lines: string[], r: MockRegion, w: number) => (
     <box flexDirection="column" width={w} border={['left']} borderColor={marked(r) ? theme.amber : theme.border2} paddingLeft={1}>
       <text fg={theme.cyan} wrapMode="none">{title}</text>
@@ -367,10 +371,19 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
     <box flexDirection="column">
       {marked('icons') ? <MockRow theme={theme} marked>
         <text id="view-studio-icon-sample" fg={theme.text} wrapMode="none">
-          <span bg={spec.iconSet === 'powerline' ? theme.surface3 : undefined}>{` ${tuiIcon(spec.iconSet, 'repository', '⎇')} Git `}</span>
-          {spec.iconSet === 'powerline' ? <span fg={theme.surface3}>{tuiIcon(spec.iconSet, 'powerline-end', ' ')}</span> : null}
-          {` ${tuiIcon(spec.iconSet, 'files', '▤')} Files  ${tuiIcon(spec.iconSet, 'success', '✓')} Done`}
+          <span bg={toolbarIcons === 'powerline' ? theme.surface3 : undefined}>{` ${tuiIcon(toolbarIcons, 'repository', '⎇')} Git `}</span>
+          {toolbarIcons === 'powerline' ? <span fg={theme.surface3}>{tuiIcon(toolbarIcons, 'powerline-end', ' ')}</span> : null}
+          {` ${tuiIcon(toolbarIcons, 'files', '▤')} Files`}
         </text>
+      </MockRow> : null}
+      {marked('popup') || marked('window') ? <MockRow theme={theme} marked>
+        <text fg={theme.text} wrapMode="none">{marked('popup')
+          ? `${tuiIcon(spec.popupIconSet ?? spec.iconSet, 'index-search', '⌕')} Search  ${tuiIcon(spec.popupIconSet ?? spec.iconSet, 'detach', '⧉')} Window`
+          : `${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'layout', '⊞')} Layout  ${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'expand', '↗')} Expand  ${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'error', '×')} Close`}
+        </text>
+      </MockRow> : null}
+      {marked('workspace') ? <MockRow theme={theme} marked>
+        <WorkspaceSwitcherSample spec={spec} theme={theme} />
       </MockRow> : null}
       {spec.fleetStrip
         ? <MockRow theme={theme} marked={marked('fleet')}><text fg={theme.green} wrapMode="none">● 2 running <span fg={theme.dim}>· build · docs</span></text></MockRow>
@@ -382,6 +395,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
         {showRail
           ? <box flexDirection="column" width={railWidth} border borderStyle="rounded" borderColor={marked('rail') ? theme.amber : theme.border2} backgroundColor={railFillColor(theme, spec.railFill)}>
               <text fg={theme.cyan} wrapMode="none">{spec.sidebarView === 'coordinator' ? 'TEAM' : 'SESSIONS'}</text>
+              {focus === 'railIconSet' ? <text fg={theme.muted} wrapMode="none">{`${tuiIcon(railIcons, 'index-search', '⌕')}  ${tuiIcon(railIcons, 'new-session', '+')} New`}</text> : null}
               <text fg={theme.text} wrapMode="none">▸ build</text>
               <text fg={theme.muted} wrapMode="none">  docs</text>
             </box>
@@ -407,6 +421,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
                   </MockRow>
                 : marked('header') ? <Placeholder theme={theme} text={focusMode ? 'focus mode hides the header' : 'reader header off'} /> : null}
               <MockRow theme={theme} marked={marked('cards')}>
+                {focus === 'transcriptIconSet' ? <text fg={theme.muted} wrapMode="none">{`${tuiIcon(spec.transcriptIconSet ?? spec.iconSet, 'success', '●')} Result  ${tuiIcon(spec.transcriptIconSet ?? spec.iconSet, 'error', '×')} Error`}</text> : null}
                 <ViewSpecimen spec={spec} theme={theme} width={columnWidth} density={density} cursor={spec.cursor === 'card'} />
               </MockRow>
               {hint
@@ -458,6 +473,9 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
             title={spec.composerTitle ? ' To: build · CLAUDE ' : undefined} titleColor={theme.dim}
             height={spec.composerSize === 'tall' ? 5 : 3} marginLeft={spec.composerWidth === 'reader' ? railWidth : 0} paddingX={1}>{composerRow}</box>
         : null}
+      {focus === 'composerIconSet' ? <text fg={theme.dim} wrapMode="none">
+        {`${tuiIcon(composerIcons, 'model', '')} model:auto  ${tuiIcon(composerIcons, 'effort', '')} effort:auto  ${tuiIcon(composerIcons, 'repository', '')} main`}
+      </text> : null}
       <MockRow theme={theme} marked={marked('keys')}>
         <text fg={theme.dim} wrapMode="none">
           {spec.cursor === 'card' ? 'j/k move · e fold · cursor card lit' : 'j/k scroll · e expand all · no cursor'}
@@ -473,19 +491,39 @@ const MOCK_TABS = [
   { title: 'Fix flaky test', folder: 'api', provider: 'C', glyph: '◌', icon: 'waiting' },
 ] as const
 
+function WorkspaceSwitcherSample({ spec, theme }: { spec: ViewSpec; theme: TuiThemePalette }) {
+  const caps = tabSegmentCaps(spec.workspaceTabStyle ?? spec.tabStyle)
+  const icons = spec.workspaceIconSet ?? spec.iconSet
+  const close = tuiIcon(icons, 'error', '×')
+  const active = mixHexColor(theme.cyan, theme.surface, 0.32) ?? theme.surface3
+  const inactive = theme.surface2
+  return <text fg={theme.text} wrapMode="none">
+    {caps ? <>
+      <span fg={active}>{caps.left}</span><span bg={active}>{` Build ${close} `}</span>
+      <span fg={active} bg={caps.joined ? inactive : undefined}>{caps.right}</span>
+      {caps.joined ? <span bg={inactive}>{' '}</span> : <span fg={inactive}>{caps.left}</span>}
+      <span bg={inactive}>{` Docs ${close} `}</span><span fg={inactive}>{caps.right}</span>
+    </> : `[ Build ${close} ] [ Docs ${close} ]`}
+    {`  ${tuiIcon(icons, 'new-session', '+')}`}
+  </text>
+}
+
 /** The tab strip as the view's Tabs fields draw it, on three sample sessions. */
 function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiThemePalette; indent: number }) {
   const width = spec.tabWidth === 'compact' ? 10 : spec.tabWidth === 'wide' ? 16 : spec.tabWidth === 'fit' ? 0 : 12
   const label = (tab: typeof MOCK_TABS[number], index: number, active: boolean) => {
     const title = spec.tabTitle === 'folder' ? tab.folder : spec.tabTitle === 'folder-title' ? `${tab.folder} · ${tab.title}` : tab.title
-    const glyph = tab.icon ? tuiIcon(spec.iconSet, tab.icon, tab.glyph) : tab.glyph
+    const glyph = tab.icon ? tuiIcon(spec.tabIconSet ?? spec.iconSet, tab.icon, tab.glyph) : tab.glyph
     const icons = spec.tabIcons === 'none' ? '' : `${spec.tabIcons === 'provider' ? `${tab.provider} ` : ''}${glyph ? `${glyph} ` : ''}`
-    const close = spec.tabClose === 'all' || (spec.tabClose === 'active' && active) ? ' ×' : ''
+    const close = spec.tabClose === 'all' || (spec.tabClose === 'active' && active) ? ` ${tuiIcon(spec.tabIconSet ?? spec.iconSet, 'error', '×')}` : ''
     const text = `${spec.tabNumbers ? `${index + 1} ` : ''}${icons}${title}`
     const budget = width ? Math.max(width - close.length, 3) : text.length
     return (text.length > budget ? `${text.slice(0, budget - 1)}…` : text.padEnd(budget)) + close
   }
   const parts = MOCK_TABS.map((tab, index) => ({ text: label(tab, index, index === 0), active: index === 0 }))
+  const caps = tabSegmentCaps(spec.tabStyle)
+  const colors = parts.map((part, index) => part.active ? mixHexColor(theme.cyan, theme.surface, 0.32) ?? theme.surface3
+    : caps?.joined && index % 2 !== 0 ? theme.surface2 : mixHexColor(theme.cyan, theme.surface, 0.14) ?? theme.surface2)
   const sep = spec.tabSeparators && spec.tabStyle !== 'boxed' && spec.tabStyle !== 'windows' ? '│' : ' '
   const underline = spec.tabStyle === 'underline' ? `${' '.repeat(indent + 1)}${'━'.repeat(parts[0]!.text.length + 2)}` : null
   return (
@@ -493,6 +531,14 @@ function MockTabStrip({ spec, theme, indent }: { spec: ViewSpec; theme: TuiTheme
       <text fg={theme.muted} wrapMode="none">
         {' '.repeat(indent)}
         {parts.map((part, index) => {
+          if (caps) {
+            const bg = colors[index]!
+            return <span key={index}>
+              {caps.joined && index > 0 ? <span bg={bg}>{' '}</span> : <span fg={bg}>{caps.left}</span>}
+              <span fg={theme.text} bg={bg}>{part.text}</span>
+              <span fg={bg} bg={caps.joined ? colors[index + 1] : undefined}>{caps.right}</span>
+            </span>
+          }
           const active = part.active
           const fg = active ? theme.cyan : theme.muted
           const body = spec.tabStyle === 'windows' && active ? <span fg={theme.cyan} bg={theme.surface}>{` ${part.text} `}</span>

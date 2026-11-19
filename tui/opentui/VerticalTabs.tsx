@@ -5,6 +5,8 @@ import { useRenderer } from '@opentui/react'
 import type { TuiThemePalette } from '../theme'
 import { fitText } from './textLayout'
 import { tabStripLabel } from './tabStrip'
+import type { ViewIconSet } from '../viewSpec'
+import { tuiIcon } from './icons'
 import { SectionFrame } from './app/borders'
 
 const FRAMES = ['◐', '◓', '◑', '◒']
@@ -14,13 +16,14 @@ export function verticalTabRailWidth(available: number, enabled: boolean): numbe
   return enabled && available >= 80 ? Math.min(30, Math.floor(available / 4)) : 0
 }
 
-export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, running, width, height, theme, onClose, onHorizontal, onPress, onDrag, onRelease }: {
+export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, running, width, height, theme, iconSet, onClose, onHorizontal, onPress, onDrag, onRelease }: {
   options: TabSelectOption[]
   activeIndex: number
   running: ReadonlySet<string>
   width: number
   height: number
   theme: TuiThemePalette
+  iconSet?: ViewIconSet
   onClose: (index: number) => void
   onHorizontal: () => void
   onPress: (index: number, event: MouseEvent) => void
@@ -67,7 +70,7 @@ export const VerticalTabs = memo(function VerticalTabs({ options, activeIndex, r
             <text fg={active ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(`${busy ? `${FRAMES[frame]} ` : ''}${label}`, Math.max(width - 6, 1))}</text>
           </box>
           <box id={`vertical-tab-close:${index}`} width={3} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onClose(index) } }}>
-            <text fg={active ? theme.cyan : theme.dim} selectable={false}> × </text>
+            <text fg={active ? theme.cyan : theme.dim} selectable={false}>{` ${tuiIcon(iconSet, 'error', '×')} `}</text>
           </box>
         </box>
       })}

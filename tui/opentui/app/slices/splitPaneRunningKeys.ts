@@ -15,6 +15,8 @@ export type UseSplitPaneRunningKeysGroupContext = {
   readerAreaWidth: number
   /** The view keeps the dock to the reader column (beside the rail) rather than the terminal's width. */
   composerInReaderColumn?: boolean
+  composerPromptIcon?: string
+  embeddedComposer?: boolean
   width: number
   fullscreenMode: boolean
   height: number
@@ -25,6 +27,7 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
   const {
     runningSessions, rightPaneWidth, taskPanelVisible, surfacePanelOnRight, showRail, sidebarWidth,
     readerAreaWidth, width, fullscreenMode, height, composerDraft, composerInReaderColumn = false,
+    composerPromptIcon, embeddedComposer,
   } = ctx
 
   // Which pane sessions have a turn in flight — drives the ◐ running glyph and
@@ -38,7 +41,7 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
     return keys
   }, [runningSessions])
 
-  const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
+  const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10) - (composerPromptIcon && !embeddedComposer ? 2 : 0)
   const rightSidePanelVisible = taskPanelVisible || surfacePanelOnRight
   // The right-hand panels span the full column, composer rows included, so a
   // full-width dock would be drawn over their bottom rows (the surface panel's
@@ -65,17 +68,18 @@ export function useSplitPaneRunningKeysGroup(ctx: UseSplitPaneRunningKeysGroupCo
   const composerWindowTop = Math.max(1, Math.floor((height - composerWindowHeight) / 2))
   const composerWindowContentWidth = Math.max(composerWindowWidth - 4, 16)
   const composerWindowTextareaWidth = Math.max(composerWindowContentWidth - 2, 12)
+  const composerWindowInputWidth = composerWindowTextareaWidth - (composerPromptIcon ? 2 : 0)
   // What this render drew from the draft. The content-change handler compares each keystroke's
   // shape with it and re-renders the root only when they differ.
   const composerLineCounts = useMemo(
-    () => computeComposerDraftShape(composerDraft, textareaInnerWidth, composerWindowTextareaWidth, null),
-    [composerDraft, textareaInnerWidth, composerWindowTextareaWidth],
+    () => computeComposerDraftShape(composerDraft, textareaInnerWidth, composerWindowInputWidth, null),
+    [composerDraft, textareaInnerWidth, composerWindowInputWidth],
   )
 
   return {
     splitPaneRunningKeys, textareaInnerWidth, rightSidePanelVisible, composerAreaOffset,
     composerAreaWidth, composerDockTextareaWidth, composerWindowWidth, composerWindowHeight,
     composerWindowLeft, composerWindowTop, composerWindowContentWidth, composerWindowTextareaWidth,
-    composerLineCounts,
+    composerLineCounts, composerWindowInputWidth,
   }
 }

@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewIconSet } from '../../../viewSpec'
+import { tuiIcon } from '../../icons'
 import type { TuiThemePalette } from '../../../theme'
 import React, { useCallback, useRef } from 'react'
 import { SpacesRail } from '../../SpacesNavigation'
@@ -17,7 +19,7 @@ import { SidebarHeading, SidebarNewSession, SidebarSortToggle, sidebarQuietColor
 
 const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
 
-export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onViewChange, onFocus, controls, coordinatorControls, status, previewEnabled = effectiveFocus === 'sessions' }: {
+export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, iconSet, onViewChange, onFocus, controls, coordinatorControls, status, previewEnabled = effectiveFocus === 'sessions' }: {
   onViewChange: (view: 'sessions' | 'coordinator') => void
   onFocus?: () => void
   previewEnabled?: boolean
@@ -25,6 +27,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
   status?: React.ReactNode
   coordinatorControls?: React.ReactNode
   onNewSession: () => void
+  iconSet?: ViewIconSet
   showRail: boolean
   sidebarWidth: number
   sidebarExtraRows: number
@@ -89,16 +92,16 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
                 <text fg={sidebarView === view ? theme.cyan : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>{/* No left padding: a tab's own leading space puts its label in the gutter column the rows below start in. A narrow rail drops the tabs' trailing space so + New still fits beside them. */ `${view === 'sessions' ? ' Sessions' : ' Coordinator'}${sidebarWidth < 34 ? '' : ' '}`}</text>
               </box>)}
               <box flexGrow={1} />
-              {sidebarView === 'sessions' ? <SidebarNewSession theme={theme} width={sidebarWidth} onPress={onNewSession} /> : null}
+              {sidebarView === 'sessions' ? <SidebarNewSession icon={tuiIcon(iconSet, 'new-session', '+')} theme={theme} width={sidebarWidth} onPress={onNewSession} /> : null}
             </box>
             {sidebarView === 'sessions' ? <>
               <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
-              <SidebarSortToggle theme={theme} width={sidebarWidth} sort={sidebarSort}
+              <SidebarSortToggle theme={theme} width={sidebarWidth} sort={sidebarSort} iconSet={iconSet}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
               {status}
             </> : null}
-            {workspacesEnabled ? <SpacesRail theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
+            {workspacesEnabled ? <SpacesRail iconSet={iconSet} theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
             {sidebarView === 'sessions' && controls ? controls : sidebarView === 'coordinator' && coordinatorControls ? coordinatorControls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}
             <box flexGrow={1} minHeight={0} paddingX={1} flexDirection="column">
               {sidebarView === 'coordinator' ? (

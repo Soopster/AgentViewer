@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewIconSet } from '../viewSpec'
+import { tuiIcon } from './icons'
 // The coordinator rail, rendered from its own store rather than from the root.
 //
 // This is the first surface moved behind `slots.tsx`, and it is the shape the
@@ -215,13 +217,13 @@ export const CoordinatorSidebar = memo(function CoordinatorSidebar(props: Coordi
  * typing a search re-renders this row and the list, never the root. There is no project scope here: the
  * Coordinator lists every run this ledger holds.
  */
-export const CoordinatorFilters = memo(function CoordinatorFilters({ theme, searchFocused, onSearchFocus, onSubmit, onOpenMenu }: {
-  theme: TuiThemePalette; searchFocused: boolean; onSearchFocus: () => void; onSubmit: () => void
+export const CoordinatorFilters = memo(function CoordinatorFilters({ theme, iconSet, searchFocused, onSearchFocus, onSubmit, onOpenMenu }: {
+  theme: TuiThemePalette; iconSet?: ViewIconSet; searchFocused: boolean; onSearchFocus: () => void; onSubmit: () => void
   onOpenMenu: (menu: SidebarFilterMenu) => void
 }) {
   const state = useSyncExternalStore(subscribeCoordinator, getCoordinatorState, getCoordinatorState)
   return <box flexShrink={0} flexDirection="column">
-    <SidebarSearchRow idPrefix="coordinator" theme={theme} placeholder="Search runs and agents  /" query={state.query}
+    <SidebarSearchRow idPrefix="coordinator" theme={theme} icon={tuiIcon(iconSet, 'index-search', '⌕')} placeholder="Search runs and agents  /" query={state.query}
       focused={searchFocused} onFocus={onSearchFocus} onQuery={setCoordinatorQuery} onSubmit={onSubmit} />
     <box flexShrink={0} flexDirection="row" paddingX={1}>
       <box id="coordinator-filter" height={1} flexShrink={0} onMouseDown={event => {
@@ -230,7 +232,7 @@ export const CoordinatorFilters = memo(function CoordinatorFilters({ theme, sear
         onOpenMenu({ x: event.x, y: event.y, title: 'Agents', items: COORDINATOR_PICKER_FILTERS.map(filter => ({
           id: `coordinator-filter:${filter}`, label: `${state.filter === filter ? '✓ ' : '  '}${COORDINATOR_FILTER_LABELS[filter]}`, run: () => setCoordinatorFilter(filter),
         })) })
-      }}><SidebarChip theme={theme} label={COORDINATOR_FILTER_LABELS[state.filter]} narrowing={state.filter !== 'all'} /></box>
+      }}><SidebarChip theme={theme} iconSet={iconSet} label={COORDINATOR_FILTER_LABELS[state.filter]} narrowing={state.filter !== 'all'} /></box>
     </box>
     <SidebarFiltersRule idPrefix="coordinator" theme={theme} />
   </box>

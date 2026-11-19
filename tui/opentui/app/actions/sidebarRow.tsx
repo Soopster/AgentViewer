@@ -23,6 +23,8 @@ import { SessionRailDetail, PR_STATE_GLYPH, pullRequestMark, pullRequestColor } 
 import { sessionProviderLabel } from '../pickers'
 import { SidebarSessionRow } from '../SidebarTitlePreview'
 import { SidebarGroupHeading } from '../SidebarChrome'
+import type { ViewIconSet } from '../../../viewSpec'
+import { tuiIcon } from '../../icons'
 
 export type BuildSidebarRowContext = {
   /** The Session insights plugin is on: PR glyph and the selected row's branch/PR detail. */
@@ -35,6 +37,7 @@ export type BuildSidebarRowContext = {
   sidebarInnerWidth: number
   firstSidebarEntryKey: string
   theme: TuiThemePalette
+  iconSet?: ViewIconSet
   sidebarSessionActivity: Map<string, 'needs-input' | 'running' | 'waiting'>
   showProviderInSessionRows: boolean
   /** A pinned/running/needs-input session lifted in from another Space: its row says which project. */
@@ -59,7 +62,7 @@ export type BuildSidebarRowContext = {
 
 export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEntry, selected: boolean) {
   const {
-    sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, iconSet, sidebarSessionActivity,
     showProviderInSessionRows, isLiftedFromOtherSpace, selectSidebarSession, setSidebarSubagentCursor,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
@@ -67,7 +70,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   } = ctx
   if (entry.type === 'project') {
     return <SidebarGroupHeading key={entry.key} id={`sidebar:${entry.key}`} label={entry.projectName} count={entry.count}
-      width={sidebarInnerWidth} dateGroup={entry.dateGroup} disclosure={entry.dateGroup || entry.collapsible ? entry.collapsed ? '▸ ' : '▾ ' : '◆ '}
+      width={sidebarInnerWidth} dateGroup={entry.dateGroup} disclosure={entry.dateGroup || entry.collapsible ? entry.collapsed ? `${tuiIcon(iconSet, 'prompt', '▸')} ` : `${tuiIcon(iconSet, 'dropdown', '▾')} ` : '◆ '}
       first={entry.key === firstSidebarEntryKey} afterHeading={sidebarEntries[sidebarEntries.indexOf(entry) - 1]?.type === 'project'} selected={selected} density={density} theme={theme}
       onPress={entry.dateGroup || entry.collapsible ? () => ctx.toggleDateGroup(entry.key) : undefined} />
   }
@@ -89,9 +92,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
     const detail = subagentEntry.kind === 'session'
       ? (() => {
           const activity = sidebarSessionActivity.get(sessionKey(subagentEntry.session))
-          const marker = activity === 'needs-input' ? '⚠'
+          const marker = activity === 'needs-input' ? tuiIcon(iconSet, 'attention', '⚠')
             : activity === 'running' ? '●'
-            : activity === 'waiting' ? '◌'
+            : activity === 'waiting' ? tuiIcon(iconSet, 'waiting', '◌')
             : isSessionRecentlyTouched(subagentEntry.session) ? '·'
             : null
           return joinMeta([
@@ -147,9 +150,9 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   // rather than the provider accent, so the two sources stay tellable apart.
   const activity = knownActivity ?? (recentlyWrittenKeys.has(sessionKey(entry.session)) ? 'active' : undefined)
   const ago = activity === 'running' ? 'now' : timeAgo(activityTime)
-  const activityGlyph = activity === 'needs-input' ? '⚠'
-    : activity === 'running' || activity === 'active' ? '●'
-    : activity === 'waiting' ? '◌'
+  const activityGlyph = activity === 'needs-input' ? tuiIcon(iconSet, 'attention', '⚠')
+    : activity === 'running' || activity === 'active' ? tuiIcon(iconSet, 'updated', '●')
+    : activity === 'waiting' ? tuiIcon(iconSet, 'waiting', '◌')
     : recentlyTouched ? '·'
     : null
   const activityColor = activity === 'needs-input' ? theme.amber
@@ -195,7 +198,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
   const settled = Boolean(entry.session.inbox?.settledAt)
   // Snoozed (the web's z): set aside for now, without being done.
   const snoozed = !settled && (entry.session.inbox?.snoozedUntil ?? 0) > Date.now()
-  const rowGlyph = activity ? activityGlyph : settled ? '✓' : snoozed ? 'z' : null
+  const rowGlyph = activity ? activityGlyph : settled ? tuiIcon(iconSet, 'success', '✓') : snoozed ? 'z' : null
   const subagentDisclosureWidth = (childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? 2 : 0
   const pinned = ctx.pinnedSessionKeys?.has(sessionKey(entry.session)) ?? false
   const showPin = Boolean(ctx.toggleSessionPin && (selected || pinned))
@@ -254,14 +257,14 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           {(childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? <text
             id={`sidebar-subagents-toggle:${sessionKey(entry.session)}`} fg={sessionAccent} selectable={false}
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); toggleSidebarSubagents(entry.session) } }}
-          >{collapsedSubagentSet.has(sessionKey(entry.session)) ? '▸ ' : '▾ '}</text> : null}
+          >{collapsedSubagentSet.has(sessionKey(entry.session)) ? `${tuiIcon(iconSet, 'prompt', '▸')} ` : `${tuiIcon(iconSet, 'dropdown', '▾')} `}</text> : null}
           {/* Keep the title readable; provider identity belongs to the rail. */}
           <text fg={settled && !activity ? theme.muted : theme.text} attributes={selected ? TextAttributes.BOLD : undefined} wrapMode="none" selectable={false}>
             {fitText(retitleCoordinatorSession(formatSessionTitle(entry.session), ctx.coordinatorRunGoals), singleRow ? rowTitleWidth : innerWidth - 3 - subagentDisclosureWidth - pinWidth)}
           </text>
           {showPin ? <text id={`sidebar-pin:${sessionKey(entry.session)}`} width={3} fg={pinned ? sessionAccent : sidebarQuietColor(theme)} wrapMode="none" selectable={false}
             onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); ctx.toggleSessionPin?.(entry.session) } }}
-            onMouseUp={event => event.stopPropagation()}>{pinned ? ' ★ ' : ' ☆ '}</text> : null}
+            onMouseUp={event => event.stopPropagation()}>{` ${pinned ? tuiIcon(iconSet, 'pin', '★') : tuiIcon(iconSet, 'pin-outline', '☆')} `}</text> : null}
           {singleRow ? (
             <>
               {teamMark ? <text fg={team!.waiting > 0 ? theme.amber : theme.green} wrapMode="none" selectable={false}>{teamMark}</text> : null}

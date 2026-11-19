@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+import { tuiIcon } from '../icons'
+import type { ViewIconSet } from '../../viewSpec'
 import React, { useState } from 'react'
 import { TextAttributes } from '@opentui/core'
 import type { TuiDensity, TuiThemePalette } from '../../theme'
@@ -18,21 +20,22 @@ export function sidebarQuietColor(theme: TuiThemePalette): string {
   return mixHexColor(theme.text, theme.surface, 0.5) ?? theme.dim
 }
 
-export function SidebarNewSession({ theme, width, onPress }: { theme: TuiThemePalette; width: number; onPress: () => void }) {
+export function SidebarNewSession({ theme, width, onPress, icon = '+' }: { theme: TuiThemePalette; width: number; onPress: () => void; icon?: string }) {
   // Plain accent text, so it does not read as a third tab; it fills only under the pointer.
   const [hover, setHover] = useState(false)
   return <box id="sidebar-new-session" height={1} flexShrink={0} backgroundColor={hover ? mixHexColor(theme.cyan, theme.surface, 0.2) ?? theme.surface3 : undefined}
     onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}
     onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
-    <text fg={theme.cyan} attributes={hover ? TextAttributes.BOLD : 0} wrapMode="none" selectable={false}>{/* Narrow rails keep the tabs whole and the button to its glyph. */ width < 34 ? ' + ' : ' + New '}</text>
+    <text fg={theme.cyan} attributes={hover ? TextAttributes.BOLD : 0} wrapMode="none" selectable={false}>{/* Narrow rails keep the tabs whole and the button to its glyph. */ width < 34 ? ` ${icon} ` : ` ${icon} New `}</text>
   </box>
 }
 
 /** The sort, painted into the rail's bottom border: clicking the SESSIONS title also toggles it, but nothing said so. */
-export function SidebarSortToggle({ theme, width, sort, onPress }: { theme: TuiThemePalette; width: number; sort: 'project' | 'time'; onPress: () => void }) {
+export function SidebarSortToggle({ theme, width, sort, onPress, iconSet }: { theme: TuiThemePalette; width: number; sort: 'project' | 'time'; onPress: () => void; iconSet?: ViewIconSet }) {
   const [hover, setHover] = useState(false)
   // A narrow rail keeps the glyph alone, leaving the right end to the count.
-  const label = width < 40 ? ' ↕ ' : ` ↕ ${sort === 'project' ? 'by project' : 'recent'} `
+  const icon = tuiIcon(iconSet, 'sort', '↕')
+  const label = width < 40 ? ` ${icon} ` : ` ${icon} ${sort === 'project' ? 'by project' : 'recent'} `
   return <box id="sidebar-sort-toggle" position="absolute" bottom={-1} left={1} width={label.length} height={1} backgroundColor={theme.surface}
     onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}
     onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); onPress() } }}>
@@ -42,13 +45,13 @@ export function SidebarSortToggle({ theme, width, sort, onPress }: { theme: TuiT
 
 /** The bottom border's right end: how many sessions show (`58 of 59`) and, when filters hide some, why. A note
  *  that names a tag or activity filter ends in × and clears them on click; a bare hidden count is dimmer. */
-export function SidebarStatus({ theme, count, note, onClearNote }: { theme: TuiThemePalette; count: string; note: string; onClearNote: () => void }) {
+export function SidebarStatus({ theme, count, note, onClearNote, iconSet }: { theme: TuiThemePalette; count: string; note: string; onClearNote: () => void; iconSet?: ViewIconSet }) {
   const quiet = sidebarQuietColor(theme)
   const clearable = note.includes('×')
   return <box id="sidebar-status" position="absolute" bottom={-1} right={1} height={1} flexDirection="row" backgroundColor={theme.surface}>
     <text fg={quiet} wrapMode="none" selectable={false}>{` ${count}${note ? ' · ' : ' '}`}</text>
     {note ? <box id="sidebar-filter-note" height={1} flexShrink={0} onMouseDown={event => { if (event.button === 0 && clearable) { event.stopPropagation(); onClearNote() } }}>
-      <text fg={clearable ? theme.cyan : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{`${note} `}</text>
+      <text fg={clearable ? theme.cyan : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{`${note.replace(/×$/, tuiIcon(iconSet, 'error', '×'))} `}</text>
     </box> : null}
   </box>
 }

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { tuiInstructionsManager } from './instructionsManagerService'
+import { TuiIconSetContext, useTuiPopupIconSet } from '../iconContext'
 // Presents one plugin surface in an overlay or a window. The host owns what a
 // plugin must not: loading its module, resolving its declared services for the
 // target it was opened on, holding its scoped state, routing its keys, and
@@ -107,10 +108,12 @@ class PluginErrorBoundary extends React.Component<{ onError: (error: Error) => v
 
 export function PluginSurfaceHost(props: PluginSurfaceHostProps) {
   const disabled = useDisabledPlugins().has(getPluginSurface(props.surfaceId).pluginId)
-  if (disabled) return <DisabledPluginSurface {...props} />
+  const popupIcons = useTuiPopupIconSet()
   // Keyed by surface: an overlay host handed a different surface (one view's
   // command opening another's) must load that view, not keep the last one.
-  return <ActivePluginSurface key={props.surfaceId} {...props} />
+  return <TuiIconSetContext.Provider value={popupIcons}>
+    {disabled ? <DisabledPluginSurface {...props} /> : <ActivePluginSurface key={props.surfaceId} {...props} />}
+  </TuiIconSetContext.Provider>
 }
 
 // A window, panel tab or saved layout can outlive the choice to turn its plugin

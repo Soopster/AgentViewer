@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useTuiPopupTitle } from './iconContext'
 import { isProviderEnabled } from '../../lib/plugins/providerPlugins'
 import { NEW_SESSION_PROVIDER_IDS } from '../../lib/extensions/providers/catalog'
 import React, { useCallback, useEffect, useState } from 'react'
@@ -65,6 +66,7 @@ export function NewSessionModal({
   onClose,
   onKeyHandlerReady,
 }: Props) {
+  const title = useTuiPopupTitle('New agent session', 'new-session')
   const [row, setRow] = useState<Row>('folder')
   const [loadingFrame, setLoadingFrame] = useState(0)
 
@@ -140,7 +142,7 @@ export function NewSessionModal({
       borderColor={theme.cyan}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title=" New agent session "
+      title={title}
       titleColor={theme.cyan}
     >
       <box height={1} />
