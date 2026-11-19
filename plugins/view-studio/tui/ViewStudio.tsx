@@ -10,7 +10,7 @@ import { TextAttributes } from '@opentui/core'
 import {
   BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, EMPTY_EXPANDED_KEYS, IDLE_TICKER_PHRASES, TRANSCRIPT_VIEW_LABELS, TranscriptCard, VIEW_SPEC_BASES,
   VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WindowButton, buildThreadedMessages, computeAllLandmarks, customViewSpec, cycleViewSpecValue, densityConfig,
-  formatTranscriptCards, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
+  formatTranscriptCards, railFillColor, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
   usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
   type CustomView, type SessionMessage, type TabPaintOccluder, type TranscriptCardProps, type TuiDensity, type TuiThemePalette,
   type ViewSpec, type ViewSpecField, type ViewSpecKey,
@@ -311,7 +311,7 @@ const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
   liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
-  sessionRail: 'rail', sidebarView: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
+  sessionRail: 'rail', sidebarView: 'rail', railFill: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
   tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip',
   tabStripFill: 'tabstrip', tabHover: 'tabstrip', tabAccent: 'tabstrip', tabActivity: 'tabstrip', tabOverflow: 'tabstrip', tabTruncate: 'tabstrip', focusMode: 'header',
   borders: 'frame', fleetStrip: 'fleet', taskPanel: 'taskpanel', sidePanel: 'sidepanel', sidePanelPlacement: 'sidepanel',
@@ -372,7 +372,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
         : marked('tabstrip') && !sideTabs ? <Placeholder theme={theme} text="session tabs off" /> : null}
       <box flexDirection="row">
         {showRail
-          ? <box flexDirection="column" width={railWidth} border borderStyle="rounded" borderColor={marked('rail') ? theme.amber : theme.border2}>
+          ? <box flexDirection="column" width={railWidth} border borderStyle="rounded" borderColor={marked('rail') ? theme.amber : theme.border2} backgroundColor={railFillColor(theme, spec.railFill)}>
               <text fg={theme.cyan} wrapMode="none">{spec.sidebarView === 'coordinator' ? 'TEAM' : 'SESSIONS'}</text>
               <text fg={theme.text} wrapMode="none">▸ build</text>
               <text fg={theme.muted} wrapMode="none">  docs</text>

@@ -25,6 +25,16 @@ export function tabStripColor(theme: TuiThemePalette, fill: TabDisplay['tabStrip
   return mixHexColor(theme.surface, theme.bg, 0.5) ?? theme.surface2
 }
 
+/**
+ * The theme the session rail draws with: its `surface` replaced by the view's
+ * `railFill`, so every row, heading and chip inside paints the same fill.
+ * `surface` returns the theme itself, so memos keyed on it hold.
+ */
+export function railThemeFor(theme: TuiThemePalette, fill: TabDisplay['tabStripFill']): TuiThemePalette {
+  if (fill === 'surface') return theme
+  return { ...theme, surface: tabStripColor(theme, fill) }
+}
+
 /** An inactive tab under the pointer: most of the way from the strip to the active tab's surface, never a coloured tint. */
 export function tabHoverColor(theme: TuiThemePalette, strip: string): string {
   if (strip === theme.surface) return mixHexColor(theme.surface2, strip, 0.7) ?? theme.surface2

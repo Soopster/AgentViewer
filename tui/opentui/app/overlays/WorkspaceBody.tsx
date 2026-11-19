@@ -81,6 +81,8 @@ type WorkspaceBodyProps = {
   sidebarEntries: SidebarEntry[]
   sidebarScrollRef: React.RefObject<ScrollBoxRenderable | null>
   sidebarRowElements: React.ReactNode[]
+  /** The rail's palette (`railFill`); the app theme when absent. */
+  railTheme?: TuiThemePalette
   showTabs: boolean
   verticalTabsWidth: number
   tabOptions: { name: string; description: string; value: string; }[]
@@ -287,7 +289,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
         flexDirection="row"
         backgroundColor={theme.bg}
       >
-        <SessionRail onViewChange={props.onSidebarViewChange} onFocus={props.onSidebarFocus} controls={props.sidebarControls} status={props.sidebarStatus} coordinatorControls={props.coordinatorControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} previewEnabled={effectiveFocus === 'sessions' && !props.windowControlsBlocked} />
+        <SessionRail onViewChange={props.onSidebarViewChange} onFocus={props.onSidebarFocus} controls={props.sidebarControls} status={props.sidebarStatus} coordinatorControls={props.coordinatorControls} onNewSession={props.onNewSession} showRail={showRail} sidebarWidth={sidebarWidth} sidebarExtraRows={sidebarExtraRows} mainContentHeight={mainContentHeight} sidebarView={sidebarView} effectiveFocus={effectiveFocus} theme={props.railTheme ?? theme} coordinatorSidebarHeader={coordinatorSidebarHeader} sidebarHeaderBaseText={sidebarHeaderBaseText} toggleSidebarSort={toggleSidebarSort} showToggleOutcome={showToggleOutcome} sidebarSort={sidebarSort} sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth} sidebarProviderBadgeText={sidebarProviderBadgeText} sidebarProviderAccent={sidebarProviderAccent} workspacesEnabled={workspacesEnabled} openSpaces={openSpaces} fullScreenPopoverOpen={fullScreenPopoverOpen} setAllProjects={setAllProjects} allProjects={allProjects} sidebarInnerWidth={sidebarInnerWidth} sidebarRowBudget={sidebarRowBudget} density={density} sidebarScrollbarOptions={sidebarScrollbarOptions} loadingSessions={loadingSessions} sessions={sessions} sidebarEntries={sidebarEntries} sidebarScrollRef={sidebarScrollRef} sidebarRowElements={sidebarRowElements} previewEnabled={effectiveFocus === 'sessions' && !props.windowControlsBlocked} />
 
         {showTabs && verticalTabsWidth > 0 ? <VerticalTabs
           options={tabOptions} activeIndex={activeStripIndex} running={runningTabKeys}

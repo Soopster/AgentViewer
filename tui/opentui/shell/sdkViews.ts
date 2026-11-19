@@ -8,6 +8,7 @@ export {
 export { registerTabPaintOccluder, type TabPaintOccluder } from '../SessionTabConnection'
 export { WindowButton } from '../WindowButton'
 export { TranscriptCard, type TranscriptCardProps } from '../app/TranscriptCard'
+export { tabStripColor as railFillColor } from '../app/derived/tabs'
 export { densityConfig, streamCompletedTurnHint, streamLandmarkText, transcriptAccent } from '../app/transcriptStyle'
 export { IDLE_TICKER_PHRASES } from '../app/chrome'
 export { computeAllLandmarks, renderedBodyLines, usesAgentCardPresentation, visibleCardsForTranscriptView } from '../app/transcriptRows'

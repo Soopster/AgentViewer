@@ -29,6 +29,8 @@ export type ViewTranscriptWidth = 'readable' | 'centered' | 'full'
 export type ViewDiffLayout = 'stack' | 'split'
 export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows'
 export type ViewTabWidth = 'fill' | 'fit' | 'compact' | 'wide'
+/** A panel background: halfway to the window surface, the surface, the app background, raised, accent-tinted, or deep. */
+export type ViewSurfaceFill = 'blend' | 'surface' | 'bg' | 'raised' | 'tinted' | 'deep'
 
 export type ViewSpec = {
   // Layout
@@ -94,7 +96,7 @@ export type ViewSpec = {
   tabSeparators: boolean
   tabTitle: 'title' | 'folder' | 'folder-title'
   /** What the strip behind inactive tabs is painted: halfway to the window surface, the surface, or the app background. */
-  tabStripFill: 'blend' | 'surface' | 'bg' | 'raised' | 'tinted' | 'deep'
+  tabStripFill: ViewSurfaceFill
   /** How an inactive tab under the pointer is marked. */
   tabHover: 'tint' | 'pill' | 'raise' | 'underline' | 'text' | 'accent' | 'none'
   /** Draw the active tab (or every tab's provider initial) in its provider's colour. */
@@ -109,6 +111,8 @@ export type ViewSpec = {
   // shown; "on entering" values are applied when the view is chosen.
   sessionRail: boolean | null
   sidebarView: 'sessions' | 'coordinator' | null
+  /** What the session rail is painted: the window surface, or one of the strip fills. */
+  railFill: ViewSurfaceFill
   tabs: boolean | null
   tabOrientation: 'horizontal' | 'vertical' | null
   focusMode: boolean | null
@@ -148,7 +152,7 @@ const CARDS: ViewSpec = {
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
-  sessionRail: null, sidebarView: null, tabs: null, tabOrientation: null, focusMode: null, borders: null,
+  sessionRail: null, sidebarView: null, railFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null,
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
 }
@@ -334,6 +338,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
   { key: 'sidebarView', section: 'Panels', label: 'Rail opens on', help: 'Switch the rail to Sessions or Coordinator when entering the view.',
     options: [KEEP, { value: 'sessions', label: 'sessions' }, { value: 'coordinator', label: 'coordinator' }] },
+  { key: 'railFill', section: 'Panels', label: 'Rail fill', help: 'Behind the session rail: the window\'s surface, a step down from it, the app background, a step above the window, a wash of the accent, or darker than the background.',
+    options: [{ value: 'surface', label: 'surface' }, { value: 'blend', label: 'blend' }, { value: 'bg', label: 'background' }, { value: 'raised', label: 'raised' }, { value: 'tinted', label: 'tinted' }, { value: 'deep', label: 'deep' }] },
   { key: 'focusMode', section: 'Panels', label: 'Focus mode', help: 'Pin focus mode: rail and header chrome hidden.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
   { key: 'borders', section: 'Panels', label: 'Borders', help: 'Pin window borders drawn or hidden.',

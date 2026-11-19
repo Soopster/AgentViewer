@@ -378,7 +378,7 @@ import { runQuestionPickerPlan } from './app/derived/questionPicker'
 import { runFleetEntries } from './app/derived/fleet'
 import { runComposerKnobSegments, runComposerStatusBlockHeight } from './app/derived/composerStatus'
 import { runTranscriptCards, runBaseTranscriptCards } from './app/derived/transcriptCards'
-import { runTabOptions } from './app/derived/tabs'
+import { railThemeFor, runTabOptions } from './app/derived/tabs'
 import { runSidebarSessionActivity } from './app/derived/sidebar'
 import { useNavigationRefs } from './app/state/navigationRefs'
 import { useSessionCaches } from './app/state/sessionCaches'
@@ -998,6 +998,8 @@ function OpenTuiWorkspace() {
     themeMode, terminalPaletteEpoch, renderer, density, focusMode, fullscreenMode, railVisible,
     focusedPane, selectedSessionKey, sessions,
   })
+  // The rail's own palette: its surface is the view's rail fill.
+  const railTheme = useMemo(() => railThemeFor(theme, viewSpec.railFill), [theme, viewSpec.railFill])
   useEffect(() => {
     sessionsRef.current = sessions
     const byKey = new Map<string, Session>()
@@ -3732,12 +3734,12 @@ function OpenTuiWorkspace() {
     if (ids.length > 0) void requestCoordinatorRunGoals([...new Set(ids)])
   }, [sessions])
   const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => runBuildSidebarRow({
-    pinnedSessionKeys: sidebarPinnedKeys, toggleSessionPin: toggleSidebarPin, sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme, sidebarSessionActivity,
+    pinnedSessionKeys: sidebarPinnedKeys, toggleSessionPin: toggleSidebarPin, sessionInsightsOn, toggleDateGroup, coordinatorRunGoals, sidebarEntries, sidebarInnerWidth, firstSidebarEntryKey, theme: railTheme, sidebarSessionActivity,
     showProviderInSessionRows, selectSidebarSession, setSidebarSubagentCursor, isLiftedFromOtherSpace,
     setSubagentTranscriptSelection, setPluginOverlay, recentlyWrittenKeys, teamAttention, density,
     renameSessionKey, childrenByParentId, splitPaneActions, sessionDragHandlers, renameDraft,
     setRenameDraft, commitRename, toggleSidebarSubagents, collapsedSubagentSet,
-  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, theme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, isLiftedFromOtherSpace, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
+  }, entry, selected), [sidebarPinnedKeys, toggleSidebarPin, sessionInsightsOn, coordinatorRunGoals, collapsedSubagentSet, childrenByParentId, toggleSidebarSubagents, railTheme, density, sidebarInnerWidth, firstSidebarEntryKey, renameSessionKey, renameDraft, commitRename, selectSidebarSession, showProviderInSessionRows, isLiftedFromOtherSpace, sidebarSessionActivity, recentlyWrittenKeys, teamAttention, sessionDragHandlers, splitPaneActions])
 
 
   // Per-row element cache. Moving the selection highlight only changes TWO rows
@@ -3761,8 +3763,8 @@ function OpenTuiWorkspace() {
   // selected row beside it. Transcript windows do the same with theirs.
   const sidebarFocused = effectiveFocus === 'sessions'
   const sidebarScrollbarOptions = useMemo(
-    () => ({ trackOptions: { foregroundColor: sidebarFocused ? theme.border2 : theme.border, backgroundColor: theme.surface } }),
-    [sidebarFocused, theme.border2, theme.border, theme.surface],
+    () => ({ trackOptions: { foregroundColor: sidebarFocused ? theme.border2 : theme.border, backgroundColor: railTheme.surface } }),
+    [sidebarFocused, theme.border2, theme.border, railTheme.surface],
   )
   const transcriptScrollbarOptions = useMemo(
     () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
@@ -7053,21 +7055,22 @@ function OpenTuiWorkspace() {
       <WorkspaceBody isolatedView={engineeringLayout.active}
         onSidebarFocus={() => { setComposerActive(false); setFocusedPane('sessions') }}
         onSidebarViewChange={view => { setSidebarView(view); setComposerActive(false); setFocusedPane('sessions') }}
-        sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={theme} query={sessionSearchQuery} searchFocused={sessionSearchMode}
+        sidebarControls={<SidebarFilters onOpenMenu={setContextMenu} idPrefix="sidebar" theme={railTheme} query={sessionSearchQuery} searchFocused={sessionSearchMode}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onQuery={setSessionSearchQuery}
           onSubmit={() => { const first = sidebarEntries.map(sidebarEntrySession).find(Boolean); if (first) setSelectedSessionKey(sessionKey(first)); setSessionSearchMode(false) }}
           scope={allProjects ? 'all' : 'repo'} activity={sidebarActivity} onScope={scope => setAllProjects(scope === 'all')} onActivity={setSidebarActivity}
           tags={sidebarTags} tag={sidebarTag} onTag={setSidebarTag} includeWorktrees={includeWorktrees} onIncludeWorktrees={setIncludeWorktrees}
           liftAcrossSpaces={liftAcrossSpaces} onLiftAcrossSpaces={workspacesEnabled ? setLiftAcrossSpaces : undefined}
           />}
-        coordinatorControls={<CoordinatorFilters theme={theme} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
+        coordinatorControls={<CoordinatorFilters theme={railTheme} searchFocused={sessionSearchMode} onOpenMenu={setContextMenu}
           onSearchFocus={() => { setComposerActive(false); setFocusedPane('sessions'); setSessionSearchMode(true) }} onSubmit={() => setSessionSearchMode(false)} />}
-        sidebarStatus={<SidebarStatus theme={theme} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
+        sidebarStatus={<SidebarStatus theme={railTheme} count={sidebarCountLabel} note={sidebarFilterNote} onClearNote={() => { setSidebarTag(null); setSidebarActivity(null) }} />}
         onNewSession={openNewSessionModal}
         onOpenTabManager={tabManagerPluginOn ? openTabManagerFromStrip : undefined}
         surfacePanelAtBottom={surfacePanelAtBottom}
         mainContentHeight={mainContentHeight}
         theme={theme}
+        railTheme={railTheme}
         showRail={showRail}
         sidebarWidth={sidebarWidth}
         sidebarExtraRows={sidebarExtraRows}
