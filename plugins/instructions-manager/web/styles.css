@@ -1,0 +1,21 @@
+/* The app's unlayered reset takes precedence over Tailwind's spacing utilities. */
+[data-plugin-view="instructions-manager"] { padding: 12px; gap: 12px; container-type: inline-size; }
+[data-plugin-view="instructions-manager"] [data-slot="button"] { padding: 5px 10px; }
+[data-plugin-view="instructions-manager"] :is(input:not([type="checkbox"]), select, textarea) { padding: 8px; }
+[data-plugin-view="instructions-manager"] :is(pre, article) { padding: 10px; }
+[data-plugin-view="instructions-manager"] .border { border-color: var(--border); }
+[data-plugin-view="instructions-manager"] [aria-label="Instruction files"] [aria-pressed] { padding: 7px 9px; margin-bottom: 4px; border-color: var(--border); }
+[data-plugin-view="instructions-manager"] [aria-label="Instruction files"] [aria-pressed="true"] { border-color: var(--cyan); background: var(--surface-2); }
+[data-plugin-view="instructions-manager"] [data-slot="tabs-list"] { padding: 3px; gap: 4px; }
+[data-plugin-view="instructions-manager"] [role="tab"] { padding: 5px 9px; }
+[data-plugin-view="instructions-manager"] [role="tab"][data-state="active"] { background: var(--surface-3); }
+[data-plugin-view="instructions-manager"] [aria-label="Instruction editor"] textarea { margin-top: 8px; }
+[data-plugin-view="instructions-manager"] .instructions-columns { grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); }
+[data-plugin-view="instructions-manager"] .instructions-reader :is(h1, h2, h3) { margin: 12px 0 8px; }
+[data-plugin-view="instructions-manager"] .instructions-reader :is(p, ul, ol, pre, table) { margin: 8px 0; }
+[data-plugin-view="instructions-manager"] .instructions-reader :is(ul, ol) { padding-left: 20px; }
+[data-plugin-view="instructions-manager"] .instructions-reader :is(th, td) { padding: 8px; border-color: var(--border); }
+@container (max-width: 700px) {
+  [data-plugin-view="instructions-manager"] .instructions-columns { grid-template-columns: minmax(0, 1fr); }
+  [data-plugin-view="instructions-manager"] [aria-label="Instruction files"] > div { max-height: 200px; }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "pi-native-experience",
+  "description": "Improve the Pi provider: two parallel lanes (memory footprint, native integration parity) plus a dependent lead integration/verification task.",
+  "argsHint": "none",
+  "maxAgents": 4,
+  "gateCommand": "[ -d node_modules ] || npm install --silent --no-audit --no-fund >/dev/null 2>&1; npx tsc --noEmit",
+  "phases": [
+    {
+      "title": "Lanes",
+      "tasks": [
+        {
+          "key": "pi-memory",
+          "title": "Reduce Pi provider memory footprint",
+          "detail": "Audit and reduce the memory footprint of the Pi provider integration. Scope: lib/piClient.ts, lib/piMapper.ts, and any Pi-specific caches/pools they own. Context: the Pi SDK (@mariozechner/pi-coding-agent) is already lazy-loaded (saved ~86MB); there is single-flight AgentSession pooling with prewarm (cold open was ~19s); commit 70f5808 'Reduce Pi TUI memory retention' just landed — read it first (git show 70f5808) and continue that work, do not undo it. Steps: 1) Run npm install in your worktree. 2) Profile where Pi retains memory: pool entries, session caches, mapper accumulation, listener leaks on dispose; write a small Node script if useful. 3) Implement bounded/LRU retention for anything unbounded, ensure dispose() paths actually release AgentSessions and listeners, and avoid retaining full message arrays where the mapper only needs deltas. 4) Verify with npx tsc --noEmit (the completion gate runs it too) and publish before/after evidence (heap numbers or retained-object reasoning) via coord_publish_finding. Keep changes surgical. Do NOT touch lib/provider.ts or lib/sessionBackend.ts — the pi-native lane owns those; coord_send_message that lane if you find integration-level issues they should fix.",
+          "paths": ["lib/piClient.ts", "lib/piMapper.ts"]
+        },
+        {
+          "key": "pi-native",
+          "title": "Make Pi a native-feeling provider (capability + UX parity)",
+          "detail": "Close the gap between Pi and the best-integrated providers (Claude/Codex) so Pi feels native in AgentViewer. Steps: 1) Run npm install in your worktree. 2) Audit PI_CAPABILITIES in lib/provider.ts against what the Pi SDK actually supports (read node_modules/@mariozechner/pi-coding-agent typings): fork/rewind/delete/summarize/share/models/steering — find capabilities that are wrongly disabled or unimplemented backend ops in lib/sessionBackend.ts pi branches (grep \"provider === 'pi'\"). 3) Implement the highest-value gaps so web + TUI controls light up for Pi, prioritizing (a) session-action parity in lib/sessionBackend.ts, (b) composer affordances (model list, slash commands) matching what the pi CLI offers, (c) live status/reasoning polish (a pi_status channel already exists). 4) Do NOT edit lib/piClient.ts or lib/piMapper.ts — the pi-memory lane owns those; if you need a client-level change, coord_send_message the pi-memory lane and agree on who lands it. 5) Verify with npx tsc --noEmit (the completion gate runs it too) and publish every capability you enabled plus how to see it in the UI via coord_publish_finding. Note: Pi model access on this machine works via openai-codex/gpt-5.4 (ChatGPT OAuth); the anthropic key has no credits — relevant if you live-test.",
+          "paths": ["lib/provider.ts", "lib/sessionBackend.ts", "components/CommandPalette.tsx", "tui/opentui/App.tsx"]
+        }
+      ]
+    },
+    {
+      "title": "Integrate",
+      "tasks": [
+        {
+          "key": "integrate",
+          "role": "lead",
+          "title": "Lead: review, merge lanes, verify Pi end-to-end",
+          "detail": "Lead integration task (blocked until both lanes complete): review both lane diffs (their worktrees live under .agent-viewer-data/coord-worktrees/<runId>/), reconcile any cross-file assumptions, merge both lane branches into the main checkout, run npx tsc --noEmit and npm run tui:check on the merged result, and publish a synthesis of memory savings + native-experience improvements as a finding before completing. If review finds gaps, coord_create_task follow-ups instead of merging broken work.",
+          "dependsOn": ["pi-memory", "pi-native"]
+        }
+      ]
+    }
+  ]
+}

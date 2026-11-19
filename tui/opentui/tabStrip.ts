@@ -1,0 +1,72 @@
+import { fitText } from './textLayout'
+import type { ViewTabStyle } from '../viewSpec'
+import { NERD_FONT_ICONS } from './icons'
+
+/** Tab styles whose outer cells are painted with Nerd Font glyphs. */
+const TAB_SEGMENT_CAPS = {
+  powerline: { left: NERD_FONT_ICONS['powerline-start'], right: NERD_FONT_ICONS['powerline-end'], joined: true },
+  bubbles: { left: NERD_FONT_ICONS['bubble-start'], right: NERD_FONT_ICONS['bubble-end'], joined: false },
+} as const
+
+export function tabSegmentCaps(style: ViewTabStyle | 'standard' | undefined) {
+  return style === 'powerline' || style === 'bubbles' ? TAB_SEGMENT_CAPS[style] : null
+}
+
+export const HORIZONTAL_TAB_BAR_HEIGHT = 2
+
+const CLOSE_SUFFIX = ' ×'
+const NERD_CLOSE_SUFFIX = ` ${NERD_FONT_ICONS.error}`
+
+function tabCloseSuffix(name: string): string {
+  return name.endsWith(CLOSE_SUFFIX) ? CLOSE_SUFFIX : name.endsWith(NERD_CLOSE_SUFFIX) ? NERD_CLOSE_SUFFIX : ''
+}
+
+export function tabHasClose(name: string): boolean {
+  return tabCloseSuffix(name) !== ''
+}
+
+// Keep the activity cell inside the tab's text budget. Prepending it to an
+// already padded name makes tab-select truncate the close button at the end.
+// Only the selected tab is closable: an inactive one gives its × cells to the title.
+export function tabStripName(label: string, tabWidth: number, activity = '', closable = true, truncate: TabTruncate = 'end', closeIcon = '×'): string {
+  const suffix = closable ? ` ${closeIcon}` : ''
+  const budget = Math.max(1, tabWidth - 2 - suffix.length - (activity ? 2 : 0))
+  const fitted = truncate === 'middle' ? fitTextMiddle(label, budget) : fitText(label, budget)
+  return `${activity ? `${activity} ` : ''}${fitted}${suffix}`
+}
+
+export type TabTruncate = 'end' | 'middle'
+
+/** Cut a label in its middle, so a title's last words survive beside its folder. */
+export function fitTextMiddle(value: string, width: number): string {
+  if (width <= 0) return ''
+  if (value.length <= width) return value.padEnd(width, ' ')
+  if (width < 5) return fitText(value, width)
+  const head = Math.ceil((width - 1) / 2)
+  const tail = width - 1 - head
+  return `${value.slice(0, head).trimEnd()}…${value.slice(value.length - tail).trimStart()}`.padEnd(width, ' ')
+}
+
+/** A strip name's label, without its padding or close button. */
+export function tabStripLabel(name: string): string {
+  const suffix = tabCloseSuffix(name)
+  return (suffix ? name.slice(0, -suffix.length) : name).trimEnd()
+}
+
+export function tabStripActivity(name: string, tabWidth: number, activity: string, truncate: TabTruncate = 'end'): string {
+  const suffix = tabCloseSuffix(name)
+  return tabStripName(tabStripLabel(name), tabWidth, activity, Boolean(suffix), truncate, suffix.trim())
+}
+
+// The connected outline must finish before the window title controls.
+export function tabStripWidth(readerAreaWidth: number): number {
+  return Math.max(readerAreaWidth - 24, 1)
+}
+
+/** ` ▾ ` (the tab list) before the tabs and ` + ` (new session) after them, as Chrome's strip. */
+export const TAB_STRIP_BUTTON_WIDTH = 3
+
+/** The cells the tabs themselves share, once both strip buttons have theirs. */
+export function tabStripTabsWidth(readerAreaWidth: number): number {
+  return Math.max(tabStripWidth(readerAreaWidth) - 2 * TAB_STRIP_BUTTON_WIDTH, 1)
+}
