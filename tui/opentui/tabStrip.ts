@@ -1,6 +1,8 @@
 import { fitText } from './textLayout'
-import type { ViewTabStyle } from '../viewSpec'
+import type { ViewSpec, ViewTabStyle } from '../viewSpec'
 import { NERD_FONT_ICONS, SEGMENT_CAPS } from './icons'
+
+type ViewTabHover = ViewSpec['tabHover']
 
 /** Tab styles whose outer cells are painted with Nerd Font glyphs. */
 const TAB_SEGMENT_CAPS = {
@@ -15,7 +17,12 @@ export function tabSegmentCaps(style: ViewTabStyle | 'standard' | undefined) {
   return style && style in TAB_SEGMENT_CAPS ? TAB_SEGMENT_CAPS[style as keyof typeof TAB_SEGMENT_CAPS] : null
 }
 
-export const HORIZONTAL_TAB_BAR_HEIGHT = 2
+/** The strip's rows: the tabs, plus a row above them only for the styles that
+ * draw there — a raised tab's top edge, or a hover mark above the tab. */
+export function horizontalTabBarHeight(style: ViewTabStyle, hover: ViewTabHover): 1 | 2 {
+  if (style === 'chrome' || style === 'boxed' || style === 'windows') return 2
+  return hover === (tabSegmentCaps(style) ? 'underline' : 'raise') ? 2 : 1
+}
 
 const CLOSE_SUFFIX = ' ×'
 const NERD_CLOSE_SUFFIX = ` ${NERD_FONT_ICONS.error}`

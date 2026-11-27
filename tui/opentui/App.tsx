@@ -8,7 +8,7 @@ import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
 import { registerWindowBridge } from './windowControlBridge'
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
-import { tabStripName, tabStripActivity, tabStripWidth, HORIZONTAL_TAB_BAR_HEIGHT } from './tabStrip'
+import { tabStripName, tabStripActivity, tabStripWidth, horizontalTabBarHeight } from './tabStrip'
 import { panelSurfaceAvailability, RIGHT_PANEL_SURFACE_KINDS, surfaceKindLabel } from '../../lib/rightPanel'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
@@ -635,6 +635,7 @@ function OpenTuiWorkspace() {
   // A custom view may pin tool calls shown or hidden; X still toggles the global setting.
   const showToolCalls = viewSpec.showToolCalls ?? globalShowToolCalls
   const tabDisplay = viewTabDisplay(viewSpec)
+  const TAB_BAR_HEIGHT = horizontalTabBarHeight(tabDisplay.tabStyle, tabDisplay.tabHover)
   // The rail's tag chips: the most used tags across the provider's sessions.
   const sidebarTags = useMemo(() => popularSessionTags(sessions), [sessions])
   // The project's worktrees, read only while the rail is scoped to the project and includes them.
@@ -2103,6 +2104,7 @@ function OpenTuiWorkspace() {
     orderedWindowKeys, windowZoom,
   } = useComposerKeysTargetTurnGroup({
     accessoryRows: composerAccessoryRows,
+    tabBarHeight: TAB_BAR_HEIGHT,
     visibleComposerSending, reattachedRunning, visibleComposerError, visibleAwaitingPersistedTurn,
     embeddedComposer, activeQueuedComposerSends, visibleComposerLiveText, steeredSendNotice,
     pendingPermissions, questionFocusIndex, questionOptionIndex, height, workspacesEnabled,
@@ -2431,7 +2433,6 @@ function OpenTuiWorkspace() {
     verticalTabsWidth,
   })
   const showPreviewBar = false
-  const TAB_BAR_HEIGHT = HORIZONTAL_TAB_BAR_HEIGHT
   // SCROLLBACK has no card for these actions to apply to, and its own keys are
   // already in the status bar.
   const streamActionFooterRows = isChatLikeView && !isScrollbackView && !embeddedComposer && visibleTranscriptCards.length > 0 ? 1 : 0

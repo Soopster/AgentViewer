@@ -103,7 +103,7 @@ type WorkspaceBodyProps = {
   showHorizontalTabs: boolean
   /** Leading tabs of `visibleTabSessions` drawn on the dedicated pinned row, not in the strip. */
   pinnedRowCount: number
-  TAB_BAR_HEIGHT: 2
+  TAB_BAR_HEIGHT: number
   tabSelectRef: React.RefObject<TabSelectRenderable | null>
   tabWidth: number
   popoverTabAt: (x: number) => WindowSurfaceId | null
@@ -338,7 +338,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
             <box
               id="session-tab-strip"
               height={TAB_BAR_HEIGHT}
-              paddingTop={1}
+              paddingTop={TAB_BAR_HEIGHT - 1}
               flexShrink={0}
               flexDirection="row"
               paddingRight={1}

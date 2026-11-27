@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { presentationIndex, type WindowPresentation } from '../../windowPresentation'
 import { verticalTabRailWidth } from '../../VerticalTabs'
-import { HORIZONTAL_TAB_BAR_HEIGHT } from '../../tabStrip'
 import { useCallback, useMemo } from 'react'
 import { type FloatingRect } from '../../windowTabs'
 import { orderWindows, surfaceWindowKey } from '../../windowOrder'
@@ -69,6 +68,7 @@ export type UseComposerKeysTargetTurnGroupContext = {
   popoverTabs: string[]
   selectedSession: Session | null
   tabsEnabled: boolean
+  tabBarHeight: number
   tabOrientation: 'horizontal' | 'vertical'
   splitPinnedKeys: string[]
   selectedSessionKey: string | null
@@ -97,7 +97,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
     taskPanelExpanded, taskPanelWidth, surfacePanelWidth, openTabSessions, popoverTabs,
     selectedSession, tabsEnabled, tabOrientation, splitPinnedKeys, selectedSessionKey,
     splitOrientation, measuredWindowAreaHeight, splitPaneCount, windowOrder, windowSurfaces,
-    windowPresentation, floatingWindow, shownPopoverTab,
+    windowPresentation, floatingWindow, shownPopoverTab, tabBarHeight,
   } = ctx
 
   // What ⌃C and ⏎ actually do. The post-turn sync keeps the status row but
@@ -253,7 +253,7 @@ export function useComposerKeysTargetTurnGroup(ctx: UseComposerKeysTargetTurnGro
   // the strip cannot make the next measurement oscillate across a fit boundary.
   const windowBudgetHeight = measuredWindowAreaHeight > 0
     ? measuredWindowAreaHeight
-    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode && !verticalTabsWidth ? HORIZONTAL_TAB_BAR_HEIGHT : 0), 1)
+    : Math.max(mainContentHeight - (tabsEnabled && !fullscreenMode && !verticalTabsWidth ? tabBarHeight : 0), 1)
   const pinnedWindowSessions = splitPinnedSessions.slice(0, splitPaneCount)
   const sessionsByKey = new Map(pinnedWindowSessions.map((session) => [sessionKey(session), session]))
   const pinnedWindowKeys = pinnedWindowSessions.map(sessionKey)

@@ -192,7 +192,7 @@ export function SessionTabConnection(props: {
       const frame = current.readWindow()
       if (!frame || !frame.visible || tabs.getSelectedOption()?.value !== current.ownerKey) return
       const connection = tabConnectionGeometry(tabs, frame, selected, offset, tabWidth)
-      if (!connection || connection.left < 0 || connection.topY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
+      if (!connection || connection.left < 0 || connection.tabY < 0 || connection.borderY >= buffer.height || connection.borderEnd >= buffer.width) return
       // A covering overlay must not acquire a hole in its own border/content.
       const uncovered = buffer.withBuffers(cells => ['┌', '╭'].some(c => cells.char[frame.y * cells.width + frame.x] === c.codePointAt(0)))
       if (!uncovered) return
