@@ -20,5 +20,10 @@ export const manifest = {
   transcriptViews: [
     { id: 'nerd-font', name: 'Nerd Font', base: 'scrollback', overrides: { iconSet: 'nerd-font', tabStyle: 'pills' } },
     { id: 'powerline', name: 'Powerline', base: 'scrollback', overrides: { iconSet: 'powerline', tabStyle: 'powerline', tabAccent: 'active' } },
+    // After Oh My Posh's segment families: atomic/bubbles, blue-owl, slimfat, nu4a.
+    { id: 'diamond', name: 'Diamond', base: 'scrollback', overrides: { iconSet: 'diamond', tabStyle: 'bubbles', tabAccent: 'active' } },
+    { id: 'slanted', name: 'Slanted', base: 'scrollback', overrides: { iconSet: 'slant', tabStyle: 'slant', tabAccent: 'active' } },
+    { id: 'pixelated', name: 'Pixelated', base: 'scrollback', overrides: { iconSet: 'pixel', tabStyle: 'pixel', tabAccent: 'active' } },
+    { id: 'flame', name: 'Flame', base: 'scrollback', overrides: { iconSet: 'flame', tabStyle: 'flame', tabAccent: 'active' } },
   ],
 } as const satisfies PluginManifest

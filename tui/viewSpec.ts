@@ -17,7 +17,7 @@ export type ViewAgentCards = 'none' | 'operational' | 'all'
 export type ViewFoldDefault = 'default' | 'expand-all'
 export type ViewTurnBoundaries = 'rules' | 'summary-only' | 'gaps' | 'none'
 export type ViewMessageLayout = 'markers' | 'continuous'
-export type ViewIconSet = 'standard' | 'nerd-font' | 'powerline'
+export type ViewIconSet = 'standard' | 'nerd-font' | 'powerline' | 'diamond' | 'slant' | 'pixel' | 'flame'
 export type ViewPromptMarker = '❯' | '›' | '>' | '▸' | '$'
 /** `tone` picks the glyph from the reply's first line (● result, × error, ▲ system, • text) and lights the cursor card ❯. */
 export type ViewReplyMarker = 'tone' | '•' | '●' | '◦' | '·' | '▹'
@@ -28,7 +28,7 @@ export type ViewToolRows = 'default' | 'dim' | 'shell-bold' | 'dollar-shell'
 export type ViewTextWidth = 'measure' | 'full'
 export type ViewTranscriptWidth = 'readable' | 'centered' | 'full'
 export type ViewDiffLayout = 'stack' | 'split'
-export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows' | 'powerline' | 'bubbles'
+export type ViewTabStyle = 'chrome' | 'underline' | 'pills' | 'boxed' | 'minimal' | 'windows' | 'powerline' | 'bubbles' | 'slant' | 'pixel' | 'flame'
 export type ViewTabWidth = 'fill' | 'fit' | 'compact' | 'wide'
 /** A panel background: halfway to the window surface, the surface, the app background, raised, accent-tinted, or deep. */
 export type ViewSurfaceFill = 'blend' | 'surface' | 'bg' | 'raised' | 'tinted' | 'deep'
@@ -97,7 +97,7 @@ export type ViewSpec = {
   composerIconSet: ViewIconSet | null
   // Tabs: how the session tab strip draws.
   tabStyle: ViewTabStyle
-  workspaceTabStyle: 'standard' | 'powerline' | 'bubbles' | null
+  workspaceTabStyle: 'standard' | 'powerline' | 'bubbles' | 'slant' | 'pixel' | 'flame' | null
   tabIconSet: ViewIconSet | null
   tabWidth: ViewTabWidth
   tabClose: 'active' | 'all' | 'never'
@@ -250,7 +250,16 @@ const ON_OFF = [{ value: true, label: 'on' }, { value: false, label: 'off' }] as
 const INHERIT = { value: null, label: 'global' } as const
 const KEEP = { value: null, label: 'leave as is' } as const
 const BASIC_ICONS = [{ value: 'standard', label: 'Standard' }, { value: 'nerd-font', label: 'Nerd Font' }] as const
-const POWERLINE_ICONS = { value: 'powerline', label: 'Powerline' } as const
+// Segment families from Oh My Posh's themes (ohmyposh.dev/docs/themes).
+const SEGMENT_ICONS = [
+  { value: 'powerline', label: 'Powerline' },
+  { value: 'diamond', label: 'Diamond' },
+  { value: 'slant', label: 'Slanted' },
+  { value: 'pixel', label: 'Pixelated' },
+  { value: 'flame', label: 'Flame' },
+] as const
+const SEGMENT_TAB_STYLES = [{ value: 'powerline', label: 'Powerline' }, { value: 'bubbles', label: 'Bubbles' },
+  { value: 'slant', label: 'Slanted' }, { value: 'pixel', label: 'Pixelated' }, { value: 'flame', label: 'Flame' }] as const
 const AREA_ICONS = [{ value: null, label: 'inherit view' }, ...BASIC_ICONS] as const
 
 export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
@@ -326,7 +335,7 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'tabOrientation', section: 'Tabs', label: 'Tab layout', help: 'Pin tabs along the top or down the side.',
     options: [INHERIT, { value: 'horizontal', label: 'top' }, { value: 'vertical', label: 'side' }] },
   { key: 'tabStyle', section: 'Tabs', label: 'Tab style', help: 'Powerline joins tabs with angled edges. Bubbles gives every tab rounded ends. Both top-strip styles use Nerd Font Mono.',
-    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }, { value: 'windows', label: 'windows' }, { value: 'powerline', label: 'Powerline' }, { value: 'bubbles', label: 'Bubbles' }] },
+    options: [{ value: 'chrome', label: 'chrome' }, { value: 'underline', label: 'underline' }, { value: 'pills', label: 'pills' }, { value: 'boxed', label: 'boxed' }, { value: 'minimal', label: 'minimal' }, { value: 'windows', label: 'windows' }, ...SEGMENT_TAB_STYLES] },
   { key: 'tabWidth', section: 'Tabs', label: 'Tab width', help: 'Share the strip, fit the longest title, keep tabs narrow, or let them run wide.',
     options: [{ value: 'fill', label: 'fill' }, { value: 'fit', label: 'fit titles' }, { value: 'compact', label: 'compact' }, { value: 'wide', label: 'wide' }] },
   { key: 'tabClose', section: 'Tabs', label: 'Close buttons', help: 'A × on the active tab, on every tab, or on none (middle-click still closes).',
@@ -350,7 +359,7 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'tabTruncate', section: 'Tabs', label: 'Truncate', help: 'Cut a long title at its end, or in the middle so its last words stay.',
     options: [{ value: 'end', label: 'end' }, { value: 'middle', label: 'middle' }] },
   { key: 'workspaceTabStyle', section: 'Tabs', label: 'Workspace switcher', help: 'Use brackets, angled joins, rounded tabs, or follow the session strip’s Powerline or Bubbles style.',
-    options: [{ value: null, label: 'follow tabs' }, { value: 'standard', label: 'brackets' }, { value: 'powerline', label: 'Powerline' }, { value: 'bubbles', label: 'Bubbles' }] },
+    options: [{ value: null, label: 'follow tabs' }, { value: 'standard', label: 'brackets' }, ...SEGMENT_TAB_STYLES] },
   // Panels
   { key: 'sessionRail', section: 'Panels', label: 'Session rail', help: 'Pin the sessions rail shown or hidden while this view is on.',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
@@ -371,10 +380,10 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'sidePanelPlacement', section: 'Panels', label: 'Side panel at', help: 'Pin the side panel beside the reader or under it.',
     options: [INHERIT, { value: 'right', label: 'beside' }, { value: 'bottom', label: 'under' }] },
   // Icons
-  { key: 'iconSet', section: 'Icons', label: 'Icon set', help: 'Default for the whole view. Select a Nerd Font Mono in your terminal for Nerd Font or Powerline.',
-    options: [...BASIC_ICONS, POWERLINE_ICONS] },
-  { key: 'toolbarIconSet', section: 'Icons', label: 'Toolbar icons', help: 'Choose icons for the Omni Bar. Powerline also adds angled joins.',
-    options: [...AREA_ICONS, POWERLINE_ICONS] },
+  { key: 'iconSet', section: 'Icons', label: 'Icon set', help: 'Default for the whole view. Select a Nerd Font Mono in your terminal for anything but Standard. Powerline, Diamond, Slanted, Pixelated and Flame follow Oh My Posh themes (agnoster, atomic, blue-owl, slimfat, nu4a) and join toolbar segments with their separators.',
+    options: [...BASIC_ICONS, ...SEGMENT_ICONS] },
+  { key: 'toolbarIconSet', section: 'Icons', label: 'Toolbar icons', help: 'Choose icons for the Omni Bar. The segmented sets also join its segments.',
+    options: [...AREA_ICONS, ...SEGMENT_ICONS] },
   { key: 'tabIconSet', section: 'Icons', label: 'Tab icons', help: 'Choose the glyphs used for session-tab status and controls.', options: AREA_ICONS },
   { key: 'railIconSet', section: 'Icons', label: 'Rail icons', help: 'Choose icons for the session rail’s search and new-session controls.', options: AREA_ICONS },
   { key: 'transcriptIconSet', section: 'Icons', label: 'Transcript icons', help: 'Choose icons for automatic transcript markers.', options: AREA_ICONS },

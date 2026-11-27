@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } from '../../../lib/plugins/types'
 import type { GitSummary } from '../../../lib/gitProvider'
-import { fitText, MODAL_CONTENT_Z_INDEX, tuiIcon, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
+import { fitText, MODAL_CONTENT_Z_INDEX, iconSetSegmentCaps, tuiIcon, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
 import { availableActions, overviewSegments, runOmniAction } from '../model'
 import { moveLayoutItem, omniGlyph, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
 import { omniLayoutStore } from './storage'
@@ -37,7 +37,8 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
     return () => clearInterval(timer)
   }, [running, startedAt])
   if (!overview) return null
-  const powerline = overview.terminalIconSet === 'powerline'
+  const caps = iconSetSegmentCaps(overview.terminalIconSet)
+  const powerline = caps !== null
   const segments = overviewSegments(overview.snapshot, gitState?.cwd === cwd ? gitState.summary : null, width, now, overview.commands?.ids, layout,
     id => tuiIcon(overview.terminalIconSet, id, omniGlyph(id)))
   // Keep attention and command access intact; the repository/activity share the rest.
@@ -63,7 +64,7 @@ export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); runOmniAction(overview, segment.action) } }}>
         <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' || hovered === segment.action ? theme.cyan : theme.text} wrapMode="none" selectable={false}>
           {cells > 1 && powerline && backgrounds[index] !== (backgrounds[index + 1] ?? theme.surface2)
-            ? <>{fitText(` ${segment.text}`, cells - 1)}<span fg={backgrounds[index]} bg={backgrounds[index + 1] ?? theme.surface2}>{tuiIcon(overview.terminalIconSet, 'powerline-end', ' ')}</span></>
+            ? <>{fitText(` ${segment.text}`, cells - 1)}<span fg={backgrounds[index]} bg={backgrounds[index + 1] ?? theme.surface2}>{caps?.right ?? ' '}</span></>
             : fitText(` ${segment.text} `, cells)}
         </text>
       </box>

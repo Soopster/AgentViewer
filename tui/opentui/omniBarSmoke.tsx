@@ -122,6 +122,12 @@ try {
     assert.equal(actions.at(-1), 'commands')
     assert.equal(screen().split('\n').findIndex(row => row.includes('Existing pinned prompt')), 1)
   }
+  for (const [iconSet, glyph] of [['diamond', 'bubble-end'], ['slant', 'slant-end'], ['pixel', 'pixel-end'], ['flame', 'flame-end']] as const) {
+    await act(async () => { update('/new-project', 160, true, iconSet) })
+    await settle()
+    assert(screen().includes(NERD_FONT_ICONS[glyph]), `${iconSet} did not paint its segment boundary`)
+    assert(screen().includes(`${NERD_FONT_ICONS.commands} Commands…`), `${iconSet} did not use Nerd Font icons`)
+  }
   await act(async () => { update('/no-git', 160) })
   await settle()
   assert(screen().includes('no-git') && !screen().includes('fresh-branch'), 'non-Git workspace retained another repository status')

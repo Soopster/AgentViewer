@@ -4,14 +4,14 @@ import { createRef } from 'react'
 import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
 import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
 import { act, testRender } from './testRender'
-import { fitTextMiddle, tabHasClose, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
+import { fitTextMiddle, tabHasClose, tabSegmentCaps, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 import { NERD_FONT_ICONS } from './icons'
 
 const nerdClose = tabStripActivity(tabStripName('A long title', 10, '', true, 'end', NERD_FONT_ICONS.error), 10, '●')
 assert.ok(tabHasClose(nerdClose))
 assert.equal(nerdClose[7], NERD_FONT_ICONS.error, 'activity preserves the selected icon at the close target')
 
-for (const style of ['powerline', 'bubbles'] as const) {
+for (const style of ['powerline', 'bubbles', 'slant', 'pixel', 'flame'] as const) {
   const tabs = createRef<TabSelectRenderable>()
   const options = ['Long first title', '中文', 'Third title'].map((label, i) => ({
     name: tabStripName(label, 10, '', i === 0), value: String(i), description: '',
@@ -27,13 +27,14 @@ for (const style of ['powerline', 'bubbles'] as const) {
   </box>, { width: 37, height: 5 })
   try {
     await setup.flush()
-    const leading = NERD_FONT_ICONS[style === 'powerline' ? 'powerline-start' : 'bubble-start']
-    const trailing = NERD_FONT_ICONS[style === 'powerline' ? 'powerline-end' : 'bubble-end']
+    const caps = tabSegmentCaps(style)!
+    const leading = caps.left
+    const trailing = caps.right
     const row = setup.captureCharFrame().split('\n')[0]!
     assert.equal(row[0], leading)
     assert.equal(row[8], '×', 'the close target keeps its column')
     assert.equal(row[9], trailing)
-    assert.equal(row[10], style === 'powerline' ? ' ' : leading)
+    assert.equal(row[10], caps.joined ? ' ' : leading)
     assert.ok(row.includes('中文'))
     assert.ok(row.trimEnd().endsWith('›'), 'the overflow arrow stays visible')
     assert.ok(setup.captureCharFrame().split('\n')[1]?.includes('Transcript border'))

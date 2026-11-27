@@ -7,7 +7,7 @@ export {
 } from '../../viewSpec'
 export { registerTabPaintOccluder, type TabPaintOccluder } from '../SessionTabConnection'
 export { WindowButton } from '../WindowButton'
-export { tuiIcon } from '../icons'
+export { iconSetSegmentCaps, tuiIcon } from '../icons'
 export { tabSegmentCaps } from '../tabStrip'
 export { mixHexColor } from '../app/transcriptStyle'
 export { TranscriptCard, type TranscriptCardProps } from '../app/TranscriptCard'

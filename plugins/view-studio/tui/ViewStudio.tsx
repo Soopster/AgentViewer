@@ -11,7 +11,7 @@ import {
   BUILTIN_VIEW_SPECS, CUSTOM_VIEW_NAME_MAX, EMPTY_EXPANDED_KEYS, IDLE_TICKER_PHRASES, TRANSCRIPT_VIEW_LABELS, TranscriptCard, VIEW_SPEC_BASES,
   VIEW_SPEC_FIELDS, VIEW_SPEC_SECTIONS, WindowButton, buildThreadedMessages, computeAllLandmarks, customViewSpec, cycleViewSpecValue, densityConfig,
   formatTranscriptCards, railFillColor, registerTabPaintOccluder, renderedBodyLines, streamCompletedTurnHint, streamLandmarkText, transcriptAccent,
-  mixHexColor, tabSegmentCaps, tuiIcon, usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
+  mixHexColor, tabSegmentCaps, tuiIcon, iconSetSegmentCaps, usesAgentCardPresentation, viewCardStyle, viewQuietTurns, viewSpecField, viewSpecValueLabel, visibleCardsForTranscriptView,
   type CustomView, type SessionMessage, type TabPaintOccluder, type TranscriptCardProps, type TuiDensity, type TuiThemePalette,
   type ViewSpec, type ViewSpecField, type ViewSpecKey,
 } from '../../../tui/opentui/shell/sdkViews'
@@ -358,6 +358,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
   const hint = useMemo(() => spec.completedTurnHint ? streamCompletedTurnHint(visibleCardsForTranscriptView(specimenSource(), spec)) : null, [spec])
   const sideLabel = sidePanel ? (viewSpecField('sidePanel')?.options.find((option) => option.value === sidePanel)?.label ?? sidePanel) : ''
   const toolbarIcons = spec.toolbarIconSet ?? spec.iconSet
+  const toolbarCaps = iconSetSegmentCaps(toolbarIcons)
   const railIcons = spec.railIconSet ?? spec.iconSet
   const composerIcons = spec.composerIconSet ?? spec.iconSet
   const composerRow = <text fg={theme.muted} wrapMode="none">{`${tuiIcon(composerIcons, 'prompt', '›')} `}<span fg={theme.dim}>Ask about this session…</span></text>
@@ -371,8 +372,8 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
     <box flexDirection="column">
       {marked('icons') ? <MockRow theme={theme} marked>
         <text id="view-studio-icon-sample" fg={theme.text} wrapMode="none">
-          <span bg={toolbarIcons === 'powerline' ? theme.surface3 : undefined}>{` ${tuiIcon(toolbarIcons, 'repository', '⎇')} Git `}</span>
-          {toolbarIcons === 'powerline' ? <span fg={theme.surface3}>{tuiIcon(toolbarIcons, 'powerline-end', ' ')}</span> : null}
+          <span bg={toolbarCaps ? theme.surface3 : undefined}>{` ${tuiIcon(toolbarIcons, 'repository', '⎇')} Git `}</span>
+          {toolbarCaps ? <span fg={theme.surface3}>{toolbarCaps.right}</span> : null}
           {` ${tuiIcon(toolbarIcons, 'files', '▤')} Files`}
         </text>
       </MockRow> : null}

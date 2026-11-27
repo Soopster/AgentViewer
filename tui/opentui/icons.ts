@@ -39,10 +39,36 @@ export const NERD_FONT_ICONS = {
   'powerline-start': '\ue0b2',
   'bubble-start': '\ue0b6',
   'bubble-end': '\ue0b4',
+  'slant-start': '\ue0ba',
+  'slant-end': '\ue0bc',
+  'pixel-start': '\ue0c7',
+  'pixel-end': '\ue0c6',
+  'flame-start': '\ue0c2',
+  'flame-end': '\ue0c0',
 } as const
 
+/**
+ * Segment separators, one family per Oh My Posh theme style: agnoster's arrows,
+ * atomic/bubbles' diamonds, blue-owl's slants, slimfat's pixels and nu4a's flames.
+ * `joined` segments butt against each other; a diamond is capped on both sides.
+ */
+export const SEGMENT_CAPS = {
+  powerline: { left: NERD_FONT_ICONS['powerline-start'], right: NERD_FONT_ICONS['powerline-end'], joined: true },
+  diamond: { left: NERD_FONT_ICONS['bubble-start'], right: NERD_FONT_ICONS['bubble-end'], joined: false },
+  slant: { left: NERD_FONT_ICONS['slant-start'], right: NERD_FONT_ICONS['slant-end'], joined: true },
+  pixel: { left: NERD_FONT_ICONS['pixel-start'], right: NERD_FONT_ICONS['pixel-end'], joined: true },
+  flame: { left: NERD_FONT_ICONS['flame-start'], right: NERD_FONT_ICONS['flame-end'], joined: true },
+} as const
+
+export type SegmentCaps = typeof SEGMENT_CAPS[keyof typeof SEGMENT_CAPS]
+
+/** The separators an icon set draws between toolbar segments, or null for a flat set. */
+export function iconSetSegmentCaps(iconSet: ViewIconSet | undefined): SegmentCaps | null {
+  return iconSet && iconSet in SEGMENT_CAPS ? SEGMENT_CAPS[iconSet as keyof typeof SEGMENT_CAPS] : null
+}
+
 export function tuiIcon(iconSet: ViewIconSet | undefined, name: keyof typeof NERD_FONT_ICONS, fallback: string): string {
-  return iconSet === 'nerd-font' || iconSet === 'powerline' ? NERD_FONT_ICONS[name] : fallback
+  return iconSet && iconSet !== 'standard' ? NERD_FONT_ICONS[name] : fallback
 }
 
 const CONTROL_ICONS: Readonly<Partial<Record<string, keyof typeof NERD_FONT_ICONS>>> = {

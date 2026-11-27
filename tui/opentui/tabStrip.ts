@@ -1,15 +1,18 @@
 import { fitText } from './textLayout'
 import type { ViewTabStyle } from '../viewSpec'
-import { NERD_FONT_ICONS } from './icons'
+import { NERD_FONT_ICONS, SEGMENT_CAPS } from './icons'
 
 /** Tab styles whose outer cells are painted with Nerd Font glyphs. */
 const TAB_SEGMENT_CAPS = {
-  powerline: { left: NERD_FONT_ICONS['powerline-start'], right: NERD_FONT_ICONS['powerline-end'], joined: true },
-  bubbles: { left: NERD_FONT_ICONS['bubble-start'], right: NERD_FONT_ICONS['bubble-end'], joined: false },
+  powerline: SEGMENT_CAPS.powerline,
+  bubbles: SEGMENT_CAPS.diamond,
+  slant: SEGMENT_CAPS.slant,
+  pixel: SEGMENT_CAPS.pixel,
+  flame: SEGMENT_CAPS.flame,
 } as const
 
 export function tabSegmentCaps(style: ViewTabStyle | 'standard' | undefined) {
-  return style === 'powerline' || style === 'bubbles' ? TAB_SEGMENT_CAPS[style] : null
+  return style && style in TAB_SEGMENT_CAPS ? TAB_SEGMENT_CAPS[style as keyof typeof TAB_SEGMENT_CAPS] : null
 }
 
 export const HORIZONTAL_TAB_BAR_HEIGHT = 2
