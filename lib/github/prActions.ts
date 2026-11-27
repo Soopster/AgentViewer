@@ -2,6 +2,7 @@
 // reviewers and labels. Review itself (comments, approvals) stays in lib/githubPr.ts.
 import { execFile } from 'node:child_process'
 import { invalidateGithubCache } from './cache'
+import { githubRepoFlags } from './links'
 import { flagValue, ghFailure, parseJson, runGh, type GhResult } from './ghRunner'
 import { scrubGithubText } from './text'
 import type { GithubPrAction } from './types'
@@ -73,11 +74,13 @@ export async function runGithubPrAction(cwd: string, request: GithubPrAction): P
     }
     case 'merge': {
       assertNumber(request.number)
-      const view = await runGh(cwd, ['pr', 'view', String(request.number), '--json', 'state,isDraft,mergeable,reviewDecision,statusCheckRollup'])
+      // The readiness check and the merge must name the same repository.
+      const repoFlags = githubRepoFlags(request.repo)
+      const view = await runGh(cwd, ['pr', 'view', String(request.number), ...repoFlags, '--json', 'state,isDraft,mergeable,reviewDecision,statusCheckRollup'])
       if (view.code !== 0) throw ghFailure(view, `Unable to read pull request #${request.number}.`)
       const readiness = assessMerge(parseJson<Record<string, unknown>>(view.stdout, {}), request.auto === true)
       if (!readiness.ok) throw new Error(`Not merging #${request.number}: ${readiness.reasons.join('; ')}.`)
-      const args = ['pr', 'merge', String(request.number), `--${request.method}`]
+      const args = ['pr', 'merge', String(request.number), ...repoFlags, `--${request.method}`]
       if (request.auto) args.push('--auto')
       if (request.deleteBranch) args.push('--delete-branch')
       result = await runGh(cwd, args)
@@ -85,7 +88,7 @@ export async function runGithubPrAction(cwd: string, request: GithubPrAction): P
     }
     case 'ready':
       assertNumber(request.number)
-      result = await runGh(cwd, request.ready ? ['pr', 'ready', String(request.number)] : ['pr', 'ready', String(request.number), '--undo'])
+      result = await runGh(cwd, ['pr', 'ready', String(request.number), ...githubRepoFlags(request.repo), ...(request.ready ? [] : ['--undo'])])
       break
     case 'checkout': {
       assertNumber(request.number)

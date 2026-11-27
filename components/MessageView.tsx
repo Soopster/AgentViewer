@@ -134,6 +134,7 @@ import { webSchedules } from './shell/schedulesService'
 import { ComposerShell } from './message-view/ComposerShell'
 import { CollapsedComposerBar } from './message-view/CollapsedComposerBar'
 import { TimelineBody } from './message-view/TimelineBody'
+import { SessionPrBar } from './github/SessionPrBar'
 import { MessageViewTopBar } from './message-view/MessageViewTopBar'
 import { runSendMessage } from './message-view/actions/sendMessage'
 import { runHandleKeyDown, runCancelSend, runIngestFileAttachments, runPrewarmComposer, runInsertMention, runInsertPromptText } from './message-view/actions/composer'
@@ -2226,6 +2227,15 @@ function MessageViewInner({
         scrollTimelineToBottom={scrollTimelineToBottom}
         readerAccessories={<ReaderPluginHost key={readerOwner} binding={readerPlugins} sessionKey={readerOwner} services={sessionPluginServices} visible={!maximized} />}
       />
+
+      {!maximized && !isProject && session && (
+        <SessionPrBar
+          session={session}
+          messages={threadedFull}
+          onAskAgent={insertPromptText}
+          onOpenReview={() => { dispatchPluginCommand('pull-requests') }}
+        />
+      )}
 
       {/* ── Message input (single session only) ──────── */}
       <CollapsedComposerBar

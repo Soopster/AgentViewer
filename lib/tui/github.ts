@@ -88,9 +88,9 @@ export async function readTuiGithubPrs(cwd: string, filters: GithubPrFilters = {
   return (await import('../github/prs')).fetchGithubPrs(cwd, filters)
 }
 
-export async function readTuiGithubPr(cwd: string, number: number): Promise<GithubPrDetail> {
-  if (isRemoteAttached()) return (await remoteJson<{ pr: GithubPrDetail }>(`/api/github/prs?${query({ cwd, number })}`)).pr
-  return (await import('../github/prs')).fetchGithubPr(cwd, number)
+export async function readTuiGithubPr(cwd: string, number: number, repo?: string): Promise<GithubPrDetail> {
+  if (isRemoteAttached()) return (await remoteJson<{ pr: GithubPrDetail }>(`/api/github/prs?${query({ cwd, number, repo })}`)).pr
+  return (await import('../github/prs')).fetchGithubPr(cwd, number, repo)
 }
 
 export async function readTuiGithubReleases(cwd: string): Promise<GithubRelease[]> {

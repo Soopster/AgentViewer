@@ -2932,6 +2932,27 @@ share `lib/github/*`; the TUI reaches it through `lib/tui/github.ts` (attached �
 
 `npm run github:smoke` (fake `gh` on PATH; guards verified by mutation) and `tui/opentui/githubPopoverSmoke.tsx`.
 
+### GitHub in the transcript and on the session (load-bearing)
+
+Modelled on T3 Code. `lib/github/activity.ts` turns `gh`, `git commit`/`push` and GitHub MCP calls into `GithubActivity`
+("Opened pull request #12"); the Web card (`components/github/GithubActivityCard.tsx`, wrapping the native card, which stays
+behind "command & output"), the TUI card (`tui/format/github.ts`) and PR auto-linking all read it.
+
+- **Commands are tokenized, never regex-matched on the raw string**: quoted text, heredoc bodies and `grep "git commit"` are not calls.
+- **Output is read only where its shape is fixed** (gh's non-TTY TSV and `key:\t` forms, `--json`, git's summaries). TSV is
+  tab-separated, so the TUI passes unsanitized output; the parser scrubs what it keeps. `gh pr checks` exiting non-zero with rows is an answer, not a failure.
+- **A chain has one exit status**: a failure is pinned on the last GitHub step; a commit that left its `[branch sha]` line did not fail.
+- **Link chips fetch only on hover/focus** (`/api/github/link`, `gh pr view <url>`); the hover card is portalled because virtual rows are transformed.
+  `#12`/sha autolinks (`lib/github/autolink.ts`) need the checkout's `origin` and never touch code or authored links.
+- **The session PR is the newest successful `pr-create`** in its transcript (`findSessionPullRequest`), linked with
+  `auto-link-pr`: only onto a session with none, never one in `declinedPrUrls` (filled by unlink).
+- **Reads, ready and merge always name the linked repository** (`githubRepoArgument` → `--repo`): a bare number answers for the checkout's repository.
+- **One next-step rule for both UIs** (`resolvePrNextAction`): conflicts → failing checks → review → draft → merge; no merge while checks run.
+  Handoffs only fill the composer, with GitHub text quoted and labelled as data. TUI: window bottom border (`SessionPrStrip`), session menu, palette.
+
+`scripts/githubTranscriptSmoke.ts` (in `github:smoke`) and `tui/opentui/sessionPrSmoke.tsx`. Not done: T3's "watch a PR and wake the agent",
+PR stacks, and a live TUI check against a real open pull request.
+
 ### Local data
 
 `.agent-viewer-data/` (gitignored) stores per-provider local-only state: tags, title overrides, selected provider. Do not commit it; do not expect it to exist on first run.

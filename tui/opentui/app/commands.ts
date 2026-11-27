@@ -32,6 +32,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'search', label: 'Search messages', key: '/', category: 'Transcript' },
   { id: 'session-search', label: 'Search sessions', key: '/', category: 'Session' },
   { id: 'next-attention', label: 'Jump to next attention item', key: '⌃N', category: 'Session' },
+  { id: 'pr-next-step', label: 'Pull request: do the next step (fix checks, conflicts, review)', key: '', category: 'Session' },
   { id: 'search-prev', label: 'Previous search match', key: '⇧N', category: 'Transcript' },
   { id: 'search-next', label: 'Next search match', key: 'n', category: 'Transcript' },
   { id: 'conversation-prev', label: 'Previous conversation card', key: '(', category: 'Transcript' },

@@ -1,6 +1,7 @@
 import { checkDigest } from './format/checkDigest'
 import { isScratchDir, SCRATCH_PROJECT_LABEL } from '../lib/scratchPaths'
 import { formatRegisteredToolExpanded, formatRegisteredToolPreview } from './format/registry'
+import { formatGithubTool } from './format/github'
 import { summarizeKind, normalizeUnifiedDiff, previewDiff, previewFileChange, synthesizeEditDiff } from './format/diffs'
 import { extractMarkdownContent, extractCodeBlocksFromBlocks } from './format/code'
 import { formatAskUserQuestionTool } from './format/questions'
@@ -278,6 +279,12 @@ function resultLineCount(thread: ToolThread): number {
   return raw.split('\n').filter((entry) => entry.trim().length > 0).length
 }
 
+function githubToolLines(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] | null {
+  const command = thread.toolUse.name === 'Bash' ? toolStringParam(toolInputRecord(thread), ['command', 'cmd', 'script']) ?? undefined : undefined
+  // Not sanitized here: gh's tables are tab-separated, and the parser scrubs what it keeps.
+  return formatGithubTool(thread, expanded, command, resultRawTextOf(thread) ?? '')
+}
+
 function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   const normalizedThread = normalizeToolThreadForTui(thread)
   const toolName = normalizedThread.toolUse.name
@@ -287,6 +294,9 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 
   const coordinatorLines = formatCoordinatorTool(normalizedThread, false)
   if (coordinatorLines) return coordinatorLines
+
+  const githubLines = githubToolLines(normalizedThread, false)
+  if (githubLines) return githubLines
 
   if (toolName === 'FileChange') {
     return previewFileChange(normalizedThread)
@@ -745,7 +755,9 @@ function compactCardLines(lines: TuiTranscriptCardLine[], density: TuiDensity): 
 }
 
 function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
-  return compactPreviewLines(lines, 2, 'Technical activity', 'muted')
+  // A GitHub card's outcome (the verdict, failing checks, the URL) is the point of it; two lines would hide all three.
+  const limit = lines[0]?.text.startsWith('tool GitHub:') ? 7 : 2
+  return compactPreviewLines(lines, limit, 'Technical activity', 'muted')
 }
 
 function compactMermaidLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
@@ -1143,6 +1155,9 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
 
       const coordinatorLines = formatCoordinatorTool(normalizedBlock, true)
       if (coordinatorLines) return coordinatorLines
+
+      const githubLines = githubToolLines(normalizedBlock, true)
+      if (githubLines) return githubLines
 
       if (TASK_TOOL_NAMES.has(toolName)) {
         return formatTaskTool(normalizedBlock, true, activeForms, taskRegistry)

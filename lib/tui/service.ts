@@ -10,7 +10,7 @@ import { withSessionInstance } from '../sessionInstances'
 import { getConfiguredProvider, getConfiguredProviderTarget, setConfiguredProviderTarget } from '../providerState'
 import { peekClaudePlanLimits, readClaudePlanLimits, type ClaudePlanLimits } from '../claudePlanLimits'
 import { updateSessionInboxState } from '../sessionInbox'
-import type { SessionInboxState } from '../types'
+import type { LinkedPullRequest, SessionInboxState } from '../types'
 import {
   getConfiguredTuiDensity,
   getConfiguredTuiDiffLayout,
@@ -522,17 +522,18 @@ export async function writeTuiShowSettledSessions(show: boolean): Promise<void> 
  */
 export async function updateTuiSessionInbox(
   session: Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'>,
-  action: 'settle' | 'reopen' | 'seen' | 'pin' | 'unpin' | 'snooze' | 'unsnooze' | 'unlink-pr',
+  action: 'settle' | 'reopen' | 'seen' | 'pin' | 'unpin' | 'snooze' | 'unsnooze' | 'auto-link-pr' | 'unlink-pr',
+  linkedPr?: LinkedPullRequest,
 ): Promise<SessionInboxState> {
   const provider = session.provider ?? 'claude'
   if (isRemoteAttached()) {
     const result = await remoteJson<{ inbox: SessionInboxState }>(encodeSessionPath(session.sessionId, '/inbox'), {
       method: 'POST',
-      body: JSON.stringify({ provider, action, ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}) }),
+      body: JSON.stringify({ provider, action, ...(linkedPr ? { linkedPr } : {}), ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}) }),
     })
     return result.inbox
   }
-  return updateSessionInboxState({ provider, sessionId: session.sessionId, providerInstanceId: session.providerInstanceId, action })
+  return updateSessionInboxState({ provider, sessionId: session.sessionId, providerInstanceId: session.providerInstanceId, action, linkedPr })
 }
 
 export type { TuiDiffLayout, TuiSidebarSort, TuiTranscriptWidth }

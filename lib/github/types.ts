@@ -102,8 +102,8 @@ export type GithubMergeMethod = 'merge' | 'squash' | 'rebase'
 
 export type GithubPrAction =
   | { action: 'create'; title: string; body?: string; base?: string; draft?: boolean }
-  | { action: 'merge'; number: number; method: GithubMergeMethod; auto?: boolean; deleteBranch?: boolean }
-  | { action: 'ready'; number: number; ready: boolean }
+  | { action: 'merge'; number: number; method: GithubMergeMethod; auto?: boolean; deleteBranch?: boolean; repo?: string }
+  | { action: 'ready'; number: number; ready: boolean; repo?: string }
   | { action: 'checkout'; number: number }
   | { action: 'close'; number: number }
   | { action: 'reopen'; number: number }
@@ -218,3 +218,23 @@ export type GithubSecurity = {
 // --- Workflows ---------------------------------------------------------------------
 export type GithubWorkflow = { id: number; name: string; state: string; path: string }
 export type GithubWorkflowDispatch = { workflow: string; ref?: string; inputs?: Record<string, string> }
+
+// --- Links in the transcript -----------------------------------------------------
+export type GithubRepoRef = { host: string; repo: string }
+export type GithubLinkPreview = {
+  kind: 'pr' | 'issue'
+  repo: string
+  number: number
+  title: string
+  state: string
+  isDraft: boolean
+  url: string
+  author: string
+  createdAt: string
+  additions?: number
+  deletions?: number
+  headRefName?: string
+  baseRefName?: string
+  reviewDecision?: string
+  checks?: GithubPrSummary['checks']
+}

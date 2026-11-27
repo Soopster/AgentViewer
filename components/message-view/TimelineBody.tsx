@@ -1,3 +1,4 @@
+import { GithubRepoProvider } from '../github/repoContext'
 import type { Session } from '../../lib/types'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
@@ -450,6 +451,7 @@ export function TimelineBody(props: TimelineBodyProps) {
                 marginInline: timelineWidth === 'centered' ? 'auto' : undefined,
               }}
             >
+              <GithubRepoProvider cwd={session?.cwd}>
               <MessageDensityProvider session={session ?? undefined} density={density} onOpenSession={onOpenSession} turnDurations={turnDurations}>
               <ViewModeProvider mode={viewMode}>
               <DiffStyleProvider diffStyle={diffStyle}>
@@ -467,6 +469,7 @@ export function TimelineBody(props: TimelineBodyProps) {
               </DiffStyleProvider>
               </ViewModeProvider>
               </MessageDensityProvider>
+              </GithubRepoProvider>
             </div>
           </div>
         )}

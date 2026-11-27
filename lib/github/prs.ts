@@ -3,6 +3,7 @@
 // lib/githubPr.ts / the pull-requests plugin). Reads are cached; mutations live
 // in prActions.ts and invalidate this module's keys.
 import { cachedGithubRead, githubCacheKey } from './cache'
+import { githubRepoFlags } from './links'
 import { ghFailure, parseJson, runGh } from './ghRunner'
 import { fetchGithubRepoOverview } from './repo'
 import { toIssueComment } from './issues'
@@ -94,20 +95,24 @@ export function toThread(raw: Record<string, unknown>): GithubPrThread {
   }
 }
 
-async function readThreads(cwd: string, number: number): Promise<GithubPrThread[]> {
-  const { repo } = await fetchGithubRepoOverview(cwd)
-  const [owner, name] = repo.split('/')
-  const result = await runGh(cwd, ['api', 'graphql', '-f', `query=${THREADS_QUERY}`, '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `number=${number}`])
+async function readThreads(cwd: string, number: number, repoArgument?: string): Promise<GithubPrThread[]> {
+  const segments = repoArgument?.split('/') ?? (await fetchGithubRepoOverview(cwd)).repo.split('/')
+  const [owner, name] = segments.slice(-2)
+  const host = segments.length > 2 ? ['--hostname', segments[0]!] : []
+  const result = await runGh(cwd, ['api', 'graphql', ...host, '-f', `query=${THREADS_QUERY}`, '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `number=${number}`])
   // Threads are an enrichment; the summary is still useful without them.
   if (result.code !== 0) return []
   const parsed = parseJson<{ data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: Array<Record<string, unknown>> } } } } }>(result.stdout, {})
   return (parsed.data?.repository?.pullRequest?.reviewThreads?.nodes ?? []).map(toThread)
 }
 
-export function fetchGithubPr(cwd: string, number: number): Promise<GithubPrDetail> {
+/** `repo` names another repository (a fork's upstream, a sibling); without it the number is the checkout's. */
+export function fetchGithubPr(cwd: string, number: number, repo?: string): Promise<GithubPrDetail> {
   if (!Number.isInteger(number) || number < 1) return Promise.reject(new Error('Invalid pull request number.'))
-  return cachedGithubRead(githubCacheKey(cwd, 'prs', 'view', number), PRS_TTL_MS, async () => {
-    const [view, threads] = await Promise.all([runGh(cwd, ['pr', 'view', String(number), '--json', DETAIL_FIELDS]), readThreads(cwd, number)])
+  let repoFlags: string[]
+  try { repoFlags = githubRepoFlags(repo) } catch (error) { return Promise.reject(error) }
+  return cachedGithubRead(githubCacheKey(cwd, 'prs', 'view', number, repo ?? ''), PRS_TTL_MS, async () => {
+    const [view, threads] = await Promise.all([runGh(cwd, ['pr', 'view', String(number), ...repoFlags, '--json', DETAIL_FIELDS]), readThreads(cwd, number, repo)])
     if (view.code !== 0) throw ghFailure(view, `Unable to read pull request #${number}.`)
     const raw = parseJson<Record<string, unknown>>(view.stdout, {})
     const rollup = Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup as Array<Record<string, unknown>> : []

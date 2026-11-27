@@ -167,7 +167,7 @@ export async function recordLinkedPullRequestState(args: {
   return { settled }
 }
 
-export type SessionInboxAction = 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'seen' | 'link-pr' | 'unlink-pr'
+export type SessionInboxAction = 'pin' | 'unpin' | 'settle' | 'reopen' | 'snooze' | 'unsnooze' | 'seen' | 'link-pr' | 'auto-link-pr' | 'unlink-pr'
 
 export async function updateSessionInboxState(args: {
   provider: AgentProvider
@@ -193,8 +193,19 @@ export async function updateSessionInboxState(args: {
   if (args.action === 'unsnooze') delete next.snoozedUntil
   // Never moves backwards: a slow client's late write must not un-see what another already saw.
   if (args.action === 'seen') next = { ...next, seenAt: Math.max(previous.seenAt ?? 0, now) }
-  if (args.action === 'link-pr' && args.linkedPr) next = { ...next, linkedPr: args.linkedPr }
-  if (args.action === 'unlink-pr') delete next.linkedPr
+  if (args.action === 'link-pr' && args.linkedPr) {
+    next = { ...next, linkedPr: args.linkedPr }
+    // Linking by hand takes back an earlier unlink.
+    if (next.declinedPrUrls) next.declinedPrUrls = next.declinedPrUrls.filter(url => url !== args.linkedPr!.url)
+  }
+  // The transcript offering a pull request it saw opened: taken only by a session
+  // with none, and never one a person already removed.
+  if (args.action === 'auto-link-pr' && args.linkedPr && !next.linkedPr && !next.declinedPrUrls?.includes(args.linkedPr.url)) next = { ...next, linkedPr: args.linkedPr }
+  if (args.action === 'unlink-pr' && next.linkedPr) {
+    if (next.linkedPr.url) next.declinedPrUrls = [...(next.declinedPrUrls ?? []).filter(url => url !== next.linkedPr!.url), next.linkedPr.url].slice(-20)
+    delete next.linkedPr
+  }
+  if (next.declinedPrUrls && !next.declinedPrUrls.length) delete next.declinedPrUrls
   if (Object.keys(next).length === 0) delete file.states[key]
   else file.states[key] = next
   await queueWrite(file)

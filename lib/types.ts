@@ -120,6 +120,8 @@ export type SessionInboxState = {
    *  settle itself when that PR merges instead of sitting in the active list
    *  long after the work landed. */
   linkedPr?: LinkedPullRequest
+  /** Pull requests a person unlinked. Auto-linking never puts one of these back. */
+  declinedPrUrls?: string[]
 }
 
 export type LinkedPullRequest = {

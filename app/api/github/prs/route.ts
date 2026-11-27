@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   if (!cwd) return NextResponse.json({ error: 'Invalid working directory.' }, { status: 400 })
   try {
     const number = params.get('number')
-    if (number) return NextResponse.json({ pr: await fetchGithubPr(cwd, Number(number)) })
+    if (number) return NextResponse.json({ pr: await fetchGithubPr(cwd, Number(number), params.get('repo') ?? undefined) })
     const state = params.get('state') ?? undefined
     const scope = params.get('scope') ?? undefined
     if ((state && !STATES.has(state)) || (scope && !SCOPES.has(scope))) return NextResponse.json({ error: 'Invalid filter.' }, { status: 400 })

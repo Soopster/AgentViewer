@@ -34,7 +34,7 @@ export const SessionRailDetail = React.memo(function SessionRailDetail({ session
     ? git.modified === 0 && git.untracked === 0 ? '✓' : [git.modified > 0 ? `~${git.modified}` : '', git.untracked > 0 ? `?${git.untracked}` : ''].filter(Boolean).join(' ')
     : null
   const tags = parseStoredSessionTags(session.tag).map((tag) => `#${tag}`).join(' ')
-  const text = [git?.branch ?? null, tree, pr ? `${pr.text} ${pr.state.toLowerCase()}` : null, tags || null].filter(Boolean).join('  ')
+  const text = [git?.branch ?? null, tree, pr ? (pr.state === 'UNKNOWN' ? pr.text : `${pr.text} ${pr.state.toLowerCase()}`) : null, tags || null].filter(Boolean).join('  ')
   if (!text) return null
   return (
     <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>

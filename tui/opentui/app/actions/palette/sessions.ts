@@ -6,6 +6,10 @@ import { formatSessionTitle } from '../../../../format'
 import { TASK_PANEL_RESIZE_STEP } from '../../layoutConstants'
 import { sessionKey } from '../../sessionList'
 
+registerHostCommand(['pr-next-step'], (ctx, _id, locals) => {
+  ctx.runPrNextStep(locals.focusedSession)
+})
+
 registerHostCommand(['new', 'new-scratch'], (ctx, id, locals) => {
     const { openNewSessionModal, openNewScratchSession } = ctx
     switch (id) {

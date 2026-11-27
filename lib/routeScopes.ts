@@ -129,6 +129,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/github/pr': { POST: 'write' },
   // GitHub reads are cached `gh` queries; only the issue POST changes anything.
   '/api/github/inbox': { GET: 'read' },
+  '/api/github/link': { GET: 'read' },
   '/api/github/issues': { GET: 'read', POST: 'write' },
   '/api/github/runs': { GET: 'read', POST: 'write' },
   // GET only drafts text from git log; POST merges, creates and checks out.

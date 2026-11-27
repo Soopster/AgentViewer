@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { useSessionPrActions, useSessionPrAutoLink } from './app/slices/sessionPr'
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
 import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../lib/plugins/composerSlash'
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
@@ -677,7 +678,7 @@ function OpenTuiWorkspace() {
     const before = session.inbox
     const after = action === 'snooze' ? { ...before, snoozedUntil: Date.now() + 60 * 60 * 1000, settledAt: undefined }
       : action === 'unsnooze' ? { ...before, snoozedUntil: undefined }
-      : { ...before, linkedPr: undefined }
+      : { ...before, linkedPr: undefined, declinedPrUrls: before?.linkedPr?.url ? [...(before.declinedPrUrls ?? []), before.linkedPr.url] : before?.declinedPrUrls }
     const patch = (inbox: Session['inbox']) => setSessions((current) => current.map((entry) => sessionKey(entry) === key ? { ...entry, inbox } : entry))
     patch(after)
     showNotice('info', action === 'snooze' ? 'Snoozed for an hour' : action === 'unsnooze' ? 'Unsnoozed' : 'Pull request unlinked')
@@ -4783,6 +4784,7 @@ function OpenTuiWorkspace() {
       { label: session.inbox?.snoozedUntil && session.inbox.snoozedUntil > Date.now() ? 'Unsnooze session' : 'Snooze 1 hour', run: () => changeSessionInbox(session, session.inbox?.snoozedUntil && session.inbox.snoozedUntil > Date.now() ? 'unsnooze' : 'snooze') },
       ...(session.inbox?.linkedPr ? [
         { label: `Open pull request #${session.inbox.linkedPr.number}`, run: () => { void openExternalUrl(session.inbox!.linkedPr!.url).catch(error => showNotice('error', String(error))) } },
+        ...sessionPr.menuItems(session),
         { label: 'Unlink pull request', run: () => changeSessionInbox(session, 'unlink-pr') },
       ] : []),
       { label: 'Open composer', run: () => { selectTabSession(session); setComposerActive(true) } },
@@ -5194,6 +5196,16 @@ function OpenTuiWorkspace() {
   const runPluginCommandId = useStableEvent((id: string, session?: Session | null) => {
     const command = getPluginCommand(id)
     if (command) runPluginCommand(command, session === undefined ? selectedSession : session)
+  })
+  // The linked pull request: auto-linked when this transcript shows it being
+  // opened, and acted on from the window's bottom border, the menu or the palette.
+  useSessionPrAutoLink(selectedSession, sessionDetail, setSessions)
+  const sessionPr = useSessionPrActions({
+    openReview: session => runPluginCommandId('pull-requests', session),
+    selectSession: session => selectTabSession(session),
+    composerTargetSession,
+    insertPrompt: text => { insertComposerTextAtCursor(text); setComposerActive(true); showNotice('info', 'Added to composer — review it, then send') },
+    notify: message => showNotice('info', message),
   })
   // What a plugin view's runCommand reaches: another plugin's command, or a host
   // command a plugin may ask for by id. Plugins never import each other.
@@ -6309,6 +6321,7 @@ function OpenTuiWorkspace() {
     return runExecuteCommandPalette({
     isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
+    runPrNextStep: sessionPr.runNextStep,
     runPluginCommand, selectedSession, openNewSessionModal, openNewScratchSession, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,

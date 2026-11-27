@@ -24,6 +24,10 @@ import { mcpResourceLinks } from '@/lib/mcpArtifacts'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
+import { detectGithubActivities, describeGithubActivity } from '@/lib/github/activity'
+import { GithubActivityCard } from './github/GithubActivityCard'
+import { githubAnchor } from './github/GithubLink'
+import { useTranscriptRemarkPlugins } from './github/repoContext'
 import remarkGfm from 'remark-gfm'
 import { projectMarkdownBlocks } from '@/lib/markdownStream'
 import type { Components } from 'react-markdown'
@@ -378,7 +382,7 @@ const mdComponents: Components = {
   ),
   strong:     ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--text)' }}>{children}</strong>,
   em:         ({ children }) => <em style={{ fontStyle: 'italic', color: 'var(--text-2)' }}>{children}</em>,
-  a:          ({ href, children }) => (
+  a:          ({ href, children }) => githubAnchor(href, children) ?? (
     <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--violet)', textDecoration: 'underline' }}>
       {children}
     </a>
@@ -3710,11 +3714,21 @@ function PluginBlockCard({ block }: { block: PluginBlock }) {
 }
 
 /** The call's own card, then — for a call a generic card draws — a draft card to judge or a way to make one. */
+/** What a call did on GitHub or to git history. A running call is not read: its output is not in yet. */
+function threadGithubActivities(thread: ToolThread) {
+  if (thread.toolUse.pluginCard || !thread.result) return []
+  const native = normalizeToolThreadForNativeCard(thread)
+  return detectGithubActivities(native.toolUse.name, native.toolUse.input, resultToString(thread.result.content), !!thread.result.is_error)
+}
+
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
   const { pluginCardDraft } = thread.toolUse
+  const github = useMemo(() => threadGithubActivities(thread), [thread])
   return (
     <>
-      <ToolThreadCardBase thread={thread} />
+      {github.length
+        ? <GithubActivityCard activities={github} pending={!thread.result}><ToolThreadCardBase thread={thread} /></GithubActivityCard>
+        : <ToolThreadCardBase thread={thread} />}
       {pluginCardDraft ? <PluginDraftCard card={pluginCardDraft} /> : <DesignCardButton toolUse={thread.toolUse} hasResult={!!thread.result} />}
     </>
   )
@@ -4180,8 +4194,9 @@ function DataImageBlock({ src, mediaType }: { src: string; mediaType: string }) 
 // re-parses whatever it is handed, and handing it the whole document per delta
 // makes the cost of one token grow with everything already written.
 const MarkdownBlockView = memo(function MarkdownBlockView({ raw }: { raw: string }) {
+  const remarkPlugins = useTranscriptRemarkPlugins()
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+    <ReactMarkdown remarkPlugins={remarkPlugins} components={mdComponents}>
       {raw}
     </ReactMarkdown>
   )
@@ -4812,7 +4827,7 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
         }}>›</span>
         <span style={{ color, fontSize: spacing.toolNameFontSize, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
         <span style={{ color: 'var(--text-3)', fontSize: spacing.toolSummaryFontSize, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-          {summarizeAgentsTool(thread)}
+          {threadGithubActivities(thread).map(describeGithubActivity).join('; ') || summarizeAgentsTool(thread)}
         </span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {metaBadges.map((badge) => (
@@ -4875,9 +4890,10 @@ function StreamToolRow({
   const name = canonicalToolName(thread.toolUse.name)
   const status = streamToolStatus(thread)
   const color = toolColor(name)
-  const label = name === 'Bash' ? 'Ran' : name
+  const github = useMemo(() => threadGithubActivities(thread), [thread])
+  const label = github.length ? 'GitHub' : name === 'Bash' ? 'Ran' : name
   const rawSummary = summarizeAgentsTool(thread)
-  const summary = name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
+  const summary = github.length ? github.map(describeGithubActivity).join('; ') : name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
   const outputSummary = compactActivity ? streamToolOutputSummary(thread) : null
   if (open) {
     return (

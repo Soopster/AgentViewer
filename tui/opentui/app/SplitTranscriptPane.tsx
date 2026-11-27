@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { SessionPrStrip } from './SessionPrStrip'
 import type { ViewSpec } from '../../viewSpec'
 import { indexComposerMessages, visibleComposerMessages } from '../../../lib/composerTranscript'
 import { foldTurnActivity } from './turnActivity'
@@ -1214,6 +1215,8 @@ export function SplitTranscriptPaneInner({
         </box>
       ) : null}
       {footer ? <box flexDirection="column" flexShrink={0}>{footer.render(width)}</box> : null}
+      {frameless ? null : <SessionPrStrip session={session} theme={theme} windowId={selected ? 'reader' : `split-pane-${paneIndex}`}
+        width={focused ? width - 4 : width - 38} />}
       {/* Key hints sit in the bottom border, as the composer's status does. */}
       <box position="absolute" bottom={-1} left={1} height={1} backgroundColor={theme.surface} visible={!frameless && !focused}>
         <text fg={theme.dim} wrapMode="none">

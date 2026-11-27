@@ -6,7 +6,7 @@ import { readSessionInboxState, updateSessionInboxState, type SessionInboxAction
 import type { LinkedPullRequest } from '@/lib/types'
 
 const ACTIONS = new Set<SessionInboxAction>([
-  'pin', 'unpin', 'settle', 'reopen', 'snooze', 'unsnooze', 'seen', 'link-pr', 'unlink-pr',
+  'pin', 'unpin', 'settle', 'reopen', 'snooze', 'unsnooze', 'seen', 'link-pr', 'auto-link-pr', 'unlink-pr',
 ])
 
 /** Accepts only the fields a client is allowed to set; `state`/`checkedAt` are
@@ -51,8 +51,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? body.action as SessionInboxAction
     : undefined
   if (!provider || !action) return NextResponse.json({ error: 'provider and a valid inbox action are required' }, { status: 400 })
-  if (action === 'link-pr' && !parseLinkedPr(body.linkedPr)) {
-    return NextResponse.json({ error: 'link-pr requires linkedPr { repo, number }' }, { status: 400 })
+  if ((action === 'link-pr' || action === 'auto-link-pr') && !parseLinkedPr(body.linkedPr)) {
+    return NextResponse.json({ error: `${action} requires linkedPr { repo, number }` }, { status: 400 })
   }
   try {
     const instance = await resolveProviderInstance(providerInstanceIdFromRequest(request, body), provider)
