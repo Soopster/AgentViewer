@@ -2,6 +2,8 @@
 // requests the web view makes; otherwise they run lib/github in this process.
 // `gh` runs where the checkout is, so attaching assumes the daemon shares the
 // machine (as git-based features already do).
+import type { AgentProvider, LinkedPullRequest, ProviderInstanceId } from '../types'
+import type { PrGuide } from '../github/guide'
 import { isRemoteAttached, remoteJson } from './remote'
 import type {
   GithubPrDetail, GithubPrFilters, GithubPrSummary, GithubRelease, GithubReleaseCreate, GithubReleaseDetail, GithubRepoOverview,
@@ -139,4 +141,39 @@ export async function markTuiGithubNotifications(cwd: string, target: { id: stri
   const inbox = await import('../github/inbox')
   if ('all' in target) await inbox.markAllGithubNotificationsRead(cwd)
   else await inbox.markGithubNotificationRead(cwd, target.id)
+}
+
+type WatchSession = { sessionId: string; provider?: AgentProvider; providerInstanceId?: ProviderInstanceId }
+const watchTarget = (session: WatchSession) => ({ provider: session.provider ?? 'claude' as const, sessionId: session.sessionId, providerInstanceId: session.providerInstanceId })
+
+export async function readTuiPrWatching(session: WatchSession): Promise<boolean> {
+  const target = watchTarget(session)
+  if (isRemoteAttached()) return !!(await remoteJson<{ watch: unknown }>(`/api/github/watch?${query(target)}`)).watch
+  return !!(await import('../github/watchStore')).findPrWatch(target)
+}
+
+export async function setTuiPrWatching(session: WatchSession, watching: boolean, linkedPr: LinkedPullRequest): Promise<void> {
+  const target = watchTarget(session)
+  if (isRemoteAttached()) {
+    const { path, ...init } = post('/api/github/watch', { ...target, watching, linkedPr })
+    await remoteJson(path, init)
+    return
+  }
+  const store = await import('../github/watchStore')
+  if (!watching) store.stopPrWatch(target)
+  else if (linkedPr.cwd) store.startPrWatch(target, linkedPr, linkedPr.cwd)
+  else throw new Error('This pull request has no checkout to read it from.')
+}
+
+export async function readTuiPrGuide(cwd: string, number: number): Promise<PrGuide | null> {
+  if (isRemoteAttached()) return (await remoteJson<{ guide: PrGuide | null }>(`/api/github/guide?${query({ cwd, number })}`)).guide
+  return (await import('../github/guideService')).readPrGuide(cwd, number)
+}
+
+export async function writeTuiPrGuide(cwd: string, number: number): Promise<PrGuide> {
+  if (isRemoteAttached()) {
+    const { path, ...init } = post('/api/github/guide', { cwd, number })
+    return (await remoteJson<{ guide: PrGuide }>(path, init)).guide
+  }
+  return (await import('../github/guideService')).writePrGuide(cwd, number)
 }

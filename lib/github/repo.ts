@@ -1,3 +1,4 @@
+import { parseGithubUrl } from './links'
 // Repository overview: what the project is, where you are in it, recent
 // commits, branches, labels and who you can assign. One cached read, six `gh`
 // calls in parallel — the header of the GitHub view.
@@ -67,4 +68,14 @@ async function readOverview(cwd: string): Promise<GithubRepoOverview> {
 
 export function fetchGithubRepoOverview(cwd: string): Promise<GithubRepoOverview> {
   return cachedGithubRead(githubCacheKey(cwd, 'repo'), REPO_TTL_MS, () => readOverview(cwd))
+}
+
+/** The account `gh` writes as on a pull request's host, or null when it cannot be read. */
+export async function fetchGithubViewer(cwd: string, url = ''): Promise<string | null> {
+  const host = parseGithubUrl(url)?.host ?? 'github.com'
+  return cachedGithubRead(githubCacheKey(cwd, 'viewer', host), 60 * 60_000, async () => {
+    const result = await runGh(cwd, ['api', 'user', '--hostname', host, '--jq', '.login'])
+    if (result.code !== 0 || !result.stdout) throw ghFailure(result, 'Unable to read the signed-in account.')
+    return result.stdout
+  }).catch(() => null)
 }

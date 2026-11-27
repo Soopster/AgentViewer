@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { prWatchFile } from '../github/watchStore'
 import { nextTriggerFire } from './cron'
+import { drainTurnStream } from './turnOutcome'
 import { appendRun, readScheduleState, schedulesFile, updateScheduleState } from './store'
 import type { Schedule, ScheduleOutcome } from './types'
 
@@ -80,11 +82,10 @@ async function defaultRunner(schedule: Schedule): Promise<ScheduleFireResult> {
     })
     return { outcome: 'ok', sessionId: (run as { leadSessionId?: string }).leadSessionId }
   }
-  const backend = await import('../sessionBackend')
-  const coordination = await import('../agentCoordination')
   let sessionId: string
   let provider: string
   if (action.kind === 'new-session') {
+    const backend = await import('../sessionBackend')
     const created = await backend.createNewViewSession({ provider: action.provider as never, cwd: action.cwd })
     sessionId = created.sessionId
     provider = created.provider
@@ -93,7 +94,17 @@ async function defaultRunner(schedule: Schedule): Promise<ScheduleFireResult> {
     provider = action.provider
   }
   const body: Record<string, unknown> = { message: schedule.prompt }
-  if (action.kind === 'new-session' && action.model) body.model = action.model
+  if (action.kind === 'new-session') {
+    // The session does not exist until this turn: without these a provider tries to resume it.
+    Object.assign(body, { isPendingSession: true, cwd: action.cwd, ...(action.model ? { model: action.model } : {}) })
+  }
+  return promptSessionUnattended(provider, sessionId, body)
+}
+
+/** Runs a turn on a session with nobody watching it: what a due schedule and a watched pull request both do. */
+export async function promptSessionUnattended(provider: string, sessionId: string, body: Record<string, unknown>): Promise<ScheduleFireResult> {
+  const backend = await import('../sessionBackend')
+  const coordination = await import('../agentCoordination')
   const response = await coordination.withCooperativeInbox(sessionId, body, outgoing =>
     backend.streamViewSessionTurn({
       sessionId,
@@ -106,8 +117,8 @@ async function defaultRunner(schedule: Schedule): Promise<ScheduleFireResult> {
     return { outcome: 'failed', sessionId, error: `HTTP ${response.status} ${detail}`.slice(0, 300) }
   }
   // Drain server-side so the turn runs to its end with no client attached.
-  await response.body?.pipeTo(new WritableStream({ write() {} })).catch(() => {})
-  return { outcome: 'ok', sessionId }
+  const failure = await drainTurnStream(response.body)
+  return failure ? { outcome: 'failed', sessionId, error: failure.slice(0, 300) } : { outcome: 'ok', sessionId }
 }
 
 async function sessionIsRunning(schedule: Schedule): Promise<boolean> {
@@ -151,6 +162,9 @@ async function fire(schedule: Schedule, now: () => number): Promise<void> {
 export async function runScheduleTick(nowMs: number = Date.now(), clock: () => number = Date.now): Promise<string[]> {
   if (process.env.AGENT_VIEWER_SCHEDULES === '0') return []
   if (!acquireScheduleLease(nowMs)) return []
+  // Watched pull requests share the lease. Loaded only when there is one, and never awaited:
+  // reading GitHub must not delay a due schedule.
+  if (existsSync(prWatchFile())) void import('../github/watchEngine').then(watch => watch.runPrWatchTick(nowMs)).catch(() => {})
   const due: Schedule[] = []
   const skipped: Schedule[] = []
   const handled: string[] = []

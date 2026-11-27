@@ -52,6 +52,7 @@ export type ExecuteCommandPaletteContext = {
   composerTargetSession: Session | null
   closeCommandPalette: () => void
   runPrNextStep: (session: Session | null) => void
+  togglePrWatch: (session: Session | null) => void
   openPopoverWindow: (kind: PopoverWindowKind, pin?: SurfaceMeta, placement?: 'beside' | 'fill' | 'tab') => void
   runPluginCommand: (command: ResolvedPluginCommand, session?: Session | null) => void
   selectedSession: Session | null

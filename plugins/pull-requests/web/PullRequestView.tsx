@@ -19,6 +19,8 @@ import {
   GitCommitHorizontal, GitPullRequest, ListChecks, Maximize2, MessageSquare, MinusCircle,
   PanelLeftClose, PanelLeftOpen, RefreshCw, Send, SlidersHorizontal, X, XCircle,
 } from 'lucide-react'
+import { Map as GuideIcon } from 'lucide-react'
+import { PrGuideTab } from './PrGuideTab'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
@@ -43,7 +45,7 @@ type Props = {
   variant?: SurfaceVariant
 }
 
-type TabId = 'conversation' | 'commits' | 'checks' | 'files'
+type TabId = 'conversation' | 'commits' | 'checks' | 'files' | 'guide'
 
 type ReviewMeta =
   | { kind: 'saved'; key: string; author: string; message: string; createdAt: string; url?: string }
@@ -1053,6 +1055,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
           {tabButton('commits', <GitCommitHorizontal size={15} />, 'Commits', pr ? countBadge(pr.commits.length) : null)}
           {tabButton('checks', <ListChecks size={15} />, 'Checks', pr ? countBadge(pr.checks.length, failingChecks > 0 ? 'var(--red)' : checkSummary && checkSummary.success > 0 ? 'var(--green)' : undefined) : null)}
           {tabButton('files', <FileDiff size={15} />, 'Files changed', pr ? countBadge(pr.files.length) : null)}
+          {tabButton('guide', <GuideIcon size={15} />, 'Guide', null)}
           <span style={{ flex: 1 }} />
           {tab === 'files' && pr ? (
             <>
@@ -1305,6 +1308,8 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent, onLink
               onJumpToFile={jumpToFile}
               onOpenChecks={() => setTab('checks')}
             />
+          ) : tab === 'guide' && pr && cwd ? (
+            <PrGuideTab cwd={cwd} pr={pr} onAskAgent={prompt => { onAskAgent(prompt); onClose() }} onOpenFile={path => jumpToFile(path)} />
           ) : tab === 'commits' ? (
             <CommitsTab pr={pr} loading={loading} />
           ) : (

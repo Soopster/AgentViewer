@@ -6322,7 +6322,7 @@ function OpenTuiWorkspace() {
     return runExecuteCommandPalette({
     isolatedView: engineeringLayout.active,
     surfaceToTab, openComposerTargetMenu, focusedWindowItem, composerTargetSession, closeCommandPalette, openPopoverWindow,
-    runPrNextStep: sessionPr.runNextStep,
+    runPrNextStep: sessionPr.runNextStep, togglePrWatch: sessionPr.toggleWatch,
     runPluginCommand, selectedSession, openNewSessionModal, openNewScratchSession, openProviderMenu,
     setAttentionOpen, jumpToNextAttention, setFocusedPane, setSessionSearchMode, setWorktreeDraft,
     setWorktreeModalOpen, selectedWorktreeTask, setWorktreeConfirm, showNotice,

@@ -164,7 +164,7 @@ export type GithubPrSummary = {
 
 export type GithubPrReview = { author: string; state: string; body: string; submittedAt: string }
 export type GithubPrCheck = { name: string; state: 'success' | 'failure' | 'pending' | 'neutral'; url: string }
-export type GithubPrThread = { id: string; path: string; line: number | null; resolved: boolean; outdated: boolean; author: string; body: string; replies: number }
+export type GithubPrThread = { id: string; path: string; line: number | null; resolved: boolean; outdated: boolean; author: string; body: string; replies: number; lastAuthor?: string; lastBody?: string }
 
 export type GithubPrDetail = GithubPrSummary & {
   body: string
@@ -181,7 +181,11 @@ export type GithubPrDetail = GithubPrSummary & {
   files: Array<{ path: string; additions: number; deletions: number }>
   comments: GithubIssueComment[]
   threads: GithubPrThread[]
+  /** Open pull requests this one is stacked on or under, bottom first, itself included; absent when it stands alone. */
+  stack?: GithubStackLayer[]
 }
+
+export type GithubStackLayer = { number: number; title: string; url: string; isDraft: boolean; headRefName: string; baseRefName: string }
 
 export type GithubReviewVerdict = 'approve' | 'comment' | 'request-changes'
 

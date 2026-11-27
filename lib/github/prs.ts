@@ -4,11 +4,12 @@
 // in prActions.ts and invalidate this module's keys.
 import { cachedGithubRead, githubCacheKey } from './cache'
 import { githubRepoFlags } from './links'
+import { buildPrStack } from './stack'
 import { ghFailure, parseJson, runGh } from './ghRunner'
 import { fetchGithubRepoOverview } from './repo'
 import { toIssueComment } from './issues'
 import { scrubGithubText } from './text'
-import type { GithubPrCheck, GithubPrDetail, GithubPrFilters, GithubPrReview, GithubPrSummary, GithubPrThread } from './types'
+import type { GithubPrCheck, GithubPrDetail, GithubPrFilters, GithubPrReview, GithubPrSummary, GithubPrThread, GithubStackLayer } from './types'
 
 export const PRS_TTL_MS = 30_000
 const DEFAULT_LIMIT = 40
@@ -78,11 +79,12 @@ export function fetchGithubPrs(cwd: string, filters: GithubPrFilters = {}): Prom
   })
 }
 
-const THREADS_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:50){nodes{id isResolved isOutdated path line comments(first:1){totalCount nodes{author{login} body}}}}}}}'
+const THREADS_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:50){nodes{id isResolved isOutdated path line comments(first:1){totalCount nodes{author{login} body}} latest:comments(last:1){nodes{author{login} body}}}}}}}'
 
 export function toThread(raw: Record<string, unknown>): GithubPrThread {
   const comments = raw.comments as { totalCount?: unknown; nodes?: Array<{ author?: { login?: unknown } | null; body?: unknown }> } | null
   const first = comments?.nodes?.[0]
+  const latest = (raw.latest as { nodes?: Array<{ author?: { login?: unknown } | null; body?: unknown }> } | undefined)?.nodes?.[0]
   return {
     id: String(raw.id ?? ''),
     path: scrubGithubText(raw.path),
@@ -92,6 +94,7 @@ export function toThread(raw: Record<string, unknown>): GithubPrThread {
     author: scrubGithubText(first?.author?.login ?? 'unknown'),
     body: scrubGithubText(first?.body),
     replies: Math.max(Number(comments?.totalCount ?? 1) - 1, 0),
+    ...(latest ? { lastAuthor: scrubGithubText(latest.author?.login ?? 'unknown'), lastBody: scrubGithubText(latest.body) } : {}),
   }
 }
 
@@ -106,6 +109,27 @@ async function readThreads(cwd: string, number: number, repoArgument?: string): 
   return (parsed.data?.repository?.pullRequest?.reviewThreads?.nodes ?? []).map(toThread)
 }
 
+const TRUNKS = ['main', 'master', 'trunk', 'develop']
+
+/** Open pull requests as stack layers. Its own, slower cache: a chain changes far less often than one layer's checks. */
+function readStackLayers(cwd: string, repo?: string): Promise<Array<GithubStackLayer & { crossRepository?: boolean }>> {
+  return cachedGithubRead(githubCacheKey(cwd, 'prs', 'stack', repo ?? ''), 2 * 60_000, async () => {
+    const result = await runGh(cwd, ['pr', 'list', ...githubRepoFlags(repo), '--state', 'open', '--limit', '100', '--json', 'number,title,url,isDraft,headRefName,baseRefName,isCrossRepository'])
+    if (result.code !== 0) throw ghFailure(result, 'Unable to list pull requests.')
+    return parseJson<Array<Record<string, unknown>>>(result.stdout, []).map(raw => ({
+      number: Number(raw.number ?? 0), title: scrubGithubText(raw.title), url: String(raw.url ?? ''), isDraft: Boolean(raw.isDraft),
+      headRefName: scrubGithubText(raw.headRefName), baseRefName: scrubGithubText(raw.baseRefName), crossRepository: Boolean(raw.isCrossRepository),
+    }))
+  })
+}
+
+async function readStack(cwd: string, view: Record<string, unknown>, number: number, repo?: string) {
+  if (view.state !== 'OPEN') return undefined
+  const layers = await readStackLayers(cwd, repo).catch(() => [])
+  const base = String(view.baseRefName ?? '')
+  return buildPrStack(layers, number, TRUNKS.find(trunk => trunk === base) ?? 'main')
+}
+
 /** `repo` names another repository (a fork's upstream, a sibling); without it the number is the checkout's. */
 export function fetchGithubPr(cwd: string, number: number, repo?: string): Promise<GithubPrDetail> {
   if (!Number.isInteger(number) || number < 1) return Promise.reject(new Error('Invalid pull request number.'))
@@ -115,6 +139,7 @@ export function fetchGithubPr(cwd: string, number: number, repo?: string): Promi
     const [view, threads] = await Promise.all([runGh(cwd, ['pr', 'view', String(number), ...repoFlags, '--json', DETAIL_FIELDS]), readThreads(cwd, number, repo)])
     if (view.code !== 0) throw ghFailure(view, `Unable to read pull request #${number}.`)
     const raw = parseJson<Record<string, unknown>>(view.stdout, {})
+    const stack = await readStack(cwd, raw, number, repo)
     const rollup = Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup as Array<Record<string, unknown>> : []
     const reviews = Array.isArray(raw.reviews) ? raw.reviews as Array<Record<string, unknown>> : []
     const commits = Array.isArray(raw.commits) ? raw.commits as Array<Record<string, unknown>> : []
@@ -142,6 +167,7 @@ export function fetchGithubPr(cwd: string, number: number, repo?: string): Promi
       files: files.map(file => ({ path: scrubGithubText(file.path), additions: Number(file.additions ?? 0), deletions: Number(file.deletions ?? 0) })),
       comments: comments.map(toIssueComment),
       threads,
+      ...(stack ? { stack } : {}),
     }
   })
 }

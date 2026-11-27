@@ -9,6 +9,7 @@ import type { GithubPrDetail } from '../../../../lib/github/types'
 import { updateTuiSessionInbox, type TuiSessionDetail } from '../../../../lib/tui/service'
 import type { LinkedPullRequest, Session } from '../../../../lib/types'
 import { sessionKey } from '../sessionList'
+import { peekPrWatching, togglePrWatching } from '../../prWatchStore'
 import { peekSessionPr } from '../../sessionPrStore'
 import { useStableEvent } from '../../useStableEvent'
 import { registerSessionPrHandler, type SessionPrIntent } from '../SessionPrStrip'
@@ -50,7 +51,16 @@ export function useSessionPrActions(host: {
     insert(waiting.prompt)
   }, [waiting, targetKey, insert])
 
+  const toggleWatch = useStableEvent((session: Session | null) => {
+    const pr = session?.inbox?.linkedPr
+    if (!session || !pr) { host.notify('No pull request is linked to this session'); return }
+    void togglePrWatching(session, pr)
+      .then(watching => host.notify(watching ? `Watching #${pr.number}: the agent is woken when it needs attention` : `Stopped watching #${pr.number}`))
+      .catch(error => host.notify(error instanceof Error ? error.message : String(error)))
+  })
+
   const act = useStableEvent((session: Session, intent: SessionPrIntent, detail: GithubPrDetail | null) => {
+    if (intent === 'watch') { toggleWatch(session); return }
     const next = detail ? resolvePrNextAction(detail) : null
     if (intent === 'open' || !detail || !next || next === 'ready' || next === 'merge') { host.openReview(session); return }
     const key = sessionKey(session)
@@ -72,8 +82,11 @@ export function useSessionPrActions(host: {
   const menuItems = useStableEvent((session: Session) => {
     const detail = detailFor(session)
     const next = detail ? resolvePrNextAction(detail) : null
-    return next ? [{ label: `Pull request: ${PR_ACTION_LABELS[next]}`, run: () => act(session, 'act', detail) }] : []
+    return [
+      ...(next ? [{ label: `Pull request: ${PR_ACTION_LABELS[next]}`, run: () => act(session, 'act', detail) }] : []),
+      { label: peekPrWatching(session) ? 'Pull request: stop watching' : 'Pull request: watch and wake the agent', run: () => toggleWatch(session) },
+    ]
   })
 
-  return { runNextStep, menuItems }
+  return { runNextStep, toggleWatch, menuItems }
 }

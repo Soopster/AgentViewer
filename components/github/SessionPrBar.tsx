@@ -5,7 +5,7 @@
 // review, mark ready, or merge. Work that needs judgement goes to the agent as a
 // prompt in the composer; it is never sent without the person pressing send.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, RotateCw, X } from 'lucide-react'
+import { ChevronDown, ExternalLink, Eye, EyeOff, RotateCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { buildPrHandoffPrompt, PR_ACTION_LABELS, resolvePrNextAction, summarizePrStatus } from '@/lib/github/prWork'
 import { githubRepoArgument } from '@/lib/github/links'
@@ -68,10 +68,31 @@ export function SessionPrBar({ session, messages, onAskAgent, onOpenReview }: {
 }) {
   const { pr, unlink } = useSessionPullRequest(session, messages)
   if (!pr) return null
-  return <PrBar key={pr.url || `${pr.repo}#${pr.number}`} pr={pr} cwd={pr.cwd ?? session.cwd ?? ''} onAskAgent={onAskAgent} onOpenReview={onOpenReview} onUnlink={unlink} />
+  return <PrBar key={`${session.sessionId} ${pr.url || `${pr.repo}#${pr.number}`}`} session={session} pr={pr} cwd={pr.cwd ?? session.cwd ?? ''} onAskAgent={onAskAgent} onOpenReview={onOpenReview} onUnlink={unlink} />
 }
 
-function PrBar({ pr, cwd, onAskAgent, onOpenReview, onUnlink }: { pr: LinkedPullRequest; cwd: string; onAskAgent: (prompt: string) => void; onOpenReview?: () => void; onUnlink: () => void }) {
+/** Whether the daemon is watching this pull request for the session, and the switch for it. */
+function useWatch(session: Session, pr: LinkedPullRequest, cwd: string, onError: (message: string) => void) {
+  const [watching, setWatching] = useState(false)
+  const target = `provider=${session.provider}&sessionId=${encodeURIComponent(session.sessionId)}${session.providerInstanceId ? `&providerInstanceId=${encodeURIComponent(session.providerInstanceId)}` : ''}`
+  useEffect(() => {
+    let live = true
+    // The daemon ends a watch itself (merged, settled, too many wakes), so it is read again while shown.
+    const read = () => { request<{ watch: unknown }>(`/api/github/watch?${target}`).then(body => { if (live) setWatching(!!body.watch) }).catch(() => {}) }
+    read()
+    const timer = setInterval(read, PENDING_POLL_MS)
+    return () => { live = false; clearInterval(timer) }
+  }, [target])
+  const toggle = () => {
+    const next = !watching
+    setWatching(next)
+    void post('/api/github/watch', { provider: session.provider, providerInstanceId: session.providerInstanceId, sessionId: session.sessionId, watching: next, linkedPr: { ...pr, cwd } })
+      .catch((error: Error) => { setWatching(!next); onError(error.message) })
+  }
+  return { watching, toggle }
+}
+
+function PrBar({ session, pr, cwd, onAskAgent, onOpenReview, onUnlink }: { session: Session; pr: LinkedPullRequest; cwd: string; onAskAgent: (prompt: string) => void; onOpenReview?: () => void; onUnlink: () => void }) {
   const [detail, setDetail] = useState<GithubPrDetail | null>(null)
   const [problem, setProblem] = useState('')
   const [expanded, setExpanded] = useState(false)
@@ -103,6 +124,7 @@ function PrBar({ pr, cwd, onAskAgent, onOpenReview, onUnlink }: { pr: LinkedPull
   const look = githubStateLook('pr', detail?.state ?? pr.state, detail?.isDraft)
   const status = detail ? summarizePrStatus(detail) : null
   const next = detail ? resolvePrNextAction(detail) : null
+  const watch = useWatch(session, pr, cwd, setProblem)
   if (confirming && next !== 'merge') setConfirming(false)
 
   const act = async (body: Record<string, unknown>) => {
@@ -156,6 +178,15 @@ function PrBar({ pr, cwd, onAskAgent, onOpenReview, onUnlink }: { pr: LinkedPull
             {PR_ACTION_LABELS[next]}
           </Button>
         ) : null}
+        {watch.watching || (detail?.state === 'OPEN' && !session.isPending) ? (
+          <button
+            type="button" onClick={watch.toggle} aria-pressed={watch.watching} data-pr-watch={watch.watching ? 'on' : 'off'}
+            title={watch.watching ? 'Watching: the agent is woken when checks fail or pass, conflicts appear, or someone else comments. Click to stop.' : 'Wake the agent when checks fail or pass, conflicts appear, or someone else comments. It may then work and push without you.'}
+            style={{ ...ICON_BUTTON, gap: 4, fontFamily: MONO, fontSize: 11, color: watch.watching ? 'var(--cyan)' : 'var(--text-3)' }}
+          >
+            {watch.watching ? <Eye size={12} /> : <EyeOff size={12} />}{watch.watching ? 'Watching' : 'Watch'}
+          </button>
+        ) : null}
         <button type="button" aria-label="Refresh pull request" title="Refresh (GitHub reads are cached for 30s)" onClick={() => setVersion(value => value + 1)} style={ICON_BUTTON}><RotateCw size={12} /></button>
         {pr.url ? <a href={pr.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub" title="Open on GitHub" style={ICON_BUTTON}><ExternalLink size={12} /></a> : null}
         <button type="button" aria-label="Unlink pull request from this session" title="Unlink from this session" onClick={onUnlink} style={ICON_BUTTON}><X size={12} /></button>
@@ -163,6 +194,11 @@ function PrBar({ pr, cwd, onAskAgent, onOpenReview, onUnlink }: { pr: LinkedPull
       {expanded && detail ? (
         <div style={{ padding: '2px 12px 8px', display: 'grid', gap: 3, maxHeight: 180, overflow: 'auto', fontFamily: MONO, fontSize: 11, color: 'var(--text-3)' }}>
           <span>{detail.headRefName} → {detail.baseRefName} · <span style={{ color: 'var(--green)' }}>+{detail.additions}</span> <span style={{ color: 'var(--red)' }}>−{detail.deletions}</span> · {detail.changedFiles} files</span>
+          {detail.stack ? detail.stack.map((layer, index) => (
+            <span key={layer.number} style={{ paddingLeft: index * 10, color: layer.number === detail.number ? 'var(--text)' : undefined }}>
+              {layer.number === detail.number ? '▸' : '└'} <a href={layer.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>#{layer.number}</a> {layer.title}{layer.isDraft ? ' (draft)' : ''}
+            </span>
+          )) : null}
           {checks.map((check, index) => (
             <span key={`${check.name}-${index}`} style={{ color: check.state === 'failure' ? 'var(--red)' : check.state === 'pending' ? 'var(--yellow)' : undefined }}>
               {check.state === 'failure' ? '✕' : check.state === 'pending' ? '●' : check.state === 'success' ? '✓' : '○'}{' '}

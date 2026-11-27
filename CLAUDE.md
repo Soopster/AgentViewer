@@ -2950,8 +2950,24 @@ behind "command & output"), the TUI card (`tui/format/github.ts`) and PR auto-li
 - **One next-step rule for both UIs** (`resolvePrNextAction`): conflicts → failing checks → review → draft → merge; no merge while checks run.
   Handoffs only fill the composer, with GitHub text quoted and labelled as data. TUI: window bottom border (`SessionPrStrip`), session menu, palette.
 
-`scripts/githubTranscriptSmoke.ts` (in `github:smoke`) and `tui/opentui/sessionPrSmoke.tsx`. Not done: T3's "watch a PR and wake the agent",
-PR stacks, and a live TUI check against a real open pull request.
+- **Watching a PR wakes the agent** (`lib/github/watch.ts` rules, `watchStore.ts`, `watchEngine.ts`). It runs from the schedules
+  engine's tick, so only the lease holder wakes anyone and `AGENT_VIEWER_SCHEDULES=0` turns it off. The first read is a baseline.
+  The viewer's own comments never wake (the agent writes as that account), and **with no readable viewer nobody's do**. News waits while
+  the session is busy; it is cleared and counted before the turn starts, so a crash cannot replay it. Ends on merge/close, settle,
+  10 comment-only wakes in a row or 8 failed reads (a rate limit does not count). The wake prompt forbids merging and replying.
+- **Stacks come from branches** (`lib/github/stack.ts`): a PR based on another open PR's head sits on it. Trunks and fork branches
+  are never layers, and a fork in the chain ends it. **Only the bottom layer is offered Merge** — merging higher merges into the layer below.
+
+- **Review guides** (`lib/github/guide.ts`, `guideService.ts`; the PR view's Guide tab, `t` in the TUI's). One tool-less model call over the
+  diff (`AGENT_VIEWER_GUIDE_MODEL`). **Excerpts are cut from the real patch**: invented files and ranges are dropped, a stop with none left is
+  dropped, and every changed file the tour misses is listed. Kept per checkout and number, stale once the head moves, single-flight, and a
+  useless reply never replaces a guide. It spends model usage, so it only runs on request (two presses in the TUI).
+- **An unattended turn fails inside a 200 stream** (`lib/schedules/turnOutcome.ts`); schedules used to report every such turn as `ok`.
+  A scheduled new session must send `isPendingSession` and `cwd`, or the provider tries to resume a session that does not exist.
+
+`scripts/githubTranscriptSmoke.ts` (in `github:smoke`), `tui/opentui/sessionPrSmoke.tsx` and `prGuideSmoke.tsx`. Checked live: both UIs against
+open `cli/cli` PRs (including an 8-layer stack), a real guide, and a watch waking a real Claude turn (GitHub side faked).
+Not checked: merge/mark-ready on a real PR. Not built: hosts other than GitHub.
 
 ### Local data
 

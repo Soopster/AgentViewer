@@ -1,11 +1,12 @@
 // What a linked pull request needs next, and the prompt that hands that work to
 // the agent. One rule for both views, so the Web bar and the terminal never
 // offer different things for the same pull request. No Node imports.
+import { stackPosition } from './stack'
 import type { GithubPrDetail } from './types'
 
 export type PrNextAction = 'resolve-conflicts' | 'ready' | 'fix-checks' | 'address-review' | 'merge' | null
 
-export type PrActionable = Pick<GithubPrDetail, 'number' | 'url' | 'title' | 'state' | 'isDraft' | 'mergeable' | 'reviewDecision' | 'headRefName' | 'baseRefName' | 'checkRuns' | 'threads' | 'reviews'>
+export type PrActionable = Pick<GithubPrDetail, 'number' | 'url' | 'title' | 'state' | 'isDraft' | 'mergeable' | 'reviewDecision' | 'headRefName' | 'baseRefName' | 'checkRuns' | 'threads' | 'reviews' | 'stack'>
 
 export function unresolvedThreads(pr: Pick<PrActionable, 'threads'>) {
   return pr.threads.filter(thread => !thread.resolved && !thread.outdated)
@@ -23,6 +24,8 @@ export function resolvePrNextAction(pr: PrActionable): PrNextAction {
   if (pr.reviewDecision === 'CHANGES_REQUESTED' || unresolvedThreads(pr).length) return 'address-review'
   if (pr.isDraft) return 'ready'
   if (pr.checkRuns.some(check => check.state === 'pending')) return null
+  // Merging an upper layer of a stack merges it into the pull request below, not into the trunk.
+  if ((stackPosition(pr.stack, pr.number)?.layer ?? 1) > 1) return null
   return pr.mergeable === 'MERGEABLE' && pr.reviewDecision !== 'REVIEW_REQUIRED' ? 'merge' : null
 }
 
@@ -40,6 +43,8 @@ export function summarizePrStatus(pr: PrActionable): PrStatusSummary {
   if (pr.state === 'MERGED') return { tone: 'merged', parts: ['Merged'] }
   if (pr.state === 'CLOSED') return { tone: 'danger', parts: ['Closed'] }
   const parts: string[] = []
+  const place = stackPosition(pr.stack, pr.number)
+  if (place) parts.push(`Stack ${place.layer}/${place.of}`)
   const failing = failingChecks(pr).length
   const pending = pr.checkRuns.filter(check => check.state === 'pending').length
   if (pr.isDraft) parts.push('Draft')

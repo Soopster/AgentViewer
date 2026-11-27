@@ -15,6 +15,7 @@ import {
   type PullRequestFile,
   type PullRequestWorkspace,
 } from '../../../lib/githubPr'
+import { GuidePanel } from './GuidePanel'
 import { buildDiffCommentComposerPrompt } from '../../../lib/diffCommentComposer'
 import { readTuiDiffReviewState, tuiDiffReviewStorageKey, writeTuiDiffReviewState, type TuiDiffReviewNote } from '../../../lib/tuiDiffReviewState'
 
@@ -574,6 +575,8 @@ export function PullRequestPopover({
     const next = update(new Map([...previous].map(([key, note]) => [key, { ...note, path: note.filePath }])))
     return new Map([...next].map(([key, note]) => [key, { ...note, filePath: note.path }]))
   }), [review.setNotes])
+  const [guideOpen, setGuideOpen] = useState(false)
+  const guideKeyRef = useRef<(key: Key) => void>(() => {})
   const navigateReview = useCallback((target: ReviewTarget) => { setPane(2); setFocusSide('right'); setCollapsed(new Set()); setShowHunkHeaders(true); setReviewBoardOpen(false); setReviewTarget(target) }, [])
 
   useEffect(() => {
@@ -903,7 +906,9 @@ export function PullRequestPopover({
   // ── Key handling ──────────────────────────────────────────────────────────
   const handleKey = useCallback((key: Key) => {
     if (reviewBoardOpen) { boardKeyRef.current(key); return }
+    if (guideOpen) { guideKeyRef.current(key); return }
     if (key.sequence === 'R' && !composer) { setReviewBoardOpen(true); return }
+    if (key.sequence === 't' && !composer && pr && repoCwd) { setGuideOpen(true); return }
     if (composer !== null) {
       if (key.name === 'escape') setComposer(null)
       return
@@ -1083,7 +1088,7 @@ export function PullRequestPopover({
     if (key.sequence === 'y') { setComposer({ mode: 'approve' }); return }
     if (key.sequence === 'X' || (key.name === 'x' && key.shift)) { setComposer({ mode: 'request' }); return }
     if (key.sequence === '?' || key.name === '?') { setComposer({ mode: 'question' }); return }
-  }, [reviewBoardOpen, setDiffNotes, clampedCursor, composer, defaultLeftW, diffMode, diffNotes, diffRows, discussionCursor, discussionEntries, focusSide,
+  }, [guideOpen, reviewBoardOpen, setDiffNotes, clampedCursor, composer, defaultLeftW, diffMode, diffNotes, diffRows, discussionCursor, discussionEntries, focusSide,
       jumpToComment, jumpToFile, jumpToHunk, leftPaneHidden, leftPaneMode, load, maxLeftW,
       moveCursorTo, onClose, onSendDiffNoteToComposer, openRangeComposer, pane, pr, prCursor, pullRequests, reviewRows.length,
       selectedDiffSpan, setDiffTabWidth, setHorizontalOffset, setWrapDiffLines, toggleFold, treeCursor, treeRows, wrapDiffLines, diffTabWidth])
@@ -1380,6 +1385,9 @@ export function PullRequestPopover({
       titleAlignment="left"
     >
       {!docked && onDetach ? <PopoverDetachButton theme={theme} onPress={onDetach} /> : null}
+      {guideOpen && pr && repoCwd ? <GuidePanel cwd={repoCwd} pr={pr} theme={theme} width={popW - 2} height={popH - 2} keyRef={guideKeyRef} onClose={() => setGuideOpen(false)}
+        onAsk={prompt => { onAskAgent(prompt); onClose() }}
+        onOpenFile={path => { const index = pr.files.findIndex(file => file.filename === path); if (index >= 0) { setPane(2); setFocusSide('right'); jumpToFile(index) } }} /> : null}
       {reviewBoardOpen ? <ReviewBoard review={review} theme={theme} width={popW - 2} height={popH - 2} keyRef={boardKeyRef} onClose={() => setReviewBoardOpen(false)} onNavigate={navigateReview} /> : null}
       <box height={bodyH} flexDirection="row">
         {/* ── Left column ─────────────────────────────────── */}
@@ -1631,7 +1639,7 @@ export function PullRequestPopover({
       <box height={1} paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
         {(() => {
           const actions: Array<[string, string]> = [
-            ['i', 'GitHub inline'], ['c', 'comment'], ['y', 'approve'], ['⇧X', 'request changes'], ['?', 'ask agent'],
+            ['i', 'GitHub inline'], ['c', 'comment'], ['y', 'approve'], ['⇧X', 'request changes'], ['?', 'ask agent'], ['t', 'guide'],
           ]
           const segs: React.ReactNode[] = []
           actions.forEach(([k, l], i) => {

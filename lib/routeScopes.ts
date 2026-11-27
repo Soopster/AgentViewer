@@ -130,6 +130,10 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   // GitHub reads are cached `gh` queries; only the issue POST changes anything.
   '/api/github/inbox': { GET: 'read' },
   '/api/github/link': { GET: 'read' },
+  // Writing a review guide spends model usage.
+  '/api/github/guide': { GET: 'read', POST: 'write' },
+  // Watching makes the daemon start agent turns, so turning it on is a write.
+  '/api/github/watch': { GET: 'read', POST: 'write' },
   '/api/github/issues': { GET: 'read', POST: 'write' },
   '/api/github/runs': { GET: 'read', POST: 'write' },
   // GET only drafts text from git log; POST merges, creates and checks out.
