@@ -18,7 +18,7 @@ const VIEW_LABELS = TRANSCRIPT_VIEW_DISPLAY_NAMES
 type Props = {
   library: WebViewLibrary
   /** Apply a spec to the web's display settings (the live preview, and choosing a view). */
-  apply: (spec: ViewSpec) => void
+  apply: (spec: ViewSpec, base: ViewSpec) => void
   onClose: () => void
 }
 
@@ -58,7 +58,8 @@ export function WebViewStudio({ library, apply, onClose }: Props) {
     const spec = library.specFor(ref)
     if (!spec) return
     library.choose(ref)
-    apply(spec)
+    const base = ref.kind === 'builtin' ? ref.view : library.views.find((view) => view.id === ref.id)?.base
+    apply(spec, BUILTIN_VIEW_SPECS[base ?? 'conversation'])
   }
   const edit = (ref: WebViewRef, clone: boolean) => {
     setConfirmDelete(false)
@@ -75,8 +76,13 @@ export function WebViewStudio({ library, apply, onClose }: Props) {
         : { ...view, overrides: { ...view.overrides } })
     }
   }
-  const change = (next: CustomView) => { setDraft(next); apply(customViewSpec(next)) }
-  const restoreActive = () => { const spec = active ? library.specFor(active) : null; if (spec) apply(spec) }
+  const change = (next: CustomView) => { setDraft(next); apply(customViewSpec(next), BUILTIN_VIEW_SPECS[next.base]) }
+  const restoreActive = () => {
+    const spec = active ? library.specFor(active) : null
+    if (!active || !spec) { apply(BUILTIN_VIEW_SPECS[draft?.base ?? 'conversation'], BUILTIN_VIEW_SPECS[draft?.base ?? 'conversation']); return }
+    const base = active.kind === 'builtin' ? active.view : library.views.find((view) => view.id === active.id)?.base
+    apply(spec, BUILTIN_VIEW_SPECS[base ?? 'conversation'])
+  }
   const cancel = () => { setDraft(null); restoreActive() }
   const save = async () => {
     if (!draft) return
@@ -100,9 +106,9 @@ export function WebViewStudio({ library, apply, onClose }: Props) {
     if (draft.builtin) {
       const builtins = { ...library.builtins }
       delete builtins[draft.base]
-      if (await library.save({ builtins })) { setDraft(null); apply(BUILTIN_VIEW_SPECS[draft.base]) }
+      if (await library.save({ builtins })) { setDraft(null); apply(BUILTIN_VIEW_SPECS[draft.base], BUILTIN_VIEW_SPECS[draft.base]) }
     } else if (await library.save({ views: library.views.filter((view) => view.id !== draft.id) })) {
-      if (active?.kind === 'custom' && active.id === draft.id) { library.choose({ kind: 'builtin', view: draft.base }); apply(BUILTIN_VIEW_SPECS[draft.base]) }
+      if (active?.kind === 'custom' && active.id === draft.id) { library.choose({ kind: 'builtin', view: draft.base }); apply(BUILTIN_VIEW_SPECS[draft.base], BUILTIN_VIEW_SPECS[draft.base]) }
       setDraft(null)
     }
     setConfirmDelete(false)

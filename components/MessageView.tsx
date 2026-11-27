@@ -1,5 +1,7 @@
 'use client'
 
+import { useWebViewStyle } from './message-view/webViewStyle'
+import { estimateSessionCostUsd } from '@/lib/analytics'
 import { runHandleDeleteSession } from './message-view/actions/deleteSession'
 
 import { beginProviderLoading } from '@/lib/providerLoading'
@@ -1266,6 +1268,8 @@ function MessageViewInner({
         blocks: [{ type: 'text', text: optimisticContextText || optimisticUserText }],
       }
     : null), [optimisticUserText, optimisticContextText, session?.provider, session?.providerInstanceId, session?.sessionId, showLiveTimelineOverlay])
+  const sessionCostUsd = useMemo(() => estimateSessionCostUsd(messages, selectedModel), [messages, selectedModel])
+  const showLiveReasoning = useWebViewStyle().liveReasoning !== false
   const codexThinking = useMemo(() => {
     if (session?.provider !== 'codex') return undefined
     for (let index = liveThreadedMessages.length - 1; index >= 0; index--) {
@@ -1280,7 +1284,7 @@ function MessageViewInner({
         sessionId: session?.sessionId,
         provider: session?.provider,
         blocks: [
-          ...(session?.provider !== 'codex' && liveReasoningText.trim()
+          ...(session?.provider !== 'codex' && showLiveReasoning && liveReasoningText.trim()
             ? [{ type: 'thinking' as const, thinking: liveReasoningText.trim() }]
             : []),
           {
@@ -1299,6 +1303,7 @@ function MessageViewInner({
     : null), [
       activeToolCount,
       codexThinking,
+      showLiveReasoning,
       awaitingPersistedTurn,
       liveAssistantText,
       liveReasoningText,
@@ -2378,6 +2383,7 @@ function MessageViewInner({
         cancelSend={cancelSend}
         awaitingPersistedTurn={awaitingPersistedTurn}
         composerStatusColor={composerStatusColor}
+        sessionCostUsd={sessionCostUsd}
         composerRuntime={composerRuntime}
         composerStatusDetail={composerStatusDetail}
         composerStatus={composerStatus}

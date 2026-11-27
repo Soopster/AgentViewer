@@ -6,11 +6,12 @@
 // web's existing display settings, which can still be toggled afterwards.
 import { useCallback, useEffect, useState } from 'react'
 import {
-  VIEW_SPEC_BASES, builtinViewSpec, customViewSpec, webSettingsFromSpec,
+  BUILTIN_VIEW_SPECS, VIEW_SPEC_BASES, builtinViewSpec, customViewSpec, webSettingsFromSpec,
   type BuiltinViewOverrides, type CustomView, type ViewSpec, type WebViewSettings,
 } from '@/tui/viewSpec'
 import type { TuiTranscriptView } from '@/tui/theme'
 import { readLocalStorageValue, writeLocalStorageValue } from './constants'
+import { publishWebViewStyle, webViewStyleOf } from './webViewStyle'
 
 export const WEB_ACTIVE_VIEW_KEY = 'agentViewer:transcriptView'
 
@@ -90,6 +91,14 @@ export function useWebViews(): WebViewLibrary {
       return false
     }
   }, [])
+
+  // The shown view's styling follows edits made here or in the terminal.
+  useEffect(() => {
+    if (!loaded || !active) return
+    const spec = specFor(active)
+    const base = active.kind === 'builtin' ? active.view : views.find((view) => view.id === active.id)?.base
+    if (spec && base) publishWebViewStyle(webViewStyleOf(spec, BUILTIN_VIEW_SPECS[base]))
+  }, [active, loaded, specFor, views])
 
   return { views, builtins, loaded, error, active, specFor, choose, save, reload: () => setEpoch((n) => n + 1) }
 }

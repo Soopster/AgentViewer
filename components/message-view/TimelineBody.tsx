@@ -308,7 +308,7 @@ export function TimelineBody(props: TimelineBodyProps) {
               <div
                 ref={timelineRef}
                 onScroll={handleTimelineScroll}
-                className={cn(viewMode === 'stream' && 'av-stream-timeline-scroll')}
+                className={cn('av-timeline-scroll', viewMode === 'stream' && 'av-stream-timeline-scroll')}
                 style={{
                   height: '100%',
                   minHeight: 0,

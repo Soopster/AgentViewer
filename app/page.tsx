@@ -43,7 +43,8 @@ import { pathBasename } from '@/lib/projectPaths'
 import { startClientPerf } from '@/lib/clientPerf'
 import type { ProviderSelection, Session } from '@/lib/types'
 import { useRightPanel } from '@/components/useRightPanel'
-import { type RightPanelSurfaceKind } from '@/lib/rightPanel'
+import { RIGHT_PANEL_SURFACE_KINDS, type RightPanelSurfaceKind } from '@/lib/rightPanel'
+import { WEB_VIEW_PANELS_EVENT, type WebViewPanelsDetail } from '@/components/message-view/webViewStyle'
 import { getPluginCommand, getPluginSurface, isPluginSurfaceId, type PluginSurfaceId } from '@/lib/plugins/catalog'
 import { dispatchPluginCommand, subscribePluginCommands } from '@/lib/plugins/commandBus'
 import type { WebPluginServices } from '@/components/shell/pluginTypes'
@@ -94,6 +95,16 @@ export default function Home() {
   const [pluginManagerOpen, setPluginManagerOpen] = useState(false)
   usePluginSettingsSync()
   const rightPanel = useRightPanel()
+  const { openSurface: openPanelSurface, collapse: collapsePanel } = rightPanel
+  useEffect(() => {
+    const enter = (event: Event) => {
+      const kind = (event as CustomEvent<WebViewPanelsDetail>).detail.sidePanel
+      if (kind === 'closed') collapsePanel()
+      else if (kind && (RIGHT_PANEL_SURFACE_KINDS as readonly string[]).includes(kind)) openPanelSurface(kind as RightPanelSurfaceKind)
+    }
+    window.addEventListener(WEB_VIEW_PANELS_EVENT, enter)
+    return () => window.removeEventListener(WEB_VIEW_PANELS_EVENT, enter)
+  }, [openPanelSurface, collapsePanel])
   const documentVisible = useDocumentVisible()
   const {
     messages: sessionMessages, loading: loadingSessionMessages,

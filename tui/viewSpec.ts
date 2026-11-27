@@ -98,6 +98,25 @@ export type ViewSpec = {
   /** The dock spans the terminal, or only the reader column beside the rail. */
   composerWidth: 'full' | 'reader'
   composerIconSet: ViewIconSet | null
+  // The status strip on the composer's bottom border. A permission mode or a
+  // provider mode other than the default is always shown.
+  stripBadge: 'filled' | 'brackets' | 'dot' | 'text' | 'off'
+  stripSeparator: '·' | '•' | '│' | '|' | '/' | '›' | '❯' | 'space'
+  stripColor: 'default' | 'muted' | 'accent' | 'bright'
+  stripLabels: 'full' | 'short' | 'none'
+  stripContextStyle: 'default' | 'percent' | 'bar'
+  /** Which comes first. A permission-mode warning leads either way. */
+  stripOrder: 'settings' | 'location'
+  stripFolderStyle: 'name' | 'parent'
+  stripModel: boolean
+  stripEffort: boolean
+  /** A context or plan-limit meter that needs attention is shown even when off. */
+  stripContext: boolean
+  stripCost: boolean
+  stripFolder: boolean
+  stripGit: 'full' | 'branch' | 'off'
+  /** The idle key hints at the strip's right end. */
+  stripHints: boolean
   // Tabs: how the session tab strip draws.
   tabStyle: ViewTabStyle
   workspaceTabStyle: 'standard' | 'powerline' | 'bubbles' | 'slant' | 'pixel' | 'flame' | null
@@ -162,6 +181,8 @@ const CARDS: ViewSpec = {
   flow: 'cards', cursor: 'card', readerHeader: true, composer: 'docked', idleTicker: true, liveReasoning: true,
   completedTurnHint: false, appTabs: false, contextSidebar: false, promptNavigation: false, scrollMarkerJump: false, scrollbar: 'markers',
   liveText: true, composerTitle: true, composerStatus: 'rail', composerBorder: 'rounded', composerSize: 'auto', composerWidth: 'full',
+  stripBadge: 'filled', stripSeparator: '·', stripColor: 'default', stripLabels: 'full', stripContextStyle: 'default', stripOrder: 'settings', stripFolderStyle: 'name', stripModel: true, stripEffort: true, stripContext: true, stripCost: true,
+  stripFolder: true, stripGit: 'full', stripHints: true,
   cardFilter: 'all', toolGrouping: 'none', agentCards: 'none', foldDefault: 'default', dimAutoFolded: false,
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
   iconSet: 'standard', messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
@@ -334,6 +355,28 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [{ value: 'auto', label: 'grow' }, { value: 'compact', label: 'compact' }, { value: 'tall', label: 'tall' }] },
   { key: 'composerWidth', section: 'Composer', label: 'Dock width', help: 'Span the terminal, or only the reader column beside the rail.',
     options: [{ value: 'full', label: 'full' }, { value: 'reader', label: 'reader column' }] },
+  { key: 'stripBadge', section: 'Composer', label: 'Strip badge', help: 'The provider chip at the start of the bottom strip.',
+    options: [{ value: 'filled', label: 'filled' }, { value: 'brackets', label: '[brackets]' }, { value: 'dot', label: '● dot' }, { value: 'text', label: 'text' }, { value: 'off', label: 'off' }] },
+  { key: 'stripSeparator', section: 'Composer', label: 'Strip separator', help: 'What divides the bottom strip\'s entries.',
+    options: [{ value: '·', label: '·' }, { value: '•', label: '•' }, { value: '│', label: '│' }, { value: '|', label: '|' }, { value: '/', label: '/' }, { value: '›', label: '›' }, { value: '❯', label: '❯' }, { value: 'space', label: 'space' }] },
+  { key: 'stripColor', section: 'Composer', label: 'Strip colour', help: 'Each entry\'s own colour, or all muted, in the accent, or bright. Mode warnings and urgent meters keep their colour.',
+    options: [{ value: 'default', label: 'colour' }, { value: 'muted', label: 'muted' }, { value: 'accent', label: 'accent' }, { value: 'bright', label: 'bright' }] },
+  { key: 'stripLabels', section: 'Composer', label: 'Strip labels', help: 'model:opus, m:opus, or the value alone.',
+    options: [{ value: 'full', label: 'full' }, { value: 'short', label: 'short' }, { value: 'none', label: 'values only' }] },
+  { key: 'stripContextStyle', section: 'Composer', label: 'Strip context as', help: 'The usual reading, a percentage, or a five-step bar.',
+    options: [{ value: 'default', label: 'usual' }, { value: 'percent', label: 'percentage' }, { value: 'bar', label: '▰▰▱▱▱ bar' }] },
+  { key: 'stripOrder', section: 'Composer', label: 'Strip order', help: 'Lead with the model settings, or with the folder and branch. A permission-mode warning is always first.',
+    options: [{ value: 'settings', label: 'settings first' }, { value: 'location', label: 'folder first' }] },
+  { key: 'stripFolderStyle', section: 'Composer', label: 'Strip folder as', help: 'The folder\'s name, or with its parent.',
+    options: [{ value: 'name', label: 'name' }, { value: 'parent', label: 'parent/name' }] },
+  { key: 'stripModel', section: 'Composer', label: 'Strip model', help: 'The model on the bottom strip. ⌥M still opens settings.', options: ON_OFF },
+  { key: 'stripEffort', section: 'Composer', label: 'Strip effort', help: 'The reasoning effort on the bottom strip.', options: ON_OFF },
+  { key: 'stripContext', section: 'Composer', label: 'Strip context', help: 'Context usage. Off, it and the plan limit still appear once they need attention.', options: ON_OFF },
+  { key: 'stripCost', section: 'Composer', label: 'Strip cost', help: 'The session\'s estimated cost at list price.', options: ON_OFF },
+  { key: 'stripFolder', section: 'Composer', label: 'Strip folder', help: 'The project folder.', options: ON_OFF },
+  { key: 'stripGit', section: 'Composer', label: 'Strip git', help: 'The branch with its changed, untracked and stash counts, the branch alone, or neither.',
+    options: [{ value: 'full', label: 'branch + counts' }, { value: 'branch', label: 'branch' }, { value: 'off', label: 'off' }] },
+  { key: 'stripHints', section: 'Composer', label: 'Strip key hints', help: 'The idle key hints on the right. Hints for a running turn and the reader\'s status bar stay.', options: ON_OFF },
   // Tabs
   { key: 'tabs', section: 'Tabs', label: 'Session tabs', help: 'Pin the session tab strip on or off.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
@@ -624,6 +667,14 @@ export const DEFAULT_TAB_DISPLAY: TabDisplay = viewTabDisplay(BUILTIN_VIEW_SPECS
 export const WEB_VIEW_FIELDS: ReadonlySet<ViewSpecKey> = new Set<ViewSpecKey>([
   'flow', 'toolGrouping', 'agentCards', 'foldDefault', 'cardFilter', 'density', 'transcriptWidth', 'textWidth',
   'diffLayout', 'stickyHeaders', 'promptNavigation', 'sessionRail', 'contextSidebar', 'composerWidth',
+  'composer', 'composerStatus', 'composerBorder', 'composerSize',
+  'stripBadge', 'stripSeparator', 'stripColor', 'stripLabels', 'stripContextStyle', 'stripOrder', 'stripFolderStyle', 'stripModel', 'stripEffort', 'stripContext', 'stripCost', 'stripFolder', 'stripGit', 'stripHints',
+  'showThinking', 'showSubagents', 'turnBoundaries', 'thinking',
+  'promptMarker', 'replyMarker', 'markerColor', 'promptBand', 'promptRule', 'userBold', 'toolRows', 'diffPreview',
+  'tabs', 'tabStyle', 'tabWidth', 'tabClose', 'tabNumbers', 'tabSeparators', 'tabTitle', 'tabStripFill', 'tabHover', 'tabAccent', 'tabTruncate',
+  'railFill',
+  'messageLayout', 'promptTimestamps', 'replyTimestamps', 'turnFooter', 'completedTurnHint', 'liveReasoning', 'scrollbar',
+  'tabIcons', 'borders', 'borderTheme', 'showToolCalls', 'sidebarView', 'sidePanel',
 ])
 
 export type WebViewModeName = 'conversation' | 'full' | 'continue' | 'stream' | 'agents'

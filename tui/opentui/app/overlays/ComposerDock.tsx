@@ -179,7 +179,7 @@ export function ComposerDock(props: ComposerDockProps) {
             </box>
             {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
             <box flexGrow={1} />
-            <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
+            {composerDockFooterHintWidth > 0 ? <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {dockShowsStatusBar
                   ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)
@@ -187,7 +187,7 @@ export function ComposerDock(props: ComposerDockProps) {
                   ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
                   : fitHintText(composerDockFooterHint, composerDockFooterHintWidth)}
               </text>
-            </box>
+            </box> : null}
           </box>
         </SectionFrame>
       ) : null

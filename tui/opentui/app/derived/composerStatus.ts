@@ -54,13 +54,13 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   }
   const afterMode = parts.length
   if (composerCurrentModel) {
-    parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor, action: 'model' })
+    parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor, action: 'model', part: 'model' })
   } else if (composerTargetSession?.provider && composerTargetSession.provider !== 'claude-acp' && composerTargetSession.provider !== 'codex-acp' && composerTargetSession.provider !== 'acp') {
     // Custom-model providers (LM Studio, opencode/copilot custom endpoints,
     // Claude on a non-default deployment) can take a moment to report their
     // current model on a cold session. Show the in-flight state, then settle
     // on "auto" when the provider intentionally reports no concrete model.
-    parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim, action: 'model' })
+    parts.push({ text: composerModelLookupSettled ? 'model:auto' : 'model:loading…', fg: theme.dim, action: 'model', part: 'model' })
   }
   // Context and plan limit are meters: quiet while there is room, and moved
   // ahead of the model once either needs attention, since the border cuts
@@ -70,18 +70,18 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   if (composerContextUsage) {
     const pct = Number.isFinite(composerContextUsage.percentage) ? composerContextUsage.percentage : 0
     metersUrgent ||= pct >= 60
-    meters.push({ text: `ctx:${formatContextUsageChip(composerContextUsage)}`, fg: contextBarColor(pct, theme), action: 'analytics' })
+    meters.push({ text: `ctx:${formatContextUsageChip(composerContextUsage)}`, fg: contextBarColor(pct, theme), action: 'analytics', part: 'context', urgent: pct >= 60, percent: pct })
   }
   // Spend is an estimate at list price, so it is marked `~` and stays quiet (dim).
-  if (sessionCostUsd != null && sessionCostUsd >= 0.005) meters.push({ text: `cost:~${fmtCost(sessionCostUsd)}`, fg: theme.dim, action: 'analytics' })
+  if (sessionCostUsd != null && sessionCostUsd >= 0.005) meters.push({ text: `cost:~${fmtCost(sessionCostUsd)}`, fg: theme.dim, action: 'analytics', part: 'cost' })
   const limitSegment = planLimitSegment(composerPlanLimits, theme)
   if (limitSegment) {
     metersUrgent ||= limitSegment.fg !== theme.dim
-    meters.push({ ...limitSegment, action: 'analytics' })
+    meters.push({ ...limitSegment, action: 'analytics', part: 'limit', urgent: limitSegment.fg !== theme.dim })
   }
   if (metersUrgent) parts.splice(afterMode, 0, ...meters)
   else parts.push(...meters)
-  parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim, action: 'model' })
+  parts.push({ text: `effort:${tuiEffort}`, fg: theme.dim, action: 'model', part: 'effort' })
   if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
     parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
   }

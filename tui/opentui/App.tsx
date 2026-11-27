@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { shapeStripSegments } from './composerStrip'
 import { useSessionPrActions, useSessionPrAutoLink } from './app/slices/sessionPr'
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
 import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../lib/plugins/composerSlash'
@@ -1689,23 +1690,23 @@ function OpenTuiWorkspace() {
   })
   const composerIconSet = viewSpec.composerIconSet ?? viewSpec.iconSet
   const composerPromptIcon = tuiIcon(composerIconSet, 'prompt', '')
-  const composerKnobSegments = useMemo(() => !engineeringLayout.active && composerIconSet === 'standard' ? baseComposerKnobSegments : baseComposerKnobSegments.map(segment => {
-    if (segment.text.startsWith('cost:') && engineeringLayout.active) return { ...segment, text: segment.text.replace('cost:', 'session cost:') }
-    const icon = segment.action === 'model' ? tuiIcon(composerIconSet, segment.text.startsWith('effort:') ? 'effort' : 'model', '') : ''
+  const composerKnobSegments = useMemo(() => shapeStripSegments(baseComposerKnobSegments, viewSpec, { muted: theme.dim, accent: composerAccentColor, bright: theme.text }).map(segment => {
+    if (segment.part === 'cost' && engineeringLayout.active) return { ...segment, text: segment.text.replace('cost:', 'session cost:') }
+    const icon = segment.action === 'model' && composerIconSet !== 'standard' ? tuiIcon(composerIconSet, segment.part === 'effort' ? 'effort' : 'model', '') : ''
     return icon ? { ...segment, text: `${icon} ${segment.text}` } : segment
-  }), [baseComposerKnobSegments, composerIconSet, engineeringLayout.active])
+  }), [baseComposerKnobSegments, composerIconSet, engineeringLayout.active, composerAccentColor, theme.dim, theme.text, viewSpec])
   useEffect(() => runComposerGitSummaryEffect({
     composerWorkingDirectory, setComposerGitSummary,
   }), [composerWorkingDirectory])
   const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
     const parts: InlineTextSegment[] = []
-    if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path' })
+    if (composerWorkingDirectory) parts.push({ text: `${composerWorkingDirectory}  `, fg: theme.dim, action: 'path', part: 'folder' })
     const branch = composerGitSummary?.branch ?? composerGitBranch
     const gitIcon = tuiIcon(composerIconSet, 'repository', '')
-    if (branch) parts.push({ text: gitIcon ? `${gitIcon} ${branch}` : branch, fg: theme.green, action: 'git' })
-    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, atomic: true, fg: theme.amber, action: 'git' })
-    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, atomic: true, fg: theme.dim, action: 'git' })
-    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, atomic: true, fg: theme.amber, action: 'git' })
+    if (branch) parts.push({ text: gitIcon ? `${gitIcon} ${branch}` : branch, fg: theme.green, action: 'git', part: 'branch' })
+    if (composerGitSummary?.modified) parts.push({ text: `  ~${composerGitSummary.modified}`, atomic: true, fg: theme.amber, action: 'git', part: 'git-count' })
+    if (composerGitSummary?.untracked) parts.push({ text: `  ?${composerGitSummary.untracked}`, atomic: true, fg: theme.dim, action: 'git', part: 'git-count' })
+    if (composerGitSummary?.stashes) parts.push({ text: `  *${composerGitSummary.stashes}`, atomic: true, fg: theme.amber, action: 'git', part: 'git-count' })
     if (selectedWorktreeTask) {
       const counts = [
         selectedWorktreeTask.dirtyFiles > 0 ? `${selectedWorktreeTask.dirtyFiles} dirty` : null,
@@ -1713,11 +1714,12 @@ function OpenTuiWorkspace() {
       ].filter(Boolean).join(' ')
       parts.push({ text: ` · ⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
     }
-    return parts
-  }, [composerGitBranch, composerGitSummary, composerIconSet, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green])
+    return shapeStripSegments(parts, viewSpec, { muted: theme.dim, accent: composerAccentColor, bright: theme.text })
+  }, [composerGitBranch, composerGitSummary, composerIconSet, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green, theme.text, composerAccentColor, viewSpec])
   const buildComposerStatsSegments = (lineCount: number, draftLength: number) => runBuildComposerStatsSegments({
     composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
     composerLocationSegments, composerWorkingDirectory, composerPathIcon: tuiIcon(composerIconSet, 'folder', ''),
+    stripBadge: viewSpec.stripBadge, stripSeparator: viewSpec.stripSeparator, stripOrder: viewSpec.stripOrder, stripFolderStyle: viewSpec.stripFolderStyle,
   }, lineCount, draftLength)
   const canBackgroundClaudeCommand = composerTargetSession?.provider === 'claude'
     && composerSendState === 'sending'
@@ -6788,6 +6790,7 @@ function OpenTuiWorkspace() {
     chatComposerStatsWidth, chatComposerHintFitted, chatComposerHintWidth,
     composerWindowFooterHintWidth, composerWindowFooterStatsWidth, pickSlashInsteadOfSubmit,
   } = useComposerDockStatsForGroup({
+    stripSeparator: viewSpec.stripSeparator, stripOrder: viewSpec.stripOrder, stripHints: viewSpec.stripHints,
     buildComposerStatsSegments, composerVisualLineCount, composerDraft, composerKnobSegments,
     theme, composerLocationSegments, composerWindowVisualLineCount, composerAttachmentLabel,
     composerActive, composerFocusBlocked, fullscreenMode, composerAccentColor,

@@ -21,6 +21,7 @@ import { WEB_TOOLBAR_PLUGIN_COMMANDS } from './lazyPanels'
 import { useState } from 'react'
 import { useOptionalSidebar } from '@/components/ui/sidebar'
 import { webSettingsFromSpec, type ViewSpec } from '@/tui/viewSpec'
+import { WEB_VIEW_PANELS_EVENT, publishWebViewStyle, webViewStyleOf } from './webViewStyle'
 import { useWebViews } from './useWebViews'
 import { WebViewStudio } from './WebViewStudio'
 import type { ActiveTranscriptFilter } from './types'
@@ -91,7 +92,11 @@ export function MessageViewTopBar(props: MessageViewTopBarProps) {
   const viewLibrary = useWebViews()
   const [viewStudioOpen, setViewStudioOpen] = useState(false)
   const sidebar = useOptionalSidebar()
-  const applyView = (spec: ViewSpec) => {
+  const applyView = (spec: ViewSpec, base: ViewSpec) => {
+    publishWebViewStyle(webViewStyleOf(spec, base))
+    if (spec.sidebarView !== base.sidebarView || spec.sidePanel !== base.sidePanel) {
+      window.dispatchEvent(new CustomEvent(WEB_VIEW_PANELS_EVENT, { detail: { sidebarView: spec.sidebarView, sidePanel: spec.sidePanel } }))
+    }
     const web = webSettingsFromSpec(spec)
     props.setViewMode(web.viewMode)
     if (web.density) props.setDensity(web.density)

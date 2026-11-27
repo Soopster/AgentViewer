@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import type { ComposerStripPart } from '../../../lib/composerStrip'
 import { TextAttributes } from '@opentui/core'
 import React, { useSyncExternalStore } from 'react'
 import { hasTuiLinkTarget, parseTuiLineTokens } from '../../../lib/tuiLinkTargets'
@@ -14,6 +15,12 @@ export type InlineTextSegment = {
   attributes?: number
   atomic?: boolean
   action?: ComposerStatusAction
+  /** Which composer-strip entry this is, for views that hide or mute entries. */
+  part?: ComposerStripPart
+  /** A meter that needs attention: shown and coloured whatever the view asks. */
+  urgent?: boolean
+  /** A context meter's reading, for views that draw it another way. */
+  percent?: number
 }
 /** The action of the segment under a column of a row drawn by renderInlineTextSegments. */
 

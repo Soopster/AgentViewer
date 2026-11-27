@@ -6,6 +6,8 @@ import type { RefObject } from 'react'
 import type { Timeout } from '@opentui/core'
 import { liveMessageSessionKey } from '../../liveTranscriptState'
 import React from 'react'
+import type { ViewSpec } from '../../../viewSpec'
+import { orderStripGroups, stripBadgeSegment, stripFolderLabel, stripSeparatorText } from '../../composerStrip'
 import { toast } from '../../toastStore'
 import { type TextareaRenderable } from '@opentui/core'
 import { type ThreadedMessage } from '../../../../lib/threading'
@@ -564,39 +566,41 @@ export type BuildComposerStatsSegmentsContext = {
   composerLocationSegments: InlineTextSegment[]
   composerWorkingDirectory: string | null
   composerPathIcon?: string
+  stripBadge: ViewSpec['stripBadge']
+  stripSeparator: ViewSpec['stripSeparator']
+  stripOrder: ViewSpec['stripOrder']
+  stripFolderStyle: ViewSpec['stripFolderStyle']
 }
 
 export function runBuildComposerStatsSegments(ctx: BuildComposerStatsSegmentsContext, lineCount: number, draftLength: number) {
   const {
     composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
-    composerLocationSegments, composerWorkingDirectory, composerPathIcon,
+    composerLocationSegments, composerWorkingDirectory, composerPathIcon, stripBadge, stripSeparator, stripOrder, stripFolderStyle,
   } = ctx
   const segments: InlineTextSegment[] = []
+  // A hidden badge leaves nothing before the first entry, so no separator leads.
+  const divide = () => { if (segments.length > 0) segments.push({ text: stripSeparatorText(stripSeparator), fg: theme.dim }) }
   if (draftLength === 0) {
-    segments.push({ text: ` ${composerConfig.label.toUpperCase()} `, fg: theme.bg, bg: getProviderAccent(composerProvider ?? 'claude'), attributes: TextAttributes.BOLD })
+    const badge = stripBadgeSegment(stripBadge, composerConfig.label, getProviderAccent(composerProvider ?? 'claude'), theme.bg)
+    if (badge) segments.push(badge)
   } else {
     segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
     segments.push({ text: ` · ${draftLength} chars`, fg: theme.text })
   }
   if (composerAttachmentLabel) {
-    segments.push({ text: ' · ', fg: theme.dim })
+    divide()
     segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
   }
-  if (composerKnobSegments.length > 0) {
-    segments.push({ text: ' · ', fg: theme.dim })
-    composerKnobSegments.forEach((segment, index) => {
-      if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
-      segments.push(segment)
-    })
-  }
-  if (composerLocationSegments.length > 0) {
-    segments.push({ text: ' · ', fg: theme.dim })
-    segments.push(...composerLocationSegments.map((segment) =>
-      composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
-        ? { ...segment, text: `${composerPathIcon ? `${composerPathIcon} ` : ''}${composerProjectLabel(composerWorkingDirectory)}  ` }
-        : segment,
-    ))
-  }
+  const location = composerLocationSegments.map((segment) =>
+    composerWorkingDirectory && segment.text === `${composerWorkingDirectory}  `
+      ? { ...segment, text: `${composerPathIcon ? `${composerPathIcon} ` : ''}${stripFolderLabel(composerWorkingDirectory, stripFolderStyle, composerProjectLabel(composerWorkingDirectory))}  ` }
+      : segment)
+  const [first, middle, last] = orderStripGroups(stripOrder, composerKnobSegments, location)
+  const addEach = (entries: InlineTextSegment[]) => entries.forEach((segment) => { divide(); segments.push(segment) })
+  // The folder and branch are one group: they carry their own spacing.
+  const addLocation = (entries: InlineTextSegment[]) => { if (entries.length > 0) { divide(); segments.push(...entries) } }
+  if (stripOrder === 'settings') { addEach(first); addLocation(middle) }
+  else { addEach(first); addLocation(middle); addEach(last) }
   return segments
 }
 

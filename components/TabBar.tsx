@@ -4,6 +4,9 @@ import { sessionSelectionKey as sessionTabKey } from '@/components/session-catal
 
 import { ViewTransition } from 'react'
 import type { Session } from '@/lib/types'
+import { pathBasename } from '@/lib/projectPaths'
+import ProviderIcon from './ProviderIcon'
+import { useWebViewStyle } from './message-view/webViewStyle'
 
 function sessionTabTitle(session: Session): string {
   return (
@@ -27,11 +30,12 @@ type Props = {
 }
 
 export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] }: Props) {
-  if (tabs.length === 0) return null
+  const view = useWebViewStyle()
+  if (tabs.length === 0 || view.tabs === false) return null
 
   return (
     <div
-      className="scrollbar-none"
+      className="scrollbar-none av-tab-strip"
       style={{
         display: 'flex',
         flexDirection: 'row',
@@ -43,10 +47,12 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] 
         overflowX: 'auto',
       }}
     >
-      {tabs.map((session) => {
+      {tabs.map((session, index) => {
         const tabKey = sessionTabKey(session)
         const isActive = tabKey === activeId
-        const title = sessionTabTitle(session)
+        const fullTitle = sessionTabTitle(session)
+        const folder = session.cwd ? pathBasename(session.cwd) : ''
+        const title = view.tabTitle === 'folder' && folder ? folder : view.tabTitle === 'folder-title' && folder ? `${folder} · ${fullTitle}` : fullTitle
         const isPinned = pinned.includes(tabKey)
         return (
           <ViewTransition key={tabKey} enter="fade-in" exit="fade-out" default="none">
@@ -54,6 +60,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] 
             type="button"
             onClick={() => onSelect(session)}
             title={title}
+            data-provider={session.provider}
             className={isActive ? 'av-session-tab av-hover-control av-active' : 'av-session-tab av-hover-control'}
             style={{
               display: 'flex',
@@ -80,6 +87,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] 
             }}
           >
             <span
+              className="av-session-tab-title"
               style={{
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -88,9 +96,13 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, pinned = [] 
               }}
             >
               {isPinned ? <span data-tab-pinned aria-label="Pinned" style={{ color: 'var(--cyan)', marginRight: 4 }}>◆</span> : null}
-              {title}
+              {view.tabNumbers ? `${index + 1} ` : null}
+              {view.tabIcons === 'provider' ? <ProviderIcon provider={session.provider ?? 'claude'} size={13} /> : null}
+              {view.tabTruncate === 'middle' && title.length > 28 ? `${title.slice(0, 13)}…${title.slice(-13)}` : title}
             </span>
-            {isPinned ? null : <span
+            {isPinned || view.tabClose === 'never' ? null : <span
+              className="av-session-tab-close"
+              data-active={isActive || undefined}
               role="button"
               aria-label="Close tab"
               onClick={(e) => {

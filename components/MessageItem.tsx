@@ -1,5 +1,6 @@
 'use client'
 
+import { useWebViewStyle } from './message-view/webViewStyle'
 import { PluginCardBlocks } from './shell/PluginCardBlocks'
 import type { PluginBlock } from '@/lib/blockRegistry'
 import { registerToolCard, resolveToolCard } from './message-view/toolCardRegistry'
@@ -4249,7 +4250,8 @@ function RenderText({ block }: { block: TextBlock }) {
 }
 
 function RenderThinking({ block }: { block: ThinkingBlock }) {
-  return block.reasoning ? <ThinkingSummary block={block} /> : <LegacyThinking block={block} />
+  // A wrapper the shown view can hide or restyle (app/view-style.css).
+  return <div className="av-thinking">{block.reasoning ? <ThinkingSummary block={block} /> : <LegacyThinking block={block} />}</div>
 }
 
 function LegacyThinking({ block }: { block: ThinkingBlock }) {
@@ -4724,6 +4726,11 @@ function BashOutputCard({ block }: { block: BashOutputBlock }) {
 }
 
 function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
+  if (block.type === 'tool_thread') return <div key={i} className="av-tool-thread">{renderPlainBlock(block, i)}</div>
+  return renderPlainBlock(block, i)
+}
+
+function renderPlainBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'tool_thread')           return <ToolThreadCard          key={i} thread={block} />
   if (block.type === 'text')                  return <RenderText              key={i} block={block} />
   if (block.type === 'thinking')              return <RenderThinking          key={i} block={block} />
@@ -5008,6 +5015,7 @@ function StreamFileUpdateRow({ thread }: { thread: ToolThread }) {
 function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   const spacing = streamDensitySpacing(use(MessageDensityContext))
   const isUserMessage = message.role === 'user'
+  const viewStyle = useWebViewStyle()
   const textBlocks = message.blocks.filter((block) => block.type === 'text' && block.text.trim().length > 0)
   const toolThreads = dedupeStreamToolThreads(
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
@@ -5018,14 +5026,20 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   for (let index = 0; index < toolThreads.length; index += 1) {
     if (isStreamActivityThread(toolThreads[index])) lastActivityIndex = index
   }
+  const turnDurations = use(TurnDurationContext)
+  const hydrated = use(HydrationContext)
   if (textBlocks.length === 0 && toolThreads.length === 0) return null
 
-  const marker = message.role === 'user' ? '❯' : message.role === 'system' ? '▲' : '•'
+  const showTime = Boolean(isUserMessage ? viewStyle.promptTimestamps : viewStyle.replyTimestamps) && message.role !== 'system'
+  const turnMs = viewStyle.turnFooter && !isUserMessage ? turnDurations?.get(message.uuid) : undefined
+
+  const marker = message.role === 'user' ? viewStyle.promptMarker ?? '❯' : message.role === 'system' ? '▲'
+    : viewStyle.replyMarker && viewStyle.replyMarker !== 'tone' ? viewStyle.replyMarker : '•'
   const markerColor = message.role === 'user'
-    ? 'var(--cyan)'
+    ? viewStyle.markerColor === 'plain' || viewStyle.markerColor === 'cyan' ? 'var(--text)' : 'var(--cyan)'
     : message.role === 'system'
       ? 'var(--amber)'
-      : 'var(--text-3)'
+      : viewStyle.markerColor === 'cyan' ? 'var(--cyan)' : 'var(--text-3)'
   // Origin kind carries the spawn chain (`subagent:parent/child`); indent the
   // whole message behind one ↪ per nesting level so subagent activity reads as
   // nested inside the stream.
@@ -5036,10 +5050,13 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
     <>
         {textBlocks.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
-            <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
+            <span aria-hidden="true" className="av-stream-marker" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
             <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: spacing.blockGap }}>
               {textBlocks.map((block, index) => renderBlock(block, index))}
             </div>
+            {showTime && message.timestamp ? (
+              <span className="av-stream-time">{hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}</span>
+            ) : null}
           </div>
         )}
         {toolThreads.length > 0 && (
@@ -5066,7 +5083,7 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   )
   return (
     <SessionContext.Provider value={message.sessionId}>
-      <div className={isUserMessage ? 'av-stream-message av-stream-message--user' : 'av-stream-message'} style={{
+      <div className={isUserMessage ? 'av-stream-message av-stream-message--user' : 'av-stream-message'} data-subagent={spawnPath.length > 0 || undefined} style={{
         display: 'flex',
         flexDirection: 'column',
         gap: spacing.blockGap,
@@ -5090,6 +5107,9 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
             </div>
           </div>
         ) : body}
+        {turnMs ? (
+          <div className="av-stream-time">{`${message.provider ? `${getAssistantDisplayName(message.provider)} · ` : ''}${formatDurationShort(turnMs)}`}</div>
+        ) : null}
       </div>
     </SessionContext.Provider>
   )
@@ -5376,7 +5396,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
 
   return (
     <SessionContext.Provider value={message.sessionId}>
-    <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: dc.dotGap, marginBottom: dc.msgGap }}>
+    <div className={`msg msg--${message.role}`} data-subagent={message.origin?.kind?.startsWith('subagent:') || undefined} style={{ display: 'flex', gap: dc.dotGap, marginBottom: dc.msgGap }}>
       {/* Left column: dot */}
       <div className="msg-dot" style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
         <div

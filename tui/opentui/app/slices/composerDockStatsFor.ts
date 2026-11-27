@@ -4,6 +4,8 @@ import type { ProviderComposerConfig } from '../../../../lib/providerComposer'
 import type { Dispatch } from 'react'
 import type { SetStateAction } from 'react'
 import React, { useMemo } from 'react'
+import type { ViewSpec } from '../../../viewSpec'
+import { orderStripGroups, stripSeparatorText } from '../../composerStrip'
 import { type Session } from '../../../../lib/types'
 import { fitText } from '../../textLayout'
 import { type RewindCandidate } from '../../rewindTargets'
@@ -18,6 +20,9 @@ export type UseComposerDockStatsForGroupContext = {
   composerVisualLineCount: number
   composerDraft: string
   composerKnobSegments: InlineTextSegment[]
+  stripSeparator: ViewSpec['stripSeparator']
+  stripHints: boolean
+  stripOrder: ViewSpec['stripOrder']
   theme: TuiThemePalette
   composerLocationSegments: InlineTextSegment[]
   composerWindowVisualLineCount: number
@@ -71,7 +76,7 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
     splitChordPending, attentionNeedsInputCount, footerSegments, rightPaneWidth, composerSlashHint,
     composerWindowContentWidth, composerRewindItems, composerRewindIndex, setComposerRewindItems,
     rewindToPrompt, composerSlashOpen, composerSlashCommands, composerFirstLine,
-    composerSlashIndex, insertSlashAtCursor,
+    composerSlashIndex, insertSlashAtCursor, stripSeparator, stripHints, stripOrder,
   } = ctx
 
   // The stats row shows the character count, which changes on every key; the rows that draw it
@@ -82,16 +87,13 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
   const composerDockStatsSegments = composerDockStatsFor(composerDraft.length)
   const composerWindowMetaSegments = useMemo<InlineTextSegment[]>(() => {
     const segments: InlineTextSegment[] = []
-    composerKnobSegments.forEach((segment, index) => {
-      if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
-      segments.push(segment)
-    })
-    if (composerLocationSegments.length > 0) {
-      if (segments.length > 0) segments.push({ text: ' · ', fg: theme.dim })
-      segments.push(...composerLocationSegments)
-    }
+    const divide = () => { if (segments.length > 0) segments.push({ text: stripSeparatorText(stripSeparator), fg: theme.dim }) }
+    const [first, location, last] = orderStripGroups(stripOrder, composerKnobSegments, composerLocationSegments)
+    for (const segment of first) { divide(); segments.push(segment) }
+    if (location.length > 0) { divide(); segments.push(...location) }
+    for (const segment of last) { divide(); segments.push(segment) }
     return segments
-  }, [composerKnobSegments, composerLocationSegments, theme.dim])
+  }, [composerKnobSegments, composerLocationSegments, stripOrder, stripSeparator, theme.dim])
   const composerWindowDraftFor = (draftLength: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = [
       { text: `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'}`, fg: theme.dim },
@@ -198,7 +200,9 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
     ? [{ text: `⚠ ${attentionNeedsInputCount} `, fg: theme.amber }, ...composerDockStatsFor(draftLength)]
     : composerDockStatsFor(draftLength)
   const dockStatusBarLength = dockShowsStatusBar ? footerSegments.reduce((n, segment) => n + segment.text.length, 0) : 0
-  const composerDockFooterHintWidth = Math.max(
+  // A view may drop the idle key hints; a running turn's, a bridge's and the status bar stay.
+  const idleHintsHidden = !stripHints && !composerKeysTargetTurn && !composerDockRouted
+  const composerDockFooterHintWidth = idleHintsHidden && !dockShowsStatusBar ? 0 : Math.max(
     18,
     Math.min((dockShowsStatusBar ? dockStatusBarLength : composerDockFooterHint.length) + 1, composerDockTextareaWidth - footerDockStatsReserve(composerDockTextareaWidth)),
   )
@@ -209,7 +213,7 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
   const composerWindowSendingHintSegments = composerKeysTargetTurn
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
-  const chatComposerFooterHint = chatComposerFocused
+  const chatComposerFooterHint = idleHintsHidden ? '' : chatComposerFocused
     ? composerKeysTargetTurn || composerDockRouted
       ? composerDockFooterHint
       : '⏎ send · ⇧⏎ newline · ⌥M settings'

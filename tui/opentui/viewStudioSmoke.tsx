@@ -164,6 +164,30 @@ try {
   assert.equal(composer(), draftInput, 'changing icon set keeps the mounted composer')
   assert.equal(draftInput.plainText, 'Draft retained while changing icons')
   await act(async () => { draftInput.setText('') })
+  // ── the bottom strip reaches the live dock ──
+  {
+    await press('4')
+    const composerFields = VIEW_SPEC_FIELDS.filter(field => field.section === 'Composer')
+    let row = 0
+    const change = async (key: ViewSpecKey) => {
+      const target = composerFields.findIndex(field => field.key === key)
+      for (; row < target; row += 1) { act(() => { setup.mockInput.pressKey('j') }); await settle(30) }
+      for (; row > target; row -= 1) { act(() => { setup.mockInput.pressKey('k') }); await settle(30) }
+      await press('l')
+    }
+    await change('stripBadge')
+    if (!frame().includes('[CLAUDE]')) fail('the bracketed badge did not reach the dock')
+    await change('stripLabels')
+    if (!/e:auto/.test(frame()) || /effort:auto/.test(frame())) fail('short labels did not reach the dock and the preview')
+    await change('stripEffort')
+    if (/e:auto/.test(frame())) fail('hiding effort left it on the strip')
+    // Back to as shipped, so the saved view and later checks are unaffected.
+    for (const key of ['stripEffort', 'stripLabels', 'stripBadge'] as const) {
+      await change(key)
+      const field = composerFields.find(candidate => candidate.key === key)!
+      for (let i = 2; i < field.options.length; i += 1) await press('l')
+    }
+  }
   await focusIconField('popupIconSet')
   await press('l')
   if (!/Popup icons\s+‹ Standard ›/.test(frame())) fail('Studio did not set the popup override')

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Atkinson_Hyperlegible, Inter, Lexend, Merriweather, Noto_Sans, Open_Sans, Roboto, Source_Sans_3 } from 'next/font/google'
 import './globals.css'
+import './view-style.css'
 import { ProviderLoadingToasts } from '@/components/ProviderLoadingToasts'
 import { THEME_META, THEME_STYLE_ELEMENT_PREFIX, themeStyleText } from '@/lib/themes'
 import { PLUGIN_MANIFESTS } from '@/lib/plugins/catalog'

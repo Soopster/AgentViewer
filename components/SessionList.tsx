@@ -1,5 +1,6 @@
 'use client'
 
+import { WEB_VIEW_PANELS_EVENT, type WebViewPanelsDetail } from './message-view/webViewStyle'
 import { usePluginDashboards } from './shell/usePluginDashboards'
 import { DashboardIcon } from './shell/dashboardIcons'
 import { dispatchPluginCommand } from '@/lib/plugins/commandBus'
@@ -149,6 +150,14 @@ function SessionListInner({
       if (window.localStorage.getItem('agentViewer:sidebarTab') === 'coordinator') setSidebarTabState('coordinator')
       if (window.localStorage.getItem('agentViewer:sidebarCompact') === '1') setCompactRowsState(true)
     } catch { /* ignore storage failures */ }
+  }, [])
+  useEffect(() => {
+    const enter = (event: Event) => {
+      const tab = (event as CustomEvent<WebViewPanelsDetail>).detail.sidebarView
+      if (tab) setSidebarTabState(tab)
+    }
+    window.addEventListener(WEB_VIEW_PANELS_EVENT, enter)
+    return () => window.removeEventListener(WEB_VIEW_PANELS_EVENT, enter)
   }, [])
   const setSidebarTab = (tab: 'sessions' | 'coordinator') => {
     setSidebarTabState(tab)

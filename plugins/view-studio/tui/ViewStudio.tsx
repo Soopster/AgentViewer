@@ -4,6 +4,7 @@
 // is drawn with the draft, so every change is seen on the real conversation,
 // and the specimen at the bottom shows the style fields on a fixed sample even
 // when the open session has no prompt, thinking or tool call to show them on.
+import { orderStripGroups, shapeStripSegments, stripBadgeSegment, stripFolderLabel, stripSeparatorText, type ComposerStripPart } from '../../../tui/opentui/shell/sdkViews'
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BoxRenderable, MouseEvent } from '@opentui/core'
 import { TextAttributes } from '@opentui/core'
@@ -305,14 +306,16 @@ function ViewSpecimen({ spec, theme, width, density, cursor }: { spec: ViewSpec;
 // would be.
 
 type MockRegion = 'icons' | 'popup' | 'window' | 'workspace' | 'tabs' | 'header' | 'cards' | 'hint' | 'reasoning' | 'ticker' | 'composer' | 'sidebar' | 'keys'
-  | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel' | 'scrollbar' | 'status' | 'livetext'
+  | 'rail' | 'tabstrip' | 'frame' | 'fleet' | 'taskpanel' | 'sidepanel' | 'scrollbar' | 'status' | 'livetext' | 'strip'
 const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   iconSet: 'icons',
   toolbarIconSet: 'icons', railIconSet: 'rail', composerIconSet: 'composer', tabIconSet: 'tabstrip',
   popupIconSet: 'popup', windowIconSet: 'window', workspaceIconSet: 'workspace', workspaceTabStyle: 'workspace',
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
-  liveText: 'livetext', composerStatus: 'status', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
+  liveText: 'livetext', composerStatus: 'status',
+  stripBadge: 'strip', stripSeparator: 'strip', stripColor: 'strip', stripLabels: 'strip', stripContextStyle: 'strip', stripOrder: 'strip', stripFolderStyle: 'strip', stripModel: 'strip', stripEffort: 'strip', stripContext: 'strip',
+  stripCost: 'strip', stripFolder: 'strip', stripGit: 'strip', stripHints: 'strip', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
   sessionRail: 'rail', sidebarView: 'rail', railFill: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
   tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip',
   tabStripFill: 'tabstrip', tabHover: 'tabstrip', tabAccent: 'tabstrip', tabActivity: 'tabstrip', tabOverflow: 'tabstrip', tabTruncate: 'tabstrip', focusMode: 'header',
@@ -383,6 +386,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
           : `${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'layout', '⊞')} Layout  ${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'expand', '↗')} Expand  ${tuiIcon(spec.windowIconSet ?? spec.iconSet, 'error', '×')} Close`}
         </text>
       </MockRow> : null}
+      {marked('strip') ? <MockRow theme={theme} marked><MockStrip spec={spec} theme={theme} width={width - 1} /></MockRow> : null}
       {marked('workspace') ? <MockRow theme={theme} marked>
         <WorkspaceSwitcherSample spec={spec} theme={theme} />
       </MockRow> : null}
@@ -482,6 +486,39 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
           {spec.cursor === 'card' ? 'j/k move · e fold · cursor card lit' : 'j/k scroll · e expand all · no cursor'}
         </text>
       </MockRow>
+    </box>
+  )
+}
+
+type MockSegment = { text: string; fg: string; bg?: string; attributes?: number; part?: ComposerStripPart; percent?: number }
+
+/** The composer's bottom strip on sample values, shaped as the dock shapes it. Drawn first so it is never clipped. */
+function MockStrip({ spec, theme, width }: { spec: ViewSpec; theme: TuiThemePalette; width: number }) {
+  const entries = shapeStripSegments<MockSegment>([
+    { text: '▶▶ auto', fg: theme.amber },
+    { text: 'model:auto', fg: theme.cyan, part: 'model' },
+    { text: 'ctx:42%', fg: theme.green, part: 'context', percent: 42 },
+    { text: 'cost:~$1.20', fg: theme.dim, part: 'cost' },
+    { text: 'effort:auto', fg: theme.dim, part: 'effort' },
+  ], spec, { muted: theme.dim, accent: theme.cyan, bright: theme.text })
+  const location = shapeStripSegments<MockSegment>([
+    { text: `${stripFolderLabel('/code/app/web', spec.stripFolderStyle, 'web')}  `, fg: theme.dim, part: 'folder' },
+    { text: 'main', fg: theme.green, part: 'branch' },
+    { text: '  ~3', fg: theme.amber, part: 'git-count' },
+    { text: '  ?1', fg: theme.dim, part: 'git-count' },
+  ], spec, { muted: theme.dim, accent: theme.cyan, bright: theme.text })
+  const separator = stripSeparatorText(spec.stripSeparator)
+  const badge = stripBadgeSegment(spec.stripBadge, 'Claude', theme.amber, theme.bg)
+  const [first, middle, last] = orderStripGroups<MockSegment>(spec.stripOrder, entries, location)
+  const groups = [...(badge ? [[badge]] : []), ...first.map(entry => [entry]), ...(middle.length ? [middle] : []), ...last.map(entry => [entry])]
+  const segments: MockSegment[] = groups.flatMap((group, index) => index ? [{ text: separator, fg: theme.dim }, ...group] : group)
+  // Two rows: the preview is narrower than a dock.
+  return (
+    <box flexDirection="column">
+      <text id="view-studio-strip-sample" wrapMode="char" width={width} height={2}>
+        {segments.map((segment, index) => <span key={index} fg={segment.fg} bg={segment.bg} attributes={segment.attributes}>{segment.text}</span>)}
+      </text>
+      <text fg={theme.dim} wrapMode="none">{spec.stripHints ? '⏎ send · ⌃R search · ⌃O expand' : '┄ idle key hints hidden'}</text>
     </box>
   )
 }

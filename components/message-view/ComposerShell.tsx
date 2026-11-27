@@ -1,4 +1,5 @@
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
+import { ComposerStrip, useComposerStripSpec } from './ComposerStrip'
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import type { AgentProvider } from '../../lib/types'
 import { Fragment, useMemo } from 'react'
@@ -190,6 +191,8 @@ type ComposerShellProps = {
   cancelSend: () => void
   awaitingPersistedTurn: boolean
   composerStatusColor: string
+  /** List-price estimate for the transcript; null when its provider reports no usage. */
+  sessionCostUsd: number | null
   composerRuntime: ComposerRuntimeState
   composerStatusDetail: string
   composerStatus: string
@@ -216,6 +219,7 @@ type ComposerShellProps = {
 export function ComposerShell(props: ComposerShellProps) {
   const disabledPlugins = useDisabledPlugins()
   const { composerAccessories } = props
+  const viewStrip = useComposerStripSpec()
   const {
     isProject, composerCollapsed, handleComposerDragEnter, handleComposerDragOver,
     handleComposerDragLeave, handleComposerDrop, timelineWidth, viewMode, composerDropActive,
@@ -245,7 +249,7 @@ export function ComposerShell(props: ComposerShellProps) {
     setAttachmentPanelOpen,
     canUseIdeBridge, ideBridge, pluginServices, contextUsage, reattachedRunning, sendMessage,
     canSubmitMessage, activeToolCount, backgroundClaudeTasks, backgroundingTasks, cancelSend,
-    awaitingPersistedTurn, composerStatusColor, composerRuntime, composerStatusDetail,
+    awaitingPersistedTurn, composerStatusColor, sessionCostUsd, composerRuntime, composerStatusDetail,
     composerStatus, codexThinking, composerGitBranch, setBranchSwitcherOpen, composerWorkingDirectory,
     branchSwitcherOpen, onOpenGit, composerGitTitle, composerGitSummary, composerGitHasDetails,
     handleComposerBranchSwitched, teammatesServices, returnToChat, rewindPreview,
@@ -1390,13 +1394,22 @@ export function ComposerShell(props: ComposerShellProps) {
                 <span style={{ color: `var(${composerConfig.cssAccentVar})`, marginRight: 6, fontWeight: 600 }}>{composerConfig.glyph}</span>
                 {codexThinking && sendState === 'sending' ? <ReasoningStatus block={codexThinking} /> : composerStatus}
               </span>
+              <ComposerStrip
+                label={composerConfig.label}
+                accent={`var(${composerConfig.cssAccentVar})`}
+                model={selectedModelValue}
+                effort={selectedEffort}
+                contextUsage={contextUsage}
+                costUsd={sessionCostUsd}
+                cwd={composerWorkingDirectory}
+              />
               <span className="av-web-composer-meta">
-                <span className="av-web-composer-hint">
+                <span className="av-web-composer-hint" data-busy={sendBusy || undefined}>
                   {sendBusy ? composerConfig.footerHintSending : composerConfig.footerHintIdle}
                   {!sendBusy && sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
                 </span>
-                {composerGitBranch ? (
-                  <span className="av-web-composer-git-cluster">
+                {composerGitBranch && viewStrip.stripGit !== 'off' ? (
+                  <span className="av-web-composer-git-cluster" data-strip-color={viewStrip.stripColor}>
                     <button
                       type="button"
                       className="av-web-composer-git-branch"
@@ -1411,6 +1424,7 @@ export function ComposerShell(props: ComposerShellProps) {
                       <span>{composerGitBranch}</span>
                       <ChevronDown aria-hidden size={11} />
                     </button>
+                    {viewStrip.stripGit !== 'full' ? null : (
                     <button
                       type="button"
                       className="av-web-composer-git-counts"
@@ -1424,6 +1438,7 @@ export function ComposerShell(props: ComposerShellProps) {
                       {composerGitSummary?.stashes ? <span className="av-web-composer-git-dirty">*{composerGitSummary.stashes}</span> : null}
                       {!composerGitHasDetails ? <span>{composerGitSummary ? 'clean' : 'status'}</span> : null}
                     </button>
+                    )}
                     {composerWorkingDirectory ? (
                       <BranchSwitcher
                         cwd={composerWorkingDirectory}

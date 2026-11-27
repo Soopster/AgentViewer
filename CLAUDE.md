@@ -1603,6 +1603,12 @@ presentation, and that difference is preserved as `agentCards: 'none'`).
   and sections. `WEB_VIEW_FIELDS` / `webSettingsFromSpec` (tui/viewSpec.ts) say which fields the web
   draws and how they map onto its own settings (view mode, density, width, sticky prompt, diff style,
   filter chips, sidebar, right panel). Other fields are labelled "terminal" and still saved.
+- **Web styling** (`components/message-view/webViewStyle.ts`, `app/view-style.css`): only fields a view
+  changes **from its base** are published, as `data-view-*` attributes and through `useWebViewStyle`, so a
+  built-in view keeps the web's own look. A field the web draws must be in both `WEB_STYLE_FIELDS` and
+  `WEB_VIEW_FIELDS`; `scripts/webViewStyleSmoke.ts` pins that and every CSS selector's field and value.
+- **The composer strip's rules are shared** (`lib/composerStrip.ts`: TUI dock, Studio preview and web).
+  A `strip*` field never hides a permission-mode warning or a meter that needs attention.
 - **Sidebar:** the filtering rules (scratch, settled, activity) live in `lib/sessionSidebarModel.ts`.
   Sort, scratch hiding and settled visibility are one tui.json store
   (`GET/PATCH /api/sidebar-preferences`). The web polls `/api/sessions/running` for the same
