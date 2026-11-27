@@ -51,7 +51,7 @@ There is no test runner and no lint script. Type-checking is the verification st
 
 ### Multi-provider session backend
 
-The app is a unified UI over five separate agent runtimes: **Claude** (`@anthropic-ai/claude-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk` for 1.x, `@opencode/client` for 2.x — see below), **GitHub Copilot** (`@github/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
+The app is a unified UI over five separate agent runtimes: **Claude** (`@anthropic-ai/claude-agent-sdk`), **Codex** (app-server), **OpenCode** (`@opencode-ai/sdk` for 1.x, `@opencode/client` for 2.x — see below), **GitHub Copilot** (`@microsoft/copilot-sdk`), and **Pi** (`@mariozechner/pi-coding-agent`). Do not re-introduce direct JSONL parsing — providers are accessed only through their SDKs.
 
 Each provider follows the same pattern in `lib/`:
 

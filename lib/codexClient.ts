@@ -9,6 +9,7 @@ import {
   type CodexServerRequest,
 } from './codexProtocol'
 import type { InitializeCapabilities } from './codex-schema'
+import type { ThreadSearchParams, ThreadSearchResponse, ThreadSearchResult } from './codex-schema/v2'
 import {
   currentProviderEnvironment,
   currentProviderExecutable,
@@ -207,9 +208,9 @@ class CodexAppServerClient {
   // Untyped on the method/params pair internally (that contract is already
   // enforced at the request() call boundary) to avoid fighting the generic's
   // variance across the recursive retry call.
-  private writeRequest(method: string, params: unknown, isRetry = false): Promise<unknown> {
+  private writeRequest(method: string, params: unknown, isRetry = false, requestId?: string): Promise<unknown> {
     const child = this.ensureProcess()
-    const id = String(this.nextId++)
+    const id = requestId ?? String(this.nextId++)
     const payload = {
       jsonrpc: '2.0' as const,
       id,
@@ -224,12 +225,51 @@ class CodexAppServerClient {
         this.pending.delete(id)
         const dead = /epipe|econnreset|not writable/i.test(error.message)
         if (dead && !isRetry) {
-          resolve(this.writeRequest(method, params, true))
+          resolve(this.writeRequest(method, params, true, requestId))
           return
         }
         reject(error)
       })
     })
+  }
+
+  async searchThreads(
+    params: ThreadSearchParams,
+    signal: AbortSignal,
+    partial: (rows: ThreadSearchResult[]) => void,
+  ): Promise<ThreadSearchResponse> {
+    signal.throwIfAborted()
+    const id = crypto.randomUUID()
+    let child: ChildProcessWithoutNullStreams | null = null
+    const unsubscribe = this.subscribe(event => {
+      if (event.method !== 'thread/search/partial' || event.params.requestId !== id) return
+      if (Array.isArray(event.params.data)) partial(event.params.data as ThreadSearchResult[])
+    })
+    let rejectAbort!: (reason: unknown) => void
+    const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
+    const abort = () => {
+      const pending = this.pending.get(id)
+      this.pending.delete(id)
+      pending?.reject(signal.reason)
+      rejectAbort(signal.reason)
+      if (pending && child && this.child === child && !child.killed) {
+        void this.writeRequest('thread/search/stream/cancel', { requestId: id }, true).catch(() => {})
+      }
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    try {
+      const request = (async () => {
+        await this.initialize()
+        signal.throwIfAborted()
+        child = this.child
+        // A retry on a new process would invalidate the cancellation target.
+        return this.writeRequest('thread/search/stream', params, true, id) as Promise<ThreadSearchResponse>
+      })()
+      return await Promise.race([request, aborted])
+    } finally {
+      unsubscribe()
+      signal.removeEventListener('abort', abort)
+    }
   }
 
   /**

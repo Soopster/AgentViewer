@@ -16,7 +16,7 @@ import { LIVE_PREVIEW_HEIGHT } from '../inlineText'
 
 export type ComposerKnobSegmentsContext = {
   composerTargetSession: Session | null
-  composerPermissionMode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'
+  composerPermissionMode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions' | 'dontAsk'
   theme: TuiThemePalette
   composerCurrentModel: string | null
   composerAccentColor: string

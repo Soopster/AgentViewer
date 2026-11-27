@@ -94,6 +94,7 @@ export type PersistedSearchResult = {
   session: PersistedSessionRecord
   score: number
   matches: PersistedSearchMatch[]
+  nativeSnippet?: string
 }
 
 export type PersistedSearchResponse = {

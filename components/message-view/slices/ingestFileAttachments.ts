@@ -52,7 +52,7 @@ export type UseIngestFileAttachmentsGroupContext = {
   sessionActionLoading: string | null
   setSessionActionLoading: Dispatch<SetStateAction<string | null>>
   setPendingPermissions: Dispatch<SetStateAction<PendingPermission[]>>
-  commitClaudePermissionSelection: (nextMode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions') => void
+  commitClaudePermissionSelection: (nextMode: 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions' | 'dontAsk') => void
   forking: boolean
   setForking: Dispatch<SetStateAction<boolean>>
   onFork: ((newSessionId: string, sourceSession?: Session) => void) | undefined

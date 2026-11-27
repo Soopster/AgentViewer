@@ -15,6 +15,8 @@
 // the terminal gets a real hyperlink either way, and `parseTuiLinkTarget` maps
 // it back to a path the editor can open. A line number rides as `#L<n>`, the
 // spelling GitHub and most editors already use.
+import { codexThreadIdFromLink } from './codexThreadLinks'
+
 export type TuiLinkRun = { text: string; url: string }
 export type TuiLineToken =
   | { kind: 'plain'; text: string }
@@ -22,6 +24,7 @@ export type TuiLineToken =
 
 export type TuiLinkTarget =
   | { kind: 'url'; url: string }
+  | { kind: 'codex-thread'; sessionId: string }
   | { kind: 'file'; path: string; line?: number }
 
 // Trailing punctuation is almost never part of the target: prose ends sentences
@@ -72,7 +75,7 @@ const LINE_TOKEN_PATTERN = new RegExp([
   // at its first `(`, and the opposite problem — prose wrapping a URL in
   // parens — is a balance question trimTrailing can answer but a character
   // class cannot.
-  /(https?:\/\/[^\s<>[\]{}'"]+)/.source,
+  /((?:https?:\/\/|codex:\/\/threads\/)[^\s<>[\]{}'"]+)/.source,
   // absolute or explicitly-relative path, optional trailing slash and :line:col.
   // The trailing slash is MATCHED rather than left behind so looksLikeFilePath can
   // see it and refuse a directory; excluded from the pattern, `/abs/dir/` would
@@ -160,7 +163,7 @@ export function parseTuiLineTokens(text: string, cwd?: string): TuiLineToken[] {
     last = LINE_TOKEN_PATTERN.lastIndex
 
     if (mdLabel !== undefined && mdTarget !== undefined) {
-      const target = /^https?:\/\//.test(mdTarget)
+      const target = /^https?:\/\//.test(mdTarget) || codexThreadIdFromLink(mdTarget)
         ? trimTrailing(mdTarget)
         : looksLikeFilePath(mdTarget, false)
           ? fileUrlFor(mdTarget, cwd)
@@ -179,7 +182,8 @@ export function parseTuiLineTokens(text: string, cwd?: string): TuiLineToken[] {
     if (!trimmed) { pushPlain(raw); continue }
 
     if (bareUrl !== undefined) {
-      tokens.push({ kind: 'link', text: trimmed, url: trimmed })
+      if (parseTuiLinkTarget(trimmed)) tokens.push({ kind: 'link', text: trimmed, url: trimmed })
+      else pushPlain(trimmed)
     } else {
       const requireExtension = relativePath !== undefined
       const url = looksLikeFilePath(trimmed, requireExtension) ? fileUrlFor(trimmed, cwd) : null
@@ -200,6 +204,8 @@ export function parseTuiLineTokens(text: string, cwd?: string): TuiLineToken[] {
  */
 export function parseTuiLinkTarget(url: string): TuiLinkTarget | null {
   if (!url) return null
+  const sessionId = codexThreadIdFromLink(url)
+  if (sessionId) return { kind: 'codex-thread', sessionId }
   if (!url.startsWith('file://')) {
     return /^https?:\/\//.test(url) ? { kind: 'url', url } : null
   }

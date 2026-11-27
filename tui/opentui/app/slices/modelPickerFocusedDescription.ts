@@ -18,7 +18,7 @@ export type UseModelPickerFocusedDescriptionGroupContext = {
   selectedSessionKey: string | null
   contextUsage: ContextUsage | null
   sessionContextUsageCacheRef: React.RefObject<Map<string, ContextUsage | null>>
-  composerPermissionMode: 'auto' | 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions'
+  composerPermissionMode: 'auto' | 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'
   theme: TuiThemePalette
   composerCurrentModel: string | null
   composerAccentColor: string

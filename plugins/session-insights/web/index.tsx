@@ -125,10 +125,13 @@ function IndexSearch({ services, placement, close }: WebPluginViewProps) {
     const mine = ++generation.current
     if (!params) { setResults([]); setStatus('idle'); return undefined }
     setStatus('searching')
+    setResults([])
     const controller = new AbortController()
     // Debounced; only the newest answer is kept.
     const timer = window.setTimeout(() => {
-      insights.search(params, controller.signal)
+      insights.search(params, controller.signal, response => {
+        if (mine === generation.current && !controller.signal.aborted) setResults(response.results)
+      })
         .then(response => { if (mine === generation.current) { setResults(response.results); setStatus('idle') } })
         .catch(cause => { if (mine === generation.current && !controller.signal.aborted) { setError(message(cause)); setStatus('error') } })
     }, 200)
@@ -138,7 +141,7 @@ function IndexSearch({ services, placement, close }: WebPluginViewProps) {
     if (!navigation) return
     const record = result.session
     const prefix = record.key.slice(0, Math.max(record.key.length - record.sessionId.length - 1, 0))
-    navigation.open({ provider: record.provider, sessionId: record.sessionId, ...(prefix && prefix !== record.provider ? { providerInstanceId: prefix } : {}) }, result.matches[0]?.uuid)
+    navigation.open({ provider: record.provider, sessionId: record.sessionId, providerInstanceId: prefix || record.provider }, result.matches[0]?.uuid)
     if (placement === 'overlay') close()
   }
   const field = { fontSize: 13, padding: '4px 8px', background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6 }
@@ -165,7 +168,7 @@ function IndexSearch({ services, placement, close }: WebPluginViewProps) {
               <span style={{ flex: 1, minWidth: 0, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.session.customTitle || result.session.title || result.session.firstPrompt || result.session.sessionId}</span>
               <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{result.session.provider}{result.session.cwd ? ` · ${result.session.cwd.split('/').filter(Boolean).pop()}` : ''}</span>
             </div>
-            {result.matches[0] ? <div style={{ fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.matches[0].snippet}</div> : null}
+            {result.matches[0] || result.nativeSnippet ? <div style={{ fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.matches[0]?.snippet ?? result.nativeSnippet}</div> : null}
           </button>
         ))}
     </Frame>

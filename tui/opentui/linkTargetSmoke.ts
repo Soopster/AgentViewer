@@ -138,4 +138,10 @@ assert.equal(parseTuiLinkTarget('mailto:a@b.c'), null)
 assert.equal(parseTuiLinkTarget(''), null)
 assert.equal(parseTuiLinkTarget('file://relative/x.ts'), null)
 
+const threadId = '01999999-1234-7abc-8def-0123456789ab'
+const codexLink = `codex://threads/${threadId}`
+assert.deepEqual(parseTuiLinkTarget(codexLink), { kind: 'codex-thread', sessionId: threadId })
+assert.deepEqual(parseTuiLineTokens(`[Open conversation](${codexLink})`), [{ kind: 'link', text: 'Open conversation', url: codexLink }])
+assert.equal(parseTuiLinkTarget(`${codexLink}?redirect=1`), null)
+
 console.log('Transcript link target smoke passed (reassembly, prose false positives, path:line, trailing punctuation, probe parity, classifier)')

@@ -502,11 +502,17 @@ function mcpAppLines(block: ThreadedBlock): TuiTranscriptCardLine[] {
     line('Open this tool in the web app for its interactive preview.', 'dim')]
 }
 
+function toolResultProvenanceLines(block: ThreadedBlock): TuiTranscriptCardLine[] {
+  return block.type === 'tool_thread' && block.result?.tool_result_meta?.rewritten_by_plugin === true
+    ? [line('Result rewritten by a Claude plugin', 'muted')]
+    : []
+}
+
 function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   const links = block.type === 'tool_thread'
     ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
     : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
-  const content = [...formatBlockContent(block, activeForms, taskRegistry), ...mcpAppLines(block)]
+  const content = [...formatBlockContent(block, activeForms, taskRegistry), ...mcpAppLines(block), ...toolResultProvenanceLines(block)]
   if (!links.length) return content
   return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
 }
@@ -1117,7 +1123,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
   const links = block.type === 'tool_thread'
     ? mcpResourceLinks(block.result?.resourceLinks, Array.isArray(block.result?.content) ? block.result.content : [])
     : block.type === 'claude_system' ? mcpResourceLinks(block.payload.resource_links) : []
-  const content = [...formatBlockExpandedContent(block, activeForms, taskRegistry), ...mcpAppLines(block)]
+  const content = [...formatBlockExpandedContent(block, activeForms, taskRegistry), ...mcpAppLines(block), ...toolResultProvenanceLines(block)]
   if (!links.length) return content
   return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
 }

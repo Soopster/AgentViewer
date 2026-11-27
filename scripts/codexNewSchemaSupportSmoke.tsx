@@ -11,10 +11,10 @@ import { buildThreadedMessages, stripToolCallBlocks } from '../lib/threading'
 import { formatTranscriptCards } from '../tui/format'
 import type { Thread, ThreadItem } from '../lib/codex-schema/v2'
 
-const question = { type: 'agentMessage', id: 'question', text: '', phase: 'final_answer', memoryCitation: null,
+const question = { type: 'agentMessage', id: 'question', text: '', phase: 'final_answer', memoryCitation: null, moderation: null,
   delivery: 'async', questions: [{ title: 'Which layout?', options: ['Compact', 'Spacious'] }, { title: 'Anything else?', options: null }] } satisfies ThreadItem
 const link = { type: 'resource_link', uri: 'https://example.com/report', name: 'Report' }
-const call = { type: 'mcpToolCall', id: 'call', server: 'reports', tool: 'Read', status: 'completed', arguments: {},
+const call = { type: 'mcpToolCall', id: 'call', server: 'reports', environmentId: null, tool: 'Read', status: 'completed', arguments: {},
   appContext: { connectorId: 'connector', linkId: 'account-1', resourceUri: 'ui://report', appName: 'Reports', actionName: 'Read' },
   mcpAppUi: { resourceUri: 'ui://report', preferredModelDisplayMode: 'fullscreen' }, mcpAppResourceUri: 'ui://legacy',
   pluginId: 'plugin', readOnlyHint: true, result: { content: [{ type: 'text', text: 'Ready' }, link],
@@ -105,7 +105,7 @@ const dependencies: NonNullable<Parameters<typeof readCodexMcpApp>[4]> = {
     catalogs++
     assert.equal(params.threadId, 'thread')
     assert.equal(params.serverName, 'reports')
-    return { data: params.cursor ? [{ name: 'reports', runtimeStatus: 'connected', pluginId: null, httpOrigin: null, serverInfo: null, serverCapabilities: null, toolsError: null, resources: [], resourceTemplates: [], authStatus: 'unknown', tools: { Read: { name: 'Read', inputSchema: {}, _meta: { ui: { resourceUri: 'ui://catalog' } } } } }] : [],
+    return { data: params.cursor ? [{ name: 'reports', runtimeStatus: 'connected', pluginId: null, httpOrigin: null, serverInfo: null, serverCapabilities: null, toolsError: null, toolListMeta: null, resources: [], resourceTemplates: [], authStatus: 'unknown', tools: { Read: { name: 'Read', inputSchema: {}, _meta: { ui: { resourceUri: 'ui://catalog' } } } } }] : [],
       nextCursor: params.cursor ? null : 'next' }
   },
   readResource: async params => {

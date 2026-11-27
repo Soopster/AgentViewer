@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/react */
+import { isClaudeComposerPermissionMode } from '../../lib/claudePermissionMode'
 import { shapeStripSegments } from './composerStrip'
 import { useSessionPrActions, useSessionPrAutoLink } from './app/slices/sessionPr'
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
@@ -2591,13 +2592,13 @@ function OpenTuiWorkspace() {
     }
   })
 
-  const toggleBorders = useStableEvent(() => {
-    const next = !showBorders
   // The view (or the View Studio's draft) chooses the border glyphs; 'none' is
   // carried by showBorders, so its boxes keep square glyphs painted as gutters.
   const viewBorderTheme = viewSpec.borderTheme === 'none' ? 'square' : viewSpec.borderTheme
   useEffect(() => { setBorderTheme(viewBorderTheme, renderer.root) }, [viewBorderTheme, renderer])
 
+  const toggleBorders = useStableEvent(() => {
+    const next = !showBorders
     setShowBorders(next)
     void writeTuiBorders(next).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store border setting')
@@ -2882,7 +2883,7 @@ function OpenTuiWorkspace() {
   const applyModelPickerPermission = useStableEvent((value: string | undefined) => {
     const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
     if (!target || !value) return
-    if (target.provider === 'claude' && CLAUDE_PERMISSION_MODE_ORDER.includes(value as TuiPermissionMode)) {
+    if (target.provider === 'claude' && CLAUDE_PERMISSION_MODE_ORDER.some(mode => mode === value)) {
       setClaudeComposerPermissionMode(target, value as TuiPermissionMode)
     } else if (target.provider === 'codex' && (value === 'auto' || value === 'untrusted' || value === 'on-request' || value === 'never')) {
       setTuiCodexApprovalByKey((prev) => ({ ...prev, [sessionKey(target)]: value }))
@@ -3020,6 +3021,7 @@ function OpenTuiWorkspace() {
     void runTuiSessionAction(target, body).catch(() => { /* swallow */ })
   }, [])
 
+  const claudePermissionRequests = useRef(new Map<string, symbol>())
   const setClaudeComposerPermissionMode = useStableEvent((target: Session | null | undefined, nextMode: TuiPermissionMode) => {
     if (!target || target.provider !== 'claude') return
     const targetKey = sessionKey(target)
@@ -3027,13 +3029,27 @@ function OpenTuiWorkspace() {
     const next = current[targetKey] === nextMode ? current : { ...current, [targetKey]: nextMode }
     tuiPermissionModeByKeyRef.current = next
     setTuiPermissionModeByKey(next)
-    pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: nextMode })
+    if (target.isPending) return
+    const token = Symbol()
+    claudePermissionRequests.current.set(targetKey, token)
+    void runTuiSessionAction(target, { action: 'setPermissionMode', permissionMode: nextMode }).then(result => {
+      const mode = result.permissionMode
+      if (claudePermissionRequests.current.get(targetKey) !== token || !isClaudeComposerPermissionMode(mode)) return
+      const latest = tuiPermissionModeByKeyRef.current
+      if (latest[targetKey] !== nextMode || mode === nextMode) return
+      const applied = { ...latest, [targetKey]: mode }
+      tuiPermissionModeByKeyRef.current = applied
+      setTuiPermissionModeByKey(applied)
+      showToggleOutcome('Claude applied permission mode:', mode)
+    }).catch(() => { /* next send carries permissionMode */ }).finally(() => {
+      if (claudePermissionRequests.current.get(targetKey) === token) claudePermissionRequests.current.delete(targetKey)
+    })
   })
 
   const cycleClaudeComposerPermissionMode = useStableEvent((target: Session | null | undefined) => {
     if (!target || target.provider !== 'claude') return
     const current = tuiPermissionModeByKeyRef.current[sessionKey(target)] ?? 'default'
-    const currentIndex = CLAUDE_PERMISSION_MODE_ORDER.indexOf(current)
+    const currentIndex = CLAUDE_PERMISSION_MODE_ORDER.findIndex(mode => mode === current)
     const next = CLAUDE_PERMISSION_MODE_ORDER[(currentIndex + 1) % CLAUDE_PERMISSION_MODE_ORDER.length]!
     showToggleOutcome('Claude permission mode:', next)
     setClaudeComposerPermissionMode(target, next)
@@ -4368,7 +4384,7 @@ function OpenTuiWorkspace() {
     setAsyncQuestionPrompt({ id: `async:${card.key}`, sessionId: session.sessionId,
       provider: session.provider, providerInstanceId: session.providerInstanceId, asyncQuestion: true, title: 'Follow-up questions', questions: card.asyncQuestions })
   })
-  const openTranscriptLinkAt = useStableEvent((event: MouseEvent): boolean => {
+  const openTranscriptLinkAt = useStableEvent((event: MouseEvent, source: Session): boolean => {
     const press = linkPressRef.current
     linkPressRef.current = null
     if (event.button !== 0 || !press) return false
@@ -4377,6 +4393,11 @@ function OpenTuiWorkspace() {
     if (!url) return false
     const target = parseTuiLinkTarget(url)
     if (!target) return false
+    if (target.kind === 'codex-thread') {
+      if (source.provider !== 'codex') return false
+      openSessionAtMessage({ provider: 'codex', providerInstanceId: source.providerInstanceId ?? 'codex', sessionId: target.sessionId })
+      return true
+    }
     if (target.kind === 'url') {
       void openExternalUrl(target.url).catch((err) => {
         showNotice('error', err instanceof Error ? err.message : `Open this URL in a browser: ${target.url}`)
@@ -7128,6 +7149,7 @@ function OpenTuiWorkspace() {
         sidebarSort={sidebarSort}
         sidebarHeaderPrefixWidth={sidebarHeaderPrefixWidth}
         sidebarProviderBadgeText={sidebarProviderBadgeText}
+        onProviderPress={openProviderMenu}
         sidebarProviderAccent={sidebarProviderAccent}
         workspacesEnabled={workspacesEnabled}
         openSpaces={openSpaces}

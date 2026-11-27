@@ -44,7 +44,7 @@ for (const file of walk(pluginsDir)) {
     }
     if (/^(app|tui\/opentui\/App|components\/MessageView|components\/CommandPalette|tui\/App)/.test(targetRel)) deny(file, specifier, 'plugins never import an app root')
     if (targetRel.startsWith('plugins/') && targetRel.split('/')[1] !== plugin && !targetRel.endsWith('/manifest')) deny(file, specifier, "another plugin's internals")
-    if (/^lib\/(sessionBackend|extensions\/providers\/[^/]+\/(runtime|server))|^@anthropic-ai|^@openai|^@github\/copilot-sdk|^@opencode|^@earendil-works|^@agentclientprotocol/.test(targetRel)) deny(file, specifier, 'plugins use host services, never provider runtimes or SDKs')
+    if (/^lib\/(sessionBackend|extensions\/providers\/[^/]+\/(runtime|server))|^@anthropic-ai|^@openai|^@(github|microsoft)\/copilot-sdk|^@opencode|^@earendil-works|^@agentclientprotocol/.test(targetRel)) deny(file, specifier, 'plugins use host services, never provider runtimes or SDKs')
     if (layer === 'tui' && targetRel.startsWith('tui/opentui/') && !targetRel.startsWith('tui/opentui/shell/sdk')) deny(file, specifier, 'TUI views reach the host through tui/opentui/shell/sdk')
     if (layer === 'web' && targetRel.startsWith('components/') && !targetRel.startsWith('components/shell/') && !targetRel.startsWith('components/ui/')) deny(file, specifier, 'Web views reach the host through components/shell or components/ui')
     if (layer === 'web' && targetRel.startsWith('tui/')) deny(file, specifier, 'a Web view imports TUI code')

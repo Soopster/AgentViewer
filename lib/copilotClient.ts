@@ -7,13 +7,12 @@ import {
   type CopilotClientOptions,
   type CopilotSession,
   type PermissionHandler,
-  type ResumeSessionConfig,
-  type SessionConfigBase,
+  type SessionOptionsBase,
   type TelemetryConfig,
   type CustomAgentConfig,
   type ElicitationHandler,
   type AutoTier,
-} from '@github/copilot-sdk'
+} from '@microsoft/copilot-sdk'
 import { getCoordinatorCopilotTools } from './coordinatorProviderBindings'
 import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 import { clearWaitingSession, getRunningSession, setWaitingSession } from './sessionRuntime'
@@ -28,9 +27,8 @@ function wrapCopilotError(error: unknown): Error {
   if (/ENOENT|spawn|not found|@github\/copilot/i.test(detail)) {
     return new Error(
       `Failed to start GitHub Copilot CLI. Options:\n` +
-      `  • Set COPILOT_CLI_URL to a running Copilot CLI server (e.g. COPILOT_CLI_URL=http://localhost:3000)\n` +
-      `  • Set COPILOT_CLI_PATH to the Copilot CLI binary location\n` +
-      `  • Install @github/copilot globally (npm i -g @github/copilot)\n` +
+      `  • Set COPILOT_CLI_URL to a protocol-4 Copilot server (e.g. COPILOT_CLI_URL=tcp://localhost:3000)\n` +
+      `  • Set COPILOT_CLI_PATH to a protocol-4 Copilot CLI binary\n` +
       `Original error: ${detail}`,
     )
   }
@@ -81,33 +79,37 @@ function readCopilotAutoTier(): AutoTier | undefined {
 function createClientOptions(): CopilotClientOptions {
   const cliUrl = normalizedEnv(process.env.COPILOT_CLI_URL)
   const cliPath = normalizedEnv(process.env.COPILOT_CLI_PATH)
-  const options: CopilotClientOptions = {
-    connection: cliUrl
-      ? RuntimeConnection.forUri(cliUrl)
-      : RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined),
-    logLevel: 'error',
+  let runtime: RuntimeConnection
+  if (cliUrl) {
+    const endpoint = new URL(cliUrl.includes('://') ? cliUrl : `tcp://${cliUrl}`)
+    const port = Number(endpoint.port || (endpoint.protocol === 'http:' ? 80 : 0))
+    if (!['tcp:', 'http:'].includes(endpoint.protocol) || !endpoint.hostname || port < 1 || port > 65535
+      || (endpoint.pathname && endpoint.pathname !== '/') || endpoint.username || endpoint.password
+      || endpoint.search || endpoint.hash) {
+      throw new Error('COPILOT_CLI_URL must identify a plaintext Copilot TCP host and port')
+    }
+    runtime = RuntimeConnection.forTcp(endpoint.hostname.replace(/^\[(.*)\]$/, '$1'), port)
+  } else {
+    runtime = RuntimeConnection.forSpawnedStdio(cliPath ? { path: cliPath } : undefined)
   }
-  const telemetry = readCopilotTelemetry()
-  if (telemetry) options.telemetry = telemetry
-
-  return options
+  return { mode: 'coding-agent', runtime, observability: { logLevel: 'error', telemetry: readCopilotTelemetry() } }
 }
 
 // Session-level config shared by both createSession (new sessions) and
-// resumeSession (every poll/resume of an existing one) — SessionConfigBase
+// resumeSession (when an existing session becomes active) — SessionOptionsBase
 // covers both. excludedBuiltinAgents/sessionLimits are opt-in via env since
 // they change what the agent can do; enableCitations is safe to default on,
 // since it's a no-op for providers that don't support it and copilotMapper's
 // applyCitations already renders the result as a plain sources footer.
-export function copilotSessionConfigOverrides(sessionId?: string): Partial<SessionConfigBase> {
-  const overrides: Partial<SessionConfigBase> = {
-    enableCitations: true,
+export function copilotSessionConfigOverrides(sessionId?: string): SessionOptionsBase {
+  const overrides: SessionOptionsBase = {
+    inference: { enableCitations: true },
     enableConfigDiscovery: true,
     // SDK 1.0.11 captures a preimage before each tool-driven file mutation.
     // Supplying this on create starts a complete rewind history; re-supplying
     // it on resume keeps eligible sessions tracking without breaking older
     // sessions whose pre-upgrade turns have no recoverable baseline.
-    enableFileChangeTracking: true,
+    filesystem: { trackFileChanges: true },
   }
 
   // SDK 1.0.14 adds the latency-focused `fast` tier. The runtime accepts a
@@ -116,7 +118,7 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
   const autoTier = readCopilotAutoTier()
   if (autoTier) {
     overrides.model = 'auto'
-    overrides.capi = { autoTier }
+    overrides.github = { capi: { autoTier } }
   }
 
   // Coordinator sessions get their coord_* tools registered by session id
@@ -125,29 +127,33 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
   // session (sessionId omitted at the initial createSession call, or simply
   // not a coordinator participant) gets none.
   const coordinatorTools = sessionId ? getCoordinatorCopilotTools(sessionId) : undefined
-  if (coordinatorTools?.length) overrides.tools = coordinatorTools as SessionConfigBase['tools']
+  if (coordinatorTools?.length) {
+    overrides.tools = { definitions: coordinatorTools as NonNullable<SessionOptionsBase['tools']>['definitions'] }
+  }
 
   const customAgents = readCustomAgents()
-  if (customAgents) overrides.customAgents = customAgents
+  if (customAgents) overrides.agents = { definitions: customAgents }
 
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_APPROVE_PLAN)) {
-    overrides.onExitPlanModeRequest = (request) => ({
-      approved: true,
-      selectedAction: request.recommendedAction,
-    })
+    overrides.interaction = {
+      onExitPlanModeRequest: (request) => ({ approved: true, selectedAction: request.recommendedAction }),
+    }
   }
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_MODE_SWITCH)) {
-    overrides.onAutoModeSwitchRequest = () => 'yes'
+    overrides.interaction = { ...overrides.interaction, onAutoModeSwitchRequest: () => 'yes' }
   }
 
   const excludedAgents = normalizedEnv(process.env.COPILOT_EXCLUDED_AGENTS)
   if (excludedAgents) {
-    overrides.excludedBuiltinAgents = excludedAgents.split(',').map((name) => name.trim()).filter(Boolean)
+    overrides.agents = {
+      ...overrides.agents,
+      excludedBuiltinAgents: excludedAgents.split(',').map((name) => name.trim()).filter(Boolean),
+    }
   }
 
   const maxAiCredits = Number(normalizedEnv(process.env.COPILOT_MAX_AI_CREDITS))
   if (Number.isFinite(maxAiCredits) && maxAiCredits > 0) {
-    overrides.sessionLimits = { maxAiCredits }
+    overrides.execution = { limits: { maxAiCredits } }
   }
 
   // Grant read/write access to extra directories beyond the session's working
@@ -155,7 +161,10 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
   // checkout. Must be re-supplied on every resume (the SDK doesn't persist it).
   const additionalDirectories = normalizedEnv(process.env.COPILOT_ADDITIONAL_DIRECTORIES)
   if (additionalDirectories) {
-    overrides.additionalDirectories = additionalDirectories.split(',').map((dir) => dir.trim()).filter(Boolean)
+    overrides.filesystem = {
+      ...overrides.filesystem,
+      additionalDirectories: additionalDirectories.split(',').map((dir) => dir.trim()).filter(Boolean),
+    }
   }
 
   return overrides
@@ -340,46 +349,50 @@ export async function rewindCopilotSessionFiles(
   }
 }
 
-async function resumeCopilotSession(
-  sessionId: string,
-  overrides: Partial<ResumeSessionConfig> = {},
-): Promise<CopilotSession> {
+async function resumeCopilotSession(sessionId: string): Promise<CopilotSession> {
   const client = await getCopilotClient()
+  const defaults = copilotSessionConfigOverrides(sessionId)
   try {
     return await client.resumeSession(sessionId, {
-      onPermissionRequest: async (request, invocation) => {
-        // Plugins answer first (lib/plugins/permissionBridge.ts); only a session
-        // that has a handler (a live turn the person watches) is asked about.
-        const handler = copilotPermissionHandlers.get(sessionId)
-        if (handler) {
-          const raw = request as unknown as Record<string, unknown>
-          const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
-          const decided = await askPluginsAboutPermission('copilot', sessionId, {
-            toolName: typeof raw.toolName === 'string' ? raw.toolName : typeof raw.kind === 'string' ? raw.kind : undefined,
-            kind: raw.kind === 'shell' ? 'command' : raw.kind === 'write' ? 'file' : raw.kind === 'url' ? 'network' : undefined,
-            input: raw,
-            ...(typeof raw.fullCommandText === 'string' ? { command: raw.fullCommandText } : {}),
-            ...(typeof raw.fileName === 'string' ? { paths: [raw.fileName] } : {}),
-            ...(typeof raw.intention === 'string' ? { title: raw.intention } : {}),
-          })
-          if (decided?.decision === 'allow') return { kind: 'approve-once' } as never
-          if (decided?.decision === 'deny') return { kind: 'reject', feedback: decided.reason ?? `Denied by the ${decided.pluginId} plugin` } as never
-        }
-        return (handler ?? approveAll)(request, invocation)
-      },
-      onElicitationRequest: (context) =>
-        (copilotElicitationHandlers.get(sessionId) ?? (() => ({ action: 'decline' as const })))(context),
-      hooks: {
-        onAgentStop: (input) => {
-          if (input.stopReason) copilotLastStopReason.set(sessionId, input.stopReason)
+      ...defaults,
+      permissions: {
+        onRequest: async (request, invocation) => {
+          // Plugins answer first (lib/plugins/permissionBridge.ts); only a session
+          // that has a handler (a live turn the person watches) is asked about.
+          const handler = copilotPermissionHandlers.get(sessionId)
+          if (handler) {
+            const raw = request as unknown as Record<string, unknown>
+            const { askPluginsAboutPermission } = await import('./plugins/permissionBridge')
+            const decided = await askPluginsAboutPermission('copilot', sessionId, {
+              toolName: typeof raw.toolName === 'string' ? raw.toolName : typeof raw.kind === 'string' ? raw.kind : undefined,
+              kind: raw.kind === 'shell' ? 'command' : raw.kind === 'write' ? 'file' : raw.kind === 'url' ? 'network' : undefined,
+              input: raw,
+              ...(typeof raw.fullCommandText === 'string' ? { command: raw.fullCommandText } : {}),
+              ...(typeof raw.fileName === 'string' ? { paths: [raw.fileName] } : {}),
+              ...(typeof raw.intention === 'string' ? { title: raw.intention } : {}),
+            })
+            if (decided?.decision === 'allow') return { kind: 'approve-once' }
+            if (decided?.decision === 'deny') return { kind: 'reject', feedback: decided.reason ?? `Denied by the ${decided.pluginId} plugin` }
+          }
+          return (handler ?? approveAll)(request, invocation)
         },
       },
-      suppressResumeEvent: true,
-      // We're a read-mostly observer; suppress duplicate telemetry events
-      // that would otherwise fire on every resume from session list polls.
-      enableSessionTelemetry: false,
-      ...copilotSessionConfigOverrides(sessionId),
-      ...overrides,
+      interaction: {
+        ...defaults.interaction,
+        onElicitationRequest: (context) => copilotElicitationHandlers.get(sessionId)?.(context) ?? { action: 'decline' },
+      },
+      hooks: {
+        handlers: {
+          onAgentStop: (input) => {
+            if (input.stopReason) copilotLastStopReason.set(sessionId, input.stopReason)
+          },
+        },
+      },
+      github: { ...defaults.github, telemetryEnabled: false },
+      events: { streaming: true },
+      ...(hasResearchToolPolicy('copilot', sessionId)
+        ? { tools: { ...defaults.tools, availableTools: [...RESEARCH_FILE_TOOLS] } }
+        : {}),
     })
   } catch (error) {
     throw wrapCopilotError(error)
@@ -560,11 +573,7 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
   }
   const inflight = copilotSessionInflight.get(sessionId)
   if (inflight) return inflight
-  const build = resumeCopilotSession(sessionId, {
-    suppressResumeEvent: false,
-    streaming: true,
-    ...(hasResearchToolPolicy('copilot', sessionId) ? { availableTools: [...RESEARCH_FILE_TOOLS] } : {}),
-  }).then((session) => {
+  const build = resumeCopilotSession(sessionId).then((session) => {
     const entry: CopilotPoolEntry = {
       session,
       lastUsed: Date.now(),

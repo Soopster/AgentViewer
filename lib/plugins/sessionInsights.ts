@@ -8,7 +8,7 @@ import type { AgentProvider, SessionMessage } from '../types'
 export type PluginSessionInsightsService = {
   /** The provenance summary and the recorded edits (with their prompts) for one session. */
   readonly provenance: (session: { provider: AgentProvider; sessionId: string }, signal?: AbortSignal) => Promise<{ summary: SessionProvenanceResult; edits: PersistedFileEditRecord[] }>
-  readonly search: (params: PersistedSearchParams, signal?: AbortSignal) => Promise<PersistedSearchResponse>
+  readonly search: (params: PersistedSearchParams, signal?: AbortSignal, onPartial?: (result: PersistedSearchResponse) => void) => Promise<PersistedSearchResponse>
 }
 
 export type TimedCall = { label: string; durationMs: number }

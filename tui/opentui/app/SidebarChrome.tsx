@@ -56,15 +56,18 @@ export function SidebarStatus({ theme, count, note, onClearNote, iconSet }: { th
   </box>
 }
 
-export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent, onPress }: {
-  theme: TuiThemePalette; width: number; text: string; prefixWidth: number; badge: string; accent: string; onPress?: () => void
+export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent, onPress, onBadgePress }: {
+  theme: TuiThemePalette; width: number; text: string; prefixWidth: number; badge: string; accent: string; onPress?: () => void; onBadgePress?: () => void
 }) {
+  const [badgeHover, setBadgeHover] = useState(false)
   return <box position="absolute" top={-1} left={1} width={Math.min(text.trimEnd().length + 2, width - 4)} height={1} paddingX={1}
     flexDirection="row" backgroundColor={theme.surface} overflow="hidden"
     onMouseDown={event => { if (event.button === 0 && onPress) { event.stopPropagation(); onPress() } }}>
     <text fg={theme.cyan} bg={theme.surface} wrapMode="none">{text.trimEnd()}</text>
-    <box id="sidebar-provider-badge" position="absolute" top={0} left={prefixWidth + 1} width={badge.length} minWidth={badge.length} maxWidth={badge.length} height={1} overflow="hidden" backgroundColor={accent}>
-      <text width={badge.length} minWidth={badge.length} maxWidth={badge.length} fg={theme.bg} attributes={TextAttributes.BOLD} wrapMode="none">{badge}</text>
+    <box id="sidebar-provider-badge" position="absolute" top={0} left={prefixWidth + 1} width={badge.length} minWidth={badge.length} maxWidth={badge.length} height={1} overflow="hidden" backgroundColor={badgeHover ? mixHexColor(accent, theme.text, 0.75) ?? accent : accent}
+      onMouseOver={() => setBadgeHover(true)} onMouseOut={() => setBadgeHover(false)}
+      onMouseDown={event => { if (event.button === 0 && onBadgePress) { event.stopPropagation(); onBadgePress() } }}>
+      <text selectable={false} width={badge.length} minWidth={badge.length} maxWidth={badge.length} fg={theme.bg} attributes={TextAttributes.BOLD} wrapMode="none">{badge}</text>
     </box>
   </box>
 }

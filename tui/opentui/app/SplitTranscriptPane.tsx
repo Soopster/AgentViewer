@@ -302,7 +302,7 @@ export type SplitTranscriptPaneProps = {
   lightweight: boolean
   /** Links in the transcript: noted on press, followed on an unmoved release (`renderer.getLinkAt`). True when one was. */
   onTranscriptPress: (event: MouseEvent) => void
-  onTranscriptRelease: (event: MouseEvent) => boolean
+  onTranscriptRelease: (event: MouseEvent, source: Session) => boolean
   /** A card's follow-up questions, opened by clicking it in SCROLLBACK. */
   onOpenAsyncQuestions: (session: Session, card: TuiTranscriptCard) => void
   /** A floating window moves by its title (App's float gesture). */
@@ -905,7 +905,7 @@ export function SplitTranscriptPaneInner({
   const releaseTranscript = (event: MouseEvent) => {
     const press = transcriptPressRef.current
     transcriptPressRef.current = null
-    if (onTranscriptRelease(event)) return
+    if (onTranscriptRelease(event, session)) return
     if (!paneScrollbackLike || event.button !== 0 || !press || press.x !== event.x || press.y !== event.y) return
     const sb = scrollRef.current
     if (!sb) return

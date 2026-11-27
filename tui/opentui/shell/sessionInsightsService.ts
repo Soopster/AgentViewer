@@ -5,5 +5,5 @@ import { readTuiSessionProvenance, searchTuiSessionIndex } from '../../../lib/tu
 
 export const tuiSessionInsights: PluginSessionInsightsService = {
   provenance: (session) => readTuiSessionProvenance(session.provider, session.sessionId),
-  search: (params) => searchTuiSessionIndex(params),
+  search: searchTuiSessionIndex,
 }

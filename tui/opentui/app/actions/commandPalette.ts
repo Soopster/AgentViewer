@@ -310,7 +310,7 @@ export type RunTuiLocalCommandContext = {
   switchComposerModel: (target: Session, requested: string) => Promise<void>
   composerCurrentModel: string | null
   contextUsage: ContextUsage | null
-  composerPermissionMode: 'plan' | 'default' | 'auto' | 'acceptEdits' | 'bypassPermissions'
+  composerPermissionMode: 'plan' | 'default' | 'auto' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'
   tuiAddedDirsByKeyRef: React.RefObject<Record<string, string[]>>
   setTuiAddedDirsByKey: React.Dispatch<React.SetStateAction<Record<string, string[]>>>
   composerLiveSlashCommands: SlashCommandSuggestion[]

@@ -145,7 +145,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
     ? 'ALL'
     : providerInstances.find((instance) => instance.providerInstanceId === providerInstanceId)?.label.toUpperCase() ?? formatProviderLabel(provider)
   const sidebarHeaderWidth = Math.max(sidebarInnerWidth, 12)
-  const sidebarProviderBadgeText = ` ${fitText(sidebarProviderLabel, Math.max(sidebarHeaderWidth - 11, 3)).trimEnd()} `
+  const sidebarProviderBadgeText = ` ${fitText(sidebarProviderLabel, Math.max(sidebarHeaderWidth - 13, 3)).trimEnd()} ▾ `
   const sidebarHeaderPrefix = `${sidebarSessionCountLabel} · `
   const sidebarHeaderPrefixWidth = Math.min(
     sidebarHeaderPrefix.length,

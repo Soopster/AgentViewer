@@ -10,7 +10,8 @@
 //
 // These are pure mapping/classification checks — no network, no subprocess.
 import assert from 'node:assert/strict'
-import { normalizeClaudeHistoryMessages, normalizeClaudeStreamThreadedMessage } from '../lib/claudeMapper'
+import { extractClaudeStreamToolResults, normalizeClaudeHistoryMessages, normalizeClaudeStreamThreadedMessage } from '../lib/claudeMapper'
+import { claudePermissionModeFromFrame } from '../lib/claudePermissionMode'
 import { effortToSdk } from '../lib/claudePool'
 import { formatClaudeRuntimeCounts, formatClaudeRuntimeDetailLines } from '../lib/claudeSdkFeatures'
 import { classifyClaudeUsageMessage, isClaudeUsageLimitError } from '../lib/claudeUsageLimits'
@@ -293,5 +294,24 @@ const orphanedTask = normalizeClaudeHistoryMessages([{
 }])
 const orphanedCards = JSON.stringify(formatTranscriptCards(buildThreadedMessages(orphanedTask)))
 assert.ok(orphanedCards.includes('worker restart'), 'TUI task card does not say the worker restart stopped it')
+
+const rewrittenResult = {
+  type: 'user', uuid: 'rewrite-reply', session_id: 's',
+  message: { role: 'user', content: [
+    { type: 'tool_result', tool_use_id: 'rewritten', content: 'edited output' },
+    { type: 'tool_result', tool_use_id: 'plain', content: 'ordinary output' },
+  ] },
+  tool_result_meta: [{ id: 'plain', call_ended: true }, { id: 'rewritten', rewritten_by_plugin: true }],
+}
+const liveResults = extractClaudeStreamToolResults(rewrittenResult)
+assert.equal(liveResults[0]?.tool_result_meta?.rewritten_by_plugin, true)
+assert.equal(liveResults[1]?.tool_result_meta?.rewritten_by_plugin, undefined)
+const [historyResult] = normalizeClaudeHistoryMessages([rewrittenResult])
+assert.deepEqual('content' in historyResult.message && Array.isArray(historyResult.message.content)
+  && historyResult.message.content.map(block => block.type === 'tool_result' ? block.tool_result_meta : null),
+liveResults.map(block => block.tool_result_meta))
+assert.equal(claudePermissionModeFromFrame({ type: 'system', subtype: 'init', permissionMode: 'dontAsk' }), 'dontAsk')
+assert.equal(claudePermissionModeFromFrame({ type: 'system', subtype: 'status', permissionMode: 'auto' }), 'auto')
+assert.equal(claudePermissionModeFromFrame({ type: 'assistant', subtype: 'status', permissionMode: 'auto' }), undefined)
 
 console.log('Claude SDK surface smoke passed')

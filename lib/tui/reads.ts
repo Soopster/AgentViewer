@@ -92,14 +92,20 @@ export async function readTuiSessionDetailSource(session: Session): Promise<{
     ? CLAUDE_MESSAGE_LIMIT
     : TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT
   if (isRemoteAttached()) {
-    const query = providerQuery(session.provider)
+    const target = new URLSearchParams()
+    if (session.provider) target.set('provider', session.provider)
+    if (session.providerInstanceId) target.set('providerInstanceId', session.providerInstanceId)
+    const messageQuery = new URLSearchParams(target)
+    messageQuery.set('limit', String(messageLimit))
+    messageQuery.set('offset', '0')
+    messageQuery.set('tail', '1')
     const [infoResult, windowResult] = await Promise.all([
-      remoteJson<{ info: SessionInfo | null }>(encodeSessionPath(session.sessionId, query))
+      remoteJson<{ info: SessionInfo | null }>(encodeSessionPath(session.sessionId, `?${target}`))
         .catch(() => ({ info: null })),
       remoteJson<{ messages: SessionMessage[]; externalWriter?: boolean }>(
         encodeSessionPath(
           session.sessionId,
-          `/messages?limit=${messageLimit}&offset=0&tail=1${session.provider ? `&provider=${encodeURIComponent(session.provider)}` : ''}`,
+          `/messages?${messageQuery}`,
         ),
       ),
     ])

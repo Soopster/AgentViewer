@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const providers = {
   claude: ['@anthropic-ai/claude-agent-sdk'], codex: [],
-  opencode: ['@opencode-ai/sdk'], copilot: ['@github/copilot-sdk'],
+  opencode: ['@opencode-ai/sdk'], copilot: ['@microsoft/copilot-sdk'],
   pi: ['@earendil-works/pi-coding-agent'],
   acp: ['@agentclientprotocol/sdk'], 'claude-acp': ['@agentclientprotocol/sdk'], 'codex-acp': ['@agentclientprotocol/sdk'],
   lmstudio: [],

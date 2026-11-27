@@ -1,3 +1,5 @@
+import { readSessionSearchStream, sessionSearchQuery } from '../session-index/searchStream'
+import type { PluginSessionInsightsService } from '../plugins/sessionInsights'
 import { beginProviderLoading } from '../providerLoading'
 import { timeSendPhase } from '../sendPhaseTrace'
 import {
@@ -152,6 +154,7 @@ export {
 import { dismissViewerAttention } from '../viewerAttention'
 import {
   encodeSessionPath,
+  getAttachBaseUrl,
   isRemoteAttached,
   readDaemonStatus,
   providerQuery,
@@ -929,17 +932,17 @@ export async function readTuiSessionProvenance(provider: AgentProvider, sessionI
  * Full-text search over the persistent session index, with the index's facets.
  * Loaded on demand: it opens the SQLite index, which browsing never needs.
  */
-export async function searchTuiSessionIndex(params: import('../session-index/types').PersistedSearchParams): Promise<import('../session-index/types').PersistedSearchResponse> {
-  if (isRemoteAttached()) {
-    const query = new URLSearchParams({ q: params.query, messagesOnly: '0' })
-    if (params.limit) query.set('limit', String(params.limit))
-    if (params.provider && params.provider !== 'all') query.set('provider', params.provider)
-    if (params.dir) query.set('dir', params.dir)
-    if (params.sinceMs != null) query.set('sinceMs', String(params.sinceMs))
-    if (params.untilMs != null) query.set('untilMs', String(params.untilMs))
-    if (params.hasError) query.set('hasError', '1')
-    if (params.touchedFile) query.set('touchedFile', params.touchedFile)
-    return remoteJson(`/api/session-index/search?${query}`)
+export const searchTuiSessionIndex: PluginSessionInsightsService['search'] = async (params, signal, onPartial) => {
+  const base = getAttachBaseUrl()
+  if (base) {
+    const query = sessionSearchQuery(params)
+    if (!onPartial) return remoteJson(`/api/session-index/search?${query}`, { signal })
+    query.set('stream', '1')
+    return readSessionSearchStream(await fetch(`${base}/api/session-index/search?${query}`, { signal }), onPartial)
+  }
+  if (onPartial) {
+    const { searchSessionsProgressively } = await import('../session-index/progressiveSearch')
+    return searchSessionsProgressively(params, signal ?? new AbortController().signal, onPartial)
   }
   const { searchPersistedSessions } = await import('../sessionPersistence')
   return searchPersistedSessions(params)
@@ -1413,7 +1416,7 @@ export async function runTuiSessionAction(
   if (isRemoteAttached()) {
     const { result } = await remoteJson<{ result: Record<string, unknown> }>(
       encodeSessionPath(session.sessionId, '/actions'),
-      { method: 'POST', body: JSON.stringify({ ...body, provider: session.provider }) },
+      { method: 'POST', body: JSON.stringify({ ...body, provider: session.provider, providerInstanceId: session.providerInstanceId }) },
     )
     return result ?? {}
   }

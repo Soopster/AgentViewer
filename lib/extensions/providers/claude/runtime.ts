@@ -790,8 +790,8 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
                 throw new Error('permissionMode is required');
             const warm = claudePoolModule().peekClaudeSession(sessionId);
             if (warm) {
-                await warm.setPermissionMode(mode);
-                return { ok: true, applied: 'live' };
+                const permissionMode = await warm.setPermissionMode(mode);
+                return { ok: true, applied: 'live', permissionMode };
             }
             return { ok: true, applied: 'next-send' };
         }

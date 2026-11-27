@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { isProviderSelection } from '@/lib/provider'
 import { normalizeProjectPath } from '@/lib/projectPaths'
 import { searchPersistedSessions } from '@/lib/sessionPersistence'
+import { searchSessionsProgressively } from '@/lib/session-index/progressiveSearch'
 import type { SessionMessage } from '@/lib/types'
 
 function parseRole(value: string | null): SessionMessage['type'] | undefined {
@@ -27,21 +28,40 @@ export async function GET(request: Request) {
   const hasError = searchParams.get('hasError') === '1' || searchParams.get('hasError') === 'true'
   const touchedFile = searchParams.get('touchedFile')?.trim() || undefined
 
-  try {
-    const results = await searchPersistedSessions({
-      sinceMs: finite('sinceMs'),
-      untilMs: finite('untilMs'),
-      hasError: hasError || undefined,
-      touchedFile,
-      query,
-      limit,
-      provider,
-      dir,
-      includeWorktrees,
-      role,
-      messagesOnly,
-      toolName,
+  const params = {
+    sinceMs: finite('sinceMs'),
+    untilMs: finite('untilMs'),
+    hasError: hasError || undefined,
+    touchedFile,
+    query,
+    limit,
+    provider,
+    dir,
+    includeWorktrees,
+    role,
+    messagesOnly,
+    toolName,
+  }
+  if (searchParams.get('stream') === '1') {
+    const cancellation = new AbortController()
+    const signal = AbortSignal.any([request.signal, cancellation.signal])
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const send = (frame: unknown) => {
+          if (!signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(frame) + '\n'))
+        }
+        void searchSessionsProgressively(params, signal, result => send({ type: 'partial', result }))
+          .then(result => send({ type: 'complete', result }))
+          .catch(error => send({ type: 'error', message: error instanceof Error ? error.message : 'Search failed' }))
+          .finally(() => { if (!cancellation.signal.aborted) controller.close() })
+      },
+      cancel() { cancellation.abort() },
     })
+    return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' } })
+  }
+  try {
+    const results = await searchPersistedSessions(params)
     return NextResponse.json(results)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

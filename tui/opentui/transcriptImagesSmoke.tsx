@@ -8,7 +8,7 @@ import { buildThreadedMessages } from '../../lib/threading'
 import { mapAcpBufferedMessage } from '../../lib/acpMapper'
 import { mapCopilotEventsToSessionMessages } from '../../lib/copilotMapper'
 import type { AcpBufferedMessage } from '../../lib/acpClientPool'
-import type { SessionEvent } from '@github/copilot-sdk'
+import type { SessionEvent } from '@microsoft/copilot-sdk'
 import { TranscriptImages } from './TranscriptImages'
 import { testRender, act } from './testRender'
 

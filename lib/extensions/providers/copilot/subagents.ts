@@ -1,5 +1,5 @@
 // Provider architecture extraction: SDK behavior preserved from the session backend.
-import type { SessionEvent as CopilotSessionEvent } from '@github/copilot-sdk';
+import type { SessionEvent as CopilotSessionEvent } from '@microsoft/copilot-sdk';
 import type { SubagentSummary } from "../../../types";
 // Provider adapters deliberately cache their normalized SessionMessage object
 // graphs. Adding provider-instance provenance with an unconditional object

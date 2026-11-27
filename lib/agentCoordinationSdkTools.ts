@@ -31,7 +31,7 @@ import type { AgentProvider } from './types';
 import { z } from 'zod';
 import { Type, type TSchema } from 'typebox';
 import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { Tool as CopilotTool, ToolNamespace } from '@github/copilot-sdk';
+import type { Tool as CopilotTool, ToolNamespace } from '@microsoft/copilot-sdk';
 import type { DynamicToolSpec } from './codex-schema/v2';
 import type { JsonValue } from './codex-schema/serde_json/JsonValue';
 import type { ExternalProtocolIdentity } from './agentProtocol';

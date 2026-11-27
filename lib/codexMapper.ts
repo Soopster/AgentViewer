@@ -60,7 +60,7 @@ export function unwrapCodexShellCommand(command: string): string {
 }
 
 function msToIsoTimestamp(ms: number | null | undefined): string | undefined {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return undefined
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0 || ms > 8.64e15) return undefined
   return new Date(ms).toISOString()
 }
 
@@ -89,7 +89,7 @@ function codexUserInputToText(input: CodexUserInput[]): string {
         case 'localImage':
           return `[local image] ${entry.path}`
         case 'audio':
-          return `[audio] ${entry.url}`
+          return `[audio] ${'url' in entry ? entry.url : `file:${entry.fileId}`}`
         case 'localAudio':
           return `[local audio] ${entry.path}`
         case 'skill':
@@ -192,7 +192,7 @@ function mapItemToMessages(
         switch (part.type) {
           case 'input_text': return part.text
           case 'input_image': return `[image] ${'image_url' in part ? part.image_url : `file:${part.file_id}`}`
-          case 'input_audio': return `[audio] ${part.audio_url}`
+          case 'input_audio': return `[audio] ${'audio_url' in part ? part.audio_url : `file:${part.file_id}`}`
           case 'encrypted_content': return '[encrypted tool output]'
         }
       }).join('\n')
@@ -362,8 +362,11 @@ function mapItemToMessages(
       return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId, timestamp)]
     case 'sleep':
       return [makeMessage(threadId, baseId, 'assistant', `Paused for ${item.durationMs} ms.`, turnId, timestamp)]
-    case 'imageGeneration':
-      return [makeMessage(threadId, baseId, 'assistant', `Image generation (${item.status})\n\n${item.result}`, turnId, timestamp)]
+    case 'imageGeneration': {
+      const result = item.savedPath ?? ('fileId' in item ? `file:${item.fileId}` : item.result)
+      const text = [`Image generation (${item.status})`, result].filter(Boolean).join('\n\n')
+      return [makeMessage(threadId, baseId, 'assistant', text, turnId, timestamp)]
+    }
     case 'enteredReviewMode':
       return [makeMessage(threadId, baseId, 'assistant', `Entered review mode\n\n${item.review}`, turnId, timestamp)]
     case 'exitedReviewMode':
@@ -400,13 +403,16 @@ export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSe
   if (!itemId || !itemType || !turnId || !threadId) return null
 
   // ItemStarted/CompletedNotification carry an exact millisecond timestamp;
-  // prefer it, then fall back to v7-UUID extraction for any payload that
-  // somehow lacks the field.
+  // prefer it, then use the item metadata or a v7 UUID for older payloads.
   const timestampMs = record.type === 'codex_item_completed'
     ? (typeof record.completedAtMs === 'number' ? record.completedAtMs : undefined)
     : (typeof record.startedAtMs === 'number' ? record.startedAtMs : undefined)
-  const timestamp = msToIsoTimestamp(timestampMs) ?? uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
-  const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp, {
+  const threadItem = item as CodexThreadItem
+  const timestamp = msToIsoTimestamp(timestampMs)
+    ?? msToIsoTimestamp(record.type === 'codex_item_completed' ? threadItem.completedAtMs : threadItem.startedAtMs)
+    ?? uuidV7ToIsoTimestamp(itemId)
+    ?? uuidV7ToIsoTimestamp(turnId)
+  const messages = mapItemToMessages(threadId, turnId, threadItem, timestamp, {
     includeToolResults: record.type === 'codex_item_completed',
   })
   if (messages.length === 0) return null
@@ -478,10 +484,10 @@ export function mapCodexThreadToMessages(thread: CodexThread, reasoningMetadata:
       ?? uuidV7ToIsoTimestamp(turn.id)
     const items = [...turn.items]
     for (const item of items) {
-      // ThreadItem has no per-item timestamp in the archive, so its v7
-      // UUID is still the only finer-grained signal we can use; fall
-      // back to the turn timestamp if even that doesn't parse.
-      const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
+      const itemTimestamp = msToIsoTimestamp(item.startedAtMs)
+        ?? msToIsoTimestamp(item.completedAtMs)
+        ?? uuidV7ToIsoTimestamp(item.id)
+        ?? turnTimestamp
       const itemMessages = mapItemToMessages(thread.id, turn.id, item, itemTimestamp, { reasoning: reasoningMetadata[`${turn.id}:${item.id}`] })
       for (const message of itemMessages) {
         const info = reasoningMetadata[message.uuid]

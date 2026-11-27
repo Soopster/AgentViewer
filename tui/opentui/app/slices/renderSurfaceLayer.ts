@@ -89,7 +89,7 @@ export type UseRenderSurfaceLayerGroupContext = {
   stickyHeaders: boolean
   lightweightWindows: boolean
   noteTranscriptLinkPress: (event: MouseEvent) => void
-  openTranscriptLinkAt: (event: MouseEvent) => boolean
+  openTranscriptLinkAt: (event: MouseEvent, source: Session) => boolean
   openCardAsyncQuestions: (session: Session, card: TuiTranscriptCard) => void
   floatGestureHandlers: { start: (event: { x: number; y: number; }) => void; move: (event: { x: number; y: number; }) => void; end: (event: { x: number; y: number; }) => void; }
   sessionDragHandlers: { press: (session: Session, fromPane: number | null, event: { x: number; y: number; }, onClick?: () => void) => void; move: (event: { x: number; y: number; }) => void; release: (event: { x: number; y: number; }) => void; }

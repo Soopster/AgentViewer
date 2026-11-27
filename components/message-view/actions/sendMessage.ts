@@ -1,3 +1,4 @@
+import { claudePermissionModeFromFrame, type ClaudeComposerPermissionMode } from '@/lib/claudePermissionMode'
 import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../../lib/plugins/composerSlash'
 import { dispatchPluginCommand } from '../../../lib/plugins/commandBus'
 import { prepareComposerTurnRequest } from '@/lib/composerSubmission'
@@ -89,7 +90,8 @@ export type SendMessageContext = {
   selectedAgent: string
   selectedCopilotMode: string
   selectedCopilotContextTier: CopilotContextTier | null
-  selectedPermissionMode: 'auto' | 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+  selectedPermissionMode: ClaudeComposerPermissionMode
+  setSelectedPermissionMode: Dispatch<SetStateAction<ClaudeComposerPermissionMode>>
   taskBudgetTokens: number | null
   enableWorkflow: boolean
   selectedCodexApproval: 'auto' | 'untrusted' | 'on-request' | 'never'
@@ -132,7 +134,7 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
     setLiveThreadedMessages, setLivePromptSuggestion, setLiveStatus, clearLiveSubagentText,
     setAwaitingPersistedTurn, setAutoFollow, pendingMessageBaselineRef, messages,
     liveToolIndexesRef, liveToolInputJsonRef, abortControllerRef, resumeFromMessageId,
-    selectedAgent, selectedCopilotMode, selectedCopilotContextTier, selectedPermissionMode,
+    selectedAgent, selectedCopilotMode, selectedCopilotContextTier, selectedPermissionMode, setSelectedPermissionMode,
     taskBudgetTokens, enableWorkflow, selectedCodexApproval, setContextUsage,
     liveTurnSessionHandoffRef, composerSessions, composerOwnerKey, onFork, setSessionActionNotice,
     setSelectedCopilotMode, setLiveSlashCommands, setSessionInfo, queueLiveSubagentDelta,
@@ -142,6 +144,7 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
     composerQueueClaimInFlightRef, setQueuedSends,
   } = ctx
   if (!session) return
+  let lastReportedPermissionMode = selectedPermissionMode
   setSendError(null)
   if (!retryOverride) {
     const draft = textareaRef.current?.value ?? inputTextRef.current
@@ -555,6 +558,12 @@ export async function runSendMessage(ctx: SendMessageContext, retryOverride?: { 
           if (parsed?.type === 'system' && parsed.subtype === 'commands_changed') {
             const commands = normalizeSlashCommandSuggestions(parsed.commands)
             if (commands) setLiveSlashCommands(commands)
+          }
+          const effectivePermissionMode = session.provider === 'claude' && parsed && claudePermissionModeFromFrame(parsed)
+          if (effectivePermissionMode) {
+            const previous = lastReportedPermissionMode
+            lastReportedPermissionMode = effectivePermissionMode
+            setSelectedPermissionMode(current => current === previous ? effectivePermissionMode : current)
           }
           if (parsed?.type === 'system' && parsed.subtype === 'status') {
             const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null

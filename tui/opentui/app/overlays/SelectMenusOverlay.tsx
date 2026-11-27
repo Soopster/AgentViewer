@@ -7,6 +7,8 @@ import { type ProviderSelection, type Session } from '../../../../lib/types'
 import { fitText } from '../../textLayout'
 import { type ModelPickerOption, type TuiCopilotContextTier, type ModelPickerFocus } from '../types'
 import { isLightThemeMode } from '../themes'
+import { useRenderer } from '@opentui/react'
+import { MODAL_CONTENT_Z_INDEX } from '../../layers'
 
 export function SelectMenusOverlay({ themeMode, theme, providerMenuOpen, presentationFocusMode, providerOptions, providerMenuIndex, setProviderMenuIndex, chooseProvider, modelPickerOpen, width, height, composerAccentColor, modelPickerTarget, modelPickerPermissionLabel, modelPickerOptions, modelPickerIndex, composerCopilotContextTier, modelPickerFocus, filteredModelPickerOptions, modelPickerLoading, modelPickerError, modelPickerQuery, setModelPickerQuery, setModelPickerIndex, applyModelPickerOption, compactModelPickerEffortOptions, modelPickerEffortIndex, setModelPickerEffortIndex, applyModelPickerEffort, compactModelPickerPermissionOptions, modelPickerPermissionIndex, setModelPickerPermissionIndex, applyModelPickerPermission, modelPickerFocusedLabel, modelPickerFocusedOption, modelPickerFocusedDescription }: {
   themeMode: TuiThemeMode
@@ -46,6 +48,14 @@ export function SelectMenusOverlay({ themeMode, theme, providerMenuOpen, present
   modelPickerFocusedOption: SelectOption
   modelPickerFocusedDescription: string
 }) {
+  // A dropdown under the rail's provider chip; the top-right corner when no chip is on screen.
+  const renderer = useRenderer()
+  const chip = providerMenuOpen ? renderer.root.findDescendantById('sidebar-provider-badge') : undefined
+  // The overlay is positioned within the content row, whose top is the rail's; the chip's x/y are screen cells.
+  const rail = chip ? renderer.root.findDescendantById('session-rail') : undefined
+  const providerMenuPlacement = chip && rail
+    ? { top: chip.y - rail.y + 1, left: Math.max(0, Math.min(chip.x, width - 34)) }
+    : { top: presentationFocusMode ? 1 : 3, right: 2 }
   return (
     (() => {
           // All floating select overlays share this palette so light-themed
@@ -54,16 +64,16 @@ export function SelectMenusOverlay({ themeMode, theme, providerMenuOpen, present
           return (<>
             {providerMenuOpen ? (
               <box
+                id="provider-picker"
                 position="absolute"
-                top={presentationFocusMode ? 1 : 3}
-                right={2}
+                {...providerMenuPlacement}
                 width={34}
                 height={14}
                 border
                 borderStyle="single"
                 borderColor={ot.border2}
                 backgroundColor={ot.surface}
-                zIndex={20}
+                zIndex={MODAL_CONTENT_Z_INDEX}
                 flexDirection="column"
               >
                 <box paddingX={1} paddingTop={1}>

@@ -12,7 +12,7 @@
 // plus a hard entry cap — because a turn that dies mid-stream never runs its
 // own cleanup, and this holds whole message arrays.
 
-import type { SessionEvent as CopilotSessionEvent } from '@github/copilot-sdk'
+import type { SessionEvent as CopilotSessionEvent } from '@microsoft/copilot-sdk'
 import type { AgentEvent as PiAgentEvent, AgentMessage as PiAgentMessage } from '@earendil-works/pi-agent-core'
 import { piAgentMessageDuplicateKey, piAgentMessageFingerprint } from './piMapper'
 import type { SessionMessage } from './types'

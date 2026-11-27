@@ -12,7 +12,7 @@ type Props = {
   height: number
   sessions: readonly Session[]
   insights: PluginSessionInsightsService
-  onOpenSession: (session: Session) => void
+  onOpenSession: (session: Session, messageUuid?: string) => void
   onClose: () => void
   onDetach?: () => void
   onKeyHandlerReady: (handler: (key: TuiPluginKeyEvent) => void) => void
@@ -37,23 +37,32 @@ export function SessionSearchPopover({ theme, width, height, sessions, insights,
     if (!params) { generation.current += 1; setResults([]); setStatus('idle'); return }
     const mine = ++generation.current
     setStatus('searching')
+    setResults([])
+    setCursor(0)
+    const controller = new AbortController()
     const timer = setTimeout(() => {
-      insights.search(params)
-        .then((response) => { if (mine === generation.current) { setResults(response.results); setCursor(0); setStatus('idle') } })
-        .catch((failure) => { if (mine === generation.current) { setError(failure instanceof Error ? failure.message : 'Search failed'); setStatus('error') } })
+      insights.search(params, controller.signal, response => {
+        if (mine !== generation.current || controller.signal.aborted) return
+        setResults(response.results)
+        setCursor(cursor => Math.min(cursor, Math.max(response.results.length - 1, 0)))
+      })
+        .then((response) => { if (mine === generation.current && !controller.signal.aborted) { setResults(response.results); setCursor(cursor => Math.min(cursor, Math.max(response.results.length - 1, 0))); setStatus('idle') } })
+        .catch((failure) => { if (mine === generation.current && !controller.signal.aborted) { setError(failure instanceof Error ? failure.message : 'Search failed'); setStatus('error') } })
     }, DEBOUNCE_MS)
-    return () => clearTimeout(timer)
-  }, [facets])
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [facets, insights])
 
   // The sidebar list is one page of the current provider; an index hit is often outside it. A tab
   // does not need a list entry, so a hit that is not listed opens from what the index recorded.
   const open = useCallback((result: PersistedSearchResult | undefined) => {
     if (!result) return
     const record = result.session
-    const found = sessions.find((session) => session.provider === record.provider && session.sessionId === record.sessionId)
-    if (found) { onOpenSession(found); return }
-    // The index key is `<instance or provider>:<session id>`; a prefix other than the provider names the instance.
-    const prefix = record.key.slice(0, Math.max(record.key.length - record.sessionId.length - 1, 0))
+    // The index key is `<instance or provider>:<session id>`.
+    const prefix = record.key.slice(0, Math.max(record.key.length - record.sessionId.length - 1, 0)) || record.provider
+    const messageUuid = result.matches[0]?.uuid
+    const found = sessions.find(session => session.provider === record.provider && session.sessionId === record.sessionId
+      && (session.providerInstanceId ?? record.provider) === prefix)
+    if (found) { onOpenSession(found, messageUuid); return }
     onOpenSession({
       sessionId: record.sessionId,
       provider: record.provider,
@@ -64,7 +73,7 @@ export function SessionSearchPopover({ theme, width, height, sessions, insights,
       firstPrompt: record.firstPrompt,
       lastModified: record.lastModified,
       createdAt: record.createdAt,
-    })
+    }, messageUuid)
   }, [onOpenSession, sessions])
 
   const handleKey = useCallback((key: TuiPluginKeyEvent) => {
@@ -127,7 +136,7 @@ export function SessionSearchPopover({ theme, width, height, sessions, insights,
       <box flexDirection="column" height={listRows}>
         {results.slice(top, top + listRows).map((result, index) => {
           const selected = top + index === cursor
-          const snippet = result.matches[0]?.snippet?.replace(/\s+/g, ' ') ?? ''
+          const snippet = (result.matches[0]?.snippet ?? result.nativeSnippet)?.replace(/\s+/g, ' ') ?? ''
           const where = [result.session.provider, baseName(result.session.cwd)].filter(Boolean).join(' · ')
           return (
             <text key={result.session.key} fg={selected ? theme.text : theme.muted} bg={selected ? theme.surface3 : undefined} wrapMode="none">

@@ -24,7 +24,8 @@ import { McpArtifactLinks, McpToolArtifacts } from './McpArtifacts'
 import { mcpResourceLinks } from '@/lib/mcpArtifacts'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
+import { codexThreadIdFromLink } from '@/lib/codexThreadLinks'
 import { detectGithubActivities, describeGithubActivity } from '@/lib/github/activity'
 import { GithubActivityCard } from './github/GithubActivityCard'
 import { githubAnchor } from './github/GithubLink'
@@ -360,6 +361,25 @@ function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentProp
   )
 }
 
+function transcriptUrlTransform(url: string, key: string): string {
+  return key === 'href' && codexThreadIdFromLink(url) ? url : defaultUrlTransform(url)
+}
+
+function TranscriptAnchor({ href, children }: React.ComponentPropsWithoutRef<'a'>) {
+  const session = use(ArtifactSessionContext)
+  const navigate = use(NavigateSessionContext)
+  const threadId = codexThreadIdFromLink(href)
+  if (threadId) {
+    if (!navigate || session?.provider !== 'codex') return <span>{children}</span>
+    return <button type="button" onClick={() => {
+      navigate({ provider: 'codex', sessionId: threadId, providerInstanceId: session.providerInstanceId ?? 'codex' })
+    }} style={{ color: 'var(--violet)', textDecoration: 'underline', cursor: 'pointer' }}>{children}</button>
+  }
+  return githubAnchor(href, children) ?? (
+    <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--violet)', textDecoration: 'underline' }}>{children}</a>
+  )
+}
+
 const mdComponents: Components = {
   p:          ({ children }) => (
     <p style={{ margin: '0 0 12px', lineHeight: 1.75, color: 'var(--text)' }}>{children}</p>
@@ -383,11 +403,7 @@ const mdComponents: Components = {
   ),
   strong:     ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--text)' }}>{children}</strong>,
   em:         ({ children }) => <em style={{ fontStyle: 'italic', color: 'var(--text-2)' }}>{children}</em>,
-  a:          ({ href, children }) => githubAnchor(href, children) ?? (
-    <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--violet)', textDecoration: 'underline' }}>
-      {children}
-    </a>
-  ),
+  a: TranscriptAnchor,
   img: ({ src, alt }) => (
     <span style={{ display: 'block', margin: '8px 0 12px' }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1371,7 +1387,7 @@ function McpResultSection({ result }: { result: ToolResultBlock }) {
         background: 'var(--surface)',
         fontSize: 13, color: 'var(--text)', lineHeight: 1.65,
       }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={transcriptUrlTransform}>
           {visible}
         </ReactMarkdown>
       </div>
@@ -3730,6 +3746,9 @@ function ToolThreadCard({ thread }: { thread: ToolThread }) {
       {github.length
         ? <GithubActivityCard activities={github} pending={!thread.result}><ToolThreadCardBase thread={thread} /></GithubActivityCard>
         : <ToolThreadCardBase thread={thread} />}
+      {thread.result?.tool_result_meta?.rewritten_by_plugin === true ? (
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>Result rewritten by a Claude plugin</div>
+      ) : null}
       {pluginCardDraft ? <PluginDraftCard card={pluginCardDraft} /> : <DesignCardButton toolUse={thread.toolUse} hasResult={!!thread.result} />}
     </>
   )
@@ -4166,7 +4185,7 @@ function InsightCard({ content }: { content: string }) {
         </span>
       </div>
       <div style={{ padding: '8px 14px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65 }}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents} urlTransform={transcriptUrlTransform}>
           {content}
         </ReactMarkdown>
       </div>
@@ -4197,7 +4216,7 @@ function DataImageBlock({ src, mediaType }: { src: string; mediaType: string }) 
 const MarkdownBlockView = memo(function MarkdownBlockView({ raw }: { raw: string }) {
   const remarkPlugins = useTranscriptRemarkPlugins()
   return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} components={mdComponents}>
+    <ReactMarkdown remarkPlugins={remarkPlugins} components={mdComponents} urlTransform={transcriptUrlTransform}>
       {raw}
     </ReactMarkdown>
   )
@@ -5628,6 +5647,12 @@ const MessageItem = memo(MessageItemInner, (prev, next) =>
       prev.message.uuid === next.message.uuid
       && prev.message.timestamp === next.message.timestamp
       && prev.message.blocks.length === next.message.blocks.length
+      && prev.message.blocks.every((block, index) => {
+        const following = next.message.blocks[index]
+        const rewritten = block.type === 'tool_thread' && block.result?.tool_result_meta?.rewritten_by_plugin === true
+        const nextRewritten = following?.type === 'tool_thread' && following.result?.tool_result_meta?.rewritten_by_plugin === true
+        return rewritten === nextRewritten
+      })
     )
   )
 )

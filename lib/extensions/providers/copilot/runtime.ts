@@ -5,7 +5,7 @@ import { listPendingProviderPermissionPayloads } from '../../../sessionControlPl
 import { coordinatorPermissionToken } from "../../../coordinatorNativePermission";
 import { extractPendingPermissions } from "../../../permissions";
 import { broadcastLiveSessionActivity, broadcastLiveSessionTurnEnd, broadcastLiveSessionTurnStart } from "../../../liveSessionHarness";
-import { approveAll, type ContextTier as CopilotContextTier, type MessageOptions as CopilotMessageOptions, type ModelInfo as CopilotModelInfo, type PermissionRequest as CopilotPermissionRequest, type PermissionRequestResult as CopilotPermissionRequestResult, type ElicitationContext as CopilotElicitationContext, type ElicitationResult as CopilotElicitationResult, type SessionEvent as CopilotSessionEvent } from '@github/copilot-sdk';
+import { approveAll, type ContextTier as CopilotContextTier, type MessageOptions as CopilotMessageOptions, type Model as CopilotModelInfo, type PermissionRequest as CopilotPermissionRequest, type PermissionRequestResult as CopilotPermissionRequestResult, type ElicitationContext as CopilotElicitationContext, type ElicitationResult as CopilotElicitationResult, type SessionEvent as CopilotSessionEvent } from '@microsoft/copilot-sdk';
 import { withTimeout } from "../../../withTimeout";
 import { providerStartupTimeoutMs } from "../../../providerWarmup";
 import { type CopilotAgentMode, type CopilotPersistentMode, parseCopilotContextTier, parseCopilotMode, parseCopilotModeResponse } from "../../../copilotComposer";
@@ -1087,10 +1087,10 @@ export async function createSession({ provider: providerOverride, cwd, title, co
     const resolvedCwd = (cwd && cwd.trim()) ? cwd : process.cwd();
     {
         const client = await getCopilotClient();
-        const { approveAll } = await import('@github/copilot-sdk');
+        const { approveAll } = await import('@microsoft/copilot-sdk');
         const session = await client.createSession({
             workingDirectory: resolvedCwd,
-            onPermissionRequest: approveAll,
+            permissions: { onRequest: approveAll },
             ...copilotSessionConfigOverrides(),
         });
         return { sessionId: session.sessionId, provider: "copilot", cwd: resolvedCwd, isPending: false };

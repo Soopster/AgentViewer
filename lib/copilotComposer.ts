@@ -5,7 +5,7 @@
 // and a `{ mode }` envelope across SDK versions; accepting either keeps a
 // version bump from silently resetting the composer to INTERACTIVE.
 
-import type { ContextTier as CopilotContextTier, MessageOptions as CopilotMessageOptions } from '@github/copilot-sdk'
+import type { ContextTier as CopilotContextTier, MessageOptions as CopilotMessageOptions } from '@microsoft/copilot-sdk'
 import type { SessionComposerOptions } from './types'
 
 export type CopilotAgentMode = NonNullable<CopilotMessageOptions['agentMode']>

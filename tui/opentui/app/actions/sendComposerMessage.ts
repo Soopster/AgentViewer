@@ -1,3 +1,4 @@
+import { claudePermissionModeFromFrame } from '../../../../lib/claudePermissionMode'
 import { createLiveTextBatch } from '../../liveTextBatch'
 import { prepareComposerTurnRequest } from '../../../../lib/composerSubmission'
 import { acknowledgeComposerMessage } from '../../../../lib/composerTranscript'
@@ -118,14 +119,14 @@ export type SendComposerMessageContext = {
   tuiEffort: TuiEffort
   tuiCopilotMode: 'interactive' | 'plan' | 'autopilot' | 'shell'
   composerCopilotContextTier: TuiCopilotContextTier
-  composerPermissionMode: 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions'
+  composerPermissionMode: 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'
   composerCopilotPermissionMode: TuiCopilotPermissionMode
   tuiAddedDirsByKeyRef: React.RefObject<Record<string, string[]>>
   tuiCodexModeByKeyRef: React.RefObject<Record<string, 'plan' | 'default'>>
   composerCodexApproval: TuiCodexApproval
   sessionContextUsageCacheRef: React.RefObject<Map<string, ContextUsage | null>>
-  tuiPermissionModeByKeyRef: React.RefObject<Record<string, 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions'>>
-  setTuiPermissionModeByKey: React.Dispatch<React.SetStateAction<Record<string, 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions'>>>
+  tuiPermissionModeByKeyRef: React.RefObject<Record<string, 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'>>
+  setTuiPermissionModeByKey: React.Dispatch<React.SetStateAction<Record<string, 'plan' | 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'>>>
   setOpenTabSessions: React.Dispatch<React.SetStateAction<Session[]>>
   setSessions: React.Dispatch<React.SetStateAction<Session[]>>
   setComposerPaneTargetKey: React.Dispatch<React.SetStateAction<string | null>>
@@ -534,6 +535,8 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
   }
   markSessionRunning(runningRef)
   const targetKey = sessionKey(targetSession)
+  let realizedTargetKey = targetKey
+  let lastReportedPermissionMode = composerPermissionMode
   // This send loop owns the turn's stream — the registry poll must not treat
   // the session as reattached while the stream is alive.
   ownedTurnKeyRef.current = targetKey
@@ -689,6 +692,7 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
           const oldKey = sessionKey(targetSession)
           const updated: Session = { ...targetSession, sessionId: realId, isPending: false }
           const newKey = sessionKey(updated)
+          realizedTargetKey = newKey
           const baseline = liveTranscriptBaselineRef.current.get(oldKey)
           if (baseline) {
             liveTranscriptBaselineRef.current.delete(oldKey)
@@ -859,6 +863,17 @@ export async function runSendComposerMessage(ctx: SendComposerMessageContext, dr
               entry.messageUuid === commandUuid ? { ...entry, state } : entry)
           }
         }
+      }
+      const effectivePermissionMode = targetSession.provider === 'claude' && claudePermissionModeFromFrame(parsedRecord)
+      if (effectivePermissionMode) {
+        const latest = tuiPermissionModeByKeyRef.current
+        if ((latest[realizedTargetKey] ?? composerPermissionMode) === lastReportedPermissionMode
+          && latest[realizedTargetKey] !== effectivePermissionMode) {
+          const next = { ...latest, [realizedTargetKey]: effectivePermissionMode }
+          tuiPermissionModeByKeyRef.current = next
+          setTuiPermissionModeByKey(next)
+        }
+        lastReportedPermissionMode = effectivePermissionMode
       }
       if (parsedRecord.type === 'system' && parsedRecord.subtype === 'status') {
         const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null

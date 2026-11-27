@@ -22,7 +22,7 @@
 
 // Type-only, so it is erased at runtime and does not put a provider SDK back
 // into this module's graph — the whole point of the file.
-import type { ContextTier as CopilotContextTier } from '@github/copilot-sdk'
+import type { ContextTier as CopilotContextTier } from '@microsoft/copilot-sdk'
 import type {
   AgentProvider,
   ContextUsage,

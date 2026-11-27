@@ -88,7 +88,7 @@ Choose the startup provider with `AGENT_VIEWER_PROVIDER` (`claude`, `codex`, `op
 | Claude | `@anthropic-ai/claude-agent-sdk` | Fork, rewind, file checkpoints, diagnostics, subagents, multiple accounts via provider instances |
 | Codex | `codex app-server` (the `codex` CLI on `PATH`) | Rollback/revert, plan mode, sub-agents, multiple accounts |
 | OpenCode | `@opencode-ai/sdk` (1.x) and `@opencode/client` (2.x) | Server version is detected; a managed server is started if none is running |
-| GitHub Copilot | `@github/copilot-sdk` | Auto-starts the Copilot CLI |
+| GitHub Copilot | `@microsoft/copilot-sdk` | Auto-starts the Copilot CLI |
 | Pi | `@earendil-works/pi-coding-agent` | Session branches for forking |
 | Claude (ACP), Codex (ACP) | `claude-agent-acp` / `codex-acp` over the Agent Client Protocol | Alternate transports for the same two agents |
 | ACP | Any agent that speaks ACP (Gemini CLI, Goose, `opencode acp`, `copilot --acp`, …) | Configure the command; each agent can be its own instance |
@@ -242,7 +242,7 @@ Tries `OPENCODE_BASE_URL`, then `OPENCODE_SERVER_URL`, then `http://127.0.0.1:40
 
 ### GitHub Copilot
 
-The SDK auto-starts the Copilot CLI over stdio. Optional: `COPILOT_CLI_URL`, `COPILOT_CLI_PATH`, and `COPILOT_AUTO_TIER` (`efficiency`, `balance`, `intelligence`, `fast`) for Auto model routing. Titles and tags are stored locally.
+Microsoft Copilot SDK v2 starts its bundled runtime over stdio. To use a different runtime, set `COPILOT_CLI_PATH` to a protocol-4 executable or `COPILOT_CLI_URL` to a protocol-4 TCP endpoint such as `tcp://localhost:3000`. Set `COPILOT_AUTO_TIER` to `efficiency`, `balance`, `intelligence`, or `fast` to select an Auto model tier. Titles and tags are stored locally.
 
 ### Pi
 
@@ -387,7 +387,7 @@ Performance and memory harnesses for the terminal app include `tui:navperf`, `tu
 - **Bun error on launch**: install Bun and open a new terminal so `PATH` is updated.
 - **Web app odd after switching branches**: delete `.next/` and rebuild.
 - **OpenCode won't start**: run `opencode serve` and set `OPENCODE_BASE_URL`.
-- **Copilot won't start**: set `COPILOT_CLI_PATH` or `COPILOT_CLI_URL`, or install `@github/copilot` globally.
+- **Copilot won't start**: check that the bundled runtime is installed, or point `COPILOT_CLI_PATH` or `COPILOT_CLI_URL` at a runtime that supports SDK protocol 4.
 - **Pi sessions missing**: set `PI_SESSION_DIR`.
 - **ACP agent missing**: check the binary resolves on `PATH`, or set its path variable / command.
 - **Search looks stale**: rebuild the index from the command palette or `POST /api/session-index/rebuild`.

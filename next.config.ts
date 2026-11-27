@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   outputFileTracingIncludes: {
     '/api/proof': ['./lib/proof/*.mjs'],
+    // The SDK resolves its optional platform package at runtime.
+    '/api/sessions': [`./node_modules/@microsoft/copilot-sdk-${process.platform}*-${process.arch}/**/*`],
     // The editor resolves this native server at runtime; static tracing cannot
     // infer the platform-specific package name from the native resolver.
     '/api/editor/lsp': [`./node_modules/@typescript/typescript-${process.platform}-${process.arch}/**/*`],
@@ -38,7 +40,7 @@ const nextConfig: NextConfig = {
     '@earendil-works/pi-coding-agent',
     '@earendil-works/pi-agent-core',
     '@earendil-works/pi-ai',
-    '@github/copilot-sdk',
+    '@microsoft/copilot-sdk',
   ],
 }
 

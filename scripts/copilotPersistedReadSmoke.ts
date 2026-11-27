@@ -22,7 +22,7 @@ import assert from 'node:assert/strict'
 import { copilotAdapter } from '../lib/adapters/copilot'
 import { evictCopilotSession, getCopilotClient, peekCopilotSession } from '../lib/copilotClient'
 import { mapCopilotEventsToSessionMessages } from '../lib/copilotMapper'
-import type { SessionEvent } from '@github/copilot-sdk'
+import type { SessionEvent } from '@microsoft/copilot-sdk'
 
 type PersistedEventReader = {
   sessions?: {

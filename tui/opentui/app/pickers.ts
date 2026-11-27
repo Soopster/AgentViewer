@@ -51,7 +51,10 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 // provider row then means all of them; a value of `provider|instance` one.
 export function providerSelectOptions(instances: readonly TuiProviderInstanceChoice[]): SelectOption[] {
   // A provider turned off in the plugin manager has no row; 'all' always has one.
-  const options = PROVIDER_SELECT_OPTIONS.filter((option) => option.value === 'all' || isProviderEnabled(option.value as string))
+  // `mod` is only a host for provider mods, so with none enabled it has nothing to list.
+  const hasProviderMod = instances.some((instance) => instance.provider === 'mod')
+  const options = PROVIDER_SELECT_OPTIONS.filter((option) => option.value === 'all'
+    || (isProviderEnabled(option.value as string) && (option.value !== 'mod' || hasProviderMod)))
   if (instances.length === 0) return options
   return options.flatMap((option) => [
     option,

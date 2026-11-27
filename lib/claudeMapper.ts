@@ -45,15 +45,22 @@ function messageUsage(value: unknown): ApiMessage['usage'] | undefined {
   }
 }
 
+function readToolResultMeta(record: Record<string, unknown>, toolResultMeta: unknown): Record<string, unknown> | undefined {
+  const meta = {
+    ...asObject(record.tool_result_meta),
+    ...asObject(Array.isArray(toolResultMeta)
+      ? toolResultMeta.find((entry) => asObject(entry).id === record.tool_use_id)
+      : toolResultMeta),
+    ...(record.background === true ? { background: true } : {}),
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined
+}
+
 function toolResultBlock(value: unknown, toolResultMeta?: unknown): ToolResultBlock | null {
   const record = asObject(value)
   if (typeof record.tool_use_id !== 'string') return null
 
   const content = record.content
-  const meta = {
-    ...asObject(toolResultMeta),
-    ...(record.background === true ? { background: true } : {}),
-  }
   return {
     type: 'tool_result',
     tool_use_id: record.tool_use_id,
@@ -64,7 +71,7 @@ function toolResultBlock(value: unknown, toolResultMeta?: unknown): ToolResultBl
     resourceLinks: mcpResourceLinks(record.resourceLinks, Array.isArray(content) ? content : []),
     ...(Object.hasOwn(record, 'structuredContent') ? { structuredContent: record.structuredContent } : {}),
     ...(record.mcpMeta && typeof record.mcpMeta === 'object' ? { mcpMeta: asObject(record.mcpMeta) } : {}),
-    tool_result_meta: Object.keys(meta).length > 0 ? meta : undefined,
+    tool_result_meta: readToolResultMeta(record, toolResultMeta),
   }
 }
 
@@ -102,7 +109,10 @@ function normalizeApiMessage(
 ): ApiMessage {
   const record = asObject(value)
   const rawContent = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult, toolResultMeta))
-  const results = Array.isArray(rawContent) ? rawContent.filter((block): block is ToolResultBlock => block.type === 'tool_result') : []
+  const results = Array.isArray(rawContent)
+    ? rawContent.filter((block): block is ToolResultBlock => block.type === 'tool_result')
+      .map(block => ({ ...block, tool_result_meta: readToolResultMeta(asObject(block), toolResultMeta) }))
+    : []
   const enriched = attachAskUserResultSidecar(attachMcpResultSidecar(results, toolUseResult), toolUseResult)
   let resultIndex = 0
   const content = Array.isArray(rawContent)

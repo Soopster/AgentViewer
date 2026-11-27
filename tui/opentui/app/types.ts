@@ -104,7 +104,7 @@ export type TuiCopilotContextTier = 'default' | 'long_context'
 export type ModelPickerFocus = 'model' | 'effort' | 'permissions'
 export type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels' | 'supportsLongContext'>
 export const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
-export type TuiPermissionMode = (typeof CLAUDE_PERMISSION_MODE_ORDER)[number]
+export type TuiPermissionMode = (typeof CLAUDE_PERMISSION_MODE_ORDER)[number] | 'dontAsk'
 export type PaletteCommand = { id: string; label: string; key: string; category: string} 
 export type PaletteRow = { kind: 'header'; label: string}  |
 { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number} 

@@ -83,13 +83,14 @@ let refusal: string | undefined
 let queriedCold = 0
 let sent = 0
 let closed = 0
+let confirmedPermissionMode: Sdk.PermissionMode | undefined
 let pendingClaim: ReturnType<typeof deferred<{ sessionId: string; cwd: string; sdkMcpSettled: boolean }>> | undefined
 function fakeQuery() {
   const exit = deferred<void>()
   const iterator = (async function* () { await exit.promise })()
   return Object.assign(iterator, {
     initializationResult: async () => ({}),
-    setPermissionMode: async () => {},
+    setPermissionMode: async () => confirmedPermissionMode ? { mode: confirmedPermissionMode } : undefined,
     setModel: async () => {},
     applyFlagSettings: async () => {},
     close: () => { exit.resolve(); closed++ },
@@ -149,6 +150,10 @@ await entry.whenConfigured()
 await entry.whenInitialized()
 assert.equal(entry.reused, true)
 assert.equal(queriedCold, 0)
+confirmedPermissionMode = 'default'
+assert.equal(await entry.setPermissionMode('plan'), 'default')
+confirmedPermissionMode = undefined
+assert.equal(await entry.setPermissionMode('default'), undefined, 'older runtimes may return no mode')
 entry.pushUserMessage({ type: 'user', session_id: opts.sessionId, parent_tool_use_id: null, message: { role: 'user', content: 'once' } })
 await tick()
 assert.equal(sent, 1)

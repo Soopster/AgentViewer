@@ -54,8 +54,8 @@ function toolResultContentFromToolCallContent(content: ToolCallContent[] | undef
     if (entry.type === 'diff') {
       return { type: 'text', text: `--- ${entry.path}\n${entry.oldText ?? ''}\n+++\n${entry.newText}` }
     }
-    // terminal
-    return { type: 'text', text: `[terminal ${entry.terminalId}]` }
+    if (entry.type === 'session') return textBlock(`[session ${entry.sessionId}]`)
+    return textBlock(`[terminal ${entry.terminalId}]`)
   })
   if (blocks.length === 1 && blocks[0]!.type === 'text') return (blocks[0] as TextBlock).text
   return blocks

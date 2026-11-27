@@ -43,7 +43,7 @@ export function useInputTextGroup(ctx: UseInputTextGroupContext) {
   const [selectedAgent, setSelectedAgent] = useComposerSessionState(composerSessions, composerOwnerKey, 'selectedAgent', '')
   const [selectedCopilotMode, setSelectedCopilotMode] = useComposerSessionState(composerSessions, composerOwnerKey, 'selectedCopilotMode', 'interactive')
   // Claude `/permissions` modes — passed through to body.permissionMode on send.
-  const [selectedPermissionMode, setSelectedPermissionMode] = useComposerSessionState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions'>(composerSessions, composerOwnerKey, 'selectedPermissionMode', 'auto')
+  const [selectedPermissionMode, setSelectedPermissionMode] = useComposerSessionState<'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypassPermissions' | 'dontAsk'>(composerSessions, composerOwnerKey, 'selectedPermissionMode', 'auto')
   // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
   // 'auto' leaves the app-server's configured default untouched.
   const [selectedCodexApproval, setSelectedCodexApproval] = useComposerSessionState<'auto' | 'untrusted' | 'on-request' | 'never'>(composerSessions, composerOwnerKey, 'selectedCodexApproval', 'auto')

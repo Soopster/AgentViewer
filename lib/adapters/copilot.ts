@@ -1,5 +1,5 @@
 import { copilotSubagentEvents, copilotSubagentSummaries } from '../extensions/providers/copilot/subagents'
-// GitHub Copilot, via @github/copilot-sdk over a pooled per-session RPC
+// GitHub Copilot, via @microsoft/copilot-sdk over a pooled per-session RPC
 // connection (lib/copilotClient.ts).
 //
 // Copilot persists a turn only once it completes, so a transcript read has to
@@ -48,10 +48,18 @@ import { COPILOT_PERMISSION_MODE_OPTIONS, copilotPermissionModeFromSdk, sortMess
 import type {
   GetAuthStatusResponse as CopilotGetAuthStatusResponse,
   GetStatusResponse as CopilotGetStatusResponse,
+  Model as CopilotModel,
   SessionEvent as CopilotSessionEvent,
   SessionMetadata as CopilotSessionMetadata,
-} from '@github/copilot-sdk'
+} from '@microsoft/copilot-sdk'
 import type { SessionAdapter } from './types'
+
+function isCopilotCatalogModel(value: unknown): value is CopilotModel {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const model = value as Partial<CopilotModel>
+  return typeof model.id === 'string' && typeof model.name === 'string'
+    && Boolean(model.capabilities && typeof model.capabilities === 'object')
+}
 
 /** Copilot's metadata endpoint doesn't know about every session the list
  *  endpoint returns; fall back to the listing so a session opened elsewhere
@@ -231,12 +239,21 @@ export const copilotAdapter: SessionAdapter = {
   async readModels(sessionId) {
     // Same rule as readSessionInfo: the TUI reads this when a session is
     // merely selected, so a cold session answers from its journal rather than
-    // paying a resume for a model badge. The catalogue itself is client-level
-    // and never needed a session at all.
+    // paying for a resume. A live session can supply its own model catalog,
+    // including models available only to its account or configured providers.
     const client = await getCopilotClient()
     const warm = peekCopilotSession(sessionId)
     const [models, current] = await Promise.all([
-      client.listModels(),
+      warm
+        ? warm.rpc.model.list()
+          .then(({ list }) => {
+            const entries: unknown[] = list
+            const models = entries.filter(isCopilotCatalogModel)
+            return models.length === entries.length ? models : null
+          })
+          .catch(() => null)
+          .then(models => models ?? client.listModels())
+        : client.listModels(),
       warm
         ? warm.rpc.model.getCurrent().catch(() => ({ modelId: undefined, contextTier: undefined }))
         : readSessionEvents(sessionId)

@@ -9,7 +9,7 @@ import { sessionKey } from '../sessionList'
 export type UseComposerProviderGroupContext = {
   composerTargetSession: Session | null
   selectedSession: Session | null
-  tuiPermissionModeByKey: Record<string, 'auto' | 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions'>
+  tuiPermissionModeByKey: Record<string, 'auto' | 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk'>
   tuiCodexApprovalByKey: Record<string, TuiCodexApproval>
   tuiCodexModeByKey: Record<string, 'default' | 'plan'>
   tuiCopilotPermissionModeByKey: Record<string, TuiCopilotPermissionMode>

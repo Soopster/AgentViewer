@@ -3,6 +3,7 @@ import type { TuiPluginView, TuiPluginViewProps } from '../../../../tui/opentui/
 import { SessionSearchPopover } from './SessionSearchPopover'
 
 export function IndexSearchSurface({ services, theme, width, height, placement, registerKeys, close, detach }: TuiPluginViewProps) {
+  const navigation = services['session-navigation']
   const fleet = services['session-fleet']!
   return (
     <SessionSearchPopover
@@ -12,7 +13,13 @@ export function IndexSearchSurface({ services, theme, width, height, placement, 
       height={height}
       sessions={fleet.sessions}
       insights={services['session-insights']!}
-      onOpenSession={(session) => { if (placement === 'overlay') close(); fleet.open(session) }}
+      onOpenSession={(session, uuid) => {
+        if (placement === 'overlay') close()
+        if (navigation && session.provider) navigation.open({
+          provider: session.provider, providerInstanceId: session.providerInstanceId ?? session.provider, sessionId: session.sessionId,
+        }, uuid)
+        else fleet.open(session)
+      }}
       onClose={close}
       onDetach={detach}
       onKeyHandlerReady={registerKeys}

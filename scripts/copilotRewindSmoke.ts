@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import type { CopilotSession } from '@github/copilot-sdk'
+import type { CopilotSession } from '@microsoft/copilot-sdk'
 import { copilotSessionConfigOverrides, rewindCopilotSessionFiles } from '../lib/copilotClient'
 import { COPILOT_CAPABILITIES } from '../lib/provider'
 
@@ -48,7 +48,7 @@ function fakeSession(options: {
 }
 
 assert.equal(COPILOT_CAPABILITIES.fileRewind, true)
-assert.equal(copilotSessionConfigOverrides().enableFileChangeTracking, true)
+assert.equal(copilotSessionConfigOverrides().filesystem?.trackFileChanges, true)
 
 const previewSession = fakeSession({})
 assert.deepEqual(await rewindCopilotSessionFiles(previewSession.session, 'user-event-1', true), {

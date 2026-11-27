@@ -88,10 +88,12 @@ const thread = {
   reasoningEffort: null,
   originator: null,
   daybreakEnabled: null,
+  daybreakProgramPropagationEnrolled: null,
   id: 'thread-1',
   extra: null,
   sessionId: 'session-1',
   forkedFromId: null,
+  attachedToThreadId: null,
   parentThreadId: null,
   preview: 'Schema alignment smoke',
   ephemeral: false,
@@ -193,7 +195,10 @@ const orderedMessages = mapCodexThreadToMessages({
       content: [{ type: 'text', text: 'Prompt first', text_elements: [] }],
     }, commandItem, {
       type: 'agentMessage',
+      moderation: null,
       id: 'msg-without-a-sortable-timestamp',
+      startedAtMs: 1_700_000_007_000,
+      completedAtMs: 1_700_000_009_000,
       text: 'Reply last',
       phase: null,
       memoryCitation: null,
@@ -211,6 +216,9 @@ const orderedMessages = mapCodexThreadToMessages({
 if (orderedMessages[0]?.type !== 'user' || orderedMessages.at(-1)?.type !== 'assistant') {
   throw new Error('Codex transcript mapping must preserve the provider-native turn/item sequence')
 }
+if (orderedMessages.at(-1)?.timestamp !== new Date(1_700_000_007_000).toISOString()) {
+  throw new Error('Codex history must prefer the recorded item start over the turn timestamp')
+}
 
 const message = normalizeCodexStreamThreadedMessage({
   type: 'codex_item_completed',
@@ -227,6 +235,13 @@ if (
   || tool.toolUse.input.scriptPath !== commandItem.scriptPath
 ) {
   throw new Error('Codex command plugin provenance was not preserved by the transcript mapper')
+}
+const completion = normalizeCodexStreamThreadedMessage({
+  type: 'codex_item_completed', threadId: thread.id, turnId: 'turn-1',
+  item: { ...commandItem, completedAtMs: 1_700_000_100_000 },
+})
+if (completion?.timestamp !== message?.timestamp || !completion?.timestamp) {
+  throw new Error('Codex live mapping must accept the completion time on the item')
 }
 
 // A user `!command` is the user's shell, not an agent tool: it maps to Claude
@@ -270,7 +285,11 @@ if (shellInput.timestamp !== new Date(1_700_000_000_000).toISOString()) {
 
 const functionOutputs: FunctionCallOutputBody[] = [
   'Plain function output',
-  [{ type: 'input_text', text: 'Rich function output' }, { type: 'input_image', file_id: 'file-tool-image' }],
+  [
+    { type: 'input_text', text: 'Rich function output' },
+    { type: 'input_image', file_id: 'file-tool-image' },
+    { type: 'input_audio', file_id: 'file-tool-audio' },
+  ],
 ]
 for (const output of functionOutputs) {
   const message = normalizeCodexStreamThreadedMessage({
@@ -282,19 +301,32 @@ for (const output of functionOutputs) {
     || block.toolUse.input.namespace !== 'files' || !block.result?.content) {
     throw new Error('Codex function-call output must retain its tool name, namespace, and result')
   }
+  if (Array.isArray(output) && !JSON.stringify(block.result.content).includes('[audio] file:file-tool-audio')) {
+    throw new Error('Codex function output must retain file-ID audio references')
+  }
 }
 const fileImageMessages = mapCodexThreadToMessages({
   ...thread,
   turns: [{
     id: 'file-image-turn', rootTurnId: null, itemsView: 'full', status: 'completed', error: null,
     startedAt: 1_700_000_000, completedAt: 1_700_000_010, durationMs: 10_000,
-    items: [{ type: 'userMessage', id: 'file-image', clientId: null, content: [{ type: 'image', fileId: 'file-user-image' }] }],
+    items: [{
+      type: 'userMessage', id: 'file-input', clientId: null,
+      content: [{ type: 'image', fileId: 'file-user-image' }, { type: 'audio', fileId: 'file-user-audio' }],
+    }, {
+      type: 'imageGeneration', id: 'file-output', status: 'completed',
+      revisedPrompt: null, failure: null, generationId: null, fileId: 'file-generated-image',
+    }],
   }],
 })
 if (!JSON.stringify(fileImageMessages).includes('[image] file:file-user-image')) {
   throw new Error('Codex file-ID image input must retain the image reference')
 }
+if (!JSON.stringify(fileImageMessages).includes('[audio] file:file-user-audio')
+  || !JSON.stringify(fileImageMessages).includes('file:file-generated-image')) {
+  throw new Error('Codex history must retain file-ID audio input and generated image references')
+}
 
 void newRequests
 void generatedRequirementAdditions
-console.log('Codex 0.163.0 schema alignment smoke passed')
+console.log('Codex schema alignment smoke passed')

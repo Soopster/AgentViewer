@@ -1,3 +1,4 @@
+import { readSessionSearchStream, sessionSearchQuery } from '../../lib/session-index/searchStream'
 import type { PluginSessionInsightsService } from '../../lib/plugins/sessionInsights'
 
 // The Web's session-insights service: the session provenance route (with its
@@ -15,16 +16,11 @@ export function createWebSessionInsightsService(fetcher: typeof fetch = (...args
       const { edits, ...summary } = body
       return { summary, edits: Array.isArray(edits) ? edits : [] }
     },
-    search(params, signal) {
-      const query = new URLSearchParams({ q: params.query, messagesOnly: '0' })
-      if (params.limit) query.set('limit', String(params.limit))
-      if (params.provider && params.provider !== 'all') query.set('provider', params.provider)
-      if (params.dir) query.set('dir', params.dir)
-      if (params.sinceMs != null) query.set('sinceMs', String(params.sinceMs))
-      if (params.untilMs != null) query.set('untilMs', String(params.untilMs))
-      if (params.hasError) query.set('hasError', '1')
-      if (params.touchedFile) query.set('touchedFile', params.touchedFile)
-      return json(`/api/session-index/search?${query}`, signal)
+    async search(params, signal, onPartial) {
+      const query = sessionSearchQuery(params)
+      if (!onPartial) return json(`/api/session-index/search?${query}`, signal)
+      query.set('stream', '1')
+      return readSessionSearchStream(await fetcher(`/api/session-index/search?${query}`, { signal }), onPartial)
     },
   }
 }

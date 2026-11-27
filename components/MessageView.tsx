@@ -15,6 +15,7 @@ import { contextReference, contextReferences, createContextAttachment, projectCo
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import type { ProtocolAgent } from '@/lib/agentProtocol'
 import Link from 'next/link'
+import { isClaudeComposerPermissionMode } from '@/lib/claudePermissionMode'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue, useSyncExternalStore } from 'react'
 import type {
   ApiMessage,
@@ -551,16 +552,24 @@ function MessageViewInner({
     }).catch(() => { /* swallow; next send carries body.model */ })
   }, [session, selectedModel, setSelectedModel])
 
+  const claudePermissionRequest = composerSessions.ref<symbol | null>(composerOwnerKey, 'claudePermissionRequest', null)
   const commitClaudePermissionSelection = useCallback((nextMode: typeof selectedPermissionMode) => {
     setSelectedPermissionMode(nextMode)
-    if (!session || session.provider !== 'claude' || session.isPending) return
-    if (nextMode === selectedPermissionMode) return
+    if (!session || session.provider !== 'claude' || session.isPending || nextMode === selectedPermissionMode) return
+    const token = Symbol()
+    claudePermissionRequest.current = token
     void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: 'claude', action: 'setPermissionMode', permissionMode: nextMode }),
-    }).catch(() => { /* swallow; next send carries body.permissionMode */ })
-  }, [session, selectedPermissionMode, setSelectedPermissionMode])
+      body: JSON.stringify({ provider: 'claude', providerInstanceId: session.providerInstanceId, action: 'setPermissionMode', permissionMode: nextMode }),
+    }).then(async response => {
+      if (!response.ok) return
+      const { result } = await response.json()
+      const mode = result?.permissionMode
+      if (claudePermissionRequest.current !== token || !isClaudeComposerPermissionMode(mode)) return
+      setSelectedPermissionMode(current => current === nextMode ? mode : current)
+    }).catch(() => { /* next send carries body.permissionMode */ })
+  }, [session, selectedPermissionMode, setSelectedPermissionMode, claudePermissionRequest])
 
   const commitCopilotModeSelection = useCallback((nextMode: string) => {
     setSelectedCopilotMode(nextMode)
@@ -975,7 +984,7 @@ function MessageViewInner({
     setLiveThreadedMessages, setLivePromptSuggestion, setLiveStatus, clearLiveSubagentText,
     setAwaitingPersistedTurn, setAutoFollow, pendingMessageBaselineRef, messages,
     liveToolIndexesRef, liveToolInputJsonRef, abortControllerRef, resumeFromMessageId,
-    selectedAgent, selectedCopilotMode, selectedCopilotContextTier, selectedPermissionMode,
+    selectedAgent, selectedCopilotMode, selectedCopilotContextTier, selectedPermissionMode, setSelectedPermissionMode,
     taskBudgetTokens, enableWorkflow, selectedCodexApproval, setContextUsage,
     liveTurnSessionHandoffRef, composerSessions, composerOwnerKey, onFork, setSessionActionNotice,
     setSelectedCopilotMode, setLiveSlashCommands, setSessionInfo, queueLiveSubagentDelta,
@@ -983,7 +992,7 @@ function MessageViewInner({
     queueLiveReasoningText, setLiveThinkingTokens, flushLiveAssistantTextNow, refreshSessionModels,
     setResumeFromMessageId, transientRetryTimerRef, activeWebComposerOwnerRef,
     composerQueueClaimInFlightRef, setQueuedSends,
-  }, retryOverride), [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, pushedCopilotAttachmentsRef, turnProducedOutputRef, transientRetryCountRef, transientRetryTimerRef, pendingSendOnModelsReadyRef, pendingMessageBaselineRef, liveTurnSessionHandoffRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setLivePromptSuggestion, setLiveStatus, setContextUsage, setSessionInfo, setSelectedCopilotMode, setSteeredNotice, setAttachments, setFailedSend, setOptimisticContextText, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThinkingTokens, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
+  }, retryOverride), [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, enableWorkflow, flushLiveAssistantTextNow, messages, modelsLoading, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, setSelectedPermissionMode, session, taskBudgetTokens, abortControllerRef, activeTurnRequestIdRef, inputTextRef, sendInFlightRef, awaitingPersistedTurnRef, pushedCopilotAttachmentsRef, turnProducedOutputRef, transientRetryCountRef, transientRetryTimerRef, pendingSendOnModelsReadyRef, pendingMessageBaselineRef, liveTurnSessionHandoffRef, steeredUserTextsRef, textareaRef, liveToolIndexesRef, liveToolInputJsonRef, setInputText, setSendState, setSendError, setLivePromptSuggestion, setLiveStatus, setContextUsage, setSessionInfo, setSelectedCopilotMode, setSteeredNotice, setAttachments, setFailedSend, setOptimisticContextText, setOptimisticUserText, setSteeredUserTexts, setReattachedRunning, setLiveThinkingTokens, setLiveThreadedMessages, setLiveToolActivities, setAwaitingPersistedTurn])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.

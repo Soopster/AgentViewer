@@ -15,7 +15,7 @@
 // state. Keep adapter modules stateless for that reason — any warm resource
 // belongs in the existing per-instance pools (claudePool, acpClientPool, …).
 
-import type { ContextTier as CopilotContextTier } from '@github/copilot-sdk'
+import type { ContextTier as CopilotContextTier } from '@microsoft/copilot-sdk'
 import type {
   AgentProvider,
   ContextUsage,

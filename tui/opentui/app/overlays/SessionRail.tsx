@@ -19,7 +19,7 @@ import { SidebarHeading, SidebarNewSession, SidebarSortToggle, sidebarQuietColor
 
 const SIDEBAR_VIEWS = ['sessions', 'coordinator'] as const
 
-export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, iconSet, onViewChange, onFocus, controls, coordinatorControls, status, previewEnabled = effectiveFocus === 'sessions' }: {
+export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainContentHeight, sidebarView, effectiveFocus, theme, coordinatorSidebarHeader, sidebarHeaderBaseText, toggleSidebarSort, showToggleOutcome, sidebarSort, sidebarHeaderPrefixWidth, sidebarProviderBadgeText, sidebarProviderAccent, workspacesEnabled, openSpaces, fullScreenPopoverOpen, setAllProjects, allProjects, sidebarInnerWidth, sidebarRowBudget, density, sidebarScrollbarOptions, loadingSessions, sessions, sidebarEntries, sidebarScrollRef, sidebarRowElements, onNewSession, onProviderPress, iconSet, onViewChange, onFocus, controls, coordinatorControls, status, previewEnabled = effectiveFocus === 'sessions' }: {
   onViewChange: (view: 'sessions' | 'coordinator') => void
   onFocus?: () => void
   previewEnabled?: boolean
@@ -42,6 +42,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
   sidebarSort: TuiSidebarSort
   sidebarHeaderPrefixWidth: number
   sidebarProviderBadgeText: string
+  onProviderPress: () => void
   sidebarProviderAccent: string
   workspacesEnabled: boolean
   openSpaces: (id?: string, close?: boolean) => void
@@ -95,7 +96,7 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
               {sidebarView === 'sessions' ? <SidebarNewSession icon={tuiIcon(iconSet, 'new-session', '+')} theme={theme} width={sidebarWidth} onPress={onNewSession} /> : null}
             </box>
             {sidebarView === 'sessions' ? <>
-              <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent}
+              <SidebarHeading theme={theme} width={sidebarWidth} text={sidebarHeaderBaseText} prefixWidth={sidebarHeaderPrefixWidth} badge={sidebarProviderBadgeText} accent={sidebarProviderAccent} onBadgePress={onProviderPress}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />
               <SidebarSortToggle theme={theme} width={sidebarWidth} sort={sidebarSort} iconSet={iconSet}
                 onPress={() => { toggleSidebarSort(); showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project') }} />

@@ -3,14 +3,15 @@ import type {
   Citations,
   GetAuthStatusResponse,
   GetStatusResponse,
-  ModelInfo,
+  Model,
   SessionEvent,
   SessionMetadata,
-} from '@github/copilot-sdk'
+} from '@microsoft/copilot-sdk'
 import type {
   ApiMessage,
   ContentBlock,
   ContextUsage,
+  ReasoningEffortLevel,
   Session,
   SessionDiagnosticSection,
   SessionInfo,
@@ -18,6 +19,7 @@ import type {
   SessionModelInfo,
 } from './types'
 import { COPILOT_CAPABILITIES } from './provider'
+import { REASONING_EFFORT_LEVELS } from './extensions/providers/runtimeCore'
 import { recordRawFrames } from './rawFrames'
 
 type CopilotStoredMetadata = {
@@ -538,28 +540,34 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
   return messages
 }
 
-export function mapCopilotModelsToSessionModels(models: ModelInfo[]): SessionModelInfo[] {
+function longCopilotContextWindow(model: Model | undefined): number | undefined {
+  const promptTokens = model?.billing?.tokenPrices?.longContext?.maxPromptTokens
+  const outputTokens = model?.capabilities?.limits?.max_output_tokens
+  return promptTokens && outputTokens ? promptTokens + outputTokens : undefined
+}
+
+export function mapCopilotModelsToSessionModels(models: Model[]): SessionModelInfo[] {
   return models.map((model) => {
-    const runtimeModel = model as ModelInfo & {
-      billing?: {
-        tokenPrices?: {
-          longContext?: {
-            contextMax?: number
-          }
-        }
-      }
-    }
-    const longContextMax = runtimeModel.billing?.tokenPrices?.longContext?.contextMax
-    const supportsLongContext = typeof longContextMax === 'number' && longContextMax > 0
-    const contextDescription = supportsLongContext
-      ? `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens · Long ${longContextMax.toLocaleString()} tokens`
-      : `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens`
+    const limits = model.capabilities?.limits
+    const contextWindowTokens = limits?.max_context_window_tokens
+    const longContextMax = longCopilotContextWindow(model)
+    const supportsLongContext = model.supportedContextTiers?.includes('long_context')
+      || !!model.billing?.tokenPrices?.longContext
+    const contextDescription = [
+      contextWindowTokens && `Context ${contextWindowTokens.toLocaleString()} tokens`,
+      longContextMax ? `Long ${longContextMax.toLocaleString()} tokens` : supportsLongContext && 'Long context available',
+    ].filter(Boolean).join(' · ')
     return {
       value: model.id,
       displayName: model.name,
       description: contextDescription,
-      supportsEffort: model.capabilities.supports.reasoningEffort,
-      supportedEffortLevels: model.supportedReasoningEfforts,
+      contextWindowTokens,
+      maxInputTokens: limits?.max_prompt_tokens,
+      maxOutputTokens: limits?.max_output_tokens,
+      supportsEffort: model.capabilities?.supports?.reasoningEffort,
+      supportedEffortLevels: model.supportedReasoningEfforts?.filter(
+        (level): level is ReasoningEffortLevel => REASONING_EFFORT_LEVELS.some(known => known === level),
+      ),
       supportsLongContext,
     }
   })
@@ -567,7 +575,7 @@ export function mapCopilotModelsToSessionModels(models: ModelInfo[]): SessionMod
 
 export function mapCopilotUsageToContextUsage(
   event: Extract<SessionEvent, { type: 'assistant.usage' }>,
-  models: Map<string, ModelInfo>,
+  models: Map<string, Model>,
   contextTier: 'default' | 'long_context' = 'default',
 ): ContextUsage | null {
   // assistant.usage is emitted for every API call. Sub-agent, compaction, and
@@ -585,19 +593,8 @@ export function mapCopilotUsageToContextUsage(
     || event.data.model.toLowerCase().includes('claude')
   const totalTokens = inputTokens + outputTokens + (cacheIsAdditionalInput ? cacheReadTokens + cacheWriteTokens : 0)
   const model = models.get(event.data.model)
-  const runtimeModel = model as ModelInfo & {
-    billing?: {
-      tokenPrices?: {
-        longContext?: {
-          contextMax?: number
-        }
-      }
-    }
-  }
-  const longContextMax = runtimeModel?.billing?.tokenPrices?.longContext?.contextMax
-  const maxTokens = contextTier === 'long_context' && typeof longContextMax === 'number' && longContextMax > 0
-    ? longContextMax
-    : model?.capabilities.limits.max_context_window_tokens ?? 0
+  const defaultContextWindow = model?.capabilities?.limits?.max_context_window_tokens
+  const maxTokens = (contextTier === 'long_context' ? longCopilotContextWindow(model) : defaultContextWindow) ?? 0
 
   return {
     totalTokens,

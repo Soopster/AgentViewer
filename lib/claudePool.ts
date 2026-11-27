@@ -353,7 +353,7 @@ export type ClaudePoolEntry = {
    */
   setModel(model: string): Promise<void>
   /** Apply a permission-mode change live. Same semantics as setModel. */
-  setPermissionMode(mode: PermissionMode): Promise<void>
+  setPermissionMode(mode: PermissionMode): Promise<PermissionMode | undefined>
 }
 
 export type ClaudePoolRunOptions = {
@@ -1000,7 +1000,7 @@ class ClaudePool {
       : Promise.resolve(null)
     const permissionChange = opts.permissionMode && opts.permissionMode !== entry.state.permissionMode
       ? entry.query.setPermissionMode(opts.permissionMode).then(
-        () => { entry.state.permissionMode = opts.permissionMode; return null },
+        (result) => { entry.state.permissionMode = result?.mode ?? opts.permissionMode; return null },
         () => 'set-permission-mode-failed' as const,
       )
       : Promise.resolve(null)
@@ -1163,10 +1163,14 @@ class ClaudePool {
       },
       setPermissionMode: async (mode: PermissionMode) => {
         entry.desiredPermissionMode = mode
+        let verifiedMode: PermissionMode | undefined
         await this.queueConfiguration(entry, async () => {
           try {
-            await withTimeout(entry.query.setPermissionMode(mode), 30_000, 'Claude permission-mode switch')
-            entry.state.permissionMode = mode
+            const response = await withTimeout(entry.query.setPermissionMode(mode), 30_000, 'Claude permission-mode switch')
+            verifiedMode = response?.mode
+            const applied = verifiedMode ?? mode
+            entry.state.permissionMode = applied
+            if (entry.desiredPermissionMode === mode) entry.desiredPermissionMode = applied
             entry.lastActivityAt = Date.now()
           } catch (err) {
             if (entry.inTurn) entry.pendingRecycleReason = 'set-permission-mode-failed'
@@ -1174,6 +1178,7 @@ class ClaudePool {
             throw err
           }
         })
+        return verifiedMode
       },
     }
   }

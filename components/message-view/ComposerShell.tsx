@@ -106,8 +106,8 @@ type ComposerShellProps = {
   composerModeOptions: SessionComposerModeOption[]
   selectedCopilotMode: string
   commitCopilotModeSelection: (nextMode: string) => void
-  selectedPermissionMode: 'auto' | 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
-  commitClaudePermissionSelection: (nextMode: 'auto' | 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions') => void
+  selectedPermissionMode: 'auto' | 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' | 'dontAsk'
+  commitClaudePermissionSelection: (nextMode: 'auto' | 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' | 'dontAsk') => void
   selectedCodexApproval: 'auto' | 'untrusted' | 'on-request' | 'never'
   setSelectedCodexApproval: Dispatch<SetStateAction<'auto' | 'untrusted' | 'on-request' | 'never'>>
   taskBudgetTokens: number | null
@@ -568,6 +568,7 @@ export function ComposerShell(props: ComposerShellProps) {
                     <NativeSelectOption value="acceptEdits">Accept edits</NativeSelectOption>
                     <NativeSelectOption value="auto">Auto</NativeSelectOption>
                     <NativeSelectOption value="plan">Plan</NativeSelectOption>
+                    {selectedPermissionMode === 'dontAsk' ? <NativeSelectOption value="dontAsk">Don't ask</NativeSelectOption> : null}
                     <NativeSelectOption value="bypassPermissions">Bypass permissions</NativeSelectOption>
                   </NativeSelect>
                 </label>

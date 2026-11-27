@@ -26,6 +26,7 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
   let collapsed = ''
   let sortToggled = 0
   let chosen = ''
+  let providerPicked = 0
   const scroll = React.createRef<ScrollBoxRenderable>()
   const context: BuildSidebarRowContext = {
     sessionInsightsOn: false, toggleDateGroup: key => { collapsed = key }, coordinatorRunGoals: new Map(),
@@ -48,7 +49,7 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
       fullScreenPopoverOpen={false} setAllProjects={() => { scopeChanged++ }} allProjects={false} sidebarInnerWidth={width - 5}
       sidebarRowBudget={20} density={density} sidebarScrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
       loadingSessions={false} sessions={sessions} sidebarEntries={entries} sidebarScrollRef={scroll}
-      sidebarRowElements={entries.map((entry, i) => runBuildSidebarRow(context, entry, i === 2))} onNewSession={() => { created++ }} />
+      sidebarRowElements={entries.map((entry, i) => runBuildSidebarRow(context, entry, i === 2))} onNewSession={() => { created++ }} onProviderPress={() => { providerPicked++ }} />
   </box>
   }
   const setup = await testRender(<Fixture />, { width, height: 24 })
@@ -82,6 +83,9 @@ for (const width of [28, 44, 64]) for (const theme of [DARK_THEME, LIGHT_THEME])
     assert.match(sortLine, width < 34 ? /25 of 26/ : /─ 25 of 26 · 1 hidden ─┘/, `${density}: count and hidden note sit at the bottom border's right end`)
     await click('sidebar-sort-toggle')
     assert.equal(sortToggled, 1, 'Clicking the border sort toggles it')
+    await click('sidebar-provider-badge')
+    assert.equal(providerPicked, 1, 'Clicking the provider chip opens the picker')
+    assert.equal(sortToggled, 1, 'The chip does not toggle the sort')
     await click('sidebar-project-scope')
     assert.equal(scopeChanged, 1)
     await click('sidebar:date:today')

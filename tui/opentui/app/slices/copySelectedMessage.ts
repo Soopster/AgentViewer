@@ -234,6 +234,8 @@ export function useCopySelectedMessageGroup(ctx: UseCopySelectedMessageGroupCont
       return
     }
     if (uuid) pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid }
+    setOpenTabSessions(current => current.some(tab => sessionKey(tab) === targetKey)
+      ? current : [...current, targetSession])
     selectTabSession(targetSession)
     setFocusedPane('messages')
   })
