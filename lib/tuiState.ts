@@ -20,7 +20,6 @@ type TuiState = {
   themeDark?: unknown
   railVisible?: unknown
   borders?: unknown
-  roundedBorders?: unknown
   sidebarWidth?: unknown
   focusMode?: unknown
   stickyHeaders?: unknown
@@ -206,15 +205,6 @@ export async function getConfiguredTuiBorders(): Promise<boolean> {
 
 export async function setConfiguredTuiBorders(borders: boolean): Promise<void> {
   await writeTuiState({ borders })
-}
-
-export async function getConfiguredTuiRoundedBorders(): Promise<boolean> {
-  const parsed = await readTuiState()
-  return parsed.roundedBorders === true
-}
-
-export async function setConfiguredTuiRoundedBorders(roundedBorders: boolean): Promise<void> {
-  await writeTuiState({ roundedBorders })
 }
 
 export async function getConfiguredTuiSidebarWidth(): Promise<number> {

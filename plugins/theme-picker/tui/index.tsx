@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
 // TUI entry for the theme picker: loaded the first time the menu opens.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import type { TuiPluginView, TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 import {
   OMZ_MODES, SectionFrame, THEMES, THEME_DESCRIPTIONS, THEME_GROUPS, THEME_LABELS, filterThemeModes, getThemePalette, isLightThemeMode,
-  roundedBordersEnabled, subscribeRoundedBorders, themeGroupModes, type ThemeMenuGroup,
+  themeGroupModes, type ThemeMenuGroup,
 } from '../../../tui/opentui/shell/sdkThemes'
 
 const groupOf = (mode: string): ThemeMenuGroup => (isLightThemeMode(mode) ? 'light' : OMZ_MODES.includes(mode) ? 'omz' : 'dark')
@@ -15,7 +15,6 @@ function ThemePicker({ services, height, registerKeys }: TuiPluginViewProps) {
   const origin = themes.origin
   const [group, setGroup] = useState<ThemeMenuGroup>(() => groupOf(origin ?? themes.mode))
   const [query, setQuery] = useState('')
-  const rounded = useSyncExternalStore(subscribeRoundedBorders, roundedBordersEnabled)
   // Keys arrive faster than renders: the handler reads what is current, not what it closed over.
   const latest = useRef({ themes, group, query })
   latest.current = { themes, group, query }
@@ -58,7 +57,6 @@ function ThemePicker({ services, height, registerKeys }: TuiPluginViewProps) {
       if (key.name === 'escape') { service.cancel(); return true }
       if (key.name === 'tab') { service.toggleFollow(); return true }
       if (key.ctrl && key.name === 'b') { service.toggleBorders(); return true }
-      if (key.ctrl && key.name === 'r') { service.toggleRoundedBorders(); return true }
       // Anything else (typing, ⌃C) is not the menu's: the search field and the host take it.
       return false
     })
@@ -146,10 +144,6 @@ function ThemePicker({ services, height, registerKeys }: TuiPluginViewProps) {
           <text fg={overlayTheme.cyan} wrapMode="none"> · ⌃B </text>
           <text fg={themes.showBorders ? overlayTheme.text : overlayTheme.muted} wrapMode="none">{themes.showBorders ? 'borders ✓' : 'borders'}</text>
         </box>
-      </box>
-      <box height={1} paddingX={2} flexDirection="row" onMouseDown={(event) => { if (event.button === 0) { event.stopPropagation(); themes.toggleRoundedBorders() } }}>
-        <text fg={overlayTheme.cyan} wrapMode="none">⌃R </text>
-        <text fg={rounded ? overlayTheme.text : overlayTheme.muted} wrapMode="none">{rounded ? 'rounded borders ✓' : 'rounded borders'}</text>
       </box>
     </SectionFrame>
   )

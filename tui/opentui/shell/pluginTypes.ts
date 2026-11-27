@@ -209,7 +209,6 @@ export type TuiPluginServices = {
     readonly toggleFollow: () => void
     readonly showBorders: boolean
     readonly toggleBorders: () => void
-    readonly toggleRoundedBorders: () => void
   }
 }
 

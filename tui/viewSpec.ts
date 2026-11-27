@@ -17,6 +17,9 @@ export type ViewAgentCards = 'none' | 'operational' | 'all'
 export type ViewFoldDefault = 'default' | 'expand-all'
 export type ViewTurnBoundaries = 'rules' | 'summary-only' | 'gaps' | 'none'
 export type ViewMessageLayout = 'markers' | 'continuous'
+// Window border glyphs (tui/opentui/borderThemes.ts draws them); 'none' hides borders.
+export const VIEW_BORDER_THEMES = ['square', 'rounded', 'heavy', 'double', 'mixed', 'dashed', 'heavy-dashed', 'dotted', 'ascii'] as const
+export type ViewBorderTheme = typeof VIEW_BORDER_THEMES[number]
 export type ViewIconSet = 'standard' | 'nerd-font' | 'powerline' | 'diamond' | 'slant' | 'pixel' | 'flame'
 export type ViewPromptMarker = '❯' | '›' | '>' | '▸' | '$'
 /** `tone` picks the glyph from the reply's first line (● result, × error, ▲ system, • text) and lights the cursor card ❯. */
@@ -128,6 +131,8 @@ export type ViewSpec = {
   tabOrientation: 'horizontal' | 'vertical' | null
   focusMode: boolean | null
   borders: boolean | null
+  /** The glyphs every plain window border is drawn with; 'none' hides borders altogether. */
+  borderTheme: ViewBorderTheme | 'none'
   fleetStrip: boolean | null
   taskPanel: 'open' | 'closed' | null
   /** 'closed', or a side-panel surface kind (built-in or a plugin's) to open. */
@@ -163,7 +168,7 @@ const CARDS: ViewSpec = {
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', workspaceTabStyle: null, tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
-  sessionRail: null, sidebarView: null, railFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null,
+  sessionRail: null, sidebarView: null, railFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null, borderTheme: 'square',
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
   toolbarIconSet: null, transcriptIconSet: null, windowIconSet: null, popupIconSet: null, workspaceIconSet: null,
@@ -371,6 +376,10 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
   { key: 'borders', section: 'Panels', label: 'Borders', help: 'Pin window borders drawn or hidden.',
     options: [INHERIT, { value: true, label: 'drawn' }, { value: false, label: 'hidden' }] },
+  { key: 'borderTheme', section: 'Panels', label: 'Border theme', help: 'The lines window borders are drawn with; none hides them. Focus and emphasis frames keep their heavy or double lines.',
+    options: [{ value: 'none', label: 'none' }, { value: 'square', label: 'square' }, { value: 'rounded', label: 'rounded' }, { value: 'heavy', label: 'heavy' },
+      { value: 'double', label: 'double' }, { value: 'mixed', label: 'double rails' }, { value: 'dashed', label: 'dashed' },
+      { value: 'heavy-dashed', label: 'heavy dashed' }, { value: 'dotted', label: 'dotted' }, { value: 'ascii', label: 'ASCII' }] },
   { key: 'fleetStrip', section: 'Panels', label: 'Fleet strip', help: 'Pin the running-sessions strip above the transcript.',
     options: [INHERIT, { value: true, label: 'shown' }, { value: false, label: 'hidden' }] },
   { key: 'taskPanel', section: 'Panels', label: 'Task panel', help: 'Open or close the task panel when entering the view.',

@@ -67,7 +67,8 @@ export function useProviderGroup() {
   const [globalTranscriptWidth, setTranscriptWidth] = useEngineeringAppState<TuiTranscriptWidth>('transcriptWidth', 'readable')
   const [globalFocusMode, setFocusMode] = useEngineeringAppState('focusMode', false)
   const focusMode = viewSpec.focusMode ?? globalFocusMode
-  const showBorders = viewSpec.borders ?? globalShowBorders
+  // A view whose border theme is 'none' hides borders whatever the Borders pin says.
+  const showBorders = viewSpec.borderTheme === 'none' ? false : viewSpec.borders ?? globalShowBorders
   const [globalStickyHeaders, setStickyHeaders] = useEngineeringAppState('stickyHeaders', false)
   const [globalLightweightWindows, setLightweightWindows] = useEngineeringAppState('lightweightWindows', false)
   const transcriptWidth = viewSpec.transcriptWidth ?? globalTranscriptWidth

@@ -6,4 +6,3 @@ export {
 } from '../app/themes'
 export { getThemePalette } from '../../theme'
 export { SectionFrame } from '../app/borders'
-export { roundedBordersEnabled, subscribeRoundedBorders } from '../roundedBorders'

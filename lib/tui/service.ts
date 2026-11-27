@@ -18,8 +18,6 @@ import {
   getConfiguredTuiStickyHeaders,
   getConfiguredTuiLightweightWindows,
   getConfiguredTuiBorders,
-  getConfiguredTuiRoundedBorders,
-  setConfiguredTuiRoundedBorders,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
   getConfiguredTuiSidebarSort,
@@ -349,13 +347,6 @@ export async function writeTuiBorders(borders: boolean): Promise<void> {
   await setConfiguredTuiBorders(borders)
 }
 
-export async function readTuiRoundedBorders(): Promise<boolean> {
-  return getConfiguredTuiRoundedBorders()
-}
-
-export async function writeTuiRoundedBorders(roundedBorders: boolean): Promise<void> {
-  await setConfiguredTuiRoundedBorders(roundedBorders)
-}
 
 export async function readTuiSidebarWidth(): Promise<number> {
   return getConfiguredTuiSidebarWidth()
