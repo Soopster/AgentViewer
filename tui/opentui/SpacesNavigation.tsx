@@ -4,6 +4,7 @@ import { mixHexColor } from './app/transcriptStyle'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { TextAttributes } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import type { SpacesController, Workspace } from './spacesStore'
 import { closeWorkspaceResources, subscribeWorkspaceResources, workspaceResources, workspaceResourceVersion } from './workspaceResources'
@@ -48,13 +49,18 @@ export function SpacesRail({ theme, width, onManage, iconSet = 'standard', under
   // The heading in the rail's quiet grey (muted is orange in some palettes), and a rule under the list: it
   // separates where you are from the search and filters below it, as the filters' own rule does from the list.
   const quiet = sidebarQuietColor(theme)
+  const faint = mixHexColor(quiet, theme.surface, 0.55) ?? theme.border
+  const resting = mixHexColor(theme.text, theme.surface, 0.25) ?? theme.text
   const activeIndex = state.spaces.findIndex(space => space.id === state.activeSpaceId)
   const shown = state.spaces.slice(Math.max(0, activeIndex - 3), Math.max(4, activeIndex + 1))
   const labels = spaceLabels(state.spaces)
   return <box id="spaces-rail" zIndex={under ? 0 : NAVIGATION_Z_INDEX} height={spaceCount + 2} flexShrink={0} flexDirection="column" border={[]} borderColor={theme.border}>
     <box height={1} paddingX={1} flexDirection="row">
-      <text fg={quiet} wrapMode="none" selectable={false}>Spaces</text>
-      <box flexGrow={1} />
+      <text fg={quiet} attributes={TextAttributes.BOLD} flexShrink={0} wrapMode="none" selectable={false}>SPACES </text>
+      {/* The heading's own rule sets the list apart from the Sessions/Coordinator tabs without spending a row. */}
+      <box height={1} flexGrow={1} flexShrink={1} flexBasis={0} overflow="hidden">
+        <text fg={faint} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
+      </box>
       <RailButton id="spaces-add" theme={theme} label={tuiControlLabel(iconSet, ' + ')} onPress={() => onManage(NEW_SPACE_ID)} />
       <RailButton id="spaces-menu" theme={theme} label={tuiControlLabel(iconSet, ' ⋯ ')} onPress={() => onManage()} />
     </box>
@@ -63,16 +69,20 @@ export function SpacesRail({ theme, width, onManage, iconSet = 'standard', under
       // the right, so an activity mark never takes the place of "current".
       const current = space.id === state.activeSpaceId
       const badge = space.workspaces.map(workspace => workspaceBadge(context.controller, workspace)).find(Boolean) ?? ''
+      // The name is what you read; what only tells two spaces apart (a number, a folder) stays quiet beside it.
+      const label = fit(labels.get(space.id) ?? space.name, Math.max(width - 11, 4))
+      const name = label.startsWith(space.name) ? space.name : label
+      const detail = label.slice(name.length).replace(/^ (?:· )?/, '')
       return <box key={space.id} id={`space:${space.id}`} height={1} paddingX={1} flexDirection="row" backgroundColor={current ? theme.surface3 : theme.surface}
         onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); context.controller.activate(space.id) } else if (event.button === 2) { event.stopPropagation(); onManage(space.id) } }}>
-        <text fg={current ? theme.cyan : quiet} wrapMode="none" selectable={false}>{current ? `${tuiIcon(iconSet, 'prompt', '▸')} ` : '  '}</text>
-        <text fg={current ? theme.cyan : theme.text} wrapMode="none">{fit(labels.get(space.id) ?? space.name, Math.max(width - 10, 4))}</text>
+        <text fg={theme.cyan} flexShrink={0} wrapMode="none" selectable={false}>{current ? ` ${tuiIcon(iconSet, 'prompt', '▸')} ` : '   '}</text>
+        <text fg={current ? theme.cyan : resting} attributes={current ? TextAttributes.BOLD : TextAttributes.NONE} wrapMode="none">{name}{detail ? <span fg={quiet} attributes={TextAttributes.NONE}>{`  ${detail}`}</span> : null}</text>
         <box flexGrow={1} />
         <text fg={badgeColor(badge, theme)} wrapMode="none" selectable={false}>{badge ? ` ${badge}` : ''}</text>
       </box>
     })}
     <box id="spaces-rule" height={1} flexShrink={0} marginX={1} overflow="hidden">
-      <text fg={mixHexColor(quiet, theme.surface, 0.55) ?? theme.border} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
+      <text fg={faint} wrapMode="none" selectable={false}>{'─'.repeat(200)}</text>
     </box>
   </box>
 }
