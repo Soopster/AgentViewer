@@ -20,7 +20,9 @@ export type PluginActivitySnapshot = {
 
 export type PluginPermissionsService = {
   /** Answers one ask on the session that raised it. Rejects when the ask is gone or the reply fails. */
-  readonly respond: (target: import('./bookmarks').PluginSessionRef, permissionId: string, response: 'once' | 'reject') => Promise<void>
+  readonly respond: (target: import('./bookmarks').PluginSessionRef, permissionId: string, response: import('../permissions').PermissionResponse) => Promise<void>
+  /** Answers a question ask. */
+  readonly answer: (target: import('./bookmarks').PluginSessionRef, permissionId: string, answers: import('../permissions').PendingQuestionAnswers) => Promise<void>
 }
 
 /** Read-only project state for the selected conversation; either read may answer null when unavailable. */

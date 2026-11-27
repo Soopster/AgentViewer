@@ -20,6 +20,12 @@ let show: (value: boolean) => void
 let resize: (width: number) => void
 let keys: TuiPluginKeyHandler | null = null
 const opened: PluginSessionRef[] = []
+const controlled: string[] = []
+const control = {
+  interrupt: async (to: PluginSessionRef) => { controlled.push(`stop:${to.providerInstanceId}`) },
+  stopTask: async () => {}, rerunChecks: async () => {}, open: () => {},
+  draft: (to: PluginSessionRef | undefined, text: string) => { controlled.push(`draft:${to?.providerInstanceId}:${text}`) },
+}
 const target = { provider: 'codex' as const, providerInstanceId: 'work', sessionId: 'same' }
 const messages: ThreadedMessage[] = [{ role: 'system', uuid: 'bg-start', provider: 'claude', blocks: [{ type: 'claude_system', payload: { type: 'system', subtype: 'task_started', task_id: 'background', description: 'Worker build' } }] } as unknown as ThreadedMessage]
 function Fixture() {
@@ -33,7 +39,7 @@ function Fixture() {
     <PluginWidgetHost slot="corner" theme={DARK_THEME} width={width} height={30} zIndex={48} />
     <PluginWidgetHost slot="viewport" theme={DARK_THEME} width={width} height={30} zIndex={80} />
     {expanded ? <PluginSurfaceHost surfaceId="activity-island" placement="overlay" theme={DARK_THEME} width={width} height={30} focused
-      provided={{ 'session-navigation': { open: value => { opened.push(value) } } }}
+      provided={{ 'activity-control': control, 'session-navigation': { open: value => { opened.push(value) } } }}
       onClose={() => setExpanded(false)} onKeyHandlerReady={value => { keys = value }} /> : null}
   </box>
 }
@@ -72,7 +78,7 @@ try {
   // Inline approvals: a/r act on the selected row; Enter opens and never approves.
   const decisions: string[] = []
   await act(async () => { tuiActivityFeed.publish({ id: 'approval:fixture', source: 'approvals', kind: 'approval', status: 'needs-input', title: 'Work needs approval', detail: 'Bash: rm -rf build', target,
-    actions: [{ id: 'reject', label: 'Reject', tone: 'danger', run: () => { decisions.push('reject') } }, { id: 'approve', label: 'Approve', tone: 'primary', run: () => { decisions.push('approve') } }] }) })
+    actions: [{ id: 'reject', key: 'r', label: 'Reject', tone: 'danger', run: () => { decisions.push('reject') } }, { id: 'approve', key: 'a', label: 'Approve', tone: 'primary', run: () => { decisions.push('approve') } }] }) })
   await act(async () => { show(true) })
   await waitFor('approval row leads with its actions', () => screen().includes('Work needs approval') && screen().includes('a Approve') && screen().includes('r Reject'))
   await press('return')
@@ -83,8 +89,25 @@ try {
   assert.deepEqual(decisions, ['approve'])
   await press('r')
   assert.deepEqual(decisions, ['approve', 'reject'])
+  process.stdout.write(screen())
   await press('escape')
   await act(async () => { tuiActivityFeed.remove('approval:fixture') })
+  // Actions fit the row: stopping a turn needs two presses, and moving on disarms it.
+  await act(async () => { tuiActivityFeed.publish({ id: 'session:fixture', source: 'sessions', kind: 'session', status: 'needs-input', title: 'Long build', detail: 'Needs input', target, context: { turn: 'running' } }) })
+  await act(async () => { show(true) })
+  await waitFor('running row offers message and stop', () => screen().includes('m Message') && screen().includes('s Stop turn'))
+  await press('s')
+  assert.deepEqual(controlled, [], 'one press only arms')
+  await waitFor('armed', () => screen().includes('s again: Stop turn'))
+  await press('escape')
+  await waitFor('escape disarms without closing', () => screen().includes('s Stop turn') && !screen().includes('again'))
+  await press('s'); await press('s')
+  assert.deepEqual(controlled, ['stop:work'])
+  await waitFor('says what happened', () => screen().includes('Stop requested'))
+  await press('m')
+  assert.deepEqual(controlled, ['stop:work', 'draft:work:'])
+  await waitFor('leaving actions close the list', () => !screen().includes('Activity ·'))
+  await act(async () => { tuiActivityFeed.remove('session:fixture') })
   await act(async () => { resize(24) })
   await settle()
   assert(screen().includes('READER CONTENT'), 'narrow geometry preserves the reader')

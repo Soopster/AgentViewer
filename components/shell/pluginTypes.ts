@@ -32,6 +32,7 @@ export type WebPluginServices = {
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../lib/plugins/schedules').PluginSchedulesService
   'chief-of-staff'?: import('../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
+  'activity-control'?: import('../../lib/plugins/activityControl').PluginActivityControl
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation
   /** Every session the shell lists in scope, the selected one and its transcript, and selecting one. */
   'session-fleet'?: {

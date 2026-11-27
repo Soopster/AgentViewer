@@ -9,6 +9,7 @@ import { manifest } from '../plugins/dynamic-island/manifest'
 import { application } from '../plugins/dynamic-island/observer'
 import { DEFAULT_PLUGIN_SETTINGS, applyPluginSettings, withPluginEnabled } from '../lib/plugins/enablement'
 import { taskActivities } from '../plugins/dynamic-island/taskActivities'
+import { activityActions } from '../plugins/dynamic-island/actions'
 import type { ThreadedMessage } from '../lib/threading'
 
 let now = 100
@@ -97,7 +98,7 @@ let git: { branch: string; modified: number; untracked: number; stashes: number 
 let proof: import('../lib/plugins/proof').ProofSnapshot | null = null
 applyPluginSettings(DEFAULT_PLUGIN_SETTINGS)
 const observed = createActivityFeed(() => now)
-const host = createPluginApplicationHost('web', [manifest], { 'dynamic-island': async () => application }, { activity: observed, repository: { readGit: async cwd => { gitReads.push(cwd); return git }, readProof: async () => proof }, permissions: { respond: async (to, id, response) => { replies.push([to.providerInstanceId ?? '', id, response]) } } })
+const host = createPluginApplicationHost('web', [manifest], { 'dynamic-island': async () => application }, { activity: observed, repository: { readGit: async cwd => { gitReads.push(cwd); return git }, readProof: async () => proof }, permissions: { respond: async (to, id, response) => { replies.push([to.providerInstanceId ?? '', id, response]) }, answer: async (to, id, answers) => { replies.push([to.providerInstanceId ?? '', id, JSON.stringify(answers)]) } } })
 await host.publish(event([]))
 assert.equal(observed.getSnapshot().length, 0, 'first snapshot does not invent a finished turn')
 await host.publish(event([['codex@work:same', 'running'], ['codex@personal:same', 'needs-input']]))
@@ -115,12 +116,20 @@ assert.equal(rows.filter(item => item.kind === 'question').length, 1)
 assert(!rows.some(item => item.id === 'session:codex@work:same'), 'listed asks replace the generic needs-input row')
 const plain = rows.find(item => item.id.endsWith(':p1'))!
 assert.match(plain.detail!, /Bash: rm -rf build/)
-assert.deepEqual(plain.actions!.map(action => [action.id, action.tone]), [['reject', 'danger'], ['approve', 'primary']])
+assert.deepEqual(plain.actions!.map(action => [action.id, action.tone]), [['reject', 'danger'], ['approve', 'primary'], ['always', undefined]])
 const guarded = rows.find(item => item.id.endsWith(':p2'))!
-assert.deepEqual(guarded.actions!.map(action => [action.id, action.tone]), [['reject', 'primary'], ['approve', undefined]], 'defaultToDeny leads with reject')
-assert.equal(rows.find(item => item.kind === 'question')!.actions!.length, 0, 'a question cannot be approved from the island')
+assert.deepEqual(guarded.actions!.map(action => [action.id, action.tone]), [['reject', 'primary'], ['approve', undefined]], 'defaultToDeny leads with reject and never offers Always')
+assert.equal(rows.find(item => item.kind === 'question')!.actions!.length, 0, 'a question with no listed choices cannot be answered from the island')
 await plain.actions!.find(action => action.id === 'approve')!.run()
 assert.deepEqual(replies, [['work', 'p1', 'once']])
+const pick = (multiSelect: boolean) => ask('q2', { questions: [{ question: 'Which?', header: 'h', multiSelect, options: [{ label: 'One' }, { label: 'Two', value: 'two' }] }] })
+await host.publish(withAsks([pick(true)]))
+assert.equal(observed.getSnapshot().find(item => item.kind === 'question')!.actions!.length, 0, 'a multi-select needs the picker')
+await host.publish(withAsks([pick(false)]))
+const choices = observed.getSnapshot().find(item => item.kind === 'question')!.actions!
+assert.deepEqual(choices.map(action => [action.key, action.label]), [['1', 'One'], ['2', 'Two']])
+await choices[1]!.run()
+assert.deepEqual(replies.at(-1), ['work', 'q2', '{"Which?":["two"]}'])
 await host.publish(withAsks([ask('p2', { defaultToDeny: true })]))
 assert.equal(observed.getSnapshot().filter(item => item.kind === 'approval').length, 1, 'an ask answered elsewhere leaves the feed')
 await host.publish(event([['codex@work:same', 'needs-input']]))
@@ -181,6 +190,30 @@ await host.publish(inRepo({ ...event([['codex@work:same', 'running']]), cwd: '/w
 assert(!observed.getSnapshot().some(item => item.kind === 'repo'), 'a dirty tree is quiet while a turn is editing it')
 await host.publish(inRepo({ cwd: null }))
 assert(!observed.getSnapshot().some(item => item.kind === 'checks' || item.kind === 'repo'), 'no project, no repo rows')
+// Each kind of row gets the actions that fit it; text is only ever drafted.
+const did: string[] = []
+const control = {
+  interrupt: async () => { did.push('interrupt') }, stopTask: async (_: unknown, id: string) => { did.push(`stopTask:${id}`) },
+  rerunChecks: async (cwd: string, ids: readonly string[], version: string) => { did.push(`rerun:${cwd}:${ids.join()}:${version}`) },
+  draft: (_: unknown, text: string) => { did.push(`draft:${text}`) }, open: (command: string) => { did.push(`open:${command}`) },
+}
+const keysOf = (row: Parameters<typeof activityActions>[0]) => activityActions(row, control).map(action => `${action.key}:${action.id}${action.confirm ? '!' : ''}`)
+const byKind = (kind: string) => repoRows.find(item => item.kind === kind)!
+assert.deepEqual(keysOf(byKind('checks')), ['f:fix', 'c:rerun', 'v:proof'])
+assert.deepEqual(keysOf(byKind('repo')), ['v:diff', 'm:commit'])
+await activityActions(byKind('checks'), control).find(action => action.id === 'rerun')!.run()
+assert.deepEqual(did, ['rerun:/work/app:tsc:1'])
+const base = { id: 'x', source: 's', title: 'T', updatedAt: 0, target }
+assert.deepEqual(keysOf({ ...base, status: 'running', kind: 'session', context: { turn: 'running' } }), ['m:message', 's:stop!'])
+assert.deepEqual(keysOf({ ...base, status: 'info', kind: 'session', context: { turn: 'ended' } }), ['m:message', 'v:diff'])
+assert.deepEqual(keysOf({ ...base, status: 'waiting', kind: 'health' }), ['p:status', 's:stop!'])
+assert.deepEqual(keysOf({ ...base, status: 'needs-input', kind: 'team' }), ['t:teammates'])
+assert.deepEqual(keysOf({ ...base, status: 'running', kind: 'task', context: { taskId: 'b' } }), [], 'only Claude can stop one task')
+assert.deepEqual(keysOf({ ...base, target: { ...target, provider: 'claude' }, status: 'running', kind: 'task', context: { taskId: 'b' } }), ['s:stop-task!'])
+assert.deepEqual(keysOf({ ...base, status: 'error', kind: 'task', context: { taskId: 'b' } }), ['f:investigate'])
+assert.deepEqual(keysOf({ ...base, status: 'error' }), ['f:investigate'])
+assert.deepEqual(keysOf({ ...base, status: 'success' }), [])
+assert.deepEqual(activityActions({ ...base, status: 'error' }, undefined), [], 'no control, no host actions')
 // Kind ranks within a status.
 const ranked = createActivityFeed(() => now)
 ranked.publish({ id: 'a', source: 's', status: 'needs-input', title: 'a', kind: 'health' })

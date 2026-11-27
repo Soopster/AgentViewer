@@ -6,6 +6,6 @@ export const manifest = {
   renderers: ['web', 'tui'], stateVersion: 1,
   application: { events: ['sessionActivity'], services: ['activity', 'permissions', 'repository'] },
   widgets: [{ id: 'island', slot: 'top-center' }],
-  surfaces: [{ id: 'activity-island', title: 'Activity island', windowLabel: 'Activity island', pin: null, single: true, keys: 'capture', placements: ['overlay'], optionalServices: ['session-navigation'], services: [] }],
+  surfaces: [{ id: 'activity-island', title: 'Activity island', windowLabel: 'Activity island', pin: null, single: true, keys: 'capture', placements: ['overlay'], optionalServices: ['session-navigation', 'activity-control'], services: [] }],
   commands: [{ id: 'activity-island', toggle: true, label: 'Toggle activity island', category: 'View', scope: 'application', requires: null, opens: 'activity-island', renderers: ['web', 'tui'], keywords: ['activity', 'island', 'notifications', 'progress'] }],
 } as const satisfies PluginManifest

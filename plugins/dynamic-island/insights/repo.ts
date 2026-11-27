@@ -31,10 +31,12 @@ export function repoActivities(input: {
       id: `checks:${cwd}`, source: REPO_SOURCE, kind: 'checks', status: 'error',
       title: `${plural(failed.length, 'check')} failing in ${name}`,
       detail: failed.map(result => result.check.label).join(', '), target, updatedAt: run.finishedAt,
+      context: { checks: { cwd, version: proof.config.version, ids: failed.map(result => result.check.id), failing: failed.map(result => result.check.label) } },
       dismissKey: `${run.id}:${failed.map(result => result.check.id).join(',')}`,
     })
     else if (run.results.some(result => proofFreshness(result, proof) === 'stale')) rows.push({
       id: `checks:${cwd}`, source: REPO_SOURCE, kind: 'checks', status: 'waiting',
+      context: { checks: { cwd, version: proof.config.version, ids: run.results.map(result => result.check.id), failing: [] } },
       title: `Checks are stale in ${name}`, detail: 'Files changed since the last passing run — rerun them in Proof', target, updatedAt: run.finishedAt,
       dismissKey: `stale:${run.id}`,
     })

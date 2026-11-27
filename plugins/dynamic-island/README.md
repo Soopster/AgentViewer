@@ -3,7 +3,7 @@
 Enabled by default in Web and OpenTUI. The top-center capsule appears when there
 is activity. Click it or invoke **Toggle activity island** from the palette to
 inspect the list. New arrivals never take focus. Escape closes the expanded list.
-In the terminal, use arrows and Enter to open a session, or `d` to dismiss a row.
+In the terminal, arrows select a row and show its buttons (clickable, or by key); Enter opens the session and `d` dismisses.
 
 The shared model combines observed session activity, Pi startup, provider startup,
 observed background tasks and notifications. Background-task summaries use the
@@ -17,20 +17,37 @@ Beyond activity, the island raises rows a person can act on. A row has a `kind`
 and optional `actions`; within one status, approvals sort first, then team,
 checks, repo, health and tasks.
 
-| Kind | Raised when | Actions |
+| Row | Raised when | Actions (terminal key) |
 |---|---|---|
-| `approval` | A session has an unanswered permission ask. One row per ask, replacing the session's generic "Needs input". | Reject, Approve (web buttons; terminal `r` / `a`). Reject leads when the provider marks the ask `defaultToDeny`. |
-| `question` | An ask that needs the transcript's picker: a question, plan or elicitation. | Open session only. |
-| `team` | Teammates are waiting on the lead (after this client's reviewed markers). Finished results alone raise nothing. | Open session. |
-| `checks` | The latest finished Proof run has failing checks (error) or only stale ones. | Open session. |
-| `repo` | The selected project has uncommitted changes and no turn is running in it. | Open session. |
-| `health` | A running turn has lasted 20 minutes or more (host start time, else first seen). | Open session. |
+| Approval | A session has an unanswered permission ask. One row per ask. | Reject `r`, Approve `a`, Always `A` (confirm). No Always on a `defaultToDeny` ask, where Reject leads. |
+| Question | One single-choice question with up to four options. | Each option, `1`-`4`. |
+| Longer question, plan, elicitation | Needs the transcript's picker. | Answer in session / Review plan. |
+| Running turn | | Message `m`, Stop turn `s` (confirm). |
+| Needs input / waiting | | Reply or Message `m`; Stop turn `s` when it needs input. |
+| Turn ended | | Reply `m`, Review changes `v`. |
+| Long turn (20m+) | | Ask for status `p`, Stop turn `s` (confirm). |
+| Team | Teammates are waiting on the lead. | Open Teammates `t`. |
+| Failing checks | Latest finished Proof run. | Draft fix `f`, Rerun failed `c`, Open Proof `v`. |
+| Stale checks | | Rerun checks `c`, Open Proof `v`. |
+| Uncommitted changes | No turn is running in the project. | Review diff `v`, Draft commit `m`. |
+| Background task | Running or failed. | Stop task `s` (confirm, Claude only); Investigate `f` when failed. |
+| Other error | A notification or startup failure. | Ask agent `f`. |
 
-Enter and `o` only ever open a session, so one stray key cannot approve. Replies go
-through the `permissions` application service, which sends the same
-`respondPermission` action the transcript's approval card sends. Project state
-(`repository` service) is read at most every 30 seconds, only while the app is
-focused and only for the selected conversation's directory.
+Every row with a session can also be opened, and any row can be dismissed.
+
+Web and OpenTUI share one model: `actions.ts` decides what each row offers and
+`useActivityActions.ts` owns confirm, busy, errors and open/dismiss. A renderer
+only draws the buttons and gives the host's `activity-control` service
+(`lib/plugins/activityControl.ts`).
+
+Enter and `o` only ever open a session, so one stray key cannot approve.
+**Nothing here sends a prompt**: draft actions open the session and add the text
+to its composer once that composer is on screen, or give up after a few seconds.
+Actions that end work or widen permissions need a second press. Replies go
+through the `permissions` application service, which sends the same actions the
+transcript's cards send. Project state (`repository` service) is read at most
+every 30 seconds, only while the app is focused and only for the selected
+conversation's directory.
 
 The **Toast notifications** plugin independently presents the same TUI
 notifications. Enable either plugin or both in Plugins. Disabling presentation

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useModAppHost } from '../../lib/plugins/useModAppHost'
 import { useModSurfaces } from '../../lib/plugins/modSurfaces'
 import { getCurrentTheme, subscribeTheme } from '../../lib/themes'
-import { dispatchPluginCommand } from '../../lib/plugins/commandBus'
+import { dispatchPluginCommand, dispatchPluginCommandWhenShown } from '../../lib/plugins/commandBus'
 import type { PluginSessionActivity } from '../../lib/plugins/application'
 import type { Session } from '../../lib/types'
 import { sessionIdentityKey } from '../../lib/sessionIdentity'
@@ -28,6 +28,16 @@ import { webApplicationPlugins } from './applicationPlugins'
 import PluginSurfaceHost from './PluginSurfaceHost'
 import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
 import { webPluginCommands } from './pluginCommands'
+
+async function postSession(target: PluginSessionRef, route: 'actions' | 'interrupt', body: Record<string, unknown>) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/${route}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, provider: target.provider, providerInstanceId: target.providerInstanceId }),
+  })
+  const data = await res.json().catch(() => ({})) as { error?: string; stopped?: boolean }
+  if (!res.ok || data.error) throw new Error(data.error ?? 'The request failed')
+  return data
+}
 
 /** The Web shell adapter for app events and capability sinks. Contains no feature policy. */
 export function ApplicationPluginHost({ teamAttention, sessions, selectedSession, cwd = null, insertText, openSession, sessionTabs, sessionFleet, shellActions }: {
@@ -73,6 +83,7 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
       const data = await res.json().catch(() => ({})) as { error?: string }
       if (!res.ok || data.error) throw new Error(data.error ?? 'Failed to respond to permission')
     },
+    answer: (target, permissionId, answers) => postSession(target, 'actions', { action: 'respondQuestion', permissionId, answers }).then(() => {}),
   }, notifications: {
     ...webNotifications.service,
     notice: showNotice,
@@ -82,6 +93,31 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
       }
     },
   } }), [showNotice])
+  // A draft waits until its session is the selected one, so it cannot land in another composer.
+  const [pendingDraft, setPendingDraft] = useState<{ key: string | null; text: string } | null>(null)
+  const selectedKey = selectedSession ? sessionIdentityKey(selectedSession) : null
+  useEffect(() => {
+    if (!pendingDraft || (pendingDraft.key && pendingDraft.key !== selectedKey)) return
+    setPendingDraft(null)
+    if (pendingDraft.text) insertText?.(pendingDraft.text)
+  }, [pendingDraft, selectedKey, insertText])
+  const activityControl = useMemo<NonNullable<WebPluginServices['activity-control']>>(() => ({
+    interrupt: target => postSession(target, 'interrupt', {}).then(() => {}),
+    stopTask: async (target, taskId) => {
+      const data = await postSession(target, 'actions', { action: 'stopTask', taskId })
+      if (data.stopped !== true) throw new Error('No running task to stop (session not warm)')
+    },
+    rerunChecks: async (cwd, ids, version) => { await webProof.start(cwd, [...ids], version) },
+    draft: (target, text) => {
+      if (text && !insertText) throw new Error('No composer is available')
+      if (target) openSession?.(target)
+      setPendingDraft({ key: target ? sessionIdentityKey(target) : null, text })
+    },
+    open: (commandId, target) => {
+      if (target) { openSession?.(target); dispatchPluginCommandWhenShown(commandId, target) }
+      else dispatchPluginCommand(commandId)
+    },
+  }), [insertText, openSession])
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
   const [modActivity, setModActivity] = useState<ReadonlyMap<string, PluginSessionActivity>>(new Map())
   // When each running turn began, from the same registry read.
@@ -180,6 +216,6 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
   }, [showNotice])
   return <>
     <NotificationFallback />
-    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), 'shell-overview': shellOverview, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
+    {overlay && <PluginSurfaceHost surfaceId={overlay.surface} placement="overlay" sessionKey={null} cwd={overlay.cwd ?? undefined} path={overlay.path ?? null} services={{ session: { session: overlay.session }, 'activity-control': activityControl, 'file-history': { open: openFileHistory }, ...(sessionTabs ? { 'session-tabs': sessionTabs } : {}), ...(sessionFleet ? { 'session-fleet': sessionFleet } : {}), 'shell-overview': shellOverview, ...(insertText ? { composer: { insertText } } : {}), ...(openSession ? { 'session-navigation': { open: openSession } } : {}), ...(overlay.cwd ? { repository: { cwd: overlay.cwd, sessionId: null } } : {}) }} onClose={close} />}
   </>
 }

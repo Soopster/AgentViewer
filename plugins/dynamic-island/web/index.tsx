@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WebPluginView, WebPluginViewProps, WebPluginWidget } from '../../../components/shell/pluginTypes'
 import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } from '../../../lib/plugins/types'
-import { webActivityFeed as feed, type ActivityStatus, type AppActivity } from '../../../lib/plugins/activityFeed'
+import { webActivityFeed as feed, type ActivityStatus } from '../../../lib/plugins/activityFeed'
 import { useObservedTranscripts } from '../../../lib/plugins/observedTranscripts'
 import { taskActivities } from '../taskActivities'
+import { useActivityActions } from '../useActivityActions'
 import { webNotifications } from '../../../lib/plugins/notifications'
 import { useActivitySource } from '../../../lib/plugins/useActivityFeed'
 import { useExpandedActivity } from '../../../lib/plugins/useActivityFeed'
@@ -40,23 +41,10 @@ function IslandWidget() {
   </button>
 }
 
-function ActionButtons({ item }: { item: AppActivity }) {
-  const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  if (!item.actions?.length) return null
-  const run = async (action: NonNullable<AppActivity['actions']>[number]) => {
-    setBusy(action.id); setError(null)
-    try { await action.run() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Action failed') } finally { setBusy(null) }
-  }
-  return <div className="activity-island-actions">
-    {item.actions.map(action => <button key={action.id} type="button" data-tone={action.tone} disabled={busy !== null} onClick={() => { void run(action) }}>{busy === action.id ? `${action.label}…` : action.label}</button>)}
-    {error ? <span role="alert" className="activity-island-error">{error}</span> : null}
-  </div>
-}
-
 function IslandSurface({ services, close }: WebPluginViewProps) {
   const items = useExpandedActivity(feed)
   useEffect(() => webNotifications.hold(), [])
+  const actions = useActivityActions({ feed, notifications: webNotifications, control: services['activity-control'], navigation: services['session-navigation'], close })
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const node = dialog.current
@@ -77,10 +65,14 @@ function IslandSurface({ services, close }: WebPluginViewProps) {
           <div className="activity-island-row-title">{item.title}</div>
           <div className="activity-island-detail">{STATUS[item.status]}{item.detail && item.detail !== STATUS[item.status] ? ` · ${item.detail}` : ''}</div>
           {item.progress !== undefined ? <progress aria-label={`${item.title} progress`} value={item.progress} max={1} /> : null}
-          <ActionButtons item={item} />
-          {item.target && services['session-navigation'] ? <button type="button" onClick={() => { close(); services['session-navigation']!.open(item.target!, item.messageUuid) }}>Open session</button> : null}
+          <div className="activity-island-actions">
+            {actions.buttons(item).map(button => <button key={button.id} type="button" data-tone={button.armed ? 'danger' : button.tone} disabled={button.busy}
+              onBlur={button.armed ? actions.disarm : undefined} onClick={button.press}>
+              {button.armed ? `Confirm: ${button.label}` : button.busy ? `${button.label}…` : button.label}</button>)}
+            {actions.status?.itemId === item.id ? <span role={actions.status.failed ? 'alert' : 'status'} className={actions.status.failed ? 'activity-island-error' : 'activity-island-done'}>{actions.status.text}</span> : null}
+          </div>
         </div>
-        <button type="button" className="activity-island-dismiss" aria-label={`Dismiss ${item.title}`} onClick={() => feed.dismiss(item.id)}>×</button>
+        <button type="button" className="activity-island-dismiss" aria-label={`Dismiss ${item.title}`} onClick={() => actions.dismiss(item)}>×</button>
       </li>)}</ul>
     </section>
   </dialog>

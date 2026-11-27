@@ -7,9 +7,26 @@ export type ActivityAction = {
   readonly id: string
   readonly label: string
   readonly tone?: 'primary' | 'danger'
+  /** The terminal's one-character shortcut. */
+  readonly key?: string
+  /** Needs a second press: it ends work or widens what the agent may do. */
+  readonly confirm?: boolean
+  /** Goes somewhere else, so the list closes before it runs. */
+  readonly leaves?: boolean
+  /** What to say once it has run, when the list stays open and the row looks the same. */
+  readonly done?: string
   readonly run: () => Promise<void> | void
 }
+/** What a row is about, as data: enough for the list to offer the actions that fit it. */
+export type ActivityContext = {
+  readonly turn?: 'running' | 'needs-input' | 'waiting' | 'ended'
+  /** A finished Proof run with failing or stale checks, and the configuration to rerun them under. */
+  readonly checks?: { readonly cwd: string; readonly ids: readonly string[]; readonly version: string; readonly failing: readonly string[] }
+  /** A background task of the target session. */
+  readonly taskId?: string
+}
 export type AppActivity = {
+  readonly context?: ActivityContext
   readonly kind?: ActivityKind
   /** What a dismissal answers. Wording, titles and counts that merely drift must not revive a dismissed row; absent means any change does. */
   readonly dismissKey?: string
@@ -74,7 +91,7 @@ export function createActivityFeed(clock: () => number = Date.now) {
   let holds = 0
   let heldOrder: string[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
-  const fingerprint = (item: AppActivity) => JSON.stringify([item.source, item.kind, item.status, item.title, item.detail, item.progress, item.target, item.messageUuid, item.actions?.map(action => [action.id, action.label, action.tone])])
+  const fingerprint = (item: AppActivity) => JSON.stringify([item.source, item.kind, item.status, item.title, item.detail, item.progress, item.target, item.messageUuid, item.context, item.actions?.map(action => [action.id, action.label, action.tone])])
   const dismissal = (item: AppActivity) => item.dismissKey ?? fingerprint(item)
   const schedule = () => {
     clearTimeout(timer)

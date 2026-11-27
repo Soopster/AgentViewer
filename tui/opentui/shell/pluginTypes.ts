@@ -57,6 +57,7 @@ export type TuiPluginServices = {
     readonly discard: () => void
     readonly remove: () => void
   }
+  'activity-control'?: import('../../../lib/plugins/activityControl').PluginActivityControl
   'session-navigation'?: import('../../../lib/plugins/bookmarks').PluginSessionNavigation
   provenance?: import('../../../lib/plugins/provenance').PluginProvenanceService
   'instructions-manager'?: import('../../../lib/plugins/instructionsManager').InstructionsManagerService

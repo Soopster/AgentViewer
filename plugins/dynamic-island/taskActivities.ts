@@ -11,7 +11,7 @@ export function taskActivities(transcripts: readonly ObservedTranscript[]): Acti
     for (const task of registry.values()) {
       if (!(task.isBackgrounded || task.events.some(event => ['started', 'progress', 'notified'].includes(event.kind))) || !['in_progress', 'pending', 'paused', 'failed'].includes(task.status)) continue
       const id = `task:${sessionIdentityKey(transcript.target)}:${task.id}`
-      result.set(id, { id, source: 'background-tasks', target: transcript.target, messageUuid: task.latestEventUuid,
+      result.set(id, { id, source: 'background-tasks', kind: 'task', context: { taskId: task.id }, target: transcript.target, messageUuid: task.latestEventUuid,
         title: task.subject || `Task ${task.id}`, status: task.status === 'failed' ? 'error' : task.status === 'paused' ? 'waiting' : 'running',
         detail: task.error || task.activeForm || task.summary || task.command })
     }

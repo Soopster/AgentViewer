@@ -49,6 +49,7 @@ import { toastExtraRows, toastStackTop } from './ToastOverlay'
 import { usePublishObservedTranscript } from '../../lib/plugins/observedTranscripts'
 import { tuiNotifications } from '../../lib/plugins/notifications'
 import { tuiActivityFeed } from '../../lib/plugins/activityFeed'
+import { useActivityControl } from './app/slices/activityControl'
 import { PluginWidgetHost, TopBarWidgetHost } from './shell/PluginWidgetHost'
 import { usePluginWidgets } from '../../lib/plugins/usePluginWidgets'
 import { tuiPluginWidgets } from './shell/widgetPlugins'
@@ -3594,6 +3595,12 @@ function OpenTuiWorkspace() {
       setPendingPermissions(prev => prev.filter(entry => entry.id !== permissionId))
       setBackgroundPrompts(prev => prev.filter(entry => entry.id !== permissionId))
     },
+    answer: async (target, permissionId, answers) => {
+      await runTuiSessionAction({ sessionId: target.sessionId, provider: target.provider, providerInstanceId: target.providerInstanceId } as Session,
+        { action: 'respondQuestion', permissionId, answers, provider: target.provider })
+      setPendingPermissions(prev => prev.filter(entry => entry.id !== permissionId))
+      setBackgroundPrompts(prev => prev.filter(entry => entry.id !== permissionId))
+    },
   }, notifications: {
     ...tuiNotifications.service,
     notice: applicationNotice,
@@ -5195,6 +5202,11 @@ function OpenTuiWorkspace() {
     if (command) { runPluginCommand(command); return true }
     return false
   })
+  const activityControl = useActivityControl({
+    sessions, openTabSessions, selectedSessionKeyRef, openSession: openSessionAtMessage, runCommand: runPluginCommandId,
+    composerTargetSession, composerTargetSessionIdentity, composerTextareaRef, composerDraftRef, applyComposerSnapshot,
+    setComposerActive, showNotice,
+  })
   const modOpenFile = useStableEvent((path: string, line?: number) => openEditorAt(path, line ?? null))
   const modAppActions = useMemo(() => ({ runCommand: runCommandForPlugin, openSession: openSessionAtMessage, openFile: modOpenFile, readFocus: () => terminalFocusedRef.current }), [runCommandForPlugin, openSessionAtMessage, modOpenFile])
   const modAppSnapshot = useMemo<Omit<import('../../lib/plugins/modApp').ModAppSnapshot, 'version' | 'instanceId' | 'commands'>>(() => ({ renderer: 'tui', cwd: gitRepoCwd || null, theme: themeMode, focused: terminalFocusedRef.current,
@@ -5367,6 +5379,7 @@ function OpenTuiWorkspace() {
     schedules: tuiSchedules,
     'chief-of-staff': tuiChiefOfStaff,
     'session-navigation': { open: openSessionAtMessage },
+    'activity-control': activityControl,
     provenance: tuiProvenance,
     checkpoints: tuiCheckpoints,
     'session-insights': tuiSessionInsights,

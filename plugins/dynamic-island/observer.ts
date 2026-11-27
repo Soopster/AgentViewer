@@ -34,7 +34,7 @@ export const application: PluginApplicationModule = {
         const titles = new Map(snapshot.sessions.map(session => [session.key, session.title]))
         const targets = new Map(snapshot.sessions.flatMap(session => session.target ? [[session.key, session.target] as const] : []))
         // Replacing the source also resolves asks that were answered elsewhere.
-        feed.replaceSource(APPROVALS_SOURCE, approvalActivities(pending, titles, targets, permissions.respond, snapshot.now))
+        feed.replaceSource(APPROVALS_SOURCE, approvalActivities(pending, titles, targets, permissions, snapshot.now))
         if (snapshot.teams) feed.replaceSource(TEAM_SOURCE, teamActivities(snapshot.teams, titles, targets, snapshot.now))
         const cwd = snapshot.cwd ?? null
         if (!cwd) { repoRead = null; feed.removeSource(REPO_SOURCE) }
@@ -55,7 +55,7 @@ export const application: PluginApplicationModule = {
           const session = sessions.get(key)
           const label = status === 'needs-input' ? 'Needs input' : status === 'waiting' ? 'Waiting' : 'Running'
           feed.publish({ id: `session:${key}`, source: 'sessions', status,
-            title: session?.title || 'Agent session', detail: label, target: session?.target,
+            title: session?.title || 'Agent session', detail: label, target: session?.target, kind: 'session', context: { turn: status },
             // Dismissed per state, so a retitle does not revive it but needing input after running does.
             dismissKey: status })
         }
@@ -63,7 +63,7 @@ export const application: PluginApplicationModule = {
           if (snapshot.activity.has(key)) continue
           const session = sessions.get(key)
           feed.publish({ id: `session:${key}`, source: 'sessions', status: 'info',
-            title: session?.title || 'Agent session', detail: 'Turn ended', target: session?.target, expiresAt: snapshot.now + 6000, dismissKey: 'ended' })
+            title: session?.title || 'Agent session', detail: 'Turn ended', target: session?.target, kind: 'session', context: { turn: 'ended' }, expiresAt: snapshot.now + 6000, dismissKey: 'ended' })
         }
         previous = new Map(snapshot.activity)
       },

@@ -338,6 +338,8 @@ export type PluginServiceId =
   | 'worktree-tasks'
   /** Open a session in the reader, optionally at a message. */
   | 'session-navigation'
+  /** What the activity list may do: stop work, rerun checks, draft a prompt, open a view. */
+  | 'activity-control'
   /** What a session wrote, and which sessions wrote a file's current lines. */
   | 'provenance'
   /** The daemon's remote-access pairing state and actions. */

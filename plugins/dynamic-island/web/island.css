@@ -36,7 +36,6 @@
 .activity-island-row-title, .activity-island-detail { overflow-wrap: anywhere; white-space: pre-wrap; }
 .activity-island-detail, .activity-island-empty { color: var(--text-2); font-size: 11px; line-height: 1.6; }
 .activity-island-detail { max-height: 12em; overflow: auto; }
-.activity-island-body > button { margin: 6px 0 0 -8px; text-decoration: underline; }
 .activity-island-body progress { display: block; width: 100%; height: 4px; margin-top: 8px; accent-color: var(--blue, #619cf4); }
 .activity-island-dismiss { flex-shrink: 0; }
 @keyframes activity-island-enter { from { opacity: 0; translate: 0 -4px; } to { opacity: 1; translate: 0 0; } }
@@ -47,4 +46,5 @@
 .activity-island-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
 .activity-island-actions button[data-tone="primary"] { font-weight: 600; }
 .activity-island-actions button[data-tone="danger"] { color: var(--red, #c0392b); }
+.activity-island-done { font-size: 11px; color: var(--green, #3fb950); }
 .activity-island-error { font-size: 11px; color: var(--red, #c0392b); }

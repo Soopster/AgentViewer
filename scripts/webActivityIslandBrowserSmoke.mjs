@@ -25,7 +25,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.route('**/api/**', route => route.fulfill({ json: { running: [{ provider: 'codex', providerInstanceId: 'work', sessionId: 'same' }], attention: [{ provider: 'codex', providerInstanceId: 'personal', sessionId: 'same' }], waiting: [] } }))
+  const posts = []
+  await page.route('**/api/**', route => route.request().method() === 'POST'
+    ? (posts.push([new URL(route.request().url()).pathname, route.request().postDataJSON()]), route.fulfill({ json: {} }))
+    : route.fulfill({ json: { running: [{ provider: 'codex', providerInstanceId: 'work', sessionId: 'same' }], attention: [{ provider: 'codex', providerInstanceId: 'personal', sessionId: 'same' }], waiting: [] } }))
   await page.goto(`http://127.0.0.1:${server.address().port}`)
   await page.waitForFunction(() => !!window.activityFixture)
   const composer = page.getByRole('textbox', { name: 'Composer' })
@@ -50,6 +53,19 @@ try {
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'hidden' })
   assert.equal(await pill.evaluate(node => node === document.activeElement), true, 'closing restores the trigger focus')
+  // Actions fit the row: stopping a turn takes two clicks and reaches the right account.
+  await page.evaluate(() => window.activityFixture.turn())
+  await pill.click()
+  await dialog.waitFor()
+  const turn = dialog.locator('li').filter({ hasText: 'Long build' })
+  await turn.getByRole('button', { name: 'Stop turn', exact: true }).click()
+  assert.equal(posts.length, 0, 'one click only arms')
+  await turn.getByRole('button', { name: 'Confirm: Stop turn', exact: true }).click()
+  await turn.getByText('Stop requested', { exact: true }).waitFor()
+  assert.deepEqual(posts, [['/api/sessions/same/interrupt', { provider: 'codex', providerInstanceId: 'work' }]])
+  await turn.getByRole('button', { name: 'Message', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  assert.equal(await page.evaluate(() => window.activityFixture.opened.at(-1).providerInstanceId), 'work')
   await page.evaluate(() => window.activityFixture.disable())
   await pill.waitFor({ state: 'detached' })
   await page.evaluate(() => window.activityFixture.notify())

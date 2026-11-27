@@ -18,6 +18,7 @@ const opened: PluginSessionRef[] = []
 let finishLoading: (() => void) | undefined
 const fixture = {
   opened,
+  turn: () => webActivityFeed.publish({ id: 'fixture-turn', source: 'fixture', kind: 'session', title: 'Long build', status: 'running', context: { turn: 'running' }, target: sessions[0] }),
   notify: () => webNotifications.service.show('info', 'Changes saved'),
   error: () => webNotifications.service.show('error', 'Build failed'),
   disable: () => applyPluginSettings(withPluginEnabled(DEFAULT_PLUGIN_SETTINGS, 'dynamic-island', false)),
