@@ -761,7 +761,7 @@ function syncPluginTools(serverInstance, taken) {
         annotations: tool.scope === 'read' ? { readOnlyHint: true } : { readOnlyHint: false, destructiveHint: false },
       }, async (args) => {
         try {
-          const result = await requestJson('/api/plugins/tools', { method: 'POST', body: JSON.stringify({ name: tool.name, args }) }, 20_000)
+          const result = await requestJson('/api/plugins/tools', { method: 'POST', body: JSON.stringify({ name: tool.name, args, cwd: bridgeCwd }) }, 20_000)
           return { content: [{ type: 'text', text: String(result?.text ?? '') }], ...(result?.isError ? { isError: true } : {}) }
         } catch (error) {
           return { content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }], isError: true }
@@ -1681,10 +1681,14 @@ registerCoordinatorTool('coord_query_context', {
   description: bridgeDescription('coord_query_context'),
   annotations: { readOnlyHint: true },
   inputSchema: {
-    query: z.string().min(1).max(300),
+    query: z.string().min(1).max(300).optional(),
+    event_id: z.string().min(1).max(160).optional(),
     limit: z.number().int().min(1).max(20).optional(),
+    detail_chars: z.number().int().min(0).max(32000).optional(),
   },
-}, async ({ query, limit }) => textResult(await coordinatorRequest('query_context', { query, limit })))
+}, async ({ query, event_id, limit, detail_chars }) => textResult(await coordinatorRequest('query_context', {
+  query, eventId: event_id, limit, detailChars: detail_chars,
+})))
 
 registerCoordinatorTool('coord_remember', {
   description: bridgeDescription('coord_remember'),

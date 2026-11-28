@@ -226,7 +226,7 @@ export const CoordinatorFilters = memo(function CoordinatorFilters({ theme, icon
     <SidebarSearchRow idPrefix="coordinator" theme={theme} icon={tuiIcon(iconSet, 'index-search', '⌕')} placeholder="Search runs and agents  /" query={state.query}
       focused={searchFocused} onFocus={onSearchFocus} onQuery={setCoordinatorQuery} onSubmit={onSubmit} />
     <box flexShrink={0} flexDirection="row" paddingX={1}>
-      <box id="coordinator-filter" height={1} flexShrink={0} onMouseDown={event => {
+      <box id="coordinator-filter" height={1} flexShrink={0} backgroundColor={state.filter !== 'all' ? theme.surface3 : undefined} onMouseDown={event => {
         if (event.button !== 0) return
         event.stopPropagation()
         onOpenMenu({ x: event.x, y: event.y, title: 'Agents', items: COORDINATOR_PICKER_FILTERS.map(filter => ({

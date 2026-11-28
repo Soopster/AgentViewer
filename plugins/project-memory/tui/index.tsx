@@ -5,16 +5,16 @@ import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/
 import { captureMemoryReply, type ProjectMemoryNote } from '../../../lib/plugins/projectMemory'
 import { popoverRootProps, PopoverDetachButton, fitText, ShortcutHelp, type ShortcutHelpGroup, type TuiPluginView, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
 import { useMemoryView } from '../useMemoryView'
-const FILTERS = ['All notes', 'Drafts', 'Approved', 'Pinned', 'Decisions', 'Conventions', 'Lessons'] as const
+const FILTERS = ['All notes', 'Agent', 'Drafts', 'Approved', 'Pinned', 'Decisions', 'Conventions', 'Lessons'] as const
 type Filter = typeof FILTERS[number]
 const TABS = ['Note', 'Source', 'Recall'] as const
 type Tab = typeof TABS[number]
 type Region = 'filters' | 'notes' | 'detail'
-const matches = (note: ProjectMemoryNote, filter: Filter) => filter === 'All notes' || (filter === 'Drafts' && !note.reviewed) || (filter === 'Approved' && note.reviewed) || (filter === 'Pinned' && note.pinned) || (filter === 'Decisions' && note.kind === 'decision') || (filter === 'Conventions' && note.kind === 'convention') || (filter === 'Lessons' && note.kind === 'lesson')
+const matches = (note: ProjectMemoryNote, filter: Filter) => filter === 'All notes' || (filter === 'Agent' && note.author === 'agent') || (filter === 'Drafts' && !note.reviewed && note.author !== 'agent') || (filter === 'Approved' && note.reviewed) || (filter === 'Pinned' && note.pinned) || (filter === 'Decisions' && note.kind === 'decision') || (filter === 'Conventions' && note.kind === 'convention') || (filter === 'Lessons' && note.kind === 'lesson')
 const HELP: readonly ShortcutHelpGroup[] = [
   { title: 'Navigate', rows: [['1 / 2 / 3', 'Filters / notes / details'], ['Tab / Shift+Tab', 'Next / previous pane'], ['← / →', 'Switch detail tabs'], ['j/k or ↑/↓', 'Move selection or scroll note'], ['Enter', 'Open note or choose filter'], ['Ctrl+N', 'Toggle filters'], ['/', 'Search memory']] },
   { title: 'Write and review', rows: [['n / c', 'New note / capture latest reply'], ['t / e', 'Edit title / note text'], ['y / p', 'Cycle type / toggle pin'], ['s / Ctrl+S', 'Save draft / save in editor'], ['a', 'Approve saved note / return to draft'], ['d', 'Delete saved note']] },
-  { title: 'Recall and source', rows: [['r', 'Toggle automatic recall for this project'], ['o', 'Open source conversation']] },
+  { title: 'Recall and source', rows: [['r', 'Toggle automatic recall for this project'], ['m', 'Toggle agents keeping their own memory'], ['o', 'Open source conversation']] },
 ]
 function ProjectMemory(props: TuiPluginViewProps) {
   const { services, theme, width, height, focused, placement, detach, registerKeys, setCapture, useState: scoped } = props
@@ -94,7 +94,7 @@ function ProjectMemory(props: TuiPluginViewProps) {
         j: () => move(1), down: () => move(1), k: () => move(-1), up: () => move(-1),
         return: () => { if (region === 'filters') { setNavigationOpen(false); setRegion('notes') } else { setRegion('detail'); setTab('Note') } },
         s: () => { if (canSave) void state.save() }, a: () => { if (hasDraft) void state.review() }, d: () => { if (hasDraft) void state.remove().then(ok => { if (ok) setCreating(false) }) },
-        r: () => { void state.recall() }, p: () => { if (hasDraft) state.edit({ pinned: !state.draft.pinned }) },
+        r: () => { void state.recall() }, m: () => { void state.toggleAgentMemory() }, p: () => { if (hasDraft) state.edit({ pinned: !state.draft.pinned }) },
         y: () => { if (hasDraft) state.edit({ kind: state.draft.kind === 'decision' ? 'convention' : state.draft.kind === 'convention' ? 'lesson' : 'decision' }) },
         o: () => { if (hasDraft && state.draft.source) services['session-navigation']?.open(state.draft.source, state.draft.source.messageUuid) },
       }
@@ -102,12 +102,13 @@ function ProjectMemory(props: TuiPluginViewProps) {
     }); return () => registerKeys(null)
   })
   const action = (label: string, run: () => void, enabled = true) => <box paddingX={1} flexShrink={0} onMouseDown={() => { if (focused && !state.busy && enabled) run() }}><text fg={enabled ? theme.cyan : theme.dim} wrapMode="none">{label}</text></box>
-  const status = state.dirty ? 'Unsaved changes' : state.note?.reviewed ? 'Approved' : 'Draft'
+  const status = state.dirty ? 'Unsaved changes' : state.note?.author === 'agent' ? 'Agent note' : state.note?.reviewed ? 'Approved' : 'Draft'
   return <box {...popoverRootProps(!overlay, { top: 2, left: Math.max(0, Math.floor((width - w) / 2)), width: w, height: h }, props.zIndex ?? 50)} border={overlay} borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title={overlay ? ' Shared Project Memory ' : undefined}>
     {overlay && detach ? <PopoverDetachButton theme={theme} onPress={detach} /> : null}
     <box height={1} flexShrink={0} flexDirection="row" paddingX={1}>
       {action(full ? showFilters ? '[◀]' : '[▶]' : '[≡]', toggleSidebar)}
-      <box flexGrow={1} minWidth={0}><text fg={theme.cyan} wrapMode="none">{fitText(`[Repo] ${services.repository!.cwd.split('/').pop()} · ${all.length} ${all.length === 1 ? 'note' : 'notes'}`, Math.max(1, inner - 24))}</text></box>
+      <box flexGrow={1} minWidth={0}><text fg={theme.cyan} wrapMode="none">{fitText(`[Repo] ${services.repository!.cwd.split('/').pop()} · ${all.length} ${all.length === 1 ? 'note' : 'notes'}`, Math.max(1, inner - 40))}</text></box>
+      {action(state.agentMemory ? '[m] Agents on' : '[m] Agents off', () => { void state.toggleAgentMemory() }, Boolean(state.snapshot))}
       {action(state.snapshot?.autoRecall ? '[r] Recall on' : '[r] Recall off', () => { void state.recall() }, Boolean(state.snapshot))}
     </box>
     {state.notice ? <text fg={theme.amber} wrapMode="word">{state.notice}</text> : null}
@@ -127,7 +128,7 @@ function ProjectMemory(props: TuiPluginViewProps) {
           {!state.note && hasDraft ? <box height={2} flexShrink={0} flexDirection="column" paddingX={1} backgroundColor={theme.surface3} onMouseDown={() => { if (focused) setRegion('detail') }}><text fg={theme.cyan} wrapMode="none">{fitText(`› ${state.draft.title || 'Untitled draft'}`, listWidth - 3)}</text><text fg={theme.amber}>Unsaved draft</text></box> : null}
           {notes.map(note => <box key={note.id} ref={state.note?.id === note.id ? selectedRow : undefined} height={2} flexShrink={0} flexDirection="column" paddingX={1} backgroundColor={state.note?.id === note.id ? theme.surface3 : undefined} onMouseDown={() => { if (focused && !state.busy && !editing) choose(note.id) }}>
             <text fg={state.note?.id === note.id ? theme.cyan : theme.text} wrapMode="none">{fitText(`${state.note?.id === note.id ? '›' : ' '} ${note.title}`, listWidth - 3)}</text>
-            <text fg={note.reviewed ? theme.green : theme.dim} wrapMode="none">{fitText(`${note.kind} · ${note.reviewed ? 'approved' : 'draft'}${note.pinned ? ' · pinned' : ''}`, listWidth - 3)}</text>
+            <text fg={note.author === 'agent' ? theme.cyan : note.reviewed ? theme.green : theme.dim} wrapMode="none">{fitText(`${note.kind} · ${note.author === 'agent' ? 'agent' : note.reviewed ? 'approved' : 'draft'}${note.pinned ? ' · pinned' : ''}`, listWidth - 3)}</text>
           </box>)}
           {!notes.length ? <box padding={1}><text fg={theme.dim} wrapMode="word">{state.snapshot ? all.length ? 'No notes match this view. Change the filter or search.' : 'No project notes yet.' : 'Loading project memory…'}</text></box> : null}
         </scrollbox>
@@ -137,6 +138,10 @@ function ProjectMemory(props: TuiPluginViewProps) {
         {tab === 'Recall' ? <scrollbox ref={content} flexGrow={1} minHeight={1} padding={1}>
           <text fg={theme.cyan}>{`Automatic recall · ${state.snapshot?.autoRecall ? 'on' : 'off'}`}</text>
           <text fg={theme.text} wrapMode="word">Approved project notes can be recalled on new turns across providers using this repository. Current task and session instructions take precedence.</text>
+          <text fg={theme.cyan}>{`Agent memory · ${state.agentMemory ? 'on' : 'off'}`}</text>
+          <text fg={theme.text} wrapMode="word">Agents save what they learn here as they work and recall it in later sessions, without approval. Edit or delete any of their notes; editing one makes it yours.</text>
+          <text fg={theme.dim} wrapMode="word">{`${all.filter(note => note.author === 'agent').length} agent notes`}</text>
+          {action(state.agentMemory ? '[m] Turn agent memory off' : '[m] Turn agent memory on', () => { void state.toggleAgentMemory() }, Boolean(state.snapshot))}
           <text fg={theme.dim} wrapMode="word">{`${all.filter(note => note.reviewed).length} approved · ${all.filter(note => note.reviewed && note.pinned).length} pinned for recall`}</text>
           {action(state.snapshot?.autoRecall ? '[r] Turn recall off' : '[r] Turn recall on', () => { void state.recall() }, Boolean(state.snapshot))}
           <text fg={theme.dim} wrapMode="word">Drafts are excluded. Save and approve edits before recalling them. Pinning makes an approved note eligible even without a keyword match.</text>

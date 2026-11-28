@@ -22,6 +22,8 @@ export type WebPluginServices = {
   'adaptive-ui'?: import('../../lib/plugins/adaptiveUi').AdaptiveUiService
   'plan-review'?: import('../../lib/plugins/planReview').PlanReviewService
   proof?: import('../../lib/plugins/proof').ProofService
+  'second-opinion'?: import('../../lib/plugins/secondOpinion').SecondOpinionService
+  'focus-mode'?: import('../../lib/plugins/focusMode').FocusService
   checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
@@ -118,5 +120,5 @@ export type WebPluginViewProps = {
 export type WebPluginView = ComponentType<WebPluginViewProps>
 
 /** What a Web widget receives: the slot it sits in. Widgets read their own state. */
-export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'plan-review' | 'repository' | 'shell-overview' | 'schedules'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
+export type WebPluginWidgetProps = { readonly services?: Pick<WebPluginServices, 'notifications' | 'proof' | 'plan-review' | 'repository' | 'shell-overview' | 'schedules' | 'focus-mode'>; readonly slot: import('@/lib/plugins/types').PluginWidgetSlot }
 export type WebPluginWidget = ComponentType<WebPluginWidgetProps>

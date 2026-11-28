@@ -267,6 +267,24 @@ assert.equal(
   (await coordination.readExternalProtocolRun(claimInvariantRun.participant)).tasks.find((entry) => entry.id === conflictingTask.id)?.status,
   'pending',
 )
+assert.deepEqual((await coordination.readExternalProtocolActionableStatus(claimInvariantTeammate)).actionable.claimableTasks, [])
+const independentTask = (await coordination.createExternalProtocolTask(claimInvariantRun.participant, {
+  title: 'Independent task', detail: 'Use an unrelated path.', paths: ['independent.txt'], targetRole: 'any',
+})).task!
+const dependentTask = (await coordination.createExternalProtocolTask(claimInvariantRun.participant, {
+  title: 'Dependent task', detail: 'Wait for the conflicting task.', paths: ['dependent.txt'],
+  dependsOn: [conflictingTask.id], targetRole: 'any',
+})).task!
+const runnable = await coordination.readExternalProtocolActionableStatus(claimInvariantTeammate)
+assert.deepEqual(runnable.actionable.claimableTasks.map(task => task.id), [independentTask.id])
+const independentClaim = await coordination.claimExternalProtocolTask(claimInvariantTeammate)
+assert.equal(independentClaim.task.id, independentTask.id, 'implicit claims skip locked work and preserve dependencies')
+assert.deepEqual(independentClaim.grantedPaths, ['independent.txt'])
+const waitingCursor = (await coordination.readExternalProtocolActionableStatus(claimInvariantTeammate)).cursor
+await coordination.releaseExternalProtocolTask(claimInvariantRun.participant, { taskId: firstOwnedTask.id, reason: 'Fixture released its paths' })
+const afterRelease = await coordination.waitForExternalProtocolChange(claimInvariantTeammate, { cursor: waitingCursor ?? undefined, timeoutMs: 1000 })
+assert.ok(afterRelease.actionable.claimableTasks.some(task => task.id === conflictingTask.id))
+assert.ok(!afterRelease.actionable.claimableTasks.some(task => task.id === dependentTask.id))
 await coordination.stopProtocolRun(claimInvariantRun.participant.runId)
 await assert.rejects(
   coordination.claimExternalProtocolTask(claimInvariantTeammate, conflictingTask.id),

@@ -72,6 +72,14 @@ const click = async (id: string) => {
   await settle()
 }
 const row = (index: number) => setup.renderer.root.findDescendantById(`sidebar:session:${sessionKey(sessions[index]!)}`)
+const colorAt = (x: number, y: number) => {
+  let column = 0
+  for (const span of setup.captureSpans().lines[y].spans) {
+    column += span.width
+    if (x < column) return span.bg
+  }
+  throw new Error(`Missing cell ${x},${y}`)
+}
 try {
   await settle(1600)
   const ctl = controller as unknown as InstanceType<typeof spaces.SpacesController>
@@ -103,6 +111,17 @@ try {
   assert.ok(!row(0)); assert.ok(!row(1)); assert.ok(!row(2))
   await click('sidebar-activity:all')
   assert.ok(!row(4), 'All sessions restores normal settled visibility')
+  const runningRow = row(1)!
+  const scopeChip = setup.renderer.root.findDescendantById('sidebar-scope')!
+  const rowColor = colorAt(runningRow.x + 6, runningRow.y)
+  const scopeColor = colorAt(scopeChip.x + 1, scopeChip.y)
+  await act(async () => { await setup.mockMouse.moveTo(runningRow.x + 6, runningRow.y) })
+  await settle()
+  assert.notDeepEqual(colorAt(runningRow.x + 6, runningRow.y), rowColor, 'the real session rail renders hover feedback')
+  await act(async () => { await setup.mockMouse.moveTo(scopeChip.x + 1, scopeChip.y) })
+  await settle()
+  assert.deepEqual(colorAt(runningRow.x + 6, runningRow.y), rowColor, 'leaving a session restores its row')
+  assert.notDeepEqual(colorAt(scopeChip.x + 1, scopeChip.y), scopeColor, 'the filter chip also responds to hover')
   const menuFor = async (index: number) => {
     const target = row(index)!
     assert.ok(target)

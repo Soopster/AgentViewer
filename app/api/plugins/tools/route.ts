@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { pluginBehaviorHost } from '@/lib/plugins/serverBehaviors'
 
@@ -10,8 +11,10 @@ export async function GET() {
   return NextResponse.json({ tools }, { headers: { 'Cache-Control': 'no-store' } })
 }
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => null) as { name?: unknown; args?: unknown } | null
+  const body = await request.json().catch(() => null) as { name?: unknown; args?: unknown; cwd?: unknown } | null
   if (!body || typeof body.name !== 'string' || body.name.length > 80) return NextResponse.json({ error: 'name is required' }, { status: 400 })
-  const result = await pluginBehaviorHost().callTool(body.name, body.args, request.signal)
+  // The bridge's own working directory: the project the calling agent runs in. Advisory, like any argument.
+  const cwd = typeof body.cwd === 'string' && body.cwd.length <= 4096 && path.isAbsolute(body.cwd) ? body.cwd : undefined
+  const result = await pluginBehaviorHost().callTool(body.name, body.args, request.signal, { cwd })
   return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
 }

@@ -66,6 +66,8 @@ export type TuiPluginServices = {
   'adaptive-ui'?: import('../../../lib/plugins/adaptiveUi').AdaptiveUiService
   'plan-review'?: import('../../../lib/plugins/planReview').PlanReviewService
   proof?: import('../../../lib/plugins/proof').ProofService
+  'second-opinion'?: import('../../../lib/plugins/secondOpinion').SecondOpinionService
+  'focus-mode'?: import('../../../lib/plugins/focusMode').FocusService
   checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../../lib/plugins/sessionTabs').PluginSessionTabs
@@ -274,7 +276,7 @@ export type TuiPluginView = (props: TuiPluginViewProps) => ReactNode
 export type TuiPluginWidgetProps = {
   readonly zIndex?: number
   readonly runCommand?: (id: string) => void
-  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'plan-review' | 'repository' | 'schedules'>
+  readonly services?: Pick<TuiPluginServices, 'shell-overview' | 'notifications' | 'proof' | 'plan-review' | 'repository' | 'schedules' | 'focus-mode'>
   readonly theme: TuiThemePalette
   readonly width: number
   readonly height: number

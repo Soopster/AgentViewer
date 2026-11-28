@@ -186,7 +186,7 @@ export function createPluginBehaviorHost(
      * Run one tool for an agent. Arguments are checked against the declaration, the handler is given a deadline, and
      * whatever happens comes back as text for the model: a failure is a result to read, never an exception to the bridge.
      */
-    async callTool(fullName: string, rawArgs: unknown, outerSignal?: AbortSignal): Promise<{ text: string; isError: boolean }> {
+    async callTool(fullName: string, rawArgs: unknown, outerSignal?: AbortSignal, caller: { cwd?: string } = {}): Promise<{ text: string; isError: boolean }> {
       if (disposed) return { text: 'plugins are reloading: try again in a moment', isError: true }
       const entry = this.listTools().find(tool => tool.name === fullName)
       if (!entry) return { text: `no tool "${fullName.slice(0, 80)}" (plugin tools: ${this.listTools().map(tool => tool.name).join(', ') || 'none are enabled'})`, isError: true }
@@ -195,7 +195,7 @@ export function createPluginBehaviorHost(
       const signal = AbortSignal.any([scopeFor(entry.pluginId).signal, AbortSignal.timeout(PLUGIN_TOOL_TIMEOUT_MS), ...(outerSignal ? [outerSignal] : [])])
       try {
         const module = await abortable(signal, async () => registry.get(entry.pluginId))
-        const result = await abortable(signal, async () => module.tools![entry.spec.name]!(checked.args, { signal }))
+        const result = await abortable(signal, async () => module.tools![entry.spec.name]!(checked.args, { signal, ...(caller.cwd ? { cwd: caller.cwd } : {}) }))
         return { text: boundPluginToolResult(result), isError: false }
       } catch (error) {
         if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return { text: `${fullName} did not finish within ${PLUGIN_TOOL_TIMEOUT_MS / 1000}s`, isError: true }

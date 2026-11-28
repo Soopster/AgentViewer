@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstat, readFile, readlink } from 'node:fs/promises'
 import path from 'node:path'
@@ -8,6 +8,29 @@ export function resultGit(cwd: string, args: string[]): Promise<string> {
     if (error) reject(new Error(stderr.trim() || error.message))
     else resolve(stdout)
   }))
+}
+
+export type StagedDependency = { target: string; base: string; tree: string }
+
+/** Resolve a reviewed squash to a commit in the target's current history. */
+export function committedDependencySync(proof: StagedDependency): string | undefined {
+  const sha = /^[a-f0-9]{40,64}$/
+  if (!path.isAbsolute(proof.target) || !sha.test(proof.base) || !sha.test(proof.tree)) return
+  try {
+    const entries = execFileSync('git', ['--no-optional-locks', 'log', '--ancestry-path', '--format=%H %T', `${proof.base}..HEAD`], {
+      cwd: proof.target, encoding: 'utf8', timeout: 1500, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    return entries.split('\n').find(line => line.endsWith(` ${proof.tree}`))?.split(' ')[0]
+  } catch { return undefined }
+}
+
+export function checkoutContainsDependencySync(cwd: string, commit: string): boolean {
+  try {
+    execFileSync('git', ['--no-optional-locks', 'merge-base', '--is-ancestor', commit, 'HEAD'], {
+      cwd, timeout: 1500, stdio: 'ignore',
+    })
+    return true
+  } catch { return false }
 }
 
 /** Read-only identity of HEAD, index, tracked edits and untracked file contents. */

@@ -16,6 +16,16 @@ import path from 'path'
 import { findRepoRoot } from './worktreeTasks'
 
 export const CHECKPOINT_REF_PREFIX = 'refs/agent-viewer-checkpoints/'
+
+/**
+ * What a snapshot takes: the whole working tree from the repository root, minus
+ * the app's own state. `.agent-viewer-data/` lives in the directory the app was
+ * started in, so in a repository that does not ignore it every checkpoint held
+ * its databases — every diff listed them and a restore rewrote or deleted the
+ * app's own state. Found live. `top` makes both pathspecs root-relative, so a
+ * checkpoint taken from a subdirectory still covers the whole tree.
+ */
+export const SNAPSHOT_PATHSPEC = ['--', ':(top)', ':(top,exclude,glob)**/.agent-viewer-data/**'] as const
 const CHECKPOINT_CAP_PER_REPO = 60
 // Turn starts must not stall on a slow snapshot (giant repos): skip instead.
 const CHECKPOINT_TIMEOUT_MS = 4000
@@ -114,7 +124,7 @@ export async function createTurnCheckpoint(
     try {
       if (!repoRoot) return null
       const env = { GIT_INDEX_FILE: indexFile }
-      await git(cwd, ['add', '-A'], { env })
+      await git(cwd, ['add', '-A', ...SNAPSHOT_PATHSPEC], { env })
       const tree = await git(cwd, ['write-tree'], { env })
       const label = sanitizeLabel(meta.message ?? '')
       const body = JSON.stringify({ sessionId: meta.sessionId, provider: meta.provider, worktree: repoRoot })
@@ -218,7 +228,7 @@ export async function snapshotWorktreeTree(cwd: string): Promise<string> {
   const indexFile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'agent-viewer-ckpt-')), 'index')
   try {
     const env = { GIT_INDEX_FILE: indexFile }
-    await git(cwd, ['add', '-A'], { env })
+    await git(cwd, ['add', '-A', ...SNAPSHOT_PATHSPEC], { env })
     return await git(cwd, ['write-tree'], { env })
   } finally {
     await fs.rm(path.dirname(indexFile), { recursive: true, force: true }).catch(() => {})
@@ -228,7 +238,8 @@ export async function snapshotWorktreeTree(cwd: string): Promise<string> {
 /** What changed between a checkpoint and the working tree right now. */
 export async function changesSinceCheckpoint(cwd: string, sha: string): Promise<CheckpointFileChange[]> {
   const nowTree = await snapshotWorktreeTree(cwd)
-  const out = await git(cwd, ['diff-tree', '-r', '--no-renames', '--name-status', sha, nowTree])
+  // The pathspec also hides app data inside checkpoints taken before it was excluded from them.
+  const out = await git(cwd, ['diff-tree', '-r', '--no-renames', '--name-status', sha, nowTree, ...SNAPSHOT_PATHSPEC])
   if (!out) return []
   return out.split('\n').flatMap((line): CheckpointFileChange[] => {
     const [status, ...rest] = line.split('\t')
@@ -248,6 +259,7 @@ export async function diffSinceCheckpoint(cwd: string, sha: string, filePath?: s
   const endTree = untilSha ?? await snapshotWorktreeTree(cwd)
   const args = ['diff', '--no-renames', sha, endTree]
   if (filePath) args.push('--', filePath)
+  else args.push(...SNAPSHOT_PATHSPEC)
   return git(cwd, args)
 }
 
@@ -282,8 +294,9 @@ export async function restoreCheckpoint(cwd: string, sha: string, paths?: string
  */
 export async function listWorkingDiffHunks(cwd: string): Promise<{ hunks: WorkingDiffHunk[]; untracked: string[] }> {
   const [diffText, untrackedOut] = await Promise.all([
-    git(cwd, ['diff', '--no-renames', '--no-color', 'HEAD']).catch(() => ''),
-    git(cwd, ['ls-files', '--others', '--exclude-standard']).catch(() => ''),
+    git(cwd, ['diff', '--no-renames', '--no-color', 'HEAD', ...SNAPSHOT_PATHSPEC]).catch(() => ''),
+    // Rejecting an untracked file deletes it: the app's own databases must never be offered.
+    git(cwd, ['ls-files', '--others', '--exclude-standard', ...SNAPSHOT_PATHSPEC]).catch(() => ''),
   ])
   const untracked = untrackedOut ? untrackedOut.split('\n').filter(Boolean) : []
   return { hunks: parseDiffHunks(diffText), untracked }
@@ -347,7 +360,7 @@ export async function deleteUntrackedFile(cwd: string, relPath: string): Promise
 export async function commitAllChanges(cwd: string, message: string): Promise<string> {
   const trimmed = message.trim()
   if (!trimmed) throw new Error('Commit message is required')
-  await git(cwd, ['add', '-A'])
+  await git(cwd, ['add', '-A', ...SNAPSHOT_PATHSPEC])
   await git(cwd, ['commit', '-m', trimmed])
   return git(cwd, ['rev-parse', 'HEAD'])
 }

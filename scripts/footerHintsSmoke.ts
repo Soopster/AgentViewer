@@ -39,5 +39,5 @@ assert.ok(!bar(140).includes('⇧W watch'), 'a disabled plugin shows no hints')
 applyPluginSettings({ version: 1, disabled: [] })
 
 // The session context menu offers repository commands that ask for it, not a hard-coded plugin.
-assert.deepEqual(listPluginCommands('tui').filter(command => command.sessionMenu).map(command => command.id), ['checkpoints'])
+assert.deepEqual(listPluginCommands('tui').filter(command => command.sessionMenu).map(command => command.id), ['second-opinion', 'checkpoints'])
 console.log('footer hints smoke passed')

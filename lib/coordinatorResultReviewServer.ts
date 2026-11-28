@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import type { ExternalProtocolIdentity } from './agentProtocol'
 import { withProviderInstance } from './providerInstances'
 import type { AgentProvider } from './types'
-import { readExternalProtocolResultContext, claimExternalProtocolResultHost, noteKeyedSideEffect, readSessionCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, readSettledInteractiveExecutions, sessionCoordinatorIdentity, runExternalProtocolIdempotent, validateWorktreeTaskLocks } from './agentCoordination'
+import { readExternalProtocolResultContext, claimExternalProtocolResultHost, noteKeyedSideEffect, readSessionCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, readSettledInteractiveExecutions, sessionCoordinatorIdentity, runExternalProtocolIdempotent, validateWorktreeTaskLocks, recordStagedTaskIntegration } from './agentCoordination'
 import { findWorktreeTaskForCwd, mergeWorktreeTask } from './worktreeTasks'
 import { readViewSessionRunning } from './sessionBackend'
 import { coordinatorCheckoutRevision, previewMergeConflicts, resultGit } from './coordinatorResultGit'
@@ -93,9 +93,24 @@ export async function integrateCoordinatorResult(sessionId: string, provider: Ag
       const worktree = await findWorktreeTaskForCwd(review.checkout.path)
       if (!worktree) throw new Error('Worktree no longer exists')
       await claimExternalProtocolResultHost(identity)
+      const target = worktree.repoRoot
+      if (review.task.receipt?.requiresIntegration && await coordinatorCheckoutRevision(worktree.path) !== review.checkout.revision) {
+        throw new Error('Source changed before staging. Refresh and inspect the result again.')
+      }
+      const base = (await resultGit(target, ['rev-parse', 'HEAD'])).trim()
       // Merge may commit the source and partially write the target before failing.
       noteKeyedSideEffect()
-      return mergeWorktreeTask(worktree)
+      const result = await mergeWorktreeTask(worktree)
+      if (result.staged && review.task.receipt?.requiresIntegration) {
+        const source = (await resultGit(worktree.path, ['rev-parse', 'HEAD'])).trim()
+        const expected = (await resultGit(target, ['merge-tree', '--write-tree', base, source])).trim()
+        const tree = (await resultGit(target, ['write-tree'])).trim()
+        if (expected !== tree || (await resultGit(target, ['rev-parse', 'HEAD'])).trim() !== base) {
+          throw new Error('Target changed during staging. Inspect the staged Git changes before continuing.')
+        }
+        await recordStagedTaskIntegration(identity, taskId, review.task.receipt.recordedAt, { target, base, tree })
+      }
+      return result
     })()
     integrations.set(key, operation)
     try { return await operation } finally { integrations.delete(key) }

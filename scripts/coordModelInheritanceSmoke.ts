@@ -30,6 +30,9 @@ mock.module(fileURLToPath(new URL('../lib/adapters/registry.ts', import.meta.url
   getSessionAdapter: async () => ({ readProviderModels: async () => ['source-model', 'changed-model'].map(value => ({ value, displayName: value, description: '', supportsEffort: true, supportedEffortLevels: ['low', 'high'] })) }),
 }))
 const coord = await import('../lib/agentCoordination')
+// Only a submission rejection permits automatic failover. A failure inside
+// an accepted stream may follow side effects and requires reconciliation.
+const startRejection = () => new Response(null, { status: 401, statusText: 'Unauthorized' })
 const until = async (predicate: () => boolean | Promise<boolean>) => { for (let i = 0; i < 200; i++) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)) } assert.fail('Coordinator dispatch did not settle') }
 const start = await instances.withProviderInstance('codex-source', 'codex', () => coord.startProtocolRun({ provider: 'codex', teammateProviders: ['claude', 'codex'], prompt: 'Verify account-specific model defaults', baseCwd: cwd, maxAgents: 6, model: 'source-model', effort: 'high', useWorktrees: false }))
 const identity = await instances.withProviderInstance('codex-source', 'codex', () => coord.sessionCoordinatorIdentity(start.sessions[0]!.sessionId, 'codex'))
@@ -64,10 +67,9 @@ try {
   const changed = await workerTurn('changed-model')
   assert.equal(changed.body.model, 'changed-model')
   assert.equal(changed.body.effort, undefined, 'changed model must not inherit another model\'s effort setting')
-  const nativeFailure = () => new Response('event: error\ndata: {"error":"authentication failed"}\n\n')
   const sdk = await import('../lib/agentCoordinationSdkTools')
   const oldIdentity = sdk.getCoordinatorCodexIdentity(inherited.sessionId, 'codex-source')!
-  inherited.release(nativeFailure())
+  inherited.release(startRejection())
   await until(async () => (await coord.readExternalProtocolStatus(identity)).snapshot.agents.some(agent => agent.name === 'inherited' && agent.provider === 'claude'))
   const replacement = await workerTurn('inherited')
   assert.notEqual(replacement.sessionId, inherited.sessionId)
@@ -85,7 +87,7 @@ try {
   assert.equal(healthy.body.model, 'source-model')
   assert.equal(healthy.body.effort, 'high', 'another teammate\'s recovery must not erase healthy source-account defaults')
   const beforePinnedFailure = created
-  changed.release(nativeFailure())
+  changed.release(startRejection())
   await until(async () => (await coord.readExternalProtocolStatus(identity)).snapshot.agents.some(agent => agent.name === 'changed-model' && agent.status === 'blocked'))
   assert.equal(created, beforePinnedFailure, 'explicit selection must not start work on an unrequested replacement provider')
 
@@ -110,7 +112,7 @@ try {
   database.exec(`CREATE TRIGGER reject_fixture_recovery_token BEFORE INSERT ON protocol_participant_tokens
     WHEN NEW.agent_id = 'agent-1' AND NEW.run_id = (SELECT value FROM meta WHERE key = 'fixture_recovery_run')
     BEGIN SELECT RAISE(ABORT, 'fixture credential rejection'); END`)
-  turn.release(new Response('event: error\ndata: {"error":"authentication failed"}\n\n'))
+  turn.release(startRejection())
   await until(async () => (await coord.readExternalProtocolStatus(recoveryIdentity)).snapshot.agents.some(agent => agent.name === 'rollback' && agent.status === 'blocked'))
   const after = (await coord.readExternalProtocolStatus(recoveryIdentity)).snapshot
   const unchanged = after.agents.find(agent => agent.name === 'rollback')!
@@ -140,7 +142,7 @@ try {
   await until(() => turns.some(turn => turn.sessionId === worker.sessionId))
   let replacementReturned = false
   beforeReplacement = async () => { await coord.stopProtocolRun(stoppedIdentity.runId); replacementReturned = true }
-  turns.find(turn => turn.sessionId === worker.sessionId)!.release(new Response('event: error\ndata: {"error":"authentication failed"}\n\n'))
+  turns.find(turn => turn.sessionId === worker.sessionId)!.release(startRejection())
   await until(() => replacementReturned)
   await until(() => !globalThis.__agentViewerCoordinatorControllers!.has(stoppedIdentity.runId))
   // Allow the replacement promise continuation and transaction to finish.

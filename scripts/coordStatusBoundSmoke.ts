@@ -21,6 +21,8 @@ const { buildCoordinatorPiTools } = await import('../lib/agentCoordinationSdkToo
 
 const lead = (await coord.createExternalProtocolRun({ prompt: 'Audit', provider: 'codex', baseCwd: cwd, participantName: 'lead' })).participant
 const worker = (await coord.joinExternalProtocolRun({ runId: lead.runId, provider: 'codex', cwd, participantName: 'worker', capabilities: { tools: ['coord_status', 'coord_claim_task'] } })).participant
+assert.equal((await coord.readExternalProtocolActionableStatus(lead)).actionable.needsPlan, true)
+assert.equal((await coord.readExternalProtocolActionableStatus(worker)).actionable.needsPlan, undefined)
 {
   // A roster row says how many tools a participant advertised, never the list.
   const row = (await coord.readExternalProtocolStatus(lead)).snapshot.agents.find((agent) => agent.id === worker.agentId)!
@@ -70,6 +72,7 @@ const statusTool = buildCoordinatorPiTools(lead).find(tool => tool.name === 'coo
 const sdkStatus = await (statusTool.execute as unknown as (id: string, args: object) => Promise<{ content: Array<{ text?: string }> }>)('compact-status', { view: 'actionable' })
 assert.deepEqual(JSON.parse(sdkStatus.content[0].text!), JSON.parse(JSON.stringify(actionable)), 'SDK path forwards the view and keeps the same digest')
 const assignment = await coord.createExternalProtocolTask(lead, { title: 'Large assignment', detail: 'Specific context. '.repeat(1000), targetRole: 'teammate' })
+assert.equal((await coord.readExternalProtocolActionableStatus(lead)).actionable.needsPlan, undefined)
 const projected = coordinatorModelResult('create_task', assignment) as typeof assignment
 assert.equal(projected.task!.prompt, undefined, 'the model does not get its authored prompt echoed back')
 {
@@ -96,7 +99,7 @@ assert.equal(findings.length, FINDINGS, 'every finding is still listed')
 assert.ok(JSON.stringify(status).length < 60_000, `status stayed small (${JSON.stringify(status).length} chars for ${FINDINGS * EVIDENCE} of evidence)`)
 for (const finding of findings) {
   assert.ok((finding.detail?.length ?? 0) < 800, 'a listed finding carries an excerpt, not its evidence')
-  assert.match(finding.detail ?? '', /coord_query_context returns the full text/, 'and says where the rest is')
+  assert.match(finding.detail ?? '', /query event_id/, 'and says how to retrieve the rest')
 }
 
 // The excerpt is only acceptable because the whole text is still reachable.
@@ -108,6 +111,24 @@ const broad = await execute({ ...lead, action: 'query_context', query: 'unvalida
 assert.equal(broad.results.length, 20)
 assert.equal(broad.results[0].detail?.length, EVIDENCE, 'the best match is whole')
 assert.ok(JSON.stringify(broad).length < 90_000, `a broad query stays bounded (${JSON.stringify(broad).length})`)
+
+const previews = await coord.queryExternalProtocolContext(lead, { query: 'unvalidated input', limit: 20, detailChars: 0 })
+assert.equal(previews.results.length, 20)
+assert.ok(previews.results.every(match => match.eventId && match.detail === undefined && match.detailTruncated))
+assert.ok(JSON.stringify(previews).length < JSON.stringify(broad).length * 0.15)
+const shortPreviews = await coord.queryExternalProtocolContext(lead, { query: 'unvalidated input', detailChars: 120 })
+assert.ok(shortPreviews.results.every(match => match.detail?.length === 120 && match.detailTruncated))
+const eventId = fullStatus.snapshot.events.find(event => event.summary === 'Unvalidated input in handler7quartz')?.eventId
+assert.ok(eventId, 'status excerpts carry an exact evidence reference')
+const queryTool = buildCoordinatorPiTools(lead).find(tool => tool.name === 'coord_query_context')!
+const evidence = await (queryTool.execute as unknown as (id: string, args: object) => Promise<{ content: Array<{ text?: string }> }>)('exact-evidence', { event_id: eventId })
+const exact = JSON.parse(evidence.content[0].text!)
+assert.equal(exact.results[0].eventId, eventId)
+assert.equal(exact.results[0].detail, found.results[0].detail)
+const otherLead = (await coord.createExternalProtocolRun({ prompt: 'Separate run', provider: 'codex', baseCwd: cwd, participantName: 'lead' })).participant
+assert.deepEqual(await coord.queryExternalProtocolContext(otherLead, { eventId }), { results: [] })
+await assert.rejects(coord.queryExternalProtocolContext(lead, { query: 'input', eventId }), /exactly one/)
+console.log(`Context response characters: legacy=${JSON.stringify(broad).length}, summaries=${JSON.stringify(previews).length}`)
 
 const waited = await execute({ ...lead, action: 'wait', cursor: before, timeoutMs: 0 }) as { events: Array<{ type: string; detail?: string }>; snapshot?: unknown }
 assert.ok(waited.events.some((event) => event.type === 'finding'), 'a wait reports the new findings')

@@ -5,7 +5,7 @@ import { EXECUTION_ATTEMPT_SCHEMA, beginExecutionAttempt, updateExecutionAttempt
 import { coordinatorBackgroundWork, type CoordinatorDeadAgent } from './coordinatorInteractiveState'
 import { markCoordinatorRejection } from './coordinatorRejection'
 import { readCoordinatorCapabilities, validateCoordinatorSelection } from './coordinatorCapabilities'
-import { coordinatorCheckoutRevision } from './coordinatorResultGit'
+import { checkoutContainsDependencySync, committedDependencySync, coordinatorCheckoutRevision, resultGit, type StagedDependency } from './coordinatorResultGit'
 // Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
 // a LEAD session decomposes the prompt into a shared task list, named
 // TEAMMATES (each in an isolated git worktree) self-claim tasks and work a
@@ -37,6 +37,8 @@ import {
   buildTeammatePlanPreamble,
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
+  formatSdkAssignment,
+  sdkAssignmentBrief,
   formatInbox,
   formatProtocolMailboxMessage,
   interpolatePlaybookText,
@@ -165,6 +167,7 @@ import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { setAcpPermissionRule } from './acpClientPool'
 import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, readWaitingSessionObservation, interruptRunningSession, steerRunningSession } from './sessionRuntime'
+import { readPendingTurnPermissions, readPendingTurnPrompts } from './sessionActivity'
 import { coordinatorAttention } from './coordinatorAttention'
 import {
   COORDINATION_DATA_DIR,
@@ -344,6 +347,7 @@ let writeQueue: Promise<unknown> = Promise.resolve()
 
 // Per-run work-loop state. Only exists in the process that started the run.
 type RunController = {
+  pinnedStaffingRetryAt?: Map<string, number>
   /** Human owns the lead conversation; only teammates receive automatic turns. */
   interactiveLeadId?: string
   runId: string
@@ -1004,6 +1008,11 @@ async function openDatabase(): Promise<SqliteDatabase> {
   try {
     configureDatabase(db)
     initializeSchema(db)
+    db.exec(`CREATE TABLE IF NOT EXISTS protocol_task_integrations (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL, receipt_at TEXT NOT NULL, proof_json TEXT NOT NULL,
+      PRIMARY KEY (run_id, task_id)
+    )`)
     pruneExpiredRunsSync(db)
     lastRunPruneAt = Date.now()
     return db
@@ -1176,6 +1185,7 @@ function rowToEvent(row: Row): AgentProtocolEvent {
     : undefined
   return {
     version: AGENT_PROTOCOL_VERSION,
+    eventId: isContextSearchEventType(String(row.type)) ? String(row.id) : undefined,
     runId: String(row.run_id),
     agentId: String(row.agent_id),
     type: String(row.type) as AgentProtocolEvent['type'],
@@ -1468,7 +1478,7 @@ function boundEventDetail(event: AgentProtocolEvent, limit: number): AgentProtoc
   if (typeof detail !== 'string' || detail.length <= limit) return event
   return {
     ...event,
-    detail: `${detail.slice(0, limit)}… [${detail.length - limit} more characters; coord_query_context returns the full text]`,
+    detail: `${detail.slice(0, limit)}… [+${detail.length - limit} chars${event.eventId ? '; query event_id' : ''}]`,
   }
 }
 
@@ -1623,6 +1633,8 @@ function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string
   }
 }
 
+const ACTIONABLE_CLAIMABLE_PREVIEW = 12
+
 function externalActionableSync(db: SqliteDatabase, runId: string, agentId: string): ExternalProtocolActionable {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) throw new Error('Coordinator run not found')
@@ -1634,10 +1646,23 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   const tasks = listTasksSync(db, runId)
   const tasksById = new Map(tasks.map((task) => [task.id, task]))
   const recoveryPending = agent ? hasUnobservedDispatchSync(db, runId, agent) : false
-  const claimable = tasks.filter((task) => (
-    task.status === 'pending' && !task.ownerAgentId && taskDepsCompleted(task, tasksById)
-      && !recoveryPending && Boolean(agent && taskClaimableByAgent(task, agent, agents))
-  ))
+  const mayClaim = agent && !recoveryPending && ['planning', 'running'].includes(run.status)
+    && !['done', 'failed', 'stopped'].includes(agent.status)
+  const locks = mayClaim ? activeRunLocksSync(db, runId) : []
+  const integrations: DependencyCheckCache = new Map()
+  const claimable = mayClaim
+    ? tasks.filter(task => taskEligibleForClaim(db, task, tasksById, agent, agents, integrations)
+      && !findTaskLockConflict(task, locks, agentId))
+    : []
+  const awaitingIntegration: NonNullable<ExternalProtocolActionable['awaitingIntegration']> = []
+  if (agent?.role === 'lead') {
+    for (const task of tasks) {
+      if (task.status !== 'pending' || !taskDepsCompleted(task, tasksById)) continue
+      const reason = dependencyIntegrationBlockerSync(db, task, tasksById, undefined, integrations)
+      if (reason) awaitingIntegration.push({ taskId: task.id, reason })
+      if (awaitingIntegration.length === 6) break
+    }
+  }
   const mailbox = db.prepare(`
     SELECT kind, priority, reply_required, in_reply_to, created_at, from_agent_id, correlation_id FROM protocol_messages
     WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL
@@ -1657,7 +1682,11 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
     ...(agent ? { waitingPolicy: coordinatorWaitingPolicy(agent,
       Boolean(controllers.get(runId)?.sdkIdentities.has(agent.id)
         || (!agent.sessionId.startsWith('external:') && db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)))) } : {}),
-    claimableTasks: claimable.map((task) => ({ id: task.id, title: task.title, targetRole: task.targetRole })),
+    claimableTasks: claimable.slice(0, ACTIONABLE_CLAIMABLE_PREVIEW).map(task => ({
+      id: task.id, title: task.title.length > 120 ? `${task.title.slice(0, 119)}…` : task.title, targetRole: task.targetRole,
+    })),
+    ...(claimable.length > ACTIONABLE_CLAIMABLE_PREVIEW ? { claimableTaskCount: claimable.length } : {}),
+    ...(awaitingIntegration.length ? { awaitingIntegration } : {}),
     inboxCount: ordinaryRows.length + readyStatusGroups.size,
     urgentCount: ordinaryRows.filter((row) => row.priority === 'urgent').length,
     statusCount: statusRows.length,
@@ -1665,6 +1694,9 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
     plansAwaitingReview: agent?.role === 'lead'
       ? tasks.filter((task) => task.status === 'planned').map((task) => task.id)
       : [],
+    ...(agent?.role === 'lead' && tasks.length === 0 && ['running', 'planning'].includes(run.status)
+      ? { needsPlan: true as const }
+      : {}),
     myTask: myTaskRow
       ? { id: myTaskRow.id, status: myTaskRow.status, planState: taskPlanStateSync(db, runId, myTaskRow.id) }
       : null,
@@ -2042,11 +2074,10 @@ export async function previewExternalProtocolPlaybook(
   return { tasks: planPlaybookTasks(playbook, params.args, 0) }
 }
 
-/** Reserve each provider lane, then fill remaining capacity from phase width. */
+/** List workflow routes and use spare capacity for parallel work on a route. */
 function workflowProviders(plans: PlaybookTaskPlan[], provider: AgentProvider, maxAgents: number): AgentProvider[] {
   const lanes = plans.filter(task => task.targetRole !== 'lead' && task.seat !== 'director')
   const unique = [...new Set(lanes.map(task => task.requestedProvider ?? provider))]
-  if (unique.length > maxAgents - 1) throw new Error('Workflow needs a teammate slot for each requested provider; increase maxAgents in the recipe')
   const peak = new Map(unique.map(lane => [lane, Math.max(...[...new Set(lanes.map(task => task.phase))].map(phase => lanes.filter(task => task.phase === phase && (task.requestedProvider ?? provider) === lane).length))]))
   const result = [...unique]
   for (const lane of unique) {
@@ -2115,23 +2146,33 @@ export async function startInteractiveWorkflow(identity: ExternalProtocolIdentit
     })
   })
   const warnings: string[] = []
+  let staffingDeferred = false
   await serializeAutomaticDelegation(identity.runId, async () => {
     const controller = await adoptInteractiveController(identity)
-    const snapshot = readSnapshotSync(await getDatabase(), identity.runId)!
+    const db = await getDatabase()
+    const snapshot = readSnapshotSync(db, identity.runId)!
     Object.assign(controller, { maxAgents: snapshot.run.maxAgents, gateCommand: snapshot.run.gateCommand,
       requirePlanApproval: snapshot.run.requirePlanApproval, requireReview: snapshot.run.requireReview,
       autonomy: snapshot.run.autonomy, acceptanceContract: snapshot.run.acceptanceContract, budget: snapshot.run.budget })
     controller.teammateProviders = [...new Set([...controller.teammateProviders, ...seeded.providers])]
     // Completed/cancelled workflows never restart workers on a delayed retry.
     const open = snapshot.tasks.filter(task => seeded.taskIds.includes(task.id) && !['completed', 'failed', 'cancelled'].includes(task.status))
+    const rotating = new Set(seeded.providers).size >= seeded.maxAgents
+    const tasksById = new Map(snapshot.tasks.map(task => [task.id, task]))
     const staffed = new Map<AgentProvider, number>()
     for (const provider of seeded.providers) {
       const needed = (staffed.get(provider) ?? 0) + 1
       staffed.set(provider, needed)
       if (!open.some(task => (task.requestedProvider ?? snapshot.run.provider) === provider && task.targetRole !== 'lead' && task.seat !== 'director')) continue
+      if (rotating && !open.some(task => (task.requestedProvider ?? snapshot.run.provider) === provider
+        && task.targetRole !== 'lead' && task.seat !== 'director' && taskDepsCompleted(task, tasksById))) continue
       const roster = listAgentsSync(await getDatabase(), identity.runId)
       if (roster.filter(agent => agent.role === 'teammate' && agent.provider === provider && controller.sessionIds.has(agent.id) && !['failed', 'stopped'].includes(agent.status)).length >= needed) continue
       if (roster.filter(agent => !['failed', 'stopped'].includes(agent.status)).length >= seeded.maxAgents) {
+        if (rotating || roster.some(agent => idleTeammateCanRetireSync(db, controller, agent))) {
+          staffingDeferred = true
+          continue
+        }
         warnings.push(`No free slot for ${provider}; stop an unused teammate, then retry this workflow request`); continue
       }
       try { const spawned = await spawnAdditionalTeammate(identity, { provider, reserveForDelegation: true }); controller.turnInFlight.delete(spawned.agentId) }
@@ -2144,6 +2185,10 @@ export async function startInteractiveWorkflow(identity: ExternalProtocolIdentit
       if (claimed) void dispatchTeammateWork(controller, agent.id).catch(() => {})
     }
   })
+  if (staffingDeferred) {
+    const controller = controllers.get(identity.runId)
+    if (controller) void staffMissingPinnedLane(controller).catch(() => {})
+  }
   notifyRunChanged(identity.runId)
   return { ...seeded, warnings }
 }
@@ -3255,7 +3300,7 @@ async function adoptInteractiveController(identity: ExternalProtocolIdentity): P
   // Restore only sessions that this server created. External/interactive participants
   // retain control of their own turns; never replay work that was in progress.
   for (const agent of snapshot.agents) {
-    if ((!/^agent-\d+$/.test(agent.id) && !(managedLead && agent.id === lead.id)) || agent.sessionId.startsWith('external:')) continue
+    if (agent.status === 'stopped' || (!/^agent-\d+$/.test(agent.id) && !(managedLead && agent.id === lead.id)) || agent.sessionId.startsWith('external:')) continue
     controller.sessionIds.set(agent.id, agent.sessionId)
     const token = managedLead && agent.id === lead.id ? identity.token : rotateSessionParticipantTokenSync(db, run.id, agent.id)
     const worker: ExternalProtocolIdentity = { runId: run.id, agentId: agent.id, token, role: agent.role }
@@ -3632,6 +3677,7 @@ export async function createExternalProtocolTask(
           runId: identity.runId, fromAgentId: identity.agentId, toAgentId: delegate.id,
           body: delegationMailBody(task.id, title, detail, task.paths, task.verifyCommands),
           kind: 'request', priority: 'normal', ts: nowIso(),
+          correlationId: `coordinator-assignment:${task.id}`,
         })
       }
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
@@ -3778,7 +3824,7 @@ function describeClaimFailureSync(db: SqliteDatabase, runId: string, agentId: st
     entry.ownerAgentId === agentId && !['completed', 'failed', 'cancelled'].includes(entry.status)
   ))
   if (alreadyOwned) return `No claimable task: ${agent?.name ?? agentId} already owns ${alreadyOwned.id}`
-  if (!taskId) return 'No claimable task: every pending task is owned or blocked by incomplete dependencies'
+  if (!taskId) return 'No claimable task: pending tasks may be blocked by dependencies, role or provider requirements, or path locks'
   const row = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
   if (!row) return `No claimable task: ${taskId} does not exist`
   const task = rowToTask(row)
@@ -3790,11 +3836,9 @@ function describeClaimFailureSync(db: SqliteDatabase, runId: string, agentId: st
   const tasksById = new Map(listTasksSync(db, runId).map((entry) => [entry.id, entry]))
   const unmet = task.blockedBy.filter((dep) => tasksById.get(dep)?.status !== 'completed')
   if (unmet.length > 0) return `No claimable task: ${taskId} is blocked by incomplete dependencies: ${unmet.join(', ')}`
-  const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active'")
-    .all(runId) as Row[]).map(rowToLock)
-  const conflict = task.paths.flatMap((lockPath) => (
-    activeLocks.filter((lock) => writeLocksConflict(lock, lockPath, agentId))
-  )).at(0)
+  const integration = dependencyIntegrationBlockerSync(db, task, tasksById, agent?.worktreePath)
+  if (integration) return `No claimable task: ${taskId}. ${integration}`
+  const conflict = findTaskLockConflict(task, activeRunLocksSync(db, runId), agentId)
   if (conflict) return `No claimable task: ${taskId} requires a path locked by ${conflict.agentId} on ${conflict.path}`
   return `No claimable task: ${taskId}`
 }
@@ -4090,6 +4134,29 @@ export async function publishExternalProtocolFinding(
 const CONTEXT_SEARCH_EVENT_TYPES = [
   'finding', 'learning', 'handoff', 'review.requested', 'task.completed', 'task.failed', 'plan.approved', 'plan.rejected',
 ] as const
+const CONTEXT_SEARCH_EVENTS = new Set<string>(CONTEXT_SEARCH_EVENT_TYPES)
+
+function isContextSearchEventType(type: string): type is typeof CONTEXT_SEARCH_EVENT_TYPES[number] {
+  return CONTEXT_SEARCH_EVENTS.has(type)
+}
+
+function contextEventMatch(row: Row, score: number): ProtocolContextMatch {
+  return {
+    eventId: String(row.id),
+    kind: row.type as typeof CONTEXT_SEARCH_EVENT_TYPES[number],
+    taskId: typeof row.task_id === 'string' ? row.task_id : undefined,
+    agentId: String(row.agent_id),
+    summary: typeof row.summary === 'string' ? row.summary : '',
+    detail: typeof row.detail === 'string' ? row.detail : undefined,
+    timestamp: String(row.timestamp),
+    score,
+  }
+}
+
+function boundContextMatch(match: ProtocolContextMatch, detailChars: number): ProtocolContextMatch {
+  if (match.detail === undefined || match.detail.length <= detailChars) return match
+  return { ...match, detail: detailChars ? match.detail.slice(0, detailChars) : undefined, detailTruncated: true }
+}
 
 /**
  * Lexical search over this run's findings/learnings/task outcomes plus task
@@ -4101,14 +4168,26 @@ const CONTEXT_SEARCH_EVENT_TYPES = [
  */
 export async function queryExternalProtocolContext(
   identity: ExternalProtocolIdentity,
-  params: { query: string; limit?: number },
+  params: { query?: string; eventId?: string; limit?: number; detailChars?: number },
 ): Promise<ExternalProtocolContextResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
-  const query = params.query.trim()
-  if (!query) throw new Error('query is required')
+  const query = params.query?.trim()
+  const eventId = params.eventId?.trim()
+  if (Boolean(query) === Boolean(eventId)) throw new Error('Provide exactly one of query or event_id')
+  const { detailChars } = params
+  if (detailChars !== undefined && (!Number.isInteger(detailChars) || detailChars < 0 || detailChars > 32_000)) {
+    throw new Error('detail_chars must be an integer from 0 to 32000')
+  }
+  if (eventId) {
+    const row = db.prepare('SELECT * FROM protocol_events WHERE run_id = ? AND id = ?')
+      .get(identity.runId, eventId) as Row | undefined
+    if (!row || !isContextSearchEventType(String(row.type))) return { results: [] }
+    const match = contextEventMatch(row, 1)
+    return { results: [detailChars === undefined ? match : boundContextMatch(match, detailChars)] }
+  }
   const limit = Math.min(Math.max(params.limit ?? 8, 1), 20)
-  const queryTokens = new Set(searchTokens(query))
+  const queryTokens = new Set(searchTokens(query ?? ''))
   if (!queryTokens.size) return { results: [] }
 
   const matches: ProtocolContextMatch[] = []
@@ -4117,19 +4196,10 @@ export async function queryExternalProtocolContext(
     `SELECT * FROM protocol_events WHERE run_id = ? AND type IN (${CONTEXT_SEARCH_EVENT_TYPES.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 500`,
   ).all(identity.runId, ...CONTEXT_SEARCH_EVENT_TYPES) as Row[]
   for (const row of eventRows) {
-    const event = rowToEvent(row)
-    const docText = [event.summary, event.detail].filter(Boolean).join('\n')
+    const docText = [row.summary, row.detail].filter(Boolean).join('\n')
     const score = queryOverlapScore(queryTokens, new Set(searchTokens(docText)))
     if (score > 0) {
-      matches.push({
-        kind: event.type as ProtocolContextMatch['kind'],
-        taskId: event.taskId,
-        agentId: event.agentId,
-        summary: event.summary ?? '',
-        detail: event.detail,
-        timestamp: event.timestamp ?? row.created_at as string,
-        score,
-      })
+      matches.push(contextEventMatch(row, score))
     }
   }
 
@@ -4173,15 +4243,17 @@ export async function queryExternalProtocolContext(
   let budget = CONTEXT_QUERY_DETAIL_BUDGET_CHARS
   return {
     results: matches.slice(0, limit).map((match, index) => {
+      if (detailChars !== undefined) {
+        const bounded = boundContextMatch(match, Math.min(budget, detailChars))
+        budget -= bounded.detail?.length ?? 0
+        return bounded
+      }
       const length = match.detail?.length ?? 0
       if (index === 0 || length <= budget) {
         budget -= length
         return match
       }
-      return {
-        ...match,
-        detail: `${match.detail!.slice(0, EXTERNAL_STATUS_EVENT_DETAIL_CHARS)}… [${length - EXTERNAL_STATUS_EVENT_DETAIL_CHARS} more characters; query for this entry specifically, or with limit 1, for the full text]`,
-      }
+      return boundContextMatch(match, EXTERNAL_STATUS_EVENT_DETAIL_CHARS)
     }),
   }
 }
@@ -4483,6 +4555,7 @@ export async function completeExternalProtocolTask(
   const verificationEnd = verificationStart ? await coordinatorCheckoutRevision(agent.worktreePath).catch(() => undefined) : undefined
   const needsDecision = normalizeNeedsDecisions(params.needsDecision)
   const receipt: ProtocolTaskReceipt = {
+    requiresIntegration: await isolatedResultRequiresIntegration(agent),
     requestedProvider: task.requestedProvider,
     requestedProviderInstanceId: task.requestedProviderInstanceId,
     requestedModel: task.requestedModel,
@@ -5802,6 +5875,18 @@ function writeLocksConflict(existing: ProtocolLock, requestedPath: string, reque
   return lockPathsOverlap(existing.path, requestedPath)
 }
 
+function activeRunLocksSync(db: SqliteDatabase, runId: string): ProtocolLock[] {
+  return (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active'")
+    .all(runId) as Row[]).map(rowToLock)
+}
+
+function findTaskLockConflict(task: ProtocolTask, locks: ProtocolLock[], agentId: string): ProtocolLock | undefined {
+  for (const path of task.paths) {
+    const conflict = locks.find(lock => writeLocksConflict(lock, path, agentId))
+    if (conflict) return conflict
+  }
+}
+
 function acquireLockSync(db: SqliteDatabase, params: {
   runId: string
   agentId: string
@@ -5874,7 +5959,7 @@ function acquireLockSync(db: SqliteDatabase, params: {
 // ---------------------------------------------------------------------------
 // Event application
 
-function insertEventSync(db: SqliteDatabase, event: AgentProtocolEvent): void {
+function insertEventSync(db: SqliteDatabase, event: AgentProtocolEvent, eventId: string = randomUUID()): void {
   const ts = event.timestamp ?? nowIso()
   db.prepare(`
     INSERT INTO protocol_events (
@@ -5882,7 +5967,7 @@ function insertEventSync(db: SqliteDatabase, event: AgentProtocolEvent): void {
       paths_json, payload_json, timestamp, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    randomUUID(),
+    eventId,
     event.runId,
     event.agentId,
     event.type,
@@ -5995,12 +6080,12 @@ function nativeTaskUsageSync(db: SqliteDatabase, runId: string, taskId: string):
 }
 
 function budgetExceededReasonSync(db: SqliteDatabase, run: ProtocolRun): string | null {
-  const usage = budgetUsageSync(db, run.id)
-  if (run.budget?.maxTokens && (usage.totalTokens ?? 0) >= run.budget.maxTokens) {
-    return `Run token budget exhausted (${usage.totalTokens ?? 0}/${run.budget.maxTokens}).`
+  const usage = run.budget?.maxTokens || run.budget?.maxCostUsd ? budgetUsageSync(db, run.id) : undefined
+  if (run.budget?.maxTokens && (usage?.totalTokens ?? 0) >= run.budget.maxTokens) {
+    return `Run token budget exhausted (${usage?.totalTokens ?? 0}/${run.budget.maxTokens}).`
   }
-  if (run.budget?.maxCostUsd && (usage.costUsd ?? 0) >= run.budget.maxCostUsd) {
-    return `Run cost budget exhausted ($${(usage.costUsd ?? 0).toFixed(4)}/$${run.budget.maxCostUsd.toFixed(4)}).`
+  if (run.budget?.maxCostUsd && (usage?.costUsd ?? 0) >= run.budget.maxCostUsd) {
+    return `Run cost budget exhausted ($${(usage?.costUsd ?? 0).toFixed(4)}/$${run.budget.maxCostUsd.toFixed(4)}).`
   }
   if (run.budget?.maxDurationMinutes && Date.now() - Date.parse(run.createdAt) >= run.budget.maxDurationMinutes * 60_000) {
     return `Run duration budget exhausted (${run.budget.maxDurationMinutes} minutes).`
@@ -6121,6 +6206,60 @@ function taskDepsCompleted(task: ProtocolTask, tasksById: Map<string, ProtocolTa
   return task.blockedBy.every((dep) => tasksById.get(dep)?.status === 'completed')
 }
 
+async function isolatedResultRequiresIntegration(agent: ProtocolAgent): Promise<true | undefined> {
+  if (!agent.worktreeBranch) return
+  try {
+    const checkout = await findWorktreeTaskForCwd(agent.worktreePath)
+    if (!checkout) return true
+    const base = (await resultGit(checkout.path, ['merge-base', 'HEAD', (await resultGit(checkout.repoRoot, ['rev-parse', 'HEAD'])).trim()])).trim()
+    const [tracked, untracked] = await Promise.all([
+      resultGit(checkout.path, ['diff', '--name-only', base, '--']),
+      resultGit(checkout.path, ['ls-files', '--others', '--exclude-standard']),
+    ])
+    return tracked.trim() || untracked.trim() ? true : undefined
+  } catch { return true }
+}
+
+type DependencyCheckCache = Map<string, { commit?: string; checkouts: Map<string, boolean> }>
+
+function dependencyIntegrationBlockerSync(db: SqliteDatabase, task: ProtocolTask, tasksById: Map<string, ProtocolTask>, cwd?: string, cache?: DependencyCheckCache): string | undefined {
+  for (const id of task.blockedBy) {
+    const dependency = tasksById.get(id)
+    if (!dependency?.receipt?.requiresIntegration) continue
+    let state = cache?.get(id)
+    if (!state) {
+      const row = db.prepare('SELECT receipt_at, proof_json FROM protocol_task_integrations WHERE run_id = ? AND task_id = ?')
+        .get(task.runId, id) as Row | undefined
+      const proof = parseJsonObject<StagedDependency>(row?.proof_json)
+      state = { commit: row?.receipt_at === dependency.receipt.recordedAt && proof ? committedDependencySync(proof) : undefined, checkouts: new Map() }
+      cache?.set(id, state)
+    }
+    if (!state.commit) {
+      const run = db.prepare('SELECT require_review, review_json FROM protocol_runs WHERE id = ?').get(task.runId) as Row | undefined
+      if (Number(run?.require_review) && parseJsonObject<{ status?: string }>(run?.review_json)?.status !== 'approved') {
+        return `Integration of ${id} is gated on run-wide review, which requires all tasks to finish. Split the prerequisite into a reviewed run or use a shared checkout for the workflow.`
+      }
+      return `Awaiting reviewed integration of ${id}. Stage its result and commit the staged tree to the target checkout.`
+    }
+    if (!cwd) continue
+    const contains = state.checkouts.get(cwd) ?? checkoutContainsDependencySync(cwd, state.commit)
+    state.checkouts.set(cwd, contains)
+    if (!contains) return `This checkout lacks the committed integration of ${id}. Use a checkout based on the integrated target.`
+  }
+}
+
+export async function recordStagedTaskIntegration(identity: ExternalProtocolIdentity, taskId: string, receiptAt: string, proof: StagedDependency): Promise<void> {
+  await enqueueWrite(db => {
+    const lead = requireExternalParticipantSync(db, identity)
+    const task = externalTaskInspectionSync(db, identity.runId, taskId).task
+    if (lead.role !== 'lead' || task.status !== 'completed' || task.receipt?.recordedAt !== receiptAt
+      || foreignInteractiveHostSync(db, identity.runId)) throw new Error('The result changed while recording its staged integration')
+    db.prepare('INSERT OR REPLACE INTO protocol_task_integrations (run_id, task_id, receipt_at, proof_json) VALUES (?, ?, ?, ?)')
+      .run(identity.runId, taskId, receiptAt, JSON.stringify(proof))
+  })
+  notifyRunChanged(identity.runId)
+}
+
 type TaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected'
 
 function taskPlanStateSync(db: SqliteDatabase, runId: string, taskId: string): TaskPlanState {
@@ -6171,6 +6310,12 @@ function taskClaimableByAgent(task: ProtocolTask, agent: ProtocolAgent, agents: 
   ))
 }
 
+function taskEligibleForClaim(db: SqliteDatabase, task: ProtocolTask, tasksById: Map<string, ProtocolTask>, agent: ProtocolAgent, agents: ProtocolAgent[], integrations?: DependencyCheckCache): boolean {
+  return task.status === 'pending' && !task.ownerAgentId && taskDepsCompleted(task, tasksById)
+    && taskClaimableByAgent(task, agent, agents)
+    && !dependencyIntegrationBlockerSync(db, task, tasksById, agent.worktreePath, integrations)
+}
+
 function hasUnobservedDispatchSync(db: SqliteDatabase, runId: string, agent: ProtocolAgent): boolean {
   return Boolean(db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id))
     && !controllers.get(runId)?.turnInFlight.has(agent.id) && !getRunningSessionInfo(agent.sessionId, agent).running
@@ -6197,17 +6342,11 @@ function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskI
   const candidates = taskId
     ? tasks.filter((task) => task.id === taskId)
     : tasks
-  const claimable = candidates.find((task) =>
-    task.status === 'pending'
-    && !task.ownerAgentId
-    && taskDepsCompleted(task, tasksById)
-    && taskClaimableByAgent(task, agent, agents))
+  const locks = activeRunLocksSync(db, runId)
+  const integrations: DependencyCheckCache = new Map()
+  const claimable = candidates.find(task => taskEligibleForClaim(db, task, tasksById, agent, agents, integrations)
+    && !findTaskLockConflict(task, locks, agentId))
   if (!claimable) return null
-  const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active'")
-    .all(runId) as Row[]).map(rowToLock)
-  if (claimable.paths.some((lockPath) => activeLocks.some((lock) => writeLocksConflict(lock, lockPath, agentId)))) {
-    return null
-  }
   const ts = nowIso()
   db.prepare("UPDATE protocol_tasks SET status = 'claimed', owner_agent_id = ?, claim_generation = claim_generation + 1, receipt_json = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND status = 'pending' AND owner_agent_id IS NULL")
     .run(agentId, ts, claimable.id, runId)
@@ -6766,7 +6905,10 @@ async function writeProtocolEvent(event: AgentProtocolEvent, wantSnapshot: boole
                 runId: event.runId,
                 fromAgentId: event.agentId,
                 toAgentId: recipient,
-                body: [`${event.taskId} completed: ${resultSummary}`, resultDetail].filter(Boolean).join('\n\n'),
+                body: [`${event.taskId} completed: ${resultSummary}`, resultDetail,
+                  (receipt as ProtocolTaskReceipt | undefined)?.requiresIntegration
+                    ? 'Dependent tasks require reviewing this result, staging it with coord_integrate_result, and committing the staged changes to the target.'
+                    : undefined].filter(Boolean).join('\n\n'),
                 ts,
                 kind: 'handoff',
               }))
@@ -7158,6 +7300,10 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
   const controller = controllers.get(runId)
   if (!controller || controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+  if (!runRow) return
+  const run = rowToRun(runRow)
+  if (run.status !== 'running' || budgetExceededReasonSync(db, run)) return
   const agents = listAgentsSync(db, runId)
   let claimedAny = false
   for (const agent of agents) {
@@ -7179,13 +7325,25 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
     }
   }
   if (claimedAny) return
+  if (await staffMissingPinnedLane(controller)) return
 
   const tasks = listTasksSync(db, runId)
   const unfinished = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
-  if (unfinished.length === 0) return
-  const teammatesActive = agents.some((agent) =>
-    agent.role === 'teammate' && (agent.status === 'working' || agent.status === 'blocked' || controller.turnInFlight.has(agent.id)))
-  if (teammatesActive) return
+  if (!unfinished.length || controller.interactiveLeadId) return
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  if (unfinished.some(task => taskDepsCompleted(task, tasksById) && dependencyIntegrationBlockerSync(db, task, tasksById))) return
+  // Waiting for approval, cooldown or execution reconciliation is not a stall.
+  if (run.phaseReports.some(phase => phase.status === 'awaiting_approval')
+    || unfinished.some(task => task.status === 'planned' || task.status === 'blocked'
+      || task.receipt?.needsDecision?.some(decision => decision.status === 'open'))) return
+  if (listAgentsSync(db, runId).some(agent =>
+    controller.turnInFlight.has(agent.id)
+    || getRunningSessionInfo(agent.sessionId, agent).running
+    || unresolvedExecutionAttempt(db, runId, agent.id)
+    || (agent.taskId && readProviderCooldown(db, agent.provider, agent.providerInstanceId ?? agent.provider)?.active)
+    || (agent.sessionId.startsWith('external:') && agent.taskId
+      && Date.now() - Date.parse(agent.lastSeenAt ?? agent.updatedAt) < EXTERNAL_AGENT_STALE_MS)
+    || (agent.role === 'teammate' && (agent.status === 'working' || agent.status === 'blocked')))) return
 
   if (controller.forcedInterventionsUsed < MAX_FORCED_INTERVENTIONS) {
     await dispatchLeadIntervention(controller, { force: true }).catch(() => {})
@@ -7202,6 +7360,91 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
     }).catch(() => {})
   }
   await maybeStartSynthesis(controller).catch(() => {})
+}
+
+function idleTeammateCanRetireSync(db: SqliteDatabase, controller: RunController, agent: ProtocolAgent): boolean {
+  const runId = controller.runId
+  if (agent.role !== 'teammate' || !['idle', 'ready', 'done'].includes(agent.status) || agent.taskId
+    || controller.sessionIds.get(agent.id) !== agent.sessionId || controller.turnInFlight.has(agent.id)
+    || getRunningSessionInfo(agent.sessionId, agent).running || unresolvedExecutionAttempt(db, runId, agent.id)
+    || readPendingTurnPermissions(agent.sessionId, agent.provider).length
+    || readPendingTurnPrompts(agent.sessionId, agent.provider).length) return false
+  if (db.prepare('SELECT 1 FROM protocol_interactive_dispatches WHERE run_id = ? AND agent_id = ?').get(runId, agent.id)) return false
+  if (db.prepare(`SELECT 1 FROM protocol_messages WHERE run_id = ? AND to_agent_id = ?
+    AND ((delivered_at IS NULL AND kind NOT IN ('status', 'status_summary')) OR (reply_required = 1 AND resolved_at IS NULL))
+    LIMIT 1`).get(runId, agent.id)) return false
+  if (db.prepare(`SELECT 1 FROM protocol_locks WHERE run_id = ? AND agent_id = ?
+    AND status = 'active' AND lease_expires_at > ? LIMIT 1`).get(runId, agent.id, nowIso())) return false
+  try { assertNoPendingBackgroundSync(db, runId, agent.id) } catch { return false }
+  return true
+}
+
+function retireIdleTeammateSync(db: SqliteDatabase, controller: RunController, expected: ProtocolAgent): void {
+  const row = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?').get(controller.runId, expected.id) as Row | undefined
+  if (!row || row.session_id !== expected.sessionId || !idleTeammateCanRetireSync(db, controller, rowToAgent(row))) {
+    throw new Error('The idle teammate changed during staffing')
+  }
+  setAgentStatusSync(db, controller.runId, expected.id, 'stopped', nowIso())
+  db.prepare('DELETE FROM protocol_participant_tokens WHERE run_id = ? AND agent_id = ?').run(controller.runId, expected.id)
+  insertEventSync(db, {
+    version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId: expected.id, type: 'learning',
+    summary: `${expected.name} freed a teammate slot. Its session, checkout, and results are retained.`,
+  })
+}
+
+/** Staff one ready provider pin that the current roster cannot execute. */
+async function staffMissingPinnedLane(controller: RunController): Promise<boolean> {
+  if (!controller.executionStarted) return false
+  const runId = controller.runId
+  const db = await getDatabase()
+  if (!db.prepare(`SELECT 1 FROM protocol_tasks WHERE run_id = ? AND status = 'pending'
+    AND (requested_provider IS NOT NULL OR blocked_by_json != '[]') AND COALESCE(target_role, 'teammate') != 'lead'
+    AND COALESCE(seat, 'executor') != 'director' LIMIT 1`).get(runId)) return false
+  return serializeAutomaticDelegation(runId, async () => {
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow || controller.stopped || controllers.get(runId) !== controller) return false
+    const run = rowToRun(runRow)
+    if (run.status !== 'running' || foreignInteractiveHostSync(db, runId) || budgetExceededReasonSync(db, run)) return false
+    const roster = listAgentsSync(db, runId)
+    const active = roster.filter(agent => !['failed', 'stopped'].includes(agent.status))
+    const workers = active.filter(agent => agent.role === 'teammate')
+    const lead = active.find(agent => agent.role === 'lead')
+    const tasks = listTasksSync(db, runId)
+    const tasksById = new Map(tasks.map(task => [task.id, task]))
+    const locks = activeRunLocksSync(db, runId)
+    const integrations: DependencyCheckCache = new Map()
+    const ready = tasks.filter(task => task.status === 'pending' && !task.ownerAgentId && task.targetRole !== 'lead'
+      && task.seat !== 'director' && taskDepsCompleted(task, tasksById) && !dependencyIntegrationBlockerSync(db, task, tasksById, undefined, integrations)
+      && !findTaskLockConflict(task, locks, ''))
+    const missing = ready.filter(task => (task.requestedProvider || task.blockedBy.some(id => tasksById.get(id)?.receipt?.requiresIntegration))
+      && !workers.some(agent => taskEligibleForClaim(db, task, tasksById, agent, active, integrations)))
+    if (!missing.length) return false
+    const retire = active.length < run.maxAgents ? undefined : workers.find(agent =>
+      !ready.some(task => task.requestedProvider && taskEligibleForClaim(db, task, tasksById, agent, active, integrations))
+      && idleTeammateCanRetireSync(db, controller, agent))
+    if (active.length >= run.maxAgents && !retire) return true
+    const name = availableTeammateName(roster, controller.sessionIds)
+    if (!name) return true
+    controller.pinnedStaffingRetryAt ??= new Map()
+    const retryAt = controller.pinnedStaffingRetryAt
+    for (const [id, until] of retryAt) if (until <= Date.now()) retryAt.delete(id)
+    for (const task of missing) {
+      const provider = task.requestedProvider ?? retire?.provider ?? lead?.provider ?? controller.provider
+      const instance = task.requestedProviderInstanceId ?? (retire?.provider === provider ? retire.providerInstanceId
+        : lead?.provider === provider ? lead.providerInstanceId : undefined) ?? provider
+      if (retryAt.has(instance) || readProviderCooldown(db, provider, instance)?.active) continue
+      const agentId = `agent-${Math.max(0, ...roster.map(agent => Number(/^agent-(\d+)$/.exec(agent.id)?.[1]) || 0)) + 1}`
+      const spawned = await spawnTeammateSession(controller, name, agentId, provider, false, instance, { taskId: task.id, retire })
+      if (spawned.ok) {
+        notifyRunChanged(runId)
+        void dispatchTeammateWork(controller, agentId)
+      } else {
+        retryAt.set(instance, Date.now() + 30_000)
+      }
+      break
+    }
+    return true
+  })
 }
 
 const TEAM_IDLE_PING_PREFIX = 'Team idle:'
@@ -7231,6 +7474,7 @@ const SUPERVISION_PING_PREFIX = 'Supervision checkpoint:'
  */
 async function pingLeadIfTeamIdle(runId: string): Promise<void> {
   const db = await getDatabase()
+  if (!db.prepare("SELECT 1 FROM protocol_runs WHERE id = ? AND status = 'running'").get(runId)) return
   const agents = listAgentsSync(db, runId)
   const lead = agents.find((agent) => agent.role === 'lead')
   if (!lead) return
@@ -7252,12 +7496,14 @@ async function pingLeadIfTeamIdle(runId: string): Promise<void> {
     LIMIT 1
   `).get(runId, lead.id, `${TEAM_IDLE_PING_PREFIX}%`, cutoff) as Row | undefined
   if (recentPing) return
-  const summary = unfinished.map((task) => `${task.id} "${task.title}" (${task.status})`).join(', ')
+  const previewLimit = 8
+  const summary = unfinished.slice(0, previewLimit).map(task => `${task.id} "${task.title.slice(0, 80)}" (${task.status})`).join(', ')
+  const more = unfinished.length > previewLimit ? ` and ${unfinished.length - previewLimit} more` : ''
   const messageId = await enqueueWrite((tx) => insertMessageSync(tx, {
     runId,
     fromAgentId: 'coordinator',
     toAgentId: lead.id,
-    body: `${TEAM_IDLE_PING_PREFIX} the whole team is idle with ${unfinished.length} task${unfinished.length === 1 ? '' : 's'} not yet complete (${summary}). Reassign, unblock, fail, or finalize.`,
+    body: `${TEAM_IDLE_PING_PREFIX} the whole team is idle with ${unfinished.length} unfinished task${unfinished.length === 1 ? '' : 's'} (${summary}${more}). Inspect status and unblock or route work as appropriate.`,
     ts: nowIso(),
     kind: 'request',
     priority: 'urgent',
@@ -7278,6 +7524,7 @@ async function checkpointLeadSupervision(runId: string): Promise<void> {
   // Interactive readers already observe live state; a healthy checkpoint must
   // not spend a lead turn or consume the user's continuation allowance.
   if (db.prepare('SELECT 1 FROM protocol_interactive_sessions WHERE run_id = ?').get(runId)) return
+  if (!db.prepare("SELECT 1 FROM protocol_runs WHERE id = ? AND status = 'running'").get(runId)) return
   const agents = listAgentsSync(db, runId)
   const lead = agents.find((agent) => agent.role === 'lead')
   if (!lead) return
@@ -7292,6 +7539,10 @@ async function checkpointLeadSupervision(runId: string): Promise<void> {
   const tasks = listTasksSync(db, runId)
   if (!tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status))) return
   const cutoff = new Date(Date.now() - SUPERVISION_CHECKPOINT_MS).toISOString()
+  // A newly claimed lane has had no opportunity to make progress. In-process
+  // leads already receive blockers and handoffs independently of checkpoints.
+  if (controllers.has(runId) && !tasks.some(task =>
+    task.updatedAt <= cutoff && active.some(agent => agent.taskId === task.id))) return
   const recent = db.prepare(`
     SELECT 1 FROM protocol_messages
     WHERE run_id = ? AND to_agent_id = ? AND from_agent_id = 'coordinator'
@@ -7493,6 +7744,72 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 }
 
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
+const COORDINATOR_STREAM_METADATA_EVENTS = new Set([
+  'session', 'heartbeat', 'turn-accepted', 'opencode-status', 'opencode-todos',
+  'context-usage', 'turn-usage', 'codex-turn-spend',
+])
+const COORDINATOR_STREAM_METADATA_FRAMES = new Set(['session', 'session_info', 'usage', 'heartbeat'])
+
+function hasCoordinatorStreamOutput(wire: string): boolean {
+  for (const [, eventType, data] of wire.matchAll(/^(?:event: ([^\r\n]+)\r?\n)?data: ([^\r\n]+)\r?$/gm)) {
+    if (eventType && COORDINATOR_STREAM_METADATA_EVENTS.has(eventType)) continue
+    try {
+      const frame = JSON.parse(data!)
+      if (frame && typeof frame === 'object' && !Array.isArray(frame)
+        && !COORDINATOR_STREAM_METADATA_FRAMES.has(frame.type)) return true
+    } catch { /* Incomplete or non-JSON SSE frames supply no provider evidence. */ }
+  }
+  return false
+}
+
+async function recordCodexStreamSpend(agent: ProtocolAgent, wire: string, sessionId = agent.sessionId): Promise<void> {
+  if (agent.provider !== 'codex') return
+  for (const [, json] of wire.matchAll(/^event: codex-turn-spend\r?\ndata: ([^\r\n]+)\r?$/gm)) {
+    const frame = parseJsonObject<{ sessionId?: unknown; turnId?: unknown; usage?: ProtocolUsageReceipt; partial?: boolean }>(json)
+    if (frame?.sessionId !== sessionId || typeof frame.turnId !== 'string' || !frame.turnId || !frame.usage) continue
+    const delta: ProtocolUsageReceipt = {}
+    for (const key of ['totalTokens', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
+      const value = frame.usage[key]
+      if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) delta[key] = value
+    }
+    if (!delta.totalTokens) continue
+    // The same turn can be observed again after delivery reconciliation.
+    const eventId = createHash('sha256').update(JSON.stringify([
+      'codex-turn-spend', agent.runId, agent.id, agent.providerInstanceId ?? agent.provider, sessionId, frame.turnId,
+    ])).digest('hex')
+    await enqueueWrite(db => {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        if (!db.prepare('SELECT 1 FROM protocol_events WHERE id = ?').get(eventId)) {
+          insertEventSync(db, {
+            version: AGENT_PROTOCOL_VERSION,
+            runId: agent.runId,
+            agentId: agent.id,
+            type: 'usage.observed',
+            taskId: agent.taskId,
+            summary: `Codex turn usage observed: ${delta.totalTokens} tokens`,
+            payload: { delta, source: 'codex-app-server', turnId: frame.turnId, partial: frame.partial === true },
+          }, eventId)
+          if (agent.taskId) {
+            const row = db.prepare('SELECT receipt_json FROM protocol_tasks WHERE run_id = ? AND id = ?')
+              .get(agent.runId, agent.taskId) as Row | undefined
+            const receipt = parseJsonObject<ProtocolTaskReceipt>(row?.receipt_json)
+            if (receipt) {
+              receipt.usage = nativeTaskUsageSync(db, agent.runId, agent.taskId)
+              db.prepare('UPDATE protocol_tasks SET receipt_json = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+                .run(JSON.stringify(receipt), nowIso(), agent.runId, agent.taskId)
+            }
+          }
+          refreshRunArtifactsSync(db, agent.runId)
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    })
+  }
+}
 
 // Mirrors bin/agent-viewer-coord-worker.mjs's classifyProviderFailure: a
 // richer failure taxonomy than a flat 'provider_failure' bucket lets
@@ -7611,7 +7928,7 @@ function findActiveCoordinatorAgentBySessionSync(db: SqliteDatabase, sessionId: 
  * Tee only active internal Coordinator sessions and consume the observation
  * branch asynchronously so the caller's SSE stream remains unchanged.
  */
-export async function observeCoordinatorSessionTurn(sessionId: string, response: Response): Promise<Response> {
+export async function observeCoordinatorSessionTurn(sessionId: string, response: Response, observeSpend = true): Promise<Response> {
   if (!response.body) return response
   const db = await getDatabase()
   let row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
@@ -7653,6 +7970,7 @@ export async function observeCoordinatorSessionTurn(sessionId: string, response:
           else await recordProtocolEvent(event)
         }
       }
+      if (observeSpend) await recordCodexStreamSpend(agent, buffer, sessionId)
     } catch {
       // Observation is best-effort and must never break the provider stream.
       await reader.cancel().catch(() => {})
@@ -8069,7 +8387,7 @@ export async function withCooperativeInbox(
     }
     if (!response.body) throw new Error('Provider returned no stream; delivery needs reconciliation')
     await enqueueWrite(tx => tx.prepare("UPDATE protocol_chat_delivery SET state = 'streaming' WHERE session_id = ? AND batch_id = ?").run(sessionId, batch.id))
-    const observed = await observeCoordinatorSessionTurn(sessionId, response)
+    const observed = await observeCoordinatorSessionTurn(sessionId, response, false)
     const [client, audit] = observed.body!.tee()
     streamOwned = true
     void (async () => {
@@ -8077,6 +8395,7 @@ export async function withCooperativeInbox(
       let contentObserved = false
       let buffer = ''
       let eventType = ''
+      let spendFrame: string | undefined
       const decoder = new TextDecoder()
       const reader = audit.getReader()
       try {
@@ -8091,6 +8410,10 @@ export async function withCooperativeInbox(
             if (!line.startsWith('data:')) continue
             const text = line.slice(5).trim()
             if (!text || text === '[DONE]') continue
+            if (eventType === 'codex-turn-spend') {
+              spendFrame = `event: codex-turn-spend\ndata: ${text}\n\n`
+              continue
+            }
             try {
               const frame = JSON.parse(text)
               if (frame.error || frame.type === 'error' || frame.type === 'codex_error' || frame.is_error === true
@@ -8100,6 +8423,7 @@ export async function withCooperativeInbox(
           }
           if (done) break
         }
+        if (spendFrame) await recordCodexStreamSpend(agent, spendFrame, sessionId)
         if (!contentObserved) failed = true
         await enqueueWrite(tx => {
           if (failed) tx.prepare("UPDATE protocol_chat_delivery SET state = 'uncertain' WHERE session_id = ? AND batch_id = ?").run(sessionId, batch.id)
@@ -8783,6 +9107,8 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
   let buffer = ''
   let realized = false
   let failure: ProviderTurnFailure | null = null
+  const expectsStreamEvidence = /^text\/event-stream(?:;|$)/i.test(response.headers.get('content-type') ?? '')
+  let streamEvidence = false
   const seen = new Set<string>()
   const seenSdkEvidence = new Set<string>()
   const coordinatorTaskId = agent.taskId
@@ -8830,6 +9156,7 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
       }
       buffer += decoder.decode(value, { stream: true })
       if (buffer.length > 250_000) buffer = buffer.slice(-120_000)
+      if (expectsStreamEvidence && !streamEvidence) streamEvidence = hasCoordinatorStreamOutput(buffer)
 
       // Pending sessions realize their real id mid-turn — later steers and
       // interrupts must target it.
@@ -8911,6 +9238,10 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
       ])
     }
   }
+  if (!failure && expectsStreamEvidence && !streamEvidence) {
+    failure = classifyProviderTurnFailure('Provider stream closed without turn output after submission')
+  }
+  await recordCodexStreamSpend(agent, buffer, controller.sessionIds.get(agent.id) ?? agent.sessionId)
   return failure
 }
 
@@ -9016,6 +9347,7 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
         return
       }
       const receipt: ProtocolTaskReceipt = {
+        requiresIntegration: await isolatedResultRequiresIntegration(agent),
         requestedProvider: task.requestedProvider,
         requestedProviderInstanceId: task.requestedProviderInstanceId,
         requestedModel: task.requestedModel,
@@ -9349,6 +9681,18 @@ async function dispatchAgentTurn(
       ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(agent.taskId, controller.runId) as Row | undefined
       : undefined
     const task = activeTaskRow ? rowToTask(activeTaskRow) : null
+    if (task?.blockedBy.length) {
+      const tasksById = new Map(listTasksSync(db, controller.runId).map(entry => [entry.id, entry]))
+      const integration = dependencyIntegrationBlockerSync(db, task, tasksById, agent.worktreePath)
+      if (integration) {
+        providerFailureHandled = true
+        await recordProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION, runId: controller.runId, agentId: agent.id,
+          type: 'agent.blocked', taskId: task.id, summary: integration,
+        })
+        return
+      }
+    }
     const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
     if (!runRow) return
     const run = rowToRun(runRow)
@@ -9389,17 +9733,22 @@ async function dispatchAgentTurn(
     await resolveProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider)
     // An ACP agent is offered its coord_* tools as an MCP server and is free to
     // ignore it — GitHub Copilot's ACP mode never starts a stdio server it is
-    // handed. The shell client reaches the same bridge as the same participant,
-    // so the teammate has a way in whichever the agent honours.
-    const sdkIdentity = agent.provider === 'acp' ? controller.sdkIdentities.get(agent.id) : undefined
+    // handed. Codex can also encounter an unbound external MCP client. The
+    // shell fallback reaches the bridge as this exact managed participant.
+    let renderedMessage = message
+    const sdkIdentity = agent.provider === 'acp' || agent.provider === 'codex' ? controller.sdkIdentities.get(agent.id) : undefined
     if (sdkIdentity) {
-      const client = await writeCoordinatorSessionClient(path.join(DATA_DIR, 'session-bindings'), await getCoordinatorBridgeUrl(), sdkIdentity)
-      // Its calls through that client need no person: each is authorized by the
-      // Coordinator as this participant. Matched on the exact command, never on
-      // a title, which is the agent's own prose ("Check coordinator run status").
-      setAcpPermissionRule(sessionId, request => request.toolCall.kind === 'execute'
-        && isCoordinatorClientInvocation((request.toolCall.rawInput as { command?: unknown } | null | undefined)?.command, client))
-      message += `\nHost-supplied session client, for when coord_* tools are absent from this session: ${client} TOOL_NAME 'JSON_ARGUMENTS'. For example coord_status with {}, or coord_complete_task with {"task_id":"…","summary":"…","request_id":"unique-stable-key"}. Give every mutation a unique request_id and reuse it unchanged after an uncertain result. The binding is private; do not read or print it.`
+      const client = await getCoordinatorBridgeUrl()
+        .then(url => writeCoordinatorSessionClient(path.join(DATA_DIR, 'session-bindings'), url, sdkIdentity))
+        .catch(() => null)
+      if (client) {
+        // ACP permission is scoped to the exact authenticated client invocation.
+        if (agent.provider === 'acp') {
+          setAcpPermissionRule(sessionId, request => request.toolCall.kind === 'execute'
+            && isCoordinatorClientInvocation((request.toolCall.rawInput as { command?: unknown } | null | undefined)?.command, client))
+        }
+        renderedMessage += `\nHost-supplied session client, for when coord_* tools are absent or unbound: ${client} TOOL_NAME 'JSON_ARGUMENTS'. For example coord_status with {"view":"actionable"}, or coord_complete_task with {"task_id":"…","summary":"…","request_id":"unique-stable-key"}. Reuse the same request_id after an uncertain result. The binding is private; do not read or print it.`
+      }
     }
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
@@ -9412,12 +9761,40 @@ async function dispatchAgentTurn(
     // Persist submission before calling the provider: a crash across this call
     // is uncertain even when no response was observed locally.
     await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'submitted'))
+    let embeddedAssignmentMail: string[] = []
+    if (agent.role === 'teammate' && task && activeTaskRow && controller.sdkIdentities.has(agent.id)) {
+      const current = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+        .get(controller.runId, task.id) as Row | undefined
+      if (current?.owner_agent_id === agent.id && current.claim_generation === activeTaskRow.claim_generation
+        && ['claimed', 'planning', 'in_progress', 'blocked'].includes(String(current.status))) {
+        const grantedPaths = (db.prepare(`SELECT path FROM protocol_locks WHERE run_id = ? AND task_id = ?
+          AND agent_id = ? AND status = 'active' AND mode = 'write' AND lease_expires_at > ? ORDER BY path`)
+          .all(controller.runId, task.id, agent.id, nowIso()) as Row[]).map(lock => String(lock.path))
+        const currentTask = rowToTask(current)
+        const brief = sdkAssignmentBrief(currentTask, grantedPaths, opts.permissionMode === 'plan')
+        const coveredBody = brief && currentTask.paths.every(path => grantedPaths.includes(path))
+          ? delegationMailBody(task.id, currentTask.title, currentTask.prompt, currentTask.paths, currentTask.verifyCommands)
+          : null
+        const mailbox = db.prepare(`SELECT id, delivered_at IS NULL AS unread,
+          reply_required = 1 AND resolved_at IS NULL AS reply_owed,
+          delivered_at IS NULL AND kind = 'request' AND reply_required = 0 AND
+          correlation_id = ? AND body = ? AS embedded
+          FROM protocol_messages WHERE run_id = ? AND to_agent_id = ?
+          AND (delivered_at IS NULL OR (reply_required = 1 AND resolved_at IS NULL))`)
+          .all(`coordinator-assignment:${task.id}`, coveredBody, controller.runId, agent.id) as Row[]
+        embeddedAssignmentMail = mailbox.filter(row => row.embedded).map(row => String(row.id))
+        renderedMessage += '\n\n' + formatSdkAssignment({
+          task: currentTask, brief, unread: mailbox.some(row => row.unread && !row.embedded),
+          deliveredReplyRequired: mailbox.some(row => row.reply_owed && !row.unread),
+        })
+      }
+    }
     const response = await withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, () => streamViewSessionTurn({
       sessionId,
       signal: new AbortController().signal,
       provider: agent.provider,
       body: {
-        message,
+        message: renderedMessage,
         provider: agent.provider,
         cwd: agent.worktreePath,
         isPendingSession: isPending ? true : undefined,
@@ -9446,9 +9823,8 @@ async function dispatchAgentTurn(
       return
     }
     // Legacy preambles contain this exact inbox batch, so acceptance delivers
-    // it. SDK tick prompts only instruct the agent to call coord_read_inbox:
-    // leave those messages unread until that tool (or live steering) delivers
-    // them. Keep the in-flight reservation to avoid duplicate startup steers.
+    // it. SDK prompts leave regular mail for the inbox tool or live steering.
+    // Their embedded assignment notices are acknowledged only after settlement.
     if (opts.inboxMessageIds?.length && !controller.sdkIdentities.has(agent.id)) {
       await enqueueWrite((tx) => acknowledgeInboxSync(tx, controller.runId, agent.id, opts.inboxMessageIds!))
     }
@@ -9458,7 +9834,10 @@ async function dispatchAgentTurn(
       providerFailureHandled = true
       retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure, { allowSameProviderRetry: false }) === 'retry'
     } else {
-      await enqueueWrite(tx => updateExecutionAttempt(tx, executionAttemptId!, 'settled'))
+      await enqueueWrite(tx => {
+        updateExecutionAttempt(tx, executionAttemptId!, 'settled')
+        acknowledgeInboxSync(tx, controller.runId, agent.id, embeddedAssignmentMail)
+      })
       dispatchSettled = true
       controller.sameProviderRetries.delete(agent.id)
     }
@@ -9638,6 +10017,9 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   }
 
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
+  if (!task && !note && !inbox.length && !db.prepare(`SELECT 1 FROM protocol_messages
+      WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL LIMIT 1`)
+    .get(controller.runId, agentId)) return
   controller.dispatchNotes.delete(agentId)
   const message = controller.sdkIdentities.has(agentId)
     ? buildSdkToolsTickPrompt({ runId: controller.runId, agent, cwd: agent.worktreePath, note })
@@ -9748,15 +10130,17 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
   await enqueueWrite((tx) => {
     setAgentStatusSync(tx, controller.runId, agentId, 'done', nowIso())
   })
-  await recordProtocolEvent({
-    version: AGENT_PROTOCOL_VERSION,
-    runId: controller.runId,
-    agentId,
-    type: 'message',
-    to: 'lead',
-    summary: `${agent.name} finished — no claimable tasks remain.`,
-    payload: { kind: controller.interactiveLeadId ? 'status' : 'request' },
-  })
+  if (!await staffMissingPinnedLane(controller)) {
+    await recordProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId: controller.runId,
+      agentId,
+      type: 'message',
+      to: 'lead',
+      summary: `${agent.name} finished — no claimable tasks remain.`,
+      payload: { kind: controller.interactiveLeadId ? 'status' : 'request' },
+    })
+  }
   await dispatchClaimableLeadTask(controller)
   await maybeStartSynthesis(controller)
 }
@@ -9978,14 +10362,18 @@ async function spawnTeammateSession(
   teammateProvider: ProtocolRun['provider'],
   reserveForDelegation = false,
   requestedInstanceId?: string,
+  assignment?: { taskId: string; retire?: ProtocolAgent },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const db = await getDatabase()
   const lead = listAgentsSync(db, controller.runId).find(agent => agent.role === 'lead')
-  const instance = await resolveProviderInstance(requestedInstanceId ?? (lead?.provider === teammateProvider ? lead.providerInstanceId : teammateProvider), teammateProvider)
   const ts = nowIso()
+  let instance: Awaited<ReturnType<typeof resolveProviderInstance>>
   let workspace: WorktreeTask | { path: string; branch: string } | null = null
   let session: Awaited<ReturnType<typeof createNewViewSession>>
+  let prepared: { sessionId: string; provider: AgentProvider; instanceId: string } | undefined
+  let token: string | undefined
   try {
+    instance = await resolveProviderInstance(requestedInstanceId ?? (lead?.provider === teammateProvider ? lead.providerInstanceId : teammateProvider), teammateProvider)
     noteKeyedSideEffect()
     workspace = controller.useWorktrees
       ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
@@ -9996,8 +10384,42 @@ async function spawnTeammateSession(
       title: `${controller.title ?? 'Coordinated run'} · ${name}`,
       codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools('teammate') : undefined,
     }))
+    prepared = { sessionId: session.sessionId, provider: session.provider, instanceId: instance.id }
     assertCoordinatorSessionInstanceSync(db, session.sessionId, instance.id)
+    const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
+    token = await enqueueWrite(tx => {
+      tx.exec('BEGIN IMMEDIATE')
+      try {
+        if (assignment) {
+          const row = tx.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+          if (!row || controller.stopped || controllers.get(controller.runId) !== controller) throw new Error('The run changed during staffing')
+          const run = rowToRun(row)
+          if (run.status !== 'running' || foreignInteractiveHostSync(tx, run.id) || budgetExceededReasonSync(tx, run)
+            || readProviderCooldown(tx, teammateProvider, instance.id)?.active) throw new Error('The run or provider is paused')
+          if (assignment.retire) retireIdleTeammateSync(tx, controller, assignment.retire)
+          const count = Number((tx.prepare("SELECT COUNT(*) AS n FROM protocol_agents WHERE run_id = ? AND status NOT IN ('stopped', 'failed')").get(run.id) as Row).n)
+          if (count >= run.maxAgents) throw new Error('A teammate filled this slot during startup')
+        }
+        assertCoordinatorSessionInstanceSync(tx, session.sessionId, instance.id)
+        tx.prepare(`INSERT INTO protocol_agents (
+          id, run_id, name, role, provider, provider_instance_id, session_id, worktree_path, worktree_branch,
+          task_id, status, last_seen_at, created_at, updated_at
+        ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)`)
+          .run(agentId, controller.runId, name, session.provider, instance.id, session.sessionId, workspace!.path, workspace!.branch, ts, ts)
+        const claim = reserveForDelegation ? null : claimTaskSync(tx, controller.runId, agentId, assignment?.taskId)
+        if (assignment && !claim) throw new Error('The pinned task is no longer claimable')
+        const credential = canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
+        tx.exec('COMMIT')
+        return credential
+      } catch (error) { tx.exec('ROLLBACK'); throw error }
+    })
   } catch (err) {
+    if (assignment && prepared && !db.prepare('SELECT 1 FROM protocol_agents WHERE session_id = ? LIMIT 1').get(prepared.sessionId)) {
+      const candidate = prepared
+      const backend = await import('./sessionBackend')
+      await withProviderInstance(candidate.instanceId, candidate.provider, () =>
+        backend.closeViewSession(candidate.sessionId, candidate.provider)).catch(() => {})
+    }
     // Session creation happens after the isolated checkout is registered.
     // If the provider cannot create a session, tear that checkout back down
     // here because no protocol_agents row exists for the normal run cleanup
@@ -10015,19 +10437,14 @@ async function spawnTeammateSession(
     }).catch(() => {})
     return { ok: false, error }
   }
-  if (!workspace) return { ok: false, error: 'No workspace available' }
-  const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
-  const token = await enqueueWrite((tx) => {
-    assertCoordinatorSessionInstanceSync(tx, session.sessionId, instance.id)
-    tx.prepare(`
-      INSERT INTO protocol_agents (
-        id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
-      ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
-    `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
-    tx.prepare('UPDATE protocol_agents SET provider_instance_id = ? WHERE run_id = ? AND id = ?').run(instance.id, controller.runId, agentId)
-    if (!reserveForDelegation) claimTaskSync(tx, controller.runId, agentId)
-    return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
-  })
+  const retired = assignment?.retire
+  if (retired) {
+    unregisterCoordinatorToolsForProvider(retired.provider, retired.sessionId, retired.providerInstanceId)
+    controller.sessionIds.delete(retired.id)
+    controller.sdkIdentities.delete(retired.id)
+    controller.pendingSessions.delete(retired.id)
+    controller.dispatchNotes.delete(retired.id)
+  }
   if (token) {
     const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token, role: 'teammate' }
     registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity, instance.id)
@@ -10057,17 +10474,49 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
     tasks = listTasksSync(db, controller.runId)
   }
 
-  const teammateCount = Math.max(1, Math.min(controller.maxAgents - 1, tasks.length))
-  const existingTeammates = listAgentsSync(db, controller.runId).filter(agent => agent.role === 'teammate')
+  const teammateTasks = tasks.filter(task => task.targetRole !== 'lead' && task.seat !== 'director'
+    && !['completed', 'failed', 'cancelled'].includes(task.status))
+  const teammateCount = Math.min(controller.maxAgents - 1, teammateTasks.length)
+  const activeRoster = listAgentsSync(db, controller.runId).filter(agent => !['failed', 'stopped'].includes(agent.status))
+  const existingTeammates = activeRoster.filter(agent => agent.role === 'teammate')
+  const lead = activeRoster.find(agent => agent.role === 'lead')
+  const defaultInstance = (provider: AgentProvider) => provider === lead?.provider ? lead.providerInstanceId ?? provider : provider
+  const occupiedRoutes = new Set(existingTeammates.map(agent => agent.providerInstanceId ?? agent.provider))
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const locks = activeRunLocksSync(db, controller.runId)
+  const ready = teammateTasks.filter(task => task.status === 'pending' && !task.ownerAgentId
+    && taskDepsCompleted(task, tasksById) && !findTaskLockConflict(task, locks, ''))
+  const readyIds = new Set(ready.map(task => task.id))
+  const ranked = [...ready, ...teammateTasks]
+  const pinnedInstances = new Map<AgentProvider, string>()
+  for (const task of ranked) {
+    if (task.requestedProvider && task.requestedProviderInstanceId && !pinnedInstances.has(task.requestedProvider)) {
+      pinnedInstances.set(task.requestedProvider, task.requestedProviderInstanceId)
+    }
+  }
+  const routes = new Map<string, AgentProvider>()
+  for (const task of ranked) {
+    const provider = task.requestedProvider
+    if (!provider || (!task.requestedProviderInstanceId && existingTeammates.some(agent => agent.provider === provider))) continue
+    const instanceId = task.requestedProviderInstanceId ?? pinnedInstances.get(provider) ?? defaultInstance(provider)
+    if (!occupiedRoutes.has(instanceId)) routes.set(instanceId, provider)
+  }
+  const missingRoutes = [...routes.entries()]
   for (let index = existingTeammates.length; index < teammateCount; index += 1) {
     if (controller.stopped) return
     const roster = listAgentsSync(db, controller.runId)
     const name = availableTeammateName(roster, controller.sessionIds)
     if (!name) break
-    const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
+    const pinned = missingRoutes.shift()
+    // After reserving distinct pins, repeat a ready lane's provider if the
+    // remaining runnable work calls for more capacity on that route.
+    const next = listTasksSync(db, controller.runId).find(task => readyIds.has(task.id)
+      && task.status === 'pending' && !task.ownerAgentId)
+    const teammateProvider = pinned?.[1] ?? next?.requestedProvider
+      ?? controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
     const usedNumbers = roster.map(agent => Number(/^agent-(\d+)$/.exec(agent.id)?.[1]) || 0)
     const agentId = `agent-${Math.max(0, ...usedNumbers) + 1}`
-    await spawnTeammateSession(controller, name, agentId, teammateProvider)
+    await spawnTeammateSession(controller, name, agentId, teammateProvider, false, pinned?.[0] ?? next?.requestedProviderInstanceId)
   }
 
   await enqueueWrite((tx) => {

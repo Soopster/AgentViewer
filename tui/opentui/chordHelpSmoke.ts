@@ -73,8 +73,13 @@ for (const entry of unprefixed) {
 }
 
 const commandHint = chordHintText(COMMAND_CHORD_MAP)
-for (const key of Object.keys(PORTABLE_COMMAND_CHORDS)) {
-  assert.ok(commandHint.includes(key), `The pending-⌃K hint must list ${key}`)
+// Keys are matched as hint tokens ("z focus"), not as letters: every letter
+// appears somewhere in the hint's words, so a substring check proved nothing.
+const hintKeys = new Set(commandHint.split(/\s{2,}/).map((token) => token.split(' ')[0]))
+for (const [key, entry] of Object.entries(PORTABLE_COMMAND_CHORDS)) {
+  // An entry that opts out (the hint is full) is still in the overlay and the unknown-key notice above.
+  if (entry.hint === false) assert.ok(!hintKeys.has(key), `⌃K ${key} opted out of the hint but is listed in it`)
+  else assert.ok(hintKeys.has(key), `The pending-⌃K hint must list ${key}`)
 }
 assert.ok(commandHint.includes('cancel'), 'A pending chord must always say how to escape it')
 

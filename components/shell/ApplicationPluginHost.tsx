@@ -15,6 +15,7 @@ import { isPluginEnabled } from '../../lib/plugins/enablement'
 import type { WebPluginServices } from './pluginTypes'
 import { useWebShellOverview, readGit, type WebShellActions } from './shellOverviewService'
 import { webProof } from './proofService'
+import { webFocus } from './focusService'
 
 const NO_SHELL_ACTIONS: WebShellActions = { openPalette: () => {}, newSession: () => {} }
 import type { PluginApplicationServices } from '../../lib/plugins/application'
@@ -86,13 +87,13 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
     answer: (target, permissionId, answers) => postSession(target, 'actions', { action: 'respondQuestion', permissionId, answers }).then(() => {}),
   }, notifications: {
     ...webNotifications.service,
-    notice: showNotice,
+    notice: (text, options) => { webNotifications.service.show('info', text, { urgent: options?.urgent }) },
     desktop: (title, body) => {
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try { new Notification(`agent-viewer · ${title}`, { body }) } catch { /* host unavailable */ }
       }
     },
-  } }), [showNotice])
+  }, focus: webFocus }), [showNotice])
   // A draft waits until its session is the selected one, so it cannot land in another composer.
   const [pendingDraft, setPendingDraft] = useState<{ key: string | null; text: string } | null>(null)
   const selectedKey = selectedSession ? sessionIdentityKey(selectedSession) : null

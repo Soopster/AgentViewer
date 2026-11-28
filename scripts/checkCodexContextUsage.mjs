@@ -4,6 +4,7 @@ import {
   advanceCodexTurnOutputUsage,
   mapCodexTokenUsageToContextUsage,
 } from '../lib/codexMapper.ts'
+import { createCodexTurnSpend } from '../lib/codexTurnSpend.ts'
 
 const currentContext = {
   totalTokens: 113_250,
@@ -72,5 +73,24 @@ const coldTurnUsage = advanceCodexTurnOutputUsage({
   modelContextWindow: 258_400,
 })
 assert.equal(coldTurnUsage.outputTokens, 125, 'a cold stream should fall back to the latest model-pass usage')
+
+const breakdown = (inputTokens, cachedInputTokens, outputTokens) => ({
+  totalTokens: inputTokens + outputTokens, inputTokens, cachedInputTokens, outputTokens,
+  reasoningOutputTokens: 0, cacheWriteInputTokens: 0,
+})
+const firstRequest = breakdown(120, 80, 15)
+const firstReport = { total: breakdown(1120, 580, 215), last: firstRequest, modelContextWindow: 10000 }
+const secondReport = { total: breakdown(1290, 700, 240), last: breakdown(170, 120, 25), modelContextWindow: 10000 }
+const warmSpend = createCodexTurnSpend(breakdown(1000, 500, 200))
+const coldSpend = createCodexTurnSpend()
+for (const tracker of [warmSpend, coldSpend]) {
+  for (const report of [firstReport, secondReport, secondReport]) tracker.observe(report)
+}
+const expectedSpend = { totalTokens: 330, inputTokens: 90, outputTokens: 40, cacheReadTokens: 200, cacheWriteTokens: 0 }
+assert.deepEqual(warmSpend.result(), { usage: expectedSpend, partial: false })
+assert.deepEqual(coldSpend.result(), { usage: expectedSpend, partial: true })
+warmSpend.observe({ ...firstReport, total: firstRequest })
+assert.equal(warmSpend.result().usage.totalTokens, 465, 'a reset counts only the current request')
+assert.equal(warmSpend.result().partial, true)
 
 console.log('Codex context usage checks passed')

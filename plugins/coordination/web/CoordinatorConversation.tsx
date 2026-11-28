@@ -10,6 +10,7 @@ import type { Session } from '@/lib/types'
 import type { ProtocolRunBudget, RunPlaybook, ProtocolAgent, ProtocolRunSnapshot } from '@/lib/agentProtocol'
 import { coordinatorAttention, type CoordinatorAttentionItem } from '@/lib/coordinatorAttention'
 import { describeRunRollup } from '@/lib/coordinatorRollup'
+import { holdDelivery } from '@/lib/plugins/deliveryGate'
 import { COORDINATOR_NOTIFICATION_DELAY_MS, coordinatorResultIdsForAgent, coordinatorSignals, coordinatorSignalSuppressed, newCoordinatorSignals } from '@/lib/coordinatorSignals'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -109,6 +110,8 @@ export default function CoordinatorConversation({ session, playbooksService, onI
         const current = fresh.filter(signal => signalBaseline?.has(signal.id))
         if (disposed || !current.length || coordinatorSignalSuppressed(!document.hidden, document.hasFocus())) return
         for (const signal of current.slice(0, 3)) {
+          // A finished teammate can wait out a focus block; one that needs the lead cannot.
+          if (holdDelivery({ channel: 'desktop', urgent: signal.kind !== 'finished', title: `Teammates · ${signal.title}`, detail: signal.detail, source: 'coordination', ...(session.provider ? { target: { provider: session.provider, sessionId: session.sessionId, ...(session.providerInstanceId ? { providerInstanceId: session.providerInstanceId } : {}) } } : {}) })) continue
           try { new Notification(signal.title, { body: signal.detail.slice(0, 160), tag: `coordinator:${signal.id}` }) } catch { /* Unsupported context. */ }
         }
       }, COORDINATOR_NOTIFICATION_DELAY_MS)

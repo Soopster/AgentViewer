@@ -25,6 +25,7 @@ function CheckpointsSurface({ services, target, theme, accent, width, height, pl
       onKeyHandlerReady={registerKeys}
       onDetach={detach}
       focusPrompt={target.turn ?? null}
+      secondOpinion={services['second-opinion']}
       // A window's history opens as a window beside it; an overlay's, over it.
       onOpenFileHistory={fileHistory ? (path) => fileHistory.open(path, overlay ? 'overlay' : 'window') : undefined}
     />

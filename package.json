@@ -145,6 +145,8 @@
     "chiefofstaff:smoke": "bun run ./scripts/chiefOfStaffSmoke.ts",
     "schedules:smoke": "bun run ./scripts/scheduleCronSmoke.ts && bun run ./scripts/scheduleEngineSmoke.ts && bun run ./scripts/scheduleDeclaredSmoke.ts && bun run ./scripts/scheduleSlashSmoke.ts && node ./scripts/scheduleCliSmoke.mjs",
     "routes:smoke": "bun run ./scripts/routeScopeSmoke.ts",
+    "secondopinion:smoke": "bun run ./scripts/secondOpinionSmoke.ts && bun run ./tui/opentui/secondOpinionSmoke.tsx && bun run ./tui/opentui/checkpointOpinionSmoke.tsx",
+    "focus:smoke": "bun run ./scripts/focusModeSmoke.ts && bun run ./tui/opentui/focusModeSmoke.tsx",
     "session:cli:smoke": "node ./scripts/sessionCliSmoke.mjs && bun run ./scripts/sessionSeenSmoke.ts && bun run ./scripts/sessionReportsSmoke.ts && bun run ./scripts/terminalAgentDetectSmoke.ts"
   },
   "dependencies": {

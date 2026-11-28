@@ -2851,6 +2851,78 @@ repo root → session), else creates one, ships assets, and calls `configureInte
 `npm run chiefofstaff:smoke` and `tui/opentui/chiefOfStaffViewSmoke.tsx`. Not verified live: a real `/cos` delegation to a teammate and a real
 Edit denial. Not checked by mutation: the new smokes.
 
+### Second Opinion (`lib/secondOpinion/`, `plugins/second-opinion`) (load-bearing)
+
+Another model reviews one agent turn's diff: the turn's checkpoint to the next one in the same worktree, or to the working
+tree for the newest turn (whose review goes `stale` once the tree moves). A Claude turn goes to Codex and anything else to
+Claude (`defaultReviewerFor`), unless the repository picks one. Palette, session menu and ⌃K i (`hint: false`: the pending-⌃K
+hint is at its width budget, so it is listed in ⌃K ? only — `chordHelpSmoke` now checks hint keys as tokens and honours the opt-out).
+**⇧U shows the findings** through the optional `second-opinion` service: a verdict on each reviewed turn, each finding under the
+diff line it starts at (`placeFindingsInDiff`), and the newest turn's findings on working hunks and untracked files. Placement
+requires the open diff to cover exactly the reviewed range (`findingsForRange`): another range numbers lines differently.
+A session-pinned panel lists that session's turns; `s` (web: All turns) widens it to the repository.
+
+- **Every location is cut from the real diff** (`normalizeSecondOpinion`, ported from the PR guide): a finding naming a file or
+  range the diff does not contain is dropped, and so is a finding left pointing at nothing. A plausible invented finding is the failure.
+- **Codex runs `codex exec --ephemeral --sandbox read-only` in an empty temp directory**, prompt on stdin, argv only
+  (`codexReviewArgs`): the diff in its prompt is all it can read. Never pass the flag that persists project trust.
+  A missing CLI (`ReviewerUnavailableError`) falls back to the other reviewer and the record says so (`fellBackFrom`).
+- **Checkpoints exclude `.agent-viewer-data/`** (`SNAPSHOT_PATHSPEC` in `lib/checkpoints.ts`: snapshots, diffs, changes, the
+  working review and commit). In a repository that did not ignore it, every checkpoint held the app's databases, a restore
+  rewrote them and the review offered them for deletion — found live. The diff the reviewer reads filters it too, and a
+  newest-turn review is stale by a signature of that filtered diff, not the tree (writing the review must not stale it).
+- **The store is shared by processes, so writes take a lock file** (`withFileLock`). A TUI and a daemon doing read-modify-write
+  without it lost a whole review, measured live. An unusable reply is asked for once more before it fails.
+- **Auto-review is per repository and off by default** (it spends model usage); the `afterTurn` hook reviews the session's newest
+  checkpoint in the background and posts a viewer-attention note for bug/risk findings. Reviewing by hand takes two presses.
+
+`npm run secondopinion:smoke` (real repository and checkpoints, fake `codex` on PATH; excerpt filter, empty cwd, fallback and
+the two-press confirm, ⇧U placement and the checkpoint exclusions verified by mutation). Checked live: Claude and Codex
+reviews; the panel and ⇧U in the real TUI (PTY); the web panel and a review run from it (headless Chrome over CDP — load the
+dev server as `localhost`: it refuses its own scripts to `127.0.0.1`); auto-review firing on a real Claude turn.
+
+### Focus Mode (`lib/plugins/deliveryGate.ts`, `lib/focus/`, `plugins/focus-mode`) (load-bearing)
+
+A timed block (`/focus 45m`, `/focus off`, the panel's 1/2/3) during which interruptions that can wait are held and shown as one
+digest when it ends. **Every interruption path passes `holdDelivery`**: the notification center's `show` (toasts, island),
+the application host's `notice`/`desktop` wrappers (session alerts and every application plugin), and the TUI's teammate alerts.
+A new path that skips it interrupts a focus block. **Urgent is never offered to the gate**: warnings, errors, `urgent: true`
+(session alerts pass it for needs-input), and teammates that need the lead. The block is one file (`.agent-viewer-data/focus.json`,
+`/api/focus`) shared by TUI and web; held items are batched to it, never dropped on a failed write. A block past its end holds
+nothing even before it is settled, and a digest from before launch is never replayed. Web teammate desktop alerts pass the
+gate too (`CoordinatorConversation`), and held session alerts carry their session so ⏎ opens it. ⌃K z (`hint: false`).
+
+`npm run focus:smoke` (four mutations verified: warnings held, urgent notice held, launch replay, extend dropping held items).
+
+### Agent memory (`lib/project-memory/`, `plugins/project-memory`) (load-bearing)
+
+Agents keep a memory per project across sessions and providers, in the same store and panel as the notes people
+write and approve. Agent notes are recalled with no approval step. People can edit them (which makes the note theirs,
+and puts it back into review), delete them, or turn agent memory off for the project (`m` in the TUI panel, a checkbox
+on the web; `agentMemory`, which is on when the field is missing).
+
+- **There are two write paths, because in-app sessions have no MCP bridge.** An in-app turn learns the protocol on its
+  first turn and writes `<memory title="…" kind="…">…</memory>` / `<forget title="…"/>` in its reply. The `afterTurn`
+  hook saves the tags, keyed on the reply's message uuid, so a turn observed twice saves once. Tags inside code fences or
+  inline code are not memories. An agent in another program gets the `project_memory_recall|remember|forget` plugin
+  tools. The bridge sends its own project directory (`bridgeCwd`) with each call, and handlers receive it as
+  `context.cwd`; a `project` argument overrides it.
+- **Recall is per session, not per turn.** A session's first turn in this process gets the protocol and an index of
+  titles. Every turn gets the bodies of matching notes that session has not been shown (`id@version`), and nothing when
+  there are none, so a long conversation does not collect copies. An updated note counts as new.
+- **An agent upserts by title and only ever touches its own notes.** Remembering a title that is already used (case and
+  whitespace ignored) updates that note. A person's note with the same title is left alone. Forgetting a person's note is
+  refused. Agent notes are capped at `AGENT_NOTE_LIMIT` (200); past that a write is refused with a way forward, and
+  nothing is evicted.
+- **The store is keyed on the repository root**, so worktrees and subdirectories share one memory. A store kept under
+  the exact directory, from before this change, is still used when the repository has none. Projects with no store are
+  answered by `peek`, which creates nothing.
+- The injected block and the tags are drawn as cards through the manifest's `blocks`. The recalled block comes first
+  and swallows the protocol text inside it.
+
+`npm run project-memory:smoke` covers all of this against a real git repository and worktree. Dropping the
+per-session dedupe, dropping the person-note guard, and keying on cwd were each verified to fail it.
+
 ### Remote access
 
 Opt-in pairing for a phone or a second browser, off by default. `lib/remoteAuth.ts` owns two

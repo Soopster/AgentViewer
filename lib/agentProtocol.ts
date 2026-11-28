@@ -286,6 +286,8 @@ export type ProtocolVerificationReceipt = {
 }
 
 export type ProtocolTaskReceipt = {
+  /** Later tasks need this isolated result committed in their base checkout. */
+  requiresIntegration?: true
   /** Coordinator-executed checks were run against this unchanged checkout. */
   verificationRevision?: string
   requestedProvider?: AgentProvider
@@ -479,6 +481,8 @@ export type ProtocolEventType =
   | 'run.status'
 
 export type AgentProtocolEvent = {
+  /** Stable identifier on persisted events that can be fetched through coord_query_context. */
+  eventId?: string
   version: AgentProtocolVersion
   runId: string
   agentId: string
@@ -858,8 +862,12 @@ export type ExternalProtocolActionable = {
   waitingPolicy?: import('./coordinatorWaitingPolicy').CoordinatorWaitingPolicy
   /** Host wake mode and the current reason automatic continuation is paused. */
   continuation?: import('./coordinatorContinuation').CoordinatorContinuationState
-  /** Pending, unowned tasks whose dependencies are all completed. */
+  /** Preview of eligible pending lanes with satisfied dependencies and available paths. */
   claimableTasks: Array<{ id: string; title: string; targetRole: ProtocolTaskTargetRole }>
+  /** Total eligible lanes when claimableTasks is truncated. */
+  claimableTaskCount?: number
+  /** Lead-only preview of otherwise ready tasks waiting for reviewed commits. */
+  awaitingIntegration?: Array<{ taskId: string; reason: string }>
   /** Undelivered mailbox messages addressed to this participant. */
   inboxCount: number
   urgentCount: number
@@ -867,6 +875,8 @@ export type ExternalProtocolActionable = {
   replyRequiredCount: number
   /** Lead only: task ids with submitted plans awaiting review. */
   plansAwaitingReview: string[]
+  /** An active lead still needs to seed the task board. */
+  needsPlan?: true
   /** The task this participant currently owns, if any. */
   myTask: { id: string; status: ProtocolTaskStatus; planState: ProtocolTaskPlanState } | null
   /** Every task is completed/failed/cancelled — the lead should finalize. */
@@ -951,11 +961,13 @@ export type ExternalProtocolTaskCreateResult = ExternalProtocolMutationResult & 
 
 /** One match from coord_query_context's lexical search over findings/learnings/tasks. */
 export type ProtocolContextMatch = {
+  eventId?: string
   kind: 'finding' | 'learning' | 'handoff' | 'review.requested' | 'task.completed' | 'task.failed' | 'plan.approved' | 'plan.rejected' | 'task' | 'project_memory'
   taskId?: string
   agentId?: string
   summary: string
   detail?: string
+  detailTruncated?: true
   timestamp: string
   score: number
 }
@@ -2138,10 +2150,8 @@ export function buildLeadSynthesisPreamble(params: {
  * Turn prompt for an agent dispatched with real coord_* tool calls
  * (lib/agentCoordinationSdkTools.ts) instead of the fenced ```a2a text
  * protocol. Mirrors bin/agent-viewer-coord-worker.mjs's tickPrompt() — short
- * and role-generic, because the agent pulls roster/board/inbox itself via
- * coord_status/coord_read_inbox rather than having them dumped into every
- * dispatch. The coordinator note (blocked-task nudge, intervention reason,
- * synthesis request) is the only per-dispatch content that actually varies.
+ * and role-generic. An assigned teammate may receive a compact assignment
+ * at submission. Other turns pull their own view with coord_status.
  */
 export function buildSdkToolsTickPrompt(params: {
   runId: string
@@ -2153,11 +2163,11 @@ export function buildSdkToolsTickPrompt(params: {
     ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, decompose the board with coord_create_task when it is empty, and finalize the run with coord_finalize_run once every task is terminal. If the board has more unblocked parallel work than idle teammates can absorb, call coord_spawn_teammate to grow the team instead of queueing it all onto the current roster.'
     : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked lane with coord_claim_task. Complete, release, or hand off owned work before ending your turn.'
   return [
-    `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound to this run — start with coord_status and act on the board and your inbox.`,
+    `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound. Use coord_status(view="actionable") for routine work and the full view for planning, recovery or roster inspection.`,
     skillGroundingLine(params.cwd),
     'If native coord_* tools are unavailable or report that they are unbound, use the exact session-bound client command supplied by the host for this session, including coord_status and coord_read_inbox with a stable request_id. Tool visibility alone does not establish your run identity. Do not create or join a replacement run, invent a client command, or inspect credential files. If no host-supplied client is available, report the binding obstacle without changing the room.',
     roleGuidance,
-    'Drain the inbox with coord_read_inbox, then perform every immediately actionable step, including implementation and verification.',
+    'If this turn includes a Coordinator assignment, start from it. Otherwise read status and inbox. Check for new mail during long work.',
     'When completing a task, submit an honest structured receipt with the actual model, token usage when available, changed files, commands run, and any unresolved decision. Never claim a requested model was used unless the provider confirms it.',
     'Coordinate actively — teammates cannot see your terminal: answer reply-required mail first, publish reusable discoveries with coord_publish_finding, and message teammates your progress affects with coord_send_message.',
     'If blocked, report it with coord_progress(status="blocked") and the exact obstacle, then message whoever can unblock you.',
@@ -2165,6 +2175,31 @@ export function buildSdkToolsTickPrompt(params: {
     'If nothing is immediately actionable, end your turn rather than waiting — the coordinator re-dispatches you when the board changes.',
     ...(params.note ? [`Coordinator note: ${params.note}`] : []),
   ].join(' ')
+}
+
+export function sdkAssignmentBrief(task: ProtocolTask, grantedPaths: string[], planOnly: boolean): string | undefined {
+  if (task.status !== 'claimed' && !planOnly) return undefined
+  const brief = JSON.stringify({ title: task.title, detail: task.prompt, grantedPaths, verifyCommands: task.verifyCommands })
+  return brief.length <= 2400 ? brief : undefined
+}
+
+/** Prompt-only projection of a claim validated by the dispatching host. */
+export function formatSdkAssignment(params: {
+  task: ProtocolTask
+  brief?: string
+  unread: boolean
+  deliveredReplyRequired: boolean
+}): string {
+  const { task, brief, unread, deliveredReplyRequired } = params
+  return [
+    `Coordinator assignment at dispatch: ${task.id} (${task.status}). You already own it. Skip routine coord_status and coord_claim_task.`,
+    unread ? 'Read unread mail with coord_read_inbox and answer required replies before starting.' : 'There was no unread mail requiring a separate initial inbox read.',
+    ...(deliveredReplyRequired ? ['Read coord_read_inbox(unresolved=true) to answer replies still owed on previously delivered mail.'] : []),
+    ...(task.contextHandoff ? [`Read coord_read_handoff for ${task.contextHandoff.id} and verify the checkpoint before editing.`] : []),
+    ...(brief
+      ? [brief]
+      : ['Continue this task from the existing conversation. Call coord_read_task for its complete brief and use live locks to confirm write scope if needed.']),
+  ].join('\n')
 }
 
 /**

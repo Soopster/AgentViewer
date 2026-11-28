@@ -547,6 +547,11 @@ try {
   }
   await client.callTool({ name: 'coord_status', arguments: { view: 'actionable' } })
   if (!seen.some(entry => entry.body?.action === 'status' && entry.body?.view === 'actionable')) throw new Error('MCP status lost the actionable view')
+  await client.callTool({ name: 'coord_query_context', arguments: { event_id: 'event-evidence', detail_chars: 0 } })
+  const contextRead = seen.find(entry => entry.body?.action === 'query_context')?.body
+  if (contextRead?.eventId !== 'event-evidence' || contextRead?.detailChars !== 0 || contextRead?.runId !== 'run-1') {
+    throw new Error('MCP query lost the exact event, summary cap or participant scope')
+  }
   const taskRead = seen.find(entry => entry.body?.action === 'read_task')?.body
   const taskList = seen.find(entry => entry.body?.action === 'list_tasks')?.body
   const taskCancel = seen.find(entry => entry.body?.action === 'cancel_task')?.body

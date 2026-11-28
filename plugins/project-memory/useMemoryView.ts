@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { blankMemory, memoryDraft, rankProjectMemory, type MemoryDraft, type ProjectMemorySnapshot, type ProjectMemoryService, type ProjectMemorySource, type MemoryOperation } from '../../lib/plugins/projectMemory'
+import { agentMemoryOn, isAgentNote, blankMemory, memoryDraft, rankProjectMemory, type MemoryDraft, type ProjectMemorySnapshot, type ProjectMemoryService, type ProjectMemorySource, type MemoryOperation } from '../../lib/plugins/projectMemory'
 type ScopedState = <T>(name: string, initial: T) => [T, (value: T | ((previous: T) => T)) => void]
 export function useMemoryView(service: ProjectMemoryService, cwd: string, scoped: ScopedState) {
   const owner = useMemo(() => ({ alive: true }), [service, cwd]), fresh = useMemo(blankMemory, [])
@@ -25,7 +25,7 @@ export function useMemoryView(service: ProjectMemoryService, cwd: string, scoped
         const next = value.notes.find(item => item.id === selected)
         if (next && operation.type !== 'settings') setDrafts(previous => ({ ...previous, [next.id]: memoryDraft(next) }))
         if (operation.type === 'delete') { const blank = blankMemory(); setDrafts(previous => { const copy = { ...previous }; delete copy[selected]; return { ...copy, [blank.id]: blank } }); setSelected(blank.id) }
-        setNotice(operation.type === 'save' ? 'Saved as a draft. Approve it before automatic recall.' : operation.type === 'review' ? operation.reviewed ? 'Note approved for recall.' : 'Note returned to draft.' : operation.type === 'settings' ? operation.autoRecall ? 'Automatic recall enabled for this project.' : 'Automatic recall disabled.' : 'Note deleted.')
+        setNotice(operation.type === 'save' ? note && isAgentNote(note) ? 'Saved as your note: approve it to keep it in recall.' : 'Saved as a draft. Approve it before automatic recall.' : operation.type === 'review' ? operation.reviewed ? 'Note approved for recall.' : 'Note returned to draft.' : operation.type === 'settings' ? operation.agentMemory !== undefined ? operation.agentMemory ? 'Agents now keep their own memory for this project.' : 'Agent memory turned off: agents neither save nor recall their notes here.' : operation.autoRecall ? 'Automatic recall enabled for this project.' : 'Automatic recall disabled.' : 'Note deleted.')
       }
       return true
     } catch (error) { if (owner.alive) setNotice(error instanceof Error ? error.message : String(error)); return false }
@@ -38,6 +38,8 @@ export function useMemoryView(service: ProjectMemoryService, cwd: string, scoped
     review: () => note && !dirty ? action({ type: 'review', id: note.id, expectedVersion: note.version, reviewed: !note.reviewed }) : Promise.resolve(false),
     remove: () => note ? action({ type: 'delete', id: note.id, expectedVersion: note.version }) : Promise.resolve(false),
     recall: () => snapshot ? action({ type: 'settings', expectedSequence: snapshot.sequence, autoRecall: !snapshot.autoRecall }) : Promise.resolve(false),
+    agentMemory: snapshot ? agentMemoryOn(snapshot) : true,
+    toggleAgentMemory: () => snapshot ? action({ type: 'settings', expectedSequence: snapshot.sequence, agentMemory: !agentMemoryOn(snapshot) }) : Promise.resolve(false),
   }
 }
 export type MemoryViewState = ReturnType<typeof useMemoryView>

@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import { checkpointForPrompt } from '../../../lib/rewindCheckpoint'
 import type { CheckpointFileChange, PluginCheckpointsService, TurnCheckpoint, WorkingDiffHunk } from '../../../lib/plugins/checkpoints'
+import { findingsInFile, findingsInHunk, openFindingsFor, placeFindingsInDiff, secondOpinionGlyph, secondOpinionLabel, workingTreeFindings, type SecondOpinionFinding, type SecondOpinionService, type SecondOpinionSnapshot } from '../../../lib/plugins/secondOpinion'
 
 type CheckpointKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -37,6 +38,8 @@ type Props = {
   docked?: boolean
   /** Shows the `⧉ window` button: break the popover out into a window. */
   onDetach?: () => void
+  /** Second Opinion reviews, when that plugin is on: badges on turns and findings beside the lines they are about. */
+  secondOpinion?: SecondOpinionService
 }
 
 type TurnsRow =
@@ -82,6 +85,7 @@ export function CheckpointPopover({
   onOpenFileHistory,
   docked = false,
   onDetach,
+  secondOpinion,
 }: Props) {
   const [tab, setTab] = useState<'turns' | 'review'>('turns')
   const [checkpoints, setCheckpoints] = useState<TurnCheckpoint[]>([])
@@ -94,6 +98,9 @@ export function CheckpointPopover({
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [diffLines, setDiffLines] = useState<string[] | null>(null)
+  /** Which turn (and file) the open diff is of, so its findings can be placed under their lines. */
+  const [diffOf, setDiffOf] = useState<{ sha: string; file?: string; until?: string } | null>(null)
+  const [opinion, setOpinion] = useState<SecondOpinionSnapshot | null>(null)
   const [commitMode, setCommitMode] = useState(false)
   const [commitDraft, setCommitDraft] = useState('')
   const now = useMemo(() => Date.now(), [checkpoints])
@@ -112,6 +119,8 @@ export function CheckpointPopover({
       setCheckpoints(nextCheckpoints)
       setHunks(workingDiff.hunks)
       setUntracked(workingDiff.untracked)
+      // Reviews are decoration: a failed read leaves the popover exactly as it was without them.
+      if (secondOpinion) void secondOpinion.read(cwd).then(next => { if (generation === generationRef.current) setOpinion(next) }).catch(() => {})
     } finally {
       if (generation === generationRef.current) setLoading(false)
     }
@@ -242,6 +251,7 @@ export function CheckpointPopover({
   const openDiff = useCallback(async (sha: string, filePath?: string, untilSha?: string) => {
     try {
       const diff = await service.diff(cwd, sha, filePath, untilSha)
+      setDiffOf({ sha, file: filePath, until: untilSha })
       setDiffLines(diff ? diff.split('\n') : [untilSha ? '(this turn changed no files)' : '(no changes since this checkpoint)'])
     } catch (err) {
       onNotice('error', err instanceof Error ? err.message : 'Failed to read diff')
@@ -411,6 +421,17 @@ export function CheckpointPopover({
     ? 'Push the current branch and open a PR via gh?'
     : null
 
+  const diffFindings = useMemo(() => {
+    if (!diffLines || !diffOf) return new Map<number, SecondOpinionFinding[]>()
+    const open = openFindingsFor(opinion, diffOf.sha)
+    // Line numbers hold only for the range the review read: this turn alone, or this turn to the working tree.
+    const sameRange = open && !open.record.stale && (open.record.untilSha ?? undefined) === diffOf.until
+    return open && sameRange ? placeFindingsInDiff(diffLines, open.findings, diffOf.file) : new Map<number, SecondOpinionFinding[]>()
+  }, [diffLines, diffOf, opinion])
+  const workingFindings = useMemo(() => workingTreeFindings(opinion), [opinion])
+  const findingColor = (finding: SecondOpinionFinding) => finding.severity === 'bug' ? theme.red : finding.severity === 'risk' ? theme.amber : theme.muted
+  const findingLine = (finding: SecondOpinionFinding, indent: string) => `${indent}◎ ${secondOpinionGlyph(finding.severity)} ${finding.severity}: ${finding.title}`.slice(0, innerW)
+
   const footerHint = commitMode
     ? '⏎ commit · Esc cancel'
     : diffLines
@@ -456,13 +477,17 @@ export function CheckpointPopover({
         <box paddingX={1} flexDirection="column">
           {diffLines ? (
             diffLines.map((line, index) => (
-              <text
-                key={`diff-${index}`}
-                fg={line.startsWith('+') ? theme.green : line.startsWith('-') ? theme.red : line.startsWith('@@') ? theme.cyan : theme.muted}
-                wrapMode="none"
-              >
-                {line.slice(0, innerW) || ' '}
-              </text>
+              <box key={`diff-${index}`} flexDirection="column">
+                <text
+                  fg={line.startsWith('+') ? theme.green : line.startsWith('-') ? theme.red : line.startsWith('@@') ? theme.cyan : theme.muted}
+                  wrapMode="none"
+                >
+                  {line.slice(0, innerW) || ' '}
+                </text>
+                {diffFindings.get(index)?.map(finding => (
+                  <text key={finding.id} fg={findingColor(finding)} wrapMode="none">{findingLine(finding, '  ')}</text>
+                ))}
+              </box>
             ))
           ) : loading ? (
             <box paddingTop={1}>
@@ -489,6 +514,13 @@ export function CheckpointPopover({
                         {row.checkpoint.label.slice(0, Math.max(innerW - 26, 12)) || '(no message)'}
                       </text>
                       <box flexGrow={1} />
+                      {(() => {
+                        const review = opinion?.reviews.find(entry => entry.checkpointSha === row.checkpoint.sha)
+                        if (!review) return null
+                        const open = openFindingsFor(opinion, row.checkpoint.sha)?.findings ?? []
+                        const color = open.some(finding => finding.severity === 'bug') ? theme.red : open.some(finding => finding.severity === 'risk') ? theme.amber : review.status === 'done' ? theme.green : theme.dim
+                        return <text fg={color} wrapMode="none">{`◎ ${secondOpinionLabel(review)}  `}</text>
+                      })()}
                       {row.checkpoint.provider ? (
                         <text fg={theme.dim} wrapMode="none">{`${row.checkpoint.provider.toUpperCase()}  `}</text>
                       ) : null}
@@ -520,12 +552,17 @@ export function CheckpointPopover({
               const selected = index === clampedCursor
               if (row.kind === 'untracked') {
                 return (
-                  <box key={`untracked:${row.path}`} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface} paddingX={1}>
-                    <text fg={selected ? accentColor : theme.dim} wrapMode="none">{selected ? '▸ ' : '  '}</text>
-                    <text fg={theme.green} wrapMode="none">{'A '}</text>
-                    <text fg={selected ? theme.text : theme.muted} wrapMode="none">{row.path.slice(0, innerW - 14)}</text>
-                    <box flexGrow={1} />
-                    <text fg={theme.dim} wrapMode="none">untracked</text>
+                  <box key={`untracked:${row.path}`} flexDirection="column" backgroundColor={selected ? theme.surface3 : theme.surface} paddingX={1}>
+                    <box flexDirection="row">
+                      <text fg={selected ? accentColor : theme.dim} wrapMode="none">{selected ? '▸ ' : '  '}</text>
+                      <text fg={theme.green} wrapMode="none">{'A '}</text>
+                      <text fg={selected ? theme.text : theme.muted} wrapMode="none">{row.path.slice(0, innerW - 14)}</text>
+                      <box flexGrow={1} />
+                      <text fg={theme.dim} wrapMode="none">untracked</text>
+                    </box>
+                    {workingFindings ? findingsInFile(row.path, workingFindings.findings).map(finding => (
+                      <text key={finding.id} fg={findingColor(finding)} wrapMode="none">{findingLine(finding, '    ')}</text>
+                    )) : null}
                   </box>
                 )
               }
@@ -537,6 +574,9 @@ export function CheckpointPopover({
                     <box flexGrow={1} />
                     <text fg={theme.cyan} wrapMode="none">{row.hunk.header.split(' @@')[0]?.slice(0, 20) ?? ''}{' @@'}</text>
                   </box>
+                  {workingFindings ? findingsInHunk(row.hunk, workingFindings.findings).map(finding => (
+                    <text key={finding.id} fg={findingColor(finding)} wrapMode="none">{findingLine(finding, '    ')}</text>
+                  )) : null}
                   {selected
                     ? row.hunk.lines.slice(1, 13).map((line, lineIndex) => (
                       <text

@@ -50,7 +50,7 @@ export function SidebarStatus({ theme, count, note, onClearNote, iconSet }: { th
   const clearable = note.includes('×')
   return <box id="sidebar-status" position="absolute" bottom={-1} right={1} height={1} flexDirection="row" backgroundColor={theme.surface}>
     <text fg={quiet} wrapMode="none" selectable={false}>{` ${count}${note ? ' · ' : ' '}`}</text>
-    {note ? <box id="sidebar-filter-note" height={1} flexShrink={0} onMouseDown={event => { if (event.button === 0 && clearable) { event.stopPropagation(); onClearNote() } }}>
+    {note ? <box id="sidebar-filter-note" height={1} flexShrink={0} onMouseDown={clearable ? event => { if (event.button === 0) { event.stopPropagation(); onClearNote() } } : undefined}>
       <text fg={clearable ? theme.cyan : mixHexColor(quiet, theme.surface, 0.7) ?? quiet} wrapMode="none" selectable={false}>{`${note.replace(/×$/, tuiIcon(iconSet, 'error', '×'))} `}</text>
     </box> : null}
   </box>
@@ -63,7 +63,7 @@ export function SidebarHeading({ theme, width, text, prefixWidth, badge, accent,
   return <box position="absolute" top={-1} left={1} width={Math.min(text.trimEnd().length + 2, width - 4)} height={1} paddingX={1}
     flexDirection="row" backgroundColor={theme.surface} overflow="hidden"
     onMouseDown={event => { if (event.button === 0 && onPress) { event.stopPropagation(); onPress() } }}>
-    <text fg={theme.cyan} bg={theme.surface} wrapMode="none">{text.trimEnd()}</text>
+    <text fg={theme.cyan} wrapMode="none">{text.trimEnd()}</text>
     <box id="sidebar-provider-badge" position="absolute" top={0} left={prefixWidth + 1} width={badge.length} minWidth={badge.length} maxWidth={badge.length} height={1} overflow="hidden" backgroundColor={badgeHover ? mixHexColor(accent, theme.text, 0.75) ?? accent : accent}
       onMouseOver={() => setBadgeHover(true)} onMouseOut={() => setBadgeHover(false)}
       onMouseDown={event => { if (event.button === 0 && onBadgePress) { event.stopPropagation(); onBadgePress() } }}>

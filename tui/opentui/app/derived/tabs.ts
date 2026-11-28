@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import type { TeamAttention } from '../../teamAttentionStore'
-import { tabStripName } from '../../tabStrip'
+import { tabPaintWidth, tabStripName } from '../../tabStrip'
 import { tuiIcon } from '../../icons'
 import { surfaceTitle } from '../../windowSurfaceNames'
 import { type SurfaceMeta } from '../../popoverWindows'
@@ -109,6 +109,7 @@ export function runTabOptions(ctx: TabOptionsContext) {
   } = ctx
   const number = (index: number) => display.tabNumbers ? `${numberOffset + index + 1} ` : ''
   const closeIcon = tuiIcon(display.iconSet, 'error', '×')
+  const nameWidth = tabPaintWidth(display.tabStyle, tabWidth)
 return (
   visibleTabSessions.map((s, index) => {
     // Every open session can be on screen, so the strip marks none of them;
@@ -127,10 +128,7 @@ return (
       ? `PREVIEW · ${title}`
       : title)
     return {
-      // tab-select draws a name in tabWidth - 2 cells from its second column,
-      // so a label padded to tabWidth - 4 puts the × at TAB_CLOSE_COLUMN.
-      // Only the selected tab carries it (tabCloseHit agrees).
-      name: tabStripName(label, tabWidth, '', tabClosable(display, !shownPopoverTab && selectedSessionKey === sessionKey(s)), display.tabTruncate, closeIcon),
+      name: tabStripName(label, nameWidth, '', tabClosable(display, !shownPopoverTab && selectedSessionKey === sessionKey(s)), display.tabTruncate, closeIcon),
       description: isPreviewMode && selectedSessionKey === sessionKey(s)
         ? 'Preview tab'
         : inSplit
@@ -144,6 +142,6 @@ return (
   const pinned = windowSurfaceMeta[id]?.session
   const pinnedSession = pinned ? openTabByKey.get(pinned) ?? sessions.find((entry) => sessionKey(entry) === pinned) : null
   const label = `${number(visibleTabSessions.length + popoverIndex)}${surfaceTitle(id)}${pinnedSession ? ` · ${formatSessionTitle(pinnedSession)}` : ''}`
-  return { name: tabStripName(label, tabWidth, '', tabClosable(display, id === shownPopoverTab), display.tabTruncate, closeIcon), description: 'popover tab', value: `popover:${id}` }
+  return { name: tabStripName(label, nameWidth, '', tabClosable(display, id === shownPopoverTab), display.tabTruncate, closeIcon), description: 'popover tab', value: `popover:${id}` }
 }))
 }

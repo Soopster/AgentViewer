@@ -44,7 +44,7 @@ export function SidebarFilters({ idPrefix, theme, iconSet, query, searchFocused,
     <SidebarSearchRow idPrefix={idPrefix} theme={theme} icon={tuiIcon(iconSet, 'index-search', '⌕')} placeholder="Search sessions  /" query={query} focused={searchFocused}
       onFocus={onSearchFocus} onQuery={onQuery} onSubmit={onSubmit} />
     <box flexShrink={0} flexDirection="row" flexWrap="wrap" paddingX={1}>
-      <box id={`${idPrefix}-scope`} height={1} flexShrink={0} onMouseDown={event => {
+      <box id={`${idPrefix}-scope`} height={1} flexShrink={0} backgroundColor={scope !== 'repo' ? theme.surface3 : undefined} onMouseDown={event => {
         if (event.button !== 0) return
         event.stopPropagation()
         onOpenMenu({ x: event.x, y: event.y, title: 'Repository scope', items: [
@@ -60,7 +60,7 @@ export function SidebarFilters({ idPrefix, theme, iconSet, query, searchFocused,
         ] })
       }}>{chip(scope === 'repo' ? 'This project' : 'All projects', scope !== 'repo')}</box>
       {separator}
-      <box id={`${idPrefix}-activity`} height={1} flexShrink={0} onMouseDown={event => {
+      <box id={`${idPrefix}-activity`} height={1} flexShrink={0} backgroundColor={activity ? theme.surface3 : undefined} onMouseDown={event => {
         if (event.button !== 0) return
         event.stopPropagation()
         onOpenMenu({ x: event.x, y: event.y, title: 'Session activity', items: ACTIVITIES.map(([value, label]) => ({
@@ -68,7 +68,7 @@ export function SidebarFilters({ idPrefix, theme, iconSet, query, searchFocused,
         })) })
       }}>{chip(activity ? activityLabel : 'All', Boolean(activity))}</box>
       {onTag ? separator : null}
-      {onTag ? <box id={`${idPrefix}-tag`} height={1} flexShrink={0} onMouseDown={event => {
+      {onTag ? <box id={`${idPrefix}-tag`} height={1} flexShrink={0} backgroundColor={tag ? theme.surface3 : undefined} onMouseDown={event => {
         if (event.button !== 0) return
         event.stopPropagation()
         onOpenMenu({ x: event.x, y: event.y, title: 'Tag', items: [
@@ -108,6 +108,6 @@ export function SidebarFiltersRule({ idPrefix, theme }: { idPrefix: string; them
 /** A dropdown chip: quiet at its default, filled and cyan once it narrows the list. */
 export function SidebarChip({ theme, label, narrowing, iconSet }: { theme: TuiThemePalette; label: string; narrowing: boolean; iconSet?: ViewIconSet }) {
   const arrow = tuiIcon(iconSet, 'dropdown', '▾')
-  return <text fg={narrowing ? theme.cyan : sidebarQuietColor(theme)} bg={narrowing ? theme.surface3 : undefined}
+  return <text fg={narrowing ? theme.cyan : sidebarQuietColor(theme)}
     wrapMode="none" selectable={false}>{narrowing ? ` ${label} ${arrow} ` : `${label} ${arrow}`}</text>
 }

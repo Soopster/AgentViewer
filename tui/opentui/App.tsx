@@ -10,7 +10,8 @@ import type { QuestionResponseOptions } from '../../lib/claudeQuestionOutcomes'
 import { presentationIndex, type WindowPresentation } from './windowPresentation'
 import { registerWindowBridge } from './windowControlBridge'
 import { VerticalTabs, verticalTabRailWidth } from './VerticalTabs'
-import { tabStripName, tabStripActivity, tabStripWidth, horizontalTabBarHeight } from './tabStrip'
+import { useMouseHover } from './mouseHover'
+import { tabStripName, tabStripActivity, tabStripWidth, horizontalTabBarHeight, tabPaintWidth } from './tabStrip'
 import { panelSurfaceAvailability, RIGHT_PANEL_SURFACE_KINDS, surfaceKindLabel } from '../../lib/rightPanel'
 import { indexComposerMessages, visibleComposerMessages } from '../../lib/composerTranscript'
 import { createComposerSessions, useComposerSessionState } from '../../lib/composerSessions'
@@ -26,6 +27,7 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { recordVoice } from './voiceRecorder'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
+import { tuiFocus } from './shell/focusService'
 import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
 import { useApplicationPlugins } from '../../lib/plugins/useApplicationPlugins'
 import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
@@ -501,8 +503,13 @@ export default function OpenTuiApp() {
   const welcomeKey = useRef<((key: { name: string; sequence: string; ctrl: boolean; shift: boolean }) => boolean) | null>(null)
   useKeyboard(key => { if (!workspace) { if (welcomeKey.current?.(key)) key.preventDefault(); key.stopPropagation() } })
   const contextValue = useMemo(() => space && workspace ? { controller, runtime: controller.runtime(workspace), space } : null, [controller, workspace, space])
-  if (!space || !workspace || !contextValue) return <box width={width} height={height}><SpacesManager controller={controller} theme={LIGHT_THEME} width={width} height={height} onClose={() => {}} onKeyHandlerReady={handler => { welcomeKey.current = handler }} /></box>
+  if (!space || !workspace || !contextValue) return <box width={width} height={height}><WelcomeMouseHover /><SpacesManager controller={controller} theme={LIGHT_THEME} width={width} height={height} onClose={() => {}} onKeyHandlerReady={handler => { welcomeKey.current = handler }} /></box>
   return <WorkspaceContext.Provider value={contextValue}><OpenTuiWorkspace key={workspace.id} /></WorkspaceContext.Provider>
+}
+
+function WelcomeMouseHover() {
+  useMouseHover(LIGHT_THEME.text)
+  return null
 }
 
 function OpenTuiWorkspace() {
@@ -1009,6 +1016,7 @@ function OpenTuiWorkspace() {
     themeMode, terminalPaletteEpoch, renderer, density, focusMode, fullscreenMode, railVisible,
     focusedPane, selectedSessionKey, sessions,
   })
+  useMouseHover(theme.text)
   // The rail's own palette: its surface is the view's rail fill.
   const railIconSet = viewSpec.railIconSet ?? viewSpec.iconSet
   const railTheme = useMemo(() => railThemeFor(theme, viewSpec.railFill), [theme, viewSpec.railFill])
@@ -3633,7 +3641,7 @@ function OpenTuiWorkspace() {
     ...tuiNotifications.service,
     notice: applicationNotice,
     desktop: notifyTeamEvent,
-  } }), [applicationNotice, notifyTeamEvent])
+  }, focus: tuiFocus }), [applicationNotice, notifyTeamEvent])
   const pendingAsksByKey = useMemo(() => {
     const byKey = new Map<string, PendingPermission[]>()
     for (const ask of [...pendingPermissions, ...backgroundPrompts]) {
@@ -4328,8 +4336,8 @@ function OpenTuiWorkspace() {
   // the next tick puts the frame back. Applying one immediately is what keeps
   // that invisible.
   useEffect(() => runOptionsEffect({
-    tabSelectRef, runningTabKeys, tabOptions, tabWidth, activity: tabDisplay.tabActivity, truncate: tabDisplay.tabTruncate,
-  }), [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth, tabDisplay.tabActivity, tabDisplay.tabTruncate])
+    tabSelectRef, runningTabKeys, tabOptions, tabWidth: tabPaintWidth(tabDisplay.tabStyle, tabWidth), activity: tabDisplay.tabActivity, truncate: tabDisplay.tabTruncate,
+  }), [runningTabKeys, tabOptions, showHorizontalTabs, tabWidth, tabDisplay.tabStyle, tabDisplay.tabActivity, tabDisplay.tabTruncate])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]

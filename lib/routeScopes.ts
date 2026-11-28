@@ -119,6 +119,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/adaptive-ui': { GET: 'write', POST: 'write' },
   '/api/plan-review': { GET: 'read', POST: 'write' },
   '/api/proof': { GET: 'read', POST: 'write' },
+  '/api/second-opinion': { GET: 'read', POST: 'write' },
+  '/api/focus': { GET: 'read', POST: 'write' },
   '/api/checkpoints': { GET: 'read', POST: 'write' },
   '/api/editor/lsp': { POST: 'write' },
   '/api/editor/search': { GET: 'read' },

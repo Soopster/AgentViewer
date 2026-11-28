@@ -143,7 +143,7 @@ export type PluginBehaviorModule = {
 }
 
 /** A tool an agent may call. Its result goes to a model, so it is bounded; a thrown error is returned to the agent as text. */
-export type PluginToolHandler = (args: Record<string, string | number | boolean>, context: { readonly signal: AbortSignal }) => unknown | Promise<unknown>
+export type PluginToolHandler = (args: Record<string, string | number | boolean>, context: { readonly signal: AbortSignal; /** The calling agent's working directory, when its bridge reported one (an absolute path). */ readonly cwd?: string }) => unknown | Promise<unknown>
 
 export class PluginTurnBlockedError extends Error {
   constructor(readonly pluginId: string, reason: string) {

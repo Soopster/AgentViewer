@@ -16,7 +16,8 @@ import { VerticalTabs } from '../../VerticalTabs'
 import { PinnedTabRow } from '../../PinnedTabRow'
 import { WindowButton } from '../../WindowButton'
 import { TAB_STRIP_BUTTON_WIDTH, tabSegmentCaps, tabStripTabsWidth, tabStripWidth } from '../../tabStrip'
-import { SessionTabConnection, noteTabStripHover } from '../../SessionTabConnection'
+import { SessionTabConnection, bubbleTabCloseHit, noteTabStripHover } from '../../SessionTabConnection'
+import { tuiIcon } from '../../icons'
 import { tabAccentColor, tabHoverColor, tabStripColor } from '../derived/tabs'
 import { getProviderAccent } from '../../../theme'
 import { mixHexColor } from '../transcriptStyle'
@@ -270,7 +271,15 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
   const stripFill = tabStripColor(theme, tabDisplay.tabStripFill)
   const tabAccent = tabAccentColor(theme, tabDisplay, selectedSession)
   const windowsStyle = tabDisplay.tabStyle === 'windows'
+  const bubblesStyle = tabDisplay.tabStyle === 'bubbles'
   const segmentedTabs = tabSegmentCaps(tabDisplay.tabStyle) !== null
+  const paintTabs = showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && (segmentedTabs || (!shownPopoverTab && showBorders))
+  const bubbleClose = bubblesStyle && tabDisplay.tabClose !== 'never'
+    ? { icon: tuiIcon(tabDisplay.iconSet, 'error', '×'), hoverColor: theme.red }
+    : undefined
+  const closeHit = (x: number) => bubblesStyle && paintTabs
+    ? bubbleTabCloseHit(tabSelectRef.current, x, bubbleClose !== undefined)
+    : tabCloseHit(x)
   // Windows Terminal's active tab is the window's own colour.
   const windowsTabFill = theme.surface
   const tabInitialColors = tabDisplay.tabAccent === 'all' && tabDisplay.tabIcons === 'provider'
@@ -382,8 +391,10 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   if (popoverTab) {
                     event.stopPropagation()
                     if (event.button === 2) openPopoverTabMenu(popoverTab, event)
-                    // Middle-click closes any tab; only the selected one draws a ×.
-                    else if (event.button === 1 || (event.button === 0 && tabCloseHit(event.x))) closePopoverTab(popoverTab)
+                    else if (event.button === 1 || (event.button === 0 && closeHit(event.x))) {
+                      event.preventDefault()
+                      closePopoverTab(popoverTab)
+                    }
                     else if (event.button === 0) showPopoverTab(popoverTab)
                     return
                   }
@@ -399,7 +410,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   }
                   if (event.button !== 0) return
                   const tab = tabAt(event.x)
-                  if (tab && tabCloseHit(event.x)) {
+                  if (tab && closeHit(event.x)) {
                     event.stopPropagation()
                     event.preventDefault()
                     closeSessionTab(tab)
@@ -408,7 +419,7 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
                   if (tab) sessionDragHandlers.pressStripTab(tab, event, () => selectTabSession(tab))
                 }}
                 onMouseDrag={(event) => { noteTabStripHover(tabSelectRef.current, null); sessionDragHandlers.move(event) }}
-                onMouseMove={(event) => noteTabStripHover(tabSelectRef.current, event.x)}
+                onMouseMove={(event) => noteTabStripHover(tabSelectRef.current, event.x, bubbleClose !== undefined)}
                 onMouseOut={() => noteTabStripHover(tabSelectRef.current, null)}
                 onMouseUp={(event) => {
                   if (event.button !== 0) return
@@ -505,10 +516,11 @@ export function WorkspaceBody(props: WorkspaceBodyProps) {
           )}
           {renderSurfaceLayer()}
           <SessionTabConnection tabs={tabSelectRef} readWindow={() => selectedWindowHandleRef.current?.()?.frame() ?? null}
-            ownerKey={selectedSessionKey} enabled={showHorizontalTabs && !windowControlsBlocked && !fullScreenPopoverOpen && (segmentedTabs || (!shownPopoverTab && showBorders))}
+            ownerKey={selectedSessionKey} enabled={paintTabs}
             foreground={tabAccent} background={theme.surface}
             inactiveForeground={theme.border} inactiveBackground={stripFill}
             hoverForeground={theme.text} hoverBackground={tabHoverColor(theme, stripFill)}
+            bubbleHoverBackground={mixHexColor(tabAccent, stripFill, 0.22) ?? theme.surface2} bubbleClose={bubbleClose}
             pillForeground={theme.text} pillBackground={mixHexColor(tabAccent, stripFill, 0.32) ?? theme.surface3}
             highlightSelected={!activeInPinnedRow} segmentBackground={mixHexColor(tabAccent, stripFill, 0.14) ?? theme.surface2}
             windowsBackground={windowsTabFill} windowsInactiveBackground={mixHexColor(theme.surface, stripFill, 0.45) ?? stripFill} inactiveLabel={theme.muted} initialColors={tabInitialColors}

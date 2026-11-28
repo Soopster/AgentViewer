@@ -7,6 +7,168 @@ The objective remains open. Passing adapter fixtures does not establish live
 provider behavior or long-duration reliability. Unrelated TUI edits in the shared
 checkout are outside this audit.
 
+## November follow-up
+
+The Coordinator now wakes a restarted unattended lead when its active task
+board is empty. Native SDK and unattended prompts request actionable status for
+routine work. A lead planning from an empty board can still read the full
+objective, and lead staffing and recovery still have the full roster available.
+
+Native Coordinator execution retains an uncertain dispatch when its SSE stream
+closes with setup metadata alone. An external worker retains an uncertain
+attempt when a JSON-mode CLI exits zero without structured output. Both paths
+retain enough identity for reconciliation. A provider event followed by EOF
+still requires stronger provider-specific settlement evidence.
+
+Request `coord_query_context(query=…, detail_chars=0)` to shortlist evidence.
+The fixture with 20 matches dropped from 48,570 to 4,953 serialized characters
+(89.8%). Findings carry a stable event ID. Fetch one by `event_id` to retrieve
+its full detail regardless of its rank or age in lexical search. The fixture
+retrieves the original 32,000 characters and verifies run isolation. These
+figures measure tool payload size. Provider billing and cache effects vary.
+
+The 300-task, 6,000-event scale fixture retrieved a finding after its lexical
+search window expired. The lead's routine status serialized to 589 characters,
+versus about 219,000 for the full view.
+
+An automatic claim now skips older tasks whose paths are locked and takes the
+first eligible independent lane. The status digest applies the same lock check.
+An explicit claim still targets the requested task and reports conflicts. With
+100 runnable lanes, the digest reports the total and previews 12 titles. The
+serialized queue fell from 20,693 to 1,996 characters. The fixture also claims
+the last lane by ID. This preserves the first-eligible policy across the full
+board, similar to Kueue's best-effort FIFO admission.
+[Kueue queueing strategies](https://kueue.sigs.k8s.io/v0.20/docs/reference/kueue.v1beta2/)
+
+The first isolated live Codex fixture found no recorded usage. The Coordinator
+now records Codex app-server turn usage in run totals and task receipts. It
+deduplicates by provider instance, session, and native turn. A cold or reset
+counter records the latest observed request and marks the turn partial to
+avoid charging historical usage. A deterministic fixture verifies that the
+recorded usage prevents a subsequent dispatch when the run crosses its token
+budget. [Codex usage counter semantics](https://github.com/openai/codex/blob/main/codex-rs/tui/src/token_usage.rs)
+
+The accounting-enabled live fixture passed in 105 seconds. Two distinct
+teammates completed their read-only tasks with nonzero provider usage in
+their receipts. The lead reported both results in one automatic turn. The
+checkout stayed clean and the two-second idle check found no extra lead turn.
+The ledger recorded 871,948 observed tokens across five native turns,
+including 738,432 cached input tokens. Three turns carried partial accounting.
+These are provider-reported counters. Billing and comparative efficiency
+require matched workloads and account-specific cost data.
+
+Managed SDK teammates now receive the current claim at submission. For a
+short new task, the brief includes its instructions, active write grants,
+and verification commands. Longer briefs and handoffs point to exact reads.
+Teammates can skip routine status, claim, and empty inbox calls. A matching
+assignment notice is acknowledged only after the stream settles. Other mail
+and unanswered replies remain in the mailbox. An unassigned managed teammate
+with no mail or dispatch note waits without a model turn.
+
+A repeat of the same two-lane Codex fixture passed in 89 seconds and recorded
+680,236 observed tokens, 22% fewer than the prior run's 871,948. One teammate
+called only the message and completion tools. The other also read status and
+inbox. Both completed with provider usage in their receipts, and the lead
+synthesized the results in one automatic turn. This is a single before/after
+sample with variable provider usage. Repeat it on dependency-heavy workloads
+before treating the difference as an expected saving.
+
+Managed startup now allocates teammate slots to explicit provider and account
+pins before filling from the configured pool. Ready work takes precedence over
+future dependencies when pins compete for slots. Lead-only tasks do not
+increase teammate staffing. A resumed lead fixture verifies that a Claude lane
+claims the only teammate slot even when Codex appears first in the pool, then
+the same session takes the dependent lane.
+
+The idle sweep preserves paused runs, pending judgments, cooldowns and
+unreconciled execution. It also gives a newly claimed managed task the full
+supervision interval before a routine checkpoint can wake the lead. The idle
+alert previews eight unfinished tasks and gives the remaining count.
+
+The managed live fixture exposed a Codex teammate reaching an unbound MCP
+client. Managed Codex turns now receive the same authenticated session-client
+fallback as interactive turns. The dispatch fixture checks the generated
+command with the loopback bridge enabled.
+
+Run the opt-in dependency fixture with
+`node --import tsx scripts/coordManagedWorkflowLive.ts`. The default pins a
+Claude worker and a Codex lead. Set `COORD_WORKFLOW_LIVE_TEAMMATE=codex` to
+exercise the same dependency and single-slot constraint with Codex.
+The Codex run completed both ordered tasks in one worker session and reached
+lead synthesis in 80 seconds. It verified both receipts, both evidence codes
+in the synthesis, and a clean checkout. The Claude run reached its pinned
+worker and stopped making progress after the provider reported its usage
+limit. Its dependent task remained pending.
+
+Managed and interactive runs can now reuse a teammate slot when a ready task
+needs a different provider or account. The Coordinator prepares the incoming
+session, rechecks the run, outgoing worker and task, then commits retirement
+and the new claim together. Active turns, mail obligations, unresolved
+attempts, and background work keep their slots. An outgoing worker's
+credentials are retired. Its checkout and receipt remain inspectable.
+
+The one-slot Codex-to-OpenCode live run passed in 81 seconds. The prerequisite
+completed before the dependent task was claimed, the lead synthesized both
+results, and the checkout stayed clean. Reproduce with
+`COORD_WORKFLOW_LIVE_TEAMMATE=codex COORD_WORKFLOW_LIVE_NEXT_TEAMMATE=opencode node --import tsx scripts/coordManagedWorkflowLive.ts`.
+The staffing fixture also exercises a nondefault provider instance,
+concurrent sweeps, startup failure, a pause during setup, and review of the
+retired worker's changed files.
+
+An isolated completion that changes repository files now records an
+integration requirement. Staging records the reviewed squash tree against the
+receipt. A dependent can claim only when the target Git history contains a
+commit of that tree and the claimant's checkout contains that commit. Managed
+staffing can replace a stale idle checkout. Lead actionable status previews the
+blocked tasks. A final-only run review and an intermediate target integration
+cannot both precede a dependent lane. The Coordinator reports that conflict
+while preserving the existing review requirement.
+
+The live write fixture passed in 74 seconds. A Codex worker wrote `rule.ts`
+in its own worktree, the harness inspected and staged the pinned result,
+and the OpenCode dependent stayed pending until the harness committed it.
+OpenCode's receipt included the value it read from `rule.ts` in its own
+checkout. The lead synthesized both results. The Git regression also rejected
+a commit of a different tree and verified recovery when the reviewed tree was
+committed. Set `COORD_WORKFLOW_LIVE_WRITE=1` with the two-provider fixture.
+
+### Patterns to carry forward
+
+- Keep submission, provider liveness, settlement, and accepted task results
+  distinct. Herdr observes agent activity from the host. Temporal records
+  activity outcomes and recommends stable idempotency keys for retries. Apply
+  these patterns to explicit settlement and to remote workers using the existing
+  run, participant, task, claim, and attempt identities.
+  [Herdr agent states](https://herdr.dev/tui/docs/agents/)
+  [Temporal activity definitions](https://docs.temporal.io/activity-definition)
+- Preserve successful lanes when a dependent lane fails. LangGraph persists
+  graph checkpoints and can retain sibling writes. Coordinator already has
+  immutable task handoffs and receipts. Verify a resumed run retains completed
+  work, dependency order, and integration checks across daemon and worker
+  crashes. [LangGraph persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence)
+- Scale delegation to independent work and pass references to durable evidence.
+  Anthropic reports increased token use in multi-agent research and describes
+  direct artifact storage. Compare single-agent, current Coordinator, and
+  revised Coordinator runs on the same coding tasks and provider account.
+  [Anthropic multi-agent research](https://www.anthropic.com/research/multi-agent-research-system)
+
+### Remaining verification
+
+Exercise cross-account slot reuse and recovery with live providers. Workflows
+that need intermediate integration and final-only approval still need a
+separate dependency staging path that preserves final target approval.
+
+1. Verify each provider's accepted, settled, interrupted, and background-work
+   signals on live runs. Exercise acceptance followed by disconnect, daemon
+   restart, and remote worker loss. Check that every uncertain attempt has an
+   observable state and that recovery submits at most one new turn.
+2. Run a dependency graph with competing paths, an approval gate, a failed
+   lane, and a final integration check through Web, OpenTUI, and standalone MCP.
+   Compare task completion, retries, manual interventions, and elapsed time.
+3. Collect reported input, cached input, and output tokens by provider and
+   account for those runs. Record how each MCP host renders text and structured
+   results. Use identical acceptance checks and report missing usage separately.
+
 ## Implemented and directly exercised
 
 | Requirement | Change | Evidence and scope |

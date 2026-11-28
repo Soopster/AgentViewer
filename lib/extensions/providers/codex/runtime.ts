@@ -3,6 +3,7 @@ import { hasResearchToolPolicy } from '../../../sessionResearchPolicy';
 import { askPluginsAboutPermission } from '../../../plugins/permissionBridge';
 import { randomUUID } from 'node:crypto'
 import { createCodexReasoningTracker } from '../../../codexReasoning'
+import { createCodexTurnSpend } from '../../../codexTurnSpend'
 import { saveCodexReasoningMetadata } from '../../../codexReasoningStore'
 import { parseQuestionAnswers, commandResultEvent, startTurnWatchdog, createTurnUsageReporter, parseAttachments, parseEffort, parseTurnRequestId } from '../runtimeCore'
 import { steerViewSession } from '../../../sessionSteering'
@@ -478,6 +479,7 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             let directOperationStarted = false;
             let completionCloseTimer: ReturnType<typeof setTimeout> | null = null;
             let lastActivityAt = Date.now();
+            let emitTurnSpend = () => {};
             let cancelWatchdog: (() => void) | null = null;
             const safeEnqueue = (chunk: string) => {
                 if (cleanedUp || downstreamClosed)
@@ -504,6 +506,7 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             const closeStream = (unsubscribe: () => void) => {
                 if (cleanedUp)
                     return;
+                emitTurnSpend();
                 cleanedUp = true;
                 if (completionCloseTimer) {
                     clearTimeout(completionCloseTimer);
@@ -615,6 +618,13 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             // opencode stream consumes its harness.
             const subscription = subscribeToCodexEvents({ threadId: sessionId });
             const cachedSnapshot = subscription.snapshot;
+            const turnSpend = createCodexTurnSpend(cachedSnapshot?.tokenUsage?.total);
+            emitTurnSpend = () => {
+                const result = turnSpend.result();
+                if (targetTurnId && result) {
+                    safeEnqueue(`event: codex-turn-spend\ndata: ${JSON.stringify({ sessionId, turnId: targetTurnId, ...result })}\n\n`);
+                }
+            };
             const reasoning = createCodexReasoningTracker(sessionId, cachedSnapshot?.tokenUsage);
             const publishReasoning = (notification: CodexNotification) => {
                 const messages = reasoning.update(notification);
@@ -710,6 +720,7 @@ export async function createCodexStream(sessionId: string, signal: AbortSignal, 
             const reportTurnUsage = createTurnUsageReporter(safeEnqueue);
             const emitTokenUsage = (tokenUsage: CodexThreadTokenUsage) => {
                 flushPendingDelta();
+                turnSpend.observe(tokenUsage);
                 publishReasoning({ method: 'thread/tokenUsage/updated', params: { threadId: sessionId, turnId: targetTurnId ?? '', tokenUsage } } as CodexNotification);
                 const usage = mapCodexTokenUsageToContextUsage(tokenUsage, currentModel);
                 safeEnqueue(codexContextUsageToEventData(usage));

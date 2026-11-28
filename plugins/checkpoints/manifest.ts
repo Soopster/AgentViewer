@@ -21,7 +21,8 @@ export const manifest = {
     placements: ['overlay', 'window'],
     windowLabel: 'Checkpoints & review in a window',
     services: ['repository', 'checkpoints'],
-    optionalServices: ['notices', 'file-history', 'session'],
+    // With Second Opinion on, its findings are shown on the turns and lines they are about.
+    optionalServices: ['notices', 'file-history', 'session', 'second-opinion'],
   }],
   commands: [{
     id: 'checkpoints',

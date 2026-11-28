@@ -14,6 +14,7 @@ import { type SplitPaneOrientation } from '../../splitPaneState'
 import { type PaneFocus, type NoticeTone } from '../types'
 import { coordinatorAlertDelivery } from '../../../../lib/coordinatorSignals'
 import { subscribeInteractiveCoordinatorNotifications, getInteractiveCoordinatorNotifications } from '../../interactiveCoordinatorStore'
+import { holdDelivery } from '../../../../lib/plugins/deliveryGate'
 import { findTuiWorktreeTask, type WorktreeTask } from '../../../../lib/tui/service'
 import { WORKTREE_TASK_CWD_SEGMENT } from '../layoutConstants'
 import { type MutableRefObject } from 'react'
@@ -241,6 +242,8 @@ export function runRendererListenersEffect(ctx: RendererListenersEffectContext) 
   const unsubscribe = subscribeInteractiveCoordinatorNotifications(({ session, signal, viewing }) => {
     // Herdr's delivery setting: read at delivery, so a change applies at once.
     const delivery = coordinatorAlertDelivery(getInteractiveCoordinatorNotifications(), viewing, terminalFocusedRef.current)
+    // A finished teammate can wait out a focus block; one that needs the lead cannot.
+    if ((delivery.notice || delivery.desktop) && holdDelivery({ channel: 'notice', urgent: signal.kind !== 'finished', title: `Teammates · ${signal.title}`, detail: signal.detail, source: 'coordination' })) return
     if (delivery.notice) showNotice('info', `Teammates · ${signal.title} — ⌃K t in ${session.title}`, 6000)
     if (delivery.desktop) notifyTeamEvent(signal.kind === 'finished' ? 'teammate finished' : 'teammate needs attention', `${signal.title}: ${signal.detail}`.slice(0, 160))
   })

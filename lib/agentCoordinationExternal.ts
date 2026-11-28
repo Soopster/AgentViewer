@@ -399,8 +399,10 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   }
   if (action === 'query_context') {
     return queryExternalProtocolContext(participantIdentity!, {
-      query: text(body.query),
+      query: optionalText(body.query),
+      eventId: optionalText(body.eventId),
       limit: Number(body.limit) || undefined,
+      detailChars: body.detailChars === undefined ? undefined : Number(body.detailChars),
     })
   }
   if (action === 'remember') {

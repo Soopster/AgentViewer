@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useRenderer } from '@opentui/react'
 import { TextAttributes, parseColor, type BoxRenderable, type RGBA, type TabSelectRenderable } from '@opentui/core'
 import type { ViewTabStyle } from '../viewSpec'
-import { tabSegmentCaps } from './tabStrip'
+import { tabCloseSuffix, tabPaintWidth, tabSegmentCaps } from './tabStrip'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -25,28 +25,55 @@ export function tabConnectionGeometry(tabs: Rect, frame: Rect, index: number, of
 // The tab under the pointer, per strip. Hover repaints the strip alone (the
 // painter below reads it): routing it through React state would re-render the
 // root, mounted transcript included, on every mouse move across the tabs.
-const hoveredTabs = new WeakMap<TabSelectRenderable, number>()
+const tabPointers = new WeakMap<TabSelectRenderable, number>()
+
+function tabScrollOffset(tabs: TabSelectRenderable): number {
+  return (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
+}
+
+function visibleTabCount(tabs: TabSelectRenderable): number {
+  return Math.max(1, Math.floor(tabs.width / tabs.getTabWidth()))
+}
 
 /** The tab index a strip column falls in, or null outside every tab. */
 export function tabIndexAt(tabs: TabSelectRenderable, x: number): number | null {
   const column = x - tabs.x
   if (column < 0 || column >= tabs.width) return null
-  const index = ((tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0) + Math.floor(column / tabs.getTabWidth())
+  const slot = Math.floor(column / tabs.getTabWidth())
+  if (slot >= visibleTabCount(tabs)) return null
+  const index = tabScrollOffset(tabs) + slot
   return index < tabs.options.length ? index : null
 }
 
-/** Record the pointer over a strip (null when it leaves); repaints only on a change of tab. */
-export function noteTabStripHover(tabs: TabSelectRenderable | null, x: number | null) {
+function bubbleCloseColumn(tabs: TabSelectRenderable, index: number): number | null {
+  const slotWidth = tabs.getTabWidth()
+  const left = tabs.x + (index - tabScrollOffset(tabs)) * slotWidth
+  const width = tabPaintWidth('bubbles', Math.min(slotWidth, tabs.x + tabs.width - left))
+  return width >= 5 ? left + width - 2 : null
+}
+
+/** Match the visible close glyph, including one revealed by hovering an inactive bubble. */
+export function bubbleTabCloseHit(tabs: TabSelectRenderable | null, x: number, enabled: boolean): boolean {
+  if (!tabs || !enabled) return false
+  const index = tabIndexAt(tabs, x)
+  if (index === null || x !== bubbleCloseColumn(tabs, index)) return false
+  return tabCloseSuffix(tabs.options[index]!.name) !== '' || hoveredTabIndex(tabs) === index
+}
+
+/** Record the pointer over a strip (null when it leaves). */
+export function noteTabStripHover(tabs: TabSelectRenderable | null, x: number | null, trackClose = false) {
   if (!tabs) return
-  const index = x === null ? null : tabIndexAt(tabs, x)
-  if ((hoveredTabs.get(tabs) ?? null) === index) return
-  if (index === null) hoveredTabs.delete(tabs)
-  else hoveredTabs.set(tabs, index)
-  tabs.requestRender()
+  const previousX = tabPointers.get(tabs)
+  const previousIndex = hoveredTabIndex(tabs)
+  const close = previousIndex !== null && trackClose ? bubbleCloseColumn(tabs, previousIndex) : null
+  if (x === null) tabPointers.delete(tabs)
+  else tabPointers.set(tabs, x)
+  if (previousIndex !== hoveredTabIndex(tabs) || (close !== null && (x === close) !== (previousX === close))) tabs.requestRender()
 }
 
 export function hoveredTabIndex(tabs: TabSelectRenderable): number | null {
-  return hoveredTabs.get(tabs) ?? null
+  const x = tabPointers.get(tabs)
+  return x === undefined ? null : tabIndexAt(tabs, x)
 }
 
 /** Native chrome only: no layout changes, timers, hit targets, or root updates.
@@ -75,6 +102,8 @@ export function SessionTabConnection(props: {
   /** An inactive tab under the pointer: Chrome draws it as a tinted pill. */
   hoverForeground: string
   hoverBackground: string
+  bubbleHoverBackground?: string
+  bubbleClose?: { icon: string; hoverColor: string }
   /** The active tab in the `pills` style. */
   pillForeground?: string
   pillBackground?: string
@@ -101,13 +130,15 @@ export function SessionTabConnection(props: {
     foreground: parseColor(props.foreground), background: parseColor(props.background),
     inactiveForeground: parseColor(props.inactiveForeground), inactiveBackground: parseColor(props.inactiveBackground),
     hoverForeground: parseColor(props.hoverForeground), hoverBackground: parseColor(props.hoverBackground),
+    bubbleHoverBackground: parseColor(props.bubbleHoverBackground ?? props.hoverBackground),
+    closeHoverColor: parseColor(props.bubbleClose?.hoverColor ?? props.hoverForeground),
     pillForeground: parseColor(props.pillForeground ?? props.hoverForeground), pillBackground: parseColor(props.pillBackground ?? props.hoverBackground),
     windowsBackground: parseColor(props.windowsBackground ?? props.pillBackground ?? props.hoverBackground),
     windowsInactiveBackground: parseColor(props.windowsInactiveBackground ?? props.inactiveBackground),
     segmentBackground: parseColor(props.segmentBackground ?? props.hoverBackground),
     inactiveLabel: parseColor(props.inactiveLabel ?? props.hoverForeground),
     initials: new Map([...(props.initialColors ?? new Map<string, string>())].map(([key, color]) => [key, parseColor(color)] as const)),
-  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.pillForeground, props.pillBackground, props.windowsBackground, props.windowsInactiveBackground, props.segmentBackground, props.inactiveLabel, props.initialColors])
+  }), [props.foreground, props.background, props.inactiveForeground, props.inactiveBackground, props.hoverForeground, props.hoverBackground, props.bubbleHoverBackground, props.bubbleClose?.hoverColor, props.pillForeground, props.pillBackground, props.windowsBackground, props.windowsInactiveBackground, props.segmentBackground, props.inactiveLabel, props.initialColors])
   const palette = useRef(colors)
   useLayoutEffect(() => { latest.current = props; palette.current = colors })
   useEffect(() => {
@@ -131,60 +162,87 @@ export function SessionTabConnection(props: {
       const drawText = (text: string, x: number, y: number, fg: RGBA, bg: RGBA, attributes = 0) => {
         for (const [from, to] of paintRanges(x, text.length, y)) buffer.drawText(text.slice(from - x, to - x), from, y, fg, bg, attributes)
       }
-      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, pillForeground, pillBackground, windowsBackground, windowsInactiveBackground, inactiveLabel, initials } = palette.current
+      const { foreground, background, inactiveForeground, inactiveBackground, hoverForeground, hoverBackground, bubbleHoverBackground, closeHoverColor, pillForeground, pillBackground, windowsBackground, windowsInactiveBackground, inactiveLabel, initials } = palette.current
       const hoverStyle = current.hover ?? 'tint'
       const style = current.tabStyle ?? 'chrome'
       const tabWidth = tabs.getTabWidth()
       // Chrome's strip: inactive tabs have no outline, only a muted separator
       // between two of them (none beside the selected tab, none after the
       // last). Only the selected tab is raised, and it opens into the window.
-      const offset = (tabs as unknown as { scrollOffset: number }).scrollOffset ?? 0
+      const offset = tabScrollOffset(tabs)
       const selected = tabs.getSelectedIndex()
       const hovered = hoveredTabIndex(tabs)
-      const lifted = hovered !== null && hovered !== selected && hoverStyle !== 'none' ? hovered : null
+      const active = current.highlightSelected === false ? -1 : selected
+      const lifted = hovered !== null && hovered !== active && hoverStyle !== 'none' ? hovered : null
       const caps = tabSegmentCaps(style)
       if (caps) {
         if (tabs.x < 0 || tabs.y < 0 || tabs.y >= buffer.height || tabs.x + tabs.width > buffer.width) return
-        const end = Math.min(tabs.options.length, offset + Math.max(1, Math.floor(tabs.width / tabWidth)))
-        const active = current.highlightSelected === false ? -1 : selected
+        const end = Math.min(tabs.options.length, offset + visibleTabCount(tabs))
+        const bubbles = style === 'bubbles'
+        const hoverPill = hoverStyle === 'pill' ? lifted : null
         const fill = (index: number) => {
           if (index === active) return pillBackground
-          if (index === lifted && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise')) return hoverBackground
+          if (index === lifted && (hoverStyle === 'tint' || hoverStyle === 'pill' || hoverStyle === 'raise')) return bubbles ? bubbleHoverBackground : hoverBackground
           if (caps.joined && index % 2 !== 0) return windowsInactiveBackground
           return palette.current.segmentBackground
         }
         for (let index = offset; index < end; index++) {
           const x = tabs.x + (index - offset) * tabWidth
-          const width = Math.min(tabWidth, tabs.x + tabs.width - x)
+          const slotWidth = Math.min(tabWidth, tabs.x + tabs.width - x)
+          const width = tabPaintWidth(style, slotWidth)
           if (width < 4) continue
           const y = tabs.y
           const bg = fill(index)
-          const fg = index === active ? pillForeground : index === lifted && hoverStyle === 'accent' ? foreground : hoverForeground
+          const fg = index === active ? pillForeground
+            : index === lifted ? (hoverStyle === 'accent' ? foreground : hoverForeground)
+            : bubbles ? inactiveLabel : hoverForeground
+          const bold = (bubbles && index === active) || (index === lifted && hoverStyle === 'text')
+          const attributes = bold ? TextAttributes.BOLD : 0
           const option = tabs.options[index]!
           const previous = index > offset
           const next = index + 1 < end
           const right = x + width - 1
+          const suffix = bubbles && current.bubbleClose ? tabCloseSuffix(option.name) : ''
+          const closeColumn = bubbles && current.bubbleClose && (suffix || index === hovered) ? bubbleCloseColumn(tabs, index) : null
+          const label = suffix ? option.name.slice(0, -suffix.length) : option.name
+          const labelWidth = width - (closeColumn === null ? 2 : 4)
           drawText(' '.repeat(width - 2), x + 1, y, fg, bg)
           // Keep fitting in terminal cells, including when an overlay clips a wide title.
-          for (const [from, to] of paintRanges(x + 1, width - 2, y)) {
+          for (const [from, to] of paintRanges(x + 1, labelWidth, y)) {
             buffer.pushScissorRect(from, y, to - from, 1)
-            try { buffer.drawTextFit(option.name, x + 1, y, width - 2, fg, bg, true) }
+            try { buffer.drawTextFit(label, x + 1, y, labelWidth, fg, bg, true) }
             finally { buffer.popScissorRect() }
+            // drawTextFit has no attributes parameter. Keep its native grapheme fitting.
+            if (bold) buffer.withBuffers(cells => {
+              for (let column = from; column < to; column++) cells.attributes[y * cells.width + column] |= attributes
+            })
           }
           const provider = index !== active ? initials.get(String(option.value)) : undefined
-          const initial = provider && /(?:^|\s)([A-Z]) /.exec(option.name)
+          const initial = provider && /(?:^|\s)([A-Z]) /.exec(label)
           if (initial && initial.index <= 8) {
             const column = x + initial.index + initial[0].length - 1
-            if (column < right) drawText(initial[1]!, column, y, provider!, bg)
+            if (column < x + 1 + labelWidth) drawText(initial[1]!, column, y, provider!, bg, attributes)
           }
-          if (index === lifted && hoverStyle === 'underline' && y > 0) drawText('━'.repeat(width - 2), x + 1, y - 1, foreground, inactiveBackground)
+          if (closeColumn !== null && current.bubbleClose) {
+            const closeFg = tabPointers.get(tabs) === closeColumn ? closeHoverColor : hoverForeground
+            drawText(suffix.trim() || current.bubbleClose.icon, closeColumn, y, closeFg, bg, attributes)
+          }
+          if (index === lifted && y > 0) {
+            if (hoverStyle === 'underline') drawText('━'.repeat(width - 2), x + 1, y - 1, foreground, inactiveBackground)
+            if (hoverStyle === 'raise') drawText(`╭${'─'.repeat(width - 2)}╮`, x, y - 1, inactiveForeground, inactiveBackground)
+          }
           // The native scroll arrows occupy the outermost cells of the strip.
           if (!(tabs.showScrollArrows && !previous && offset > 0)) {
-            if (caps.joined && previous) drawText(' ', x, y, fg, bg)
+            if (index === hoverPill) drawText('▐', x, y, bg, inactiveBackground)
+            else if (caps.joined && previous && index - 1 !== hoverPill) drawText(' ', x, y, fg, bg)
             else drawText(caps.left, x, y, bg, inactiveBackground)
           }
-          if (!(tabs.showScrollArrows && end < tabs.options.length && right === tabs.x + tabs.width - 1)) {
-            drawText(caps.right, right, y, bg, caps.joined && next ? fill(index + 1) : inactiveBackground)
+          const lastColumn = x + slotWidth - 1
+          const rightArrow = tabs.showScrollArrows && end < tabs.options.length && lastColumn === tabs.x + tabs.width - 1
+          if (bubbles && !rightArrow) drawText(' ', lastColumn, y, inactiveLabel, inactiveBackground)
+          if (bubbles || !rightArrow) {
+            if (index === hoverPill) drawText('▌', right, y, bg, inactiveBackground)
+            else drawText(caps.right, right, y, bg, caps.joined && next && index + 1 !== hoverPill ? fill(index + 1) : inactiveBackground)
           }
         }
         return

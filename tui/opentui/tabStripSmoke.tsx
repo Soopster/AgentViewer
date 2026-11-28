@@ -1,28 +1,52 @@
 /** @jsxImportSource @opentui/react */
 import assert from 'node:assert/strict'
 import { createRef } from 'react'
-import { parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
-import { SessionTabConnection, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry } from './SessionTabConnection'
+import { TextAttributes, parseColor, type BoxRenderable, type TabSelectRenderable } from '@opentui/core'
+import { SessionTabConnection, bubbleTabCloseHit, noteTabStripHover, registerTabPaintOccluder, tabConnectionGeometry, tabIndexAt } from './SessionTabConnection'
 import { act, testRender } from './testRender'
-import { fitTextMiddle, tabHasClose, tabSegmentCaps, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
+import { fitTextMiddle, horizontalTabBarHeight, tabHasClose, tabPaintWidth, tabSegmentCaps, tabStripActivity, tabStripName, tabStripWidth } from './tabStrip'
 import { NERD_FONT_ICONS } from './icons'
 
 const nerdClose = tabStripActivity(tabStripName('A long title', 10, '', true, 'end', NERD_FONT_ICONS.error), 10, '●')
 assert.ok(tabHasClose(nerdClose))
 assert.equal(nerdClose[7], NERD_FONT_ICONS.error, 'activity preserves the selected icon at the close target')
 
-for (const style of ['powerline', 'bubbles', 'slant', 'pixel', 'flame'] as const) {
+const segmentCases = [
+  ...(['powerline', 'slant', 'pixel', 'flame'] as const).flatMap(style =>
+    (['tint', 'text'] as const).map(hover => ({ style, hover, closeEnabled: false }))),
+  ...(['tint', 'text', 'pill', 'raise', 'none'] as const).map(hover =>
+    ({ style: 'bubbles' as const, hover, closeEnabled: true })),
+  { style: 'bubbles', hover: 'tint', closeEnabled: false } as const,
+]
+for (const { style, hover, closeEnabled } of segmentCases) {
   const tabs = createRef<TabSelectRenderable>()
-  const options = ['Long first title', '中文', 'Third title'].map((label, i) => ({
-    name: tabStripName(label, 10, '', i === 0), value: String(i), description: '',
+  const bubbles = style === 'bubbles'
+  const nameWidth = tabPaintWidth(style, 10)
+  const y = horizontalTabBarHeight(style, hover) - 1
+  const options = ['Long first title', '中文長標題', 'Third title'].map((label, i) => ({
+    name: tabStripName(label, nameWidth, '', i === 0 && (!bubbles || closeEnabled)), value: String(i), description: '',
   }))
+  const closed: number[] = []
   const setup = await testRender(<box flexDirection="column">
+    {y > 0 ? <box height={y} /> : null}
     <tab-select ref={tabs} options={options} width={20} height={1} tabWidth={10} showDescription={false} showUnderline={false}
-      onMouseMove={event => noteTabStripHover(tabs.current, event.x)} />
+      onMouseMove={event => noteTabStripHover(tabs.current, event.x, closeEnabled)}
+      onMouseOut={() => noteTabStripHover(tabs.current, null)}
+      onMouseDown={event => {
+        const tab = tabs.current!
+        const index = tabIndexAt(tab, event.x)
+        if (index === null) return
+        if (bubbleTabCloseHit(tab, event.x, closeEnabled)) {
+          event.preventDefault()
+          closed.push(index)
+        } else tab.setSelectedIndex(index)
+      }} />
     <text>Transcript border</text>
-    <SessionTabConnection tabs={tabs} readWindow={() => null} ownerKey={null} enabled tabStyle={style}
+    <SessionTabConnection tabs={tabs} readWindow={() => null} ownerKey={null} enabled tabStyle={style} hover={hover}
       foreground="#00aaff" background="#101010" inactiveForeground="#555555" inactiveBackground="#101010"
-      hoverForeground="#eeeeee" hoverBackground="#414141" segmentBackground="#222222" windowsInactiveBackground="#161616"
+      hoverForeground="#eeeeee" hoverBackground="#414141" bubbleHoverBackground="#303a45"
+      bubbleClose={closeEnabled ? { icon: '×', hoverColor: '#ff4444' } : undefined}
+      inactiveLabel="#888888" segmentBackground="#222222" windowsInactiveBackground="#161616"
       pillForeground="#ffffff" pillBackground="#234567" />
   </box>, { width: 37, height: 5 })
   try {
@@ -30,23 +54,75 @@ for (const style of ['powerline', 'bubbles', 'slant', 'pixel', 'flame'] as const
     const caps = tabSegmentCaps(style)!
     const leading = caps.left
     const trailing = caps.right
-    const row = setup.captureCharFrame().split('\n')[0]!
+    const rows = () => setup.captureCharFrame().split('\n')
+    const at = (x: number, row = y) => {
+      let column = 0
+      for (const span of setup.captureSpans().lines[row].spans) {
+        column += span.width
+        if (x < column) return span
+      }
+      throw new Error(`Missing cell ${x},${row}`)
+    }
+    const row = rows()[y]!
     assert.equal(row[0], leading)
-    assert.equal(row[8], '×', 'the close target keeps its column')
-    assert.equal(row[9], trailing)
+    if (!bubbles || closeEnabled) assert.equal(row[nameWidth - 2], '×', 'the close target keeps its column')
+    assert.equal(row[nameWidth - 1], trailing)
     assert.equal(row[10], caps.joined ? ' ' : leading)
     assert.ok(row.includes('中文'))
     assert.ok(row.trimEnd().endsWith('›'), 'the overflow arrow stays visible')
-    assert.ok(setup.captureCharFrame().split('\n')[1]?.includes('Transcript border'))
-    await act(async () => { await setup.mockMouse.moveTo(11, 0) })
+    assert.ok(rows()[y + 1]?.includes('Transcript border'))
+    if (bubbles) {
+      assert.equal(row[9], ' ', 'the gap separates the two caps')
+      assert.deepEqual(at(9).bg, parseColor('#101010'))
+      assert.deepEqual(at(11).fg, parseColor('#888888'), 'inactive titles are muted')
+      assert.deepEqual(at(1).fg, parseColor('#ffffff'))
+      assert.equal(at(1).attributes & TextAttributes.BOLD, TextAttributes.BOLD, 'selected bubble titles are bold')
+      assert.equal(bubbleTabCloseHit(tabs.current, 17, closeEnabled), false, 'an invisible button cannot close')
+    }
+    await act(async () => { await setup.mockMouse.moveTo(11, y) })
     await setup.flush()
-    const hovered = setup.captureSpans().lines[0]!.spans.find(span => span.text.includes('中文'))
-    assert.deepEqual(hovered?.bg, parseColor('#414141'))
-    const remove = registerTabPaintOccluder(() => ({ x: 0, y: 0, width: 2, height: 1 }))
+    const hoverFill = hover === 'tint' || hover === 'pill' || hover === 'raise'
+    const restingFill = caps.joined ? '#161616' : '#222222'
+    assert.deepEqual(at(11).bg, parseColor(hoverFill ? (bubbles ? '#303a45' : '#414141') : restingFill))
+    assert.deepEqual(at(11).fg, parseColor(hover === 'none' ? '#888888' : '#eeeeee'))
+    assert.equal(at(11).attributes & TextAttributes.BOLD, hover === 'text' ? TextAttributes.BOLD : 0)
+    if (hover === 'pill') assert.equal(at(10).text, '▐', 'pill hover uses half-block caps')
+    if (hover === 'raise') assert.ok(rows()[y - 1].includes('╭───────╮'), 'raise draws an outline above the bubble')
+    if (bubbles && closeEnabled) {
+      assert.ok(at(17).text.endsWith('×'), 'the close glyph fits after a wide title')
+      assert.deepEqual(at(17).fg, parseColor('#eeeeee'))
+      assert.equal(bubbleTabCloseHit(tabs.current, 18, true), false, 'the cap cannot close the tab')
+      assert.equal(bubbleTabCloseHit(tabs.current, 19, true), false, 'the overflow arrow cannot close the tab')
+      await act(async () => { await setup.mockMouse.moveTo(17, y) })
+      await setup.flush()
+      assert.deepEqual(at(17).fg, parseColor('#ff4444'), 'pointing directly at close repaints it')
+      await act(async () => { await setup.mockMouse.click(17, y) })
+      assert.deepEqual(closed, [1], 'clicking closes the hovered inactive tab')
+      assert.equal(tabs.current!.getSelectedIndex(), 0, 'the click never selects the tab')
+      await act(async () => { await setup.mockMouse.moveTo(21, y) })
+      await setup.flush()
+      assert.equal((rows()[y].match(/×/g) ?? []).length, 1, 'mouse out restores the inactive title')
+      if (hover === 'tint') {
+        await act(async () => { tabs.current!.setSelectedIndex(2); await setup.mockMouse.moveTo(7, y) })
+        await setup.flush()
+        assert.equal(at(0).text, '‹', 'the left scroll arrow stays visible')
+        assert.ok(at(7).text.endsWith('×'), 'the revealed close follows the scrolled tab')
+        await act(async () => { await setup.mockMouse.click(7, y) })
+        assert.deepEqual(closed, [1, 1], 'the hit target uses the scrolled index')
+        assert.equal(tabs.current!.getSelectedIndex(), 2)
+        await act(async () => { tabs.current!.setSelectedIndex(0) })
+      }
+    } else if (bubbles) {
+      assert.ok(!rows()[y].includes('×'), 'the never setting hides close on hover')
+      await act(async () => { await setup.mockMouse.click(17, y) })
+      assert.deepEqual(closed, [])
+      assert.equal(tabs.current!.getSelectedIndex(), 1)
+    }
+    const remove = registerTabPaintOccluder(() => ({ x: 0, y, width: 2, height: 1 }))
     try {
       await act(async () => { tabs.current!.requestRender() })
       await setup.flush()
-      assert.equal(setup.captureCharFrame().split('\n')[0]![0], ' ', 'the painter leaves covered cells alone')
+      assert.equal(rows()[y]![0], ' ', 'the painter leaves covered cells alone')
     } finally { remove() }
   } finally {
     await act(async () => setup.renderer.destroy())
@@ -332,5 +408,5 @@ for (const hover of ['raise', 'underline', 'pill', 'text', 'accent', 'none'] as 
 assert.equal(fitTextMiddle('agentViewer · Add agent viewer plugin skill', 21), 'agentViewe…ugin skill')
 assert.equal(tabStripName('agentViewer · Add agent viewer plugin skill', 25, '', true, 'middle'), 'agentViewe…ugin skill ×')
 assert.equal(fitTextMiddle('short', 8), 'short   ')
-console.log('Tab strip passed: Chrome-style raised active tab, underline/pills/boxed/minimal/windows styles, tint/pill/raise/underline/text/accent/none hover, provider initials, middle truncation, inactive separators, hover lift, flush-left join, active-only close, scrolling and row bounds')
+console.log('Tab strip passed: connected and segmented styles, hover colors and bold text, Bubbles gaps and hover-to-close, provider initials, truncation, scrolling and row bounds')
 process.exit(0)

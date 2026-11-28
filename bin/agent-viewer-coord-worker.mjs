@@ -350,6 +350,7 @@ function makeTurnCancelledError(command, providerOutput) {
 function classifyProviderFailure(error) {
   const text = `${error?.message || error}\n${error?.providerOutput || ''}`.toLowerCase()
   if (error?.code === 'COORDINATOR_TURN_CANCELLED') return 'turn_cancelled'
+  if (error?.code === 'COORDINATOR_PROVIDER_EVIDENCE_MISSING') return 'provider_evidence_missing'
   if (error?.code === 'COORDINATOR_PROVIDER_TURN_TIMEOUT') return 'provider_timeout'
   if (error?.code === 'ENOENT' || /enoent|command not found|not recognized as/.test(text)) return 'cli_missing'
   if (/rate.?limit|quota|usage limit|credit balance|insufficient credits|billing|too many requests|429/.test(text)) return 'rate_limited'
@@ -430,21 +431,25 @@ function tickPrompt(state, actionable) {
     ? `You are working in an isolated git worktree at ${state.cwd}; stay within granted paths and leave integration to the lead.`
     : `You are working in the shared checkout at ${state.cwd}; keep writes inside granted non-overlapping paths, preserve existing changes, and do not reset or clean files owned by another participant.`
   const roleGuidance = state.role === 'lead'
-    ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, or perform board work yourself when no teammate is available.'
+    ? 'You are the lead: if the board is empty, seed it with independent tasks and explicit dependencies. Supervise and delegate before implementing. Claim lead integration/review work, or work a teammate lane only when no teammate is available.'
     : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked teammate lane. Complete, release, or hand off owned work before going idle.'
+  const statusView = state.role === 'lead' && (!actionable || actionable.needsPlan)
+    ? 'Start with full coord_status to recover the objective and board.'
+    : 'Start with coord_status(view="actionable"). Use full status when you need the roster or board.'
   return [
     `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
-    'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
+    `You are ALREADY bound. Keep this run identity. ${statusView}`,
     `Read and follow the coordinate-agents skill at ${skillPath} if it is not already loaded in this session; reload after context loss or a skill update.${skillFallback} Use the agent-viewer coord_* MCP tools now. These supervisor instructions are sufficient if no copy can be read.`,
     checkoutGuidance,
     roleGuidance,
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
     'Coordinate actively — teammates run in other CLIs and cannot see your terminal: answer reply_required mail first, publish reusable discoveries with coord_publish_finding, and send coord_send_message whenever your progress, blockers, or findings affect another lane.',
-    'If you are the lead, maintain an explicit status view for every teammate from coord_status: active task, working/blocked/idle state, latest update, and terminal task result. Do not interrupt healthy work; unblock, reassign, or add work when the board shows a real need.',
+    ...(state.role === 'lead' ? ['Inspect teammate ownership and progress when making staffing or recovery decisions. Preserve healthy work.'] : []),
     'If blocked, report blocked with coord_progress and include the exact obstacle; the Coordinator will alert the lead. Also message the teammate best placed to help, check the inbox for guidance, and report working again as soon as you can resume.',
     'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
     'Supply request_id on the first mutation and reuse it with identical arguments on retries; generated keys protect only one tool call. If no action is ready, return control to the supervisor; never call coord_wait, poll, or sleep inside this model turn. The supervisor receives board changes and will re-dispatch you.',
-    'If all tasks are terminal and you are lead, review every durable task result, synthesize the run, and finalize it. Never print participant credentials.',
+    ...(state.role === 'lead' ? ['When all tasks are terminal, review durable results, synthesize the run, and finalize it.'] : []),
+    'Never print participant credentials.',
     ...(actionable?.replyGuardReminder ? [actionable.replyGuardReminder] : []),
   ].join(' ')
 }
@@ -592,6 +597,7 @@ async function providerTick(state, baseUrl, actionable) {
     let droppingOversizedFrame = false
     let providerOutput = ''
     let providerReportedError = null
+    let observedProviderEvent = false
     let sessionStateSave = persistProviderAttempt({ state: 'submitted', pid: child.pid ?? null })
     let turnTimedOut = false
     let turnCancelled = false
@@ -665,6 +671,8 @@ async function providerTick(state, baseUrl, actionable) {
       if (!line || Buffer.byteLength(line) > PROVIDER_FRAME_MAX_BYTES) return
       try {
         const event = JSON.parse(line)
+        if (!event || typeof event !== 'object' || Array.isArray(event)) return
+        observedProviderEvent = true
         providerReportedError ||= providerEventFailure(event)
         // codex: thread_id · claude: session_id · opencode: sessionID (also
         // nested under info/part) · copilot: sessionId
@@ -740,6 +748,16 @@ async function providerTick(state, baseUrl, actionable) {
       try {
         if (!droppingOversizedFrame) consumeProviderLine(buffered)
         await sessionStateSave
+        // CLI transports request structured output. A process can exit zero
+        // before reporting any provider work, so keep ownership and require
+        // reconciliation rather than letting the next tick replay the turn.
+        if (code === 0 && !observedProviderEvent && !turnCancelled && !turnTimedOut && !shutdownRequested) {
+          await persistProviderAttempt({ exitCode: code, signal, sessionId: state.providerSessionId ?? null })
+          const error = new Error(`${command} exited without structured provider output`)
+          error.code = 'COORDINATOR_PROVIDER_EVIDENCE_MISSING'
+          reject(error)
+          return
+        }
         await persistProviderAttempt({ state: 'closed', exitCode: code, signal, sessionId: state.providerSessionId ?? null })
         if (turnCancelled) reject(turnCancelledError())
         else if (turnTimedOut) reject(providerTimeoutError())
@@ -1155,6 +1173,7 @@ function shouldTick(actionable, role) {
     && ownedTask.planState !== 'awaiting'
   if (role === 'lead') {
     return (actionable.plansAwaitingReview?.length ?? 0) > 0
+      || actionable.needsPlan === true
       || ownedTaskReady
       || (actionable.claimableTasks?.length ?? 0) > 0
       || actionable.allTasksTerminal === true

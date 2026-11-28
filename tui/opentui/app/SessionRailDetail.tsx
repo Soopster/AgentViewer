@@ -37,7 +37,7 @@ export const SessionRailDetail = React.memo(function SessionRailDetail({ session
   const text = [git?.branch ?? null, tree, pr ? (pr.state === 'UNKNOWN' ? pr.text : `${pr.text} ${pr.state.toLowerCase()}`) : null, tags || null].filter(Boolean).join('  ')
   if (!text) return null
   return (
-    <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+    <box paddingX={1} flexDirection="row">
       <text fg={accent} wrapMode="none" selectable={false}>▎</text>
       <text fg={mixHexColor(sidebarQuietColor(theme), rowBg, 0.8) ?? theme.dim} wrapMode="none" selectable={false}>{fitText(text, width - 3)}</text>
     </box>

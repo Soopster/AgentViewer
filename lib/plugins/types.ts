@@ -225,7 +225,7 @@ export type PluginManifest = {
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]
-    readonly services: readonly ('notifications' | 'activity' | 'permissions' | 'repository')[]
+    readonly services: readonly ('notifications' | 'activity' | 'permissions' | 'repository' | 'focus')[]
   }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number
@@ -318,6 +318,10 @@ export type PluginServiceId =
   | 'adaptive-ui'
   | 'plan-review'
   | 'proof'
+  /** Another model's review of an agent turn's diff. */
+  | 'second-opinion'
+  /** Focus Mode's block and what it held. */
+  | 'focus-mode'
   | 'notifications'
   | 'shell-overview'
   | 'run-launch'

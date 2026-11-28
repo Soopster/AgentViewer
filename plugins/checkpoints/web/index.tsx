@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '@/lib/plugins/types'
 import type { WebPluginView, WebPluginViewProps } from '@/components/shell/pluginTypes'
 import type { CheckpointFileChange, TurnCheckpoint, WorkingDiffHunk } from '@/lib/plugins/checkpoints'
+import { findingsForRange, findingsInFile, findingsInHunk, placeFindingsInDiff, secondOpinionGlyph, secondOpinionLabel, workingTreeFindings, type SecondOpinionFinding, type SecondOpinionSnapshot } from '@/lib/plugins/secondOpinion'
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const ago = (at: number) => {
@@ -16,12 +17,28 @@ const ago = (at: number) => {
 }
 const STATUS_COLOR: Record<CheckpointFileChange['status'], string> = { A: 'var(--green, #3fb950)', M: 'var(--amber, #d29922)', D: 'var(--red, #f85149)' }
 
-function DiffText({ text }: { text: string }) {
+const FINDING_COLOR: Record<SecondOpinionFinding['severity'], string> = { bug: 'var(--red, #f85149)', risk: 'var(--amber, #d29922)', nit: 'var(--text-2)' }
+
+function FindingNote({ finding }: { finding: SecondOpinionFinding }) {
+  return (
+    <div data-second-opinion-finding={finding.id} title={[finding.why, finding.suggestion && `Suggested: ${finding.suggestion}`].filter(Boolean).join('\n\n')}
+      style={{ color: FINDING_COLOR[finding.severity], fontFamily: 'var(--font-sans, sans-serif)', whiteSpace: 'normal', padding: '2px 8px', margin: '2px 0', borderLeft: `2px solid ${FINDING_COLOR[finding.severity]}` }}>
+      ◎ {secondOpinionGlyph(finding.severity)} {finding.severity}: {finding.title}
+    </div>
+  )
+}
+
+function DiffText({ text, findings = [], file }: { text: string; findings?: SecondOpinionFinding[]; file?: string }) {
   if (!text.trim()) return <div style={{ color: 'var(--text-2)' }}>No differences.</div>
+  const lines = text.split('\n')
+  const placed = placeFindingsInDiff(lines, findings, file)
   return (
     <pre data-checkpoint-diff style={{ margin: 0, fontFamily: 'var(--font-mono, monospace)', fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre', overflow: 'auto' }}>
-      {text.split('\n').map((line, index) => (
-        <div key={index} style={{ color: line.startsWith('+') && !line.startsWith('+++') ? 'var(--green, #3fb950)' : line.startsWith('-') && !line.startsWith('---') ? 'var(--red, #f85149)' : line.startsWith('@@') ? 'var(--cyan, #39c5cf)' : 'var(--text-2)' }}>{line || ' '}</div>
+      {lines.map((line, index) => (
+        <div key={index}>
+          <div style={{ color: line.startsWith('+') && !line.startsWith('+++') ? 'var(--green, #3fb950)' : line.startsWith('-') && !line.startsWith('---') ? 'var(--red, #f85149)' : line.startsWith('@@') ? 'var(--cyan, #39c5cf)' : 'var(--text-2)' }}>{line || ' '}</div>
+          {placed.get(index)?.map(finding => <FindingNote key={finding.id} finding={finding} />)}
+        </div>
       ))}
     </pre>
   )
@@ -46,6 +63,15 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
   const [confirm, setConfirm] = useState<string | null>(null)
   const [commitMessage, setCommitMessage] = useState('')
   const [generation, setGeneration] = useState(0)
+  const opinionService = services['second-opinion']
+  const [opinion, setOpinion] = useState<SecondOpinionSnapshot | null>(null)
+  useEffect(() => {
+    if (!opinionService) return undefined
+    const controller = new AbortController()
+    // Decoration only: a failed read leaves the view exactly as it is without reviews.
+    opinionService.read(cwd, controller.signal).then(next => { if (!controller.signal.aborted) setOpinion(next) }).catch(() => {})
+    return () => controller.abort()
+  }, [opinionService, cwd, generation])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -86,6 +112,7 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
   }, [confirm])
   const context = session ? { sessionId: session.sessionId, provider: session.provider, providerInstanceId: session.providerInstanceId } : undefined
   const checkpoint = list?.find(entry => entry.sha === selected) ?? null
+  const workingFindings = workingTreeFindings(opinion)
   const button = (key: string, label: string, action: () => Promise<string>, danger = true) => (
     <button type="button" disabled={busy} data-checkpoint-action={key} onClick={() => { void run(key, action) }}
       style={{ fontSize: 12, color: confirm === key && danger ? 'var(--red, #f85149)' : undefined }}>{confirm === key ? `${label}? click again` : label}</button>
@@ -100,7 +127,10 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
             <button key={entry.ref} type="button" data-checkpoint={entry.sha} onClick={() => { setSelected(entry.sha); setFile(null); setConfirm(null) }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 12px', border: 'none', borderBottom: '1px solid var(--border)', background: entry.sha === selected ? 'var(--surface-3)' : 'transparent', color: 'var(--text)', cursor: 'pointer' }}>
               <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label || '(no prompt)'}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{ago(entry.createdAt)}{entry.provider ? ` · ${entry.provider}` : ''} · {entry.sha.slice(0, 7)}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{ago(entry.createdAt)}{entry.provider ? ` · ${entry.provider}` : ''} · {entry.sha.slice(0, 7)}{(() => {
+                const review = opinion?.reviews.find(record => record.checkpointSha === entry.sha)
+                return review ? <span data-second-opinion-badge> · ◎ {secondOpinionLabel(review)}</span> : null
+              })()}</div>
             </button>
           ))}
       </div>
@@ -123,7 +153,7 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
             ))}
           <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 4 }}>{file ? file : 'All files'}</div>
-            {diff === null ? <div style={{ color: 'var(--text-2)' }}>Reading diff…</div> : <DiffText text={diff} />}
+            {diff === null ? <div style={{ color: 'var(--text-2)' }}>Reading diff…</div> : <DiffText text={diff} findings={findingsForRange(opinion, checkpoint.sha, null)} file={file ?? undefined} />}
           </div>
         </>}
       </div>
@@ -147,13 +177,14 @@ function Checkpoints({ services, placement, close }: WebPluginViewProps) {
             {button(`delete:${path}`, 'Delete', async () => { await checkpoints.deleteUntracked(cwd, path); return `Deleted ${path}` })}
           </div>
         ))}
+        {workingFindings ? working.untracked.flatMap(path => findingsInFile(path, workingFindings.findings).map(finding => <FindingNote key={`${path}:${finding.id}`} finding={finding} />)) : null}
         {working.hunks.map((hunk, index) => (
           <div key={`${hunk.file}:${hunk.header}:${index}`} data-checkpoint-hunk={hunk.file} style={{ border: '1px solid var(--border)', borderRadius: 6, margin: '8px 0', overflow: 'hidden' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 8px', background: 'var(--surface-2)', fontSize: 12 }}>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{hunk.file} <span style={{ color: 'var(--text-2)' }}>{hunk.header}</span></span>
               {button(`reject:${index}`, 'Reject', async () => { await checkpoints.rejectHunk(cwd, hunk.patchText); return `Rejected a hunk in ${hunk.file}` })}
             </div>
-            <div style={{ padding: '4px 8px' }}><DiffText text={hunk.lines.join('\n')} /></div>
+            <div style={{ padding: '4px 8px' }}>{workingFindings ? findingsInHunk(hunk, workingFindings.findings).map(finding => <FindingNote key={finding.id} finding={finding} />) : null}<DiffText text={hunk.lines.join('\n')} /></div>
           </div>
         ))}
       </>}

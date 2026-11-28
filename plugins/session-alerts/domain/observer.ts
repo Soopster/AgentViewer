@@ -8,11 +8,14 @@ export function createAlertObserver(context: PluginApplicationContext, readMode:
       const alerts = tracker.observe(snapshot.activity, snapshot.now)
       if (context.signal.aborted) return
       for (const alert of alerts) {
-        const title = snapshot.sessions.find(session => session.key === alert.key)?.title ?? 'A session'
+        const session = snapshot.sessions.find(entry => entry.key === alert.key)
+        const title = session?.title ?? 'A session'
         const delivery = sessionAlertDelivery(readMode(), snapshot.selectedKey === alert.key, snapshot.focused)
         const text = sessionAlertText(alert.kind, title)
-        if (delivery.notice) context.services.notifications?.notice(`${title} ${text.title}`)
-        if (delivery.desktop) context.services.notifications?.desktop(text.title, text.body.slice(0, 160))
+        // A session waiting on the person is never held by a focus block; a finished turn may be.
+        const options = { urgent: alert.kind === 'needs-input', ...(session?.target ? { target: session.target } : {}) }
+        if (delivery.notice) context.services.notifications?.notice(`${title} ${text.title}`, options)
+        if (delivery.desktop) context.services.notifications?.desktop(text.title, text.body.slice(0, 160), options)
       }
     },
   }

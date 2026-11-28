@@ -36,11 +36,16 @@ export type PluginApplicationServices = {
   readonly permissions?: PluginPermissionsService
   readonly activity?: Pick<import('./activityFeed').PluginActivityFeed, 'publish' | 'remove' | 'removeSource' | 'replaceSource'>
   readonly notifications?: import('./notifications').PluginNotifications & {
-    readonly notice: (text: string) => void
+    /** `urgent`: it asks something of the person (input, an approval), so a focus block never holds it. */
+    readonly notice: (text: string, options?: PluginDeliveryOptions) => void
     /** The host decides availability. Calling this never asks for permission. */
-    readonly desktop: (title: string, body: string) => void
+    readonly desktop: (title: string, body: string, options?: PluginDeliveryOptions) => void
   }
+  /** Focus Mode's block, for the plugin that holds interruptions during one. */
+  readonly focus?: import('./focusMode').FocusService
 }
+
+export type PluginDeliveryOptions = { readonly urgent?: boolean; readonly target?: import('./bookmarks').PluginSessionRef }
 
 export type PluginApplicationContext = {
   readonly signal: AbortSignal

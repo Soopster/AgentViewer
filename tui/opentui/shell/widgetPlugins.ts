@@ -10,5 +10,6 @@ export const tuiPluginWidgets = createPluginWidgetRegistry<TuiPluginWidget>('tui
   'plan-review': async () => (await import('../../../plugins/plan-review/tui/widget')).widgets,
   proof: async () => (await import('../../../plugins/proof/tui')).widgets,
   schedules: async () => (await import('../../../plugins/schedules/tui/widget')).widgets,
+  'focus-mode': async () => (await import('../../../plugins/focus-mode/tui')).widgets,
   'pi-activity': async () => (await import('../../../plugins/pi-activity/tui')).widgets,
 })

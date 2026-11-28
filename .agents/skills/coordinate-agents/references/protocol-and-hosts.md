@@ -277,11 +277,14 @@ that path retains provider discovery and backend authorization.
 
 Read full `coord_status` on first join/recovery or when you need the board/roster/locks.
 For routine next-action checks, use `coord_status(view="actionable")`. It keeps
-the caller identity, run status, cursor, phases and the complete actionable
-digest, including waiting ownership and reply obligations, while omitting the
-snapshot. Mutation and wait receipts already contain next actions: act on them
-without another status read. Use `coord_read_task` for a specific full receipt
-and a focused `coord_query_context` (limit 1 when sufficient) for full findings.
+the caller identity, run status, cursor, phases, waiting ownership and reply
+obligations. Mutation and wait receipts already include next actions.
+`claimableTasks` previews up to 12 eligible lanes with available paths.
+`claimableTaskCount` gives the total when the preview is shorter. Omit
+`task_id` on `coord_claim_task` to select the next eligible lane across the
+full board, or name a task to claim that lane specifically.
+Use `coord_read_task` for full receipts and `coord_query_context(event_id=…)`
+for exact finding detail.
 
 Create/delegate receipts omit the prompt you just supplied and private dispatch
 policy. They still report task identity/status, paths, dependencies, delegation

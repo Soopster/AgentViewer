@@ -252,7 +252,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           />
         </box>
       ) : (
-        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+        <box paddingX={1} flexDirection="row">
           <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
           {(childrenByParentId.get(sessionKey(entry.session))?.length ?? 0) > 0 ? <text
             id={`sidebar-subagents-toggle:${sessionKey(entry.session)}`} fg={sessionAccent} selectable={false}
@@ -276,7 +276,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
         </box>
       )}
       {singleRow ? null : (
-      <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+      <box paddingX={1} flexDirection="row">
         <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
         <text fg={activity === 'needs-input' ? theme.amber : sidebarQuietColor(theme)} wrapMode="none" selectable={false}>
           {/* The opening prompt, as the web row previews it, when it says more than the title.
@@ -296,7 +296,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
         : null}
       {/* Comfortable density retains the session recap below its compact row. */}
       {density !== 'comfortable' || !entry.session.recap ? null : (
-        <box paddingX={1} flexDirection="row" backgroundColor={rowBg}>
+        <box paddingX={1} flexDirection="row">
           <text fg={sessionAccent} wrapMode="none" selectable={false}>{selected ? '▎' : ' '}</text>
           <text fg={theme.muted} wrapMode="none" selectable={false}>{fitText(entry.session.recap.text, innerWidth - 3)}</text>
         </box>

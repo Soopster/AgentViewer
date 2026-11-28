@@ -13,6 +13,8 @@ import { manifest as skillsManager } from '../../plugins/skills-manager/manifest
 import { manifest as adaptiveUi } from '../../plugins/adaptive-ui/manifest'
 import { manifest as planReview } from '../../plugins/plan-review/manifest'
 import { manifest as proof } from '../../plugins/proof/manifest'
+import { manifest as secondOpinion } from '../../plugins/second-opinion/manifest'
+import { manifest as focusMode } from '../../plugins/focus-mode/manifest'
 // The bundled feature plugins' manifests: metadata only, safe in Web clients,
 // the TUI root and workers. Adding a plugin adds one line here and one line in
 // each renderer's loader list (components/shell/pluginViews.ts,
@@ -62,7 +64,7 @@ import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, viewStudio, worktreeTasks, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, secondOpinion, focusMode, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, viewStudio, worktreeTasks, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

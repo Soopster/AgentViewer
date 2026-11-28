@@ -9,6 +9,8 @@ const provider = process.env.COORD_SMOKE_PROVIDER ?? 'codex'
 assert.ok(['codex', 'claude'].includes(provider))
 const rounds = Number(process.env.COORD_LIVE_ROUNDS ?? 1)
 const idleSeconds = Number(process.env.COORD_LIVE_IDLE_SECONDS ?? 10)
+const requireUsage = process.env.COORD_LIVE_REQUIRE_USAGE === '1'
+const reportCalls = process.env.COORD_LIVE_REPORT_CALLS === '1'
 assert.ok(Number.isInteger(rounds) && rounds >= 1 && rounds <= 10)
 assert.ok(Number.isFinite(idleSeconds) && idleSeconds >= 0 && idleSeconds <= 300)
 const origin = process.env.COORD_SMOKE_ORIGIN ?? 'http://127.0.0.1:3210'
@@ -100,7 +102,29 @@ try {
       assert.equal(idle.interactive.delivery, null, 'idle started a delivery')
       assert.equal(idle.runningAgentIds.length, 0, 'work continued after completed results')
     }
-    console.log(JSON.stringify({ stage: 'round-passed', provider, round, automaticTurns: 4 - remaining, idleSeconds }))
+    const usageState = await request(`${endpoint}?provider=${provider}`)
+    const usage = usageState.interactive.resources?.usage
+    if (requireUsage) {
+      const roundTasks = usageState.snapshot.tasks.filter(task => !oldIds.has(task.id))
+      const taskTokens = roundTasks.map(task => task.receipt?.usage?.totalTokens ?? 0)
+      assert.ok(taskTokens.every(tokens => tokens > 0), 'all teammate receipts need observed provider tokens')
+      assert.ok(usage?.totalTokens > taskTokens.reduce((sum, tokens) => sum + tokens, 0), 'run usage must include lead tokens')
+    }
+    console.log(JSON.stringify({ stage: 'round-passed', provider, round, automaticTurns: 4 - remaining, idleSeconds, usage }))
+    if (reportCalls) {
+      for (const agent of usageState.snapshot.agents.filter(agent => agent.role === 'teammate')) {
+        const transcript = await request(`/api/sessions/${encodeURIComponent(agent.sessionId)}/messages?provider=${provider}&tail=1&limit=100`)
+        const tools = new Map()
+        for (const message of transcript.messages.filter(message => message.type === 'assistant')) {
+          const content = message.message?.content
+          if (!Array.isArray(content)) continue
+          for (const block of content) {
+            if (block.type === 'tool_use' && /^coord_/.test(block.name)) tools.set(block.id, block.name)
+          }
+        }
+        console.log(JSON.stringify({ stage: 'teammate-tools', provider, round, agentId: agent.id, tools: [...tools.values()] }))
+      }
+    }
   }
   assert.equal(execFileSync('git', ['-C', cwd, 'status', '--porcelain'], { encoding: 'utf8' }), '')
   console.log(JSON.stringify({ stage: 'passed', provider, rounds, tasks: rounds * 2, elapsedSeconds: Math.round((Date.now() - started) / 1000), fixtureUnchanged: true }))

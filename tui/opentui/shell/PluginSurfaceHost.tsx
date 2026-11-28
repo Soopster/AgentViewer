@@ -11,6 +11,8 @@ import { tuiSkillsManager } from './skillsManagerService'
 import { tuiAdaptiveUi } from './adaptiveUiService'
 import { tuiPlanReview } from './planReviewService'
 import { tuiProof } from './proofService'
+import { tuiSecondOpinion } from './secondOpinionService'
+import { tuiFocus } from './focusService'
 import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useScopedNotifications } from '../../../lib/plugins/useScopedNotifications'
@@ -173,7 +175,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
       notifications,
-      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'adaptive-ui': tuiAdaptiveUi, 'plan-review': tuiPlanReview, proof: tuiProof,
+      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'adaptive-ui': tuiAdaptiveUi, 'plan-review': tuiPlanReview, proof: tuiProof, 'second-opinion': tuiSecondOpinion, 'focus-mode': tuiFocus,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),

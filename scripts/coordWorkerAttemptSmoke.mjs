@@ -19,14 +19,18 @@ await writeFile(provider, `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs'
 const count = ${JSON.stringify(count)}
 writeFileSync(count, String(Number(readFileSync(count, 'utf8')) + 1))
+const mode = readFileSync(${JSON.stringify(mode)}, 'utf8')
+if (mode === 'silent') process.exit(0)
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'retained-native-session' }))
-if (readFileSync(${JSON.stringify(mode)}, 'utf8') === 'hang') setInterval(() => {}, 1000)
+if (mode === 'hang') setInterval(() => {}, 1000)
 `)
 await chmod(provider, 0o700)
+const actions = []
 const daemon = createServer(async (request, response) => {
   let raw = ''
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
+  actions.push(body.action)
   response.setHeader('Content-Type', 'application/json')
   const snapshot = { run: { id: 'attempt-run', status: 'running' }, agents: [], tasks: [], locks: [], messages: [], events: [] }
   response.end(JSON.stringify(body.action === 'join_run' || body.action === 'resume'
@@ -90,6 +94,20 @@ try {
   assert.equal(record.providerAttempt.sessionId, 'retained-native-session')
   assert.equal(record.providerAttempt.providerInstanceId, null, 'unobserved provider account remains unknown')
   assert.ok(record.providerAttempts.length <= 10)
+  actions.length = 0
+  await writeFile(mode, 'silent')
+  const silent = launch(['--identity', identity, '--attach', attach])
+  assert.equal(await exited(silent), 1)
+  const silentRecord = JSON.parse(await readFile(workerRecordPath(identity), 'utf8'))
+  assert.equal(silentRecord.status, 'needs_recovery')
+  assert.equal(silentRecord.providerAttempt.state, 'uncertain')
+  assert.equal(silentRecord.providerAttempt.exitCode, 0)
+  assert.equal(silentRecord.providerAttempt.failureClass, 'provider_evidence_missing')
+  assert.equal(silentRecord.providerAttempt.sessionId, 'retained-native-session')
+  assert.ok(!actions.includes('handoff_task') && !actions.includes('leave_run'), 'uncertain output retains ownership')
+  const rejected = launch(['--identity', identity, '--attach', attach])
+  assert.equal(await exited(rejected), 1)
+  assert.equal(await readFile(count, 'utf8'), '3', 'silent success must never trigger an automatic replay')
   console.log('Worker attempts passed: killed supervisor retains a live detached child; default/provider-change/pinned restarts refuse duplicates, stale pins reject, exact post-stop reconciliation starts one turn and preserves history/session.')
 } finally {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')

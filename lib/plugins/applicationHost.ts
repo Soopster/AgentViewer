@@ -1,4 +1,5 @@
 import { createLazyRegistry } from '../extensions/lazyRegistry'
+import { holdDelivery } from './deliveryGate'
 import { createPluginResourceScope } from './lifecycle'
 import { isPluginEnabled, subscribePluginEnablement } from './enablement'
 import { PLUGIN_API_VERSION, type PluginManifest, type PluginRenderer } from './types'
@@ -57,9 +58,10 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
             const services: PluginApplicationServices = { ...(declared.includes('repository') && offered.repository ? { repository: { readGit: cwd => offered.repository!.readGit(cwd), readProof: (cwd, signal) => offered.repository!.readProof(cwd, signal) } } : {}), ...(declared.includes('permissions') && offered.permissions ? { permissions: { respond: (target, id, response) => current.scope.signal.aborted ? Promise.reject(new Error('Plugin deactivated')) : offered.permissions!.respond(target, id, response), answer: (target, id, answers) => current.scope.signal.aborted ? Promise.reject(new Error('Plugin deactivated')) : offered.permissions!.answer(target, id, answers) } } : {}), ...(declared.includes('activity') && offered.activity ? { activity: { publish: input => { if (!current.scope.signal.aborted) offered.activity!.publish(input) }, remove: offered.activity.remove, removeSource: offered.activity.removeSource, replaceSource: (source, items) => { if (!current.scope.signal.aborted) offered.activity!.replaceSource(source, items) } } } : {}), ...(notifications ? { notifications: {
               show: (kind, text, options) => current.scope.signal.aborted ? '' : notifications.show(kind, text, options),
               dismiss: id => { if (!current.scope.signal.aborted) notifications.dismiss(id) },
-              notice: text => { if (!current.scope.signal.aborted) notifications.notice(text) },
-              desktop: (title, body) => { if (!current.scope.signal.aborted) notifications.desktop(title, body) },
-            } } : {}) }
+              // Every plugin's notices and desktop notifications pass the delivery gate (a focus block).
+              notice: (text, options) => { if (!current.scope.signal.aborted && !holdDelivery({ channel: 'notice', urgent: options?.urgent === true, title: text, target: options?.target, source: manifest.id })) notifications.notice(text) },
+              desktop: (title, body, options) => { if (!current.scope.signal.aborted && !holdDelivery({ channel: 'desktop', urgent: options?.urgent === true, title, detail: body, target: options?.target, source: manifest.id })) notifications.desktop(title, body) },
+            } } : {}), ...(declared.includes('focus') && offered.focus ? { focus: offered.focus } : {}) }
             current.observer = module.activate({ signal: current.scope.signal, services, defer: current.scope.defer })
             assertSynchronous(current.observer, manifest.id)
             if (typeof current.observer?.onSessionActivity !== 'function') throw new Error(`Plugin ${manifest.id} has no sessionActivity observer`)

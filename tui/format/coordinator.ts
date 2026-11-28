@@ -213,7 +213,7 @@ function coordinatorObligations(actionable: Record<string, unknown> | null): str
   if (!actionable) return []
   const count = (key: string) => typeof actionable[key] === 'number' ? actionable[key] as number : 0
   const plans = Array.isArray(actionable.plansAwaitingReview) ? actionable.plansAwaitingReview.length : 0
-  const claimable = Array.isArray(actionable.claimableTasks) ? actionable.claimableTasks.length : 0
+  const claimable = count('claimableTaskCount') || (Array.isArray(actionable.claimableTasks) ? actionable.claimableTasks.length : 0)
   const overlaps = Array.isArray(actionable.overlapWarnings) ? actionable.overlapWarnings.length : 0
   const mine = record(actionable.myTask)
   return [

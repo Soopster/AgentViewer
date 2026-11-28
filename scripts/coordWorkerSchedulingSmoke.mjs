@@ -38,6 +38,7 @@ for (const scenario of [
   { name: 'idle-until-mail', idle: true, wakeByMail: true },
   { name: 'blocked-heartbeat-flood', status: 'blocked', planState: 'approved', wakeByMail: true, wakeAfter: 12 },
   { name: 'resume-runnable-immediately', status: 'in_progress', planState: 'approved', resume: true, runnable: true },
+  { name: 'resume-lead-before-planning', idle: true, lead: true, resume: true, runnable: true },
   { name: 'resume-blocked-until-mail', status: 'blocked', planState: 'approved', wakeByMail: true, resume: true },
   { name: 'resume-planned-until-approved', status: 'planned', planState: 'awaiting', resume: true },
   { name: 'resume-outage-then-terminal', status: 'blocked', planState: 'approved', outage: 'read', terminal: true, resume: true },
@@ -55,7 +56,7 @@ for (const scenario of [
   const identityFile = path.join(root, `${scenario.name}.json`)
   if (scenario.resume) await writeFile(identityFile, JSON.stringify({
     runId: 'scheduling-run', agentId: 'teammate', token: 'test-secret',
-    name: scenario.name, role: 'teammate', provider: 'codex', cwd: root,
+    name: scenario.name, role: scenario.lead ? 'lead' : 'teammate', provider: 'codex', cwd: root,
     providerSessionId: 'existing-provider-session',
   }))
   const wakeAfter = scenario.wakeAfter ?? 3
@@ -127,6 +128,7 @@ for (const scenario of [
         actionable: {
           runStatus: snapshot.run.status,
           inboxCount: awakened && scenario.wakeByMail ? 1 : 0,
+          needsPlan: scenario.lead && snapshot.run.status === 'running',
           replyRequiredCount: 0, plansAwaitingReview: [],
           // A spare lane must not wake a teammate already owning blocked work.
           claimableTasks: scenario.idle ? [] : [{ id: 'other-task', targetRole: 'teammate' }],

@@ -42,7 +42,7 @@ Before finalization, verify the requested participation through completed tasks,
 
 While the run is nonterminal:
 
-1. Read inbox and status on entry: full for join/recovery, `view="actionable"` for routine turns; let `actionable` choose the next step: answer `replyRequiredCount`, continue `myTask`, claim `claimableTasks`, review `plansAwaitingReview`, or inspect `allTasksTerminal`. Push/wait already carries state. `coord_read_task` returns full receipts/handoffs; `coord_list_tasks` finds older task IDs. Use `coord_query_context` for prior decisions or full findings.
+1. Use the supplied assignment or push/wait state when present. Otherwise read inbox and status (full on join/recovery, `view="actionable"` routinely). Answer required replies, then continue, claim, review, or finalize as indicated. `coord_read_task` returns full receipts/handoffs; `coord_list_tasks` finds older task IDs. Use `coord_query_context` for prior decisions or full findings.
 2. Answer `replyRequired` mail with `coord_send_message(kind="response", in_reply_to=<message-id>)`. Reading acknowledges delivery; it does not answer. `coord_read_inbox(unresolved=true)` lists what you still owe, with original ids, without acknowledging anything. Check mail during long work so changed instructions arrive before more edits.
 3. Do role-appropriate work. Report new evidence, a blocker, or a changed next action once — through progress, a finding, or mail to those affected — not in every channel, and never mail just to check liveness.
 4. Interactive participants heartbeat about every two minutes of long work. Managed supervisors heartbeat for you; still report meaningful progress. On `replyGuardReminder`, report real progress or an obstacle; never invent activity.

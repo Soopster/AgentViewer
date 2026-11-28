@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes', 'view-studio', 'worktree-tasks']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'second-opinion', 'focus-mode', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes', 'view-studio', 'worktree-tasks']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).module,
@@ -23,6 +23,8 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'adaptive-ui': async () => (await import('../../../plugins/adaptive-ui/tui')).module,
   'plan-review': async () => (await import('../../../plugins/plan-review/tui')).module,
   proof: async () => (await import('../../../plugins/proof/tui')).module,
+  'second-opinion': async () => (await import('../../../plugins/second-opinion/tui')).module,
+  'focus-mode': async () => (await import('../../../plugins/focus-mode/tui')).module,
   checkpoints: async () => (await import('../../../plugins/checkpoints/tui')).module,
   'file-history': async () => (await import('../../../plugins/file-history/tui')).module,
   messaging: async () => (await import('../../../plugins/messaging/tui')).module,
