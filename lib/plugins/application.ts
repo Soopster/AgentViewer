@@ -43,6 +43,8 @@ export type PluginApplicationServices = {
   }
   /** Focus Mode's block, for the plugin that holds interruptions during one. */
   readonly focus?: import('./focusMode').FocusService
+  /** The person's own editor (Open in IDE). */
+  readonly ide?: import('./openInIde').PluginIdeService
 }
 
 export type PluginDeliveryOptions = { readonly urgent?: boolean; readonly target?: import('./bookmarks').PluginSessionRef }

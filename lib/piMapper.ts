@@ -14,6 +14,7 @@ import type {
 } from './types'
 import { PI_CAPABILITIES } from './provider'
 import type { PiSessionListEntry } from './piClient'
+import { thinJson } from './plugins/thinJson'
 import { recordRawFrames } from './rawFrames'
 
 type PiStoredMetadata = {
@@ -222,6 +223,8 @@ function mapSingleMessage(
         toolName: string
         content: AnyContent[]
         isError: boolean
+        structuredContent?: unknown
+        details?: unknown
       }
       return [{
         type: 'user',
@@ -238,6 +241,8 @@ function mapSingleMessage(
             tool_use_id: tr.toolCallId,
             content: toolResultContentToBlocks(tr.content),
             is_error: tr.isError || undefined,
+            ...((tr.toolName === 'web_search' || tr.toolName === 'fetch_content') && (tr.structuredContent ?? tr.details) != null
+              ? { structuredContent: thinJson(tr.structuredContent ?? tr.details) } : {}),
           }],
         },
       }]

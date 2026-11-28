@@ -13,6 +13,7 @@ import { tuiPlanReview } from './planReviewService'
 import { tuiProof } from './proofService'
 import { tuiSecondOpinion } from './secondOpinionService'
 import { tuiFocus } from './focusService'
+import { tuiIde } from './ideService'
 import { recordModDiagnostic } from '../../../lib/plugins/modDiagnostics'
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useScopedNotifications } from '../../../lib/plugins/useScopedNotifications'
@@ -175,7 +176,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
     const offered = Object.entries(provided ?? {}).filter(([id, value]) => value && wants(id as PluginServiceId))
     return resolvePluginServices<TuiPluginServices>(surface, {
       notifications,
-      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'adaptive-ui': tuiAdaptiveUi, 'plan-review': tuiPlanReview, proof: tuiProof, 'second-opinion': tuiSecondOpinion, 'focus-mode': tuiFocus,
+      'instructions-manager': tuiInstructionsManager, 'project-memory': tuiProjectMemory, 'skills-manager': tuiSkillsManager, 'adaptive-ui': tuiAdaptiveUi, 'plan-review': tuiPlanReview, proof: tuiProof, 'second-opinion': tuiSecondOpinion, 'focus-mode': tuiFocus, 'open-in-ide': tuiIde,
       ...Object.fromEntries(offered),
       ...(wantsTranscript ? { 'session-transcript': { detail: transcript, status: transcriptStatus } } : {}),
       ...(wants('repository') ? { repository: { cwd: repositoryCwd, sessionId: repositorySessionId, ...(repositoryLabel ? { label: repositoryLabel } : {}) } } : {}),
@@ -289,7 +290,7 @@ function ActivePluginSurface(props: PluginSurfaceHostProps) {
       {offersWindow
         ? (
           // Same origin and layer as before; only here so the view's frame can be measured.
-          <box ref={frame as never} position="absolute" top={0} left={0} width={width} height={height} zIndex={zIndex}>
+          <box ref={frame as never} id={`plugin-overlay-frame:${surfaceId}`} position="absolute" top={0} left={0} width={width} height={height} zIndex={zIndex}>
             <PluginErrorBoundary key={attempt} onError={setFailure}><Component {...viewProps} /></PluginErrorBoundary>
             {detach}
           </box>

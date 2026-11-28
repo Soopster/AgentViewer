@@ -61,7 +61,7 @@ export function createPluginApplicationHost(renderer: PluginRenderer, manifests:
               // Every plugin's notices and desktop notifications pass the delivery gate (a focus block).
               notice: (text, options) => { if (!current.scope.signal.aborted && !holdDelivery({ channel: 'notice', urgent: options?.urgent === true, title: text, target: options?.target, source: manifest.id })) notifications.notice(text) },
               desktop: (title, body, options) => { if (!current.scope.signal.aborted && !holdDelivery({ channel: 'desktop', urgent: options?.urgent === true, title, detail: body, target: options?.target, source: manifest.id })) notifications.desktop(title, body) },
-            } } : {}), ...(declared.includes('focus') && offered.focus ? { focus: offered.focus } : {}) }
+            } } : {}), ...(declared.includes('focus') && offered.focus ? { focus: offered.focus } : {}), ...(declared.includes('ide') && offered.ide ? { ide: offered.ide } : {}) }
             current.observer = module.activate({ signal: current.scope.signal, services, defer: current.scope.defer })
             assertSynchronous(current.observer, manifest.id)
             if (typeof current.observer?.onSessionActivity !== 'function') throw new Error(`Plugin ${manifest.id} has no sessionActivity observer`)

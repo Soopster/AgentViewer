@@ -28,6 +28,7 @@ import { recordVoice } from './voiceRecorder'
 import { lazyComponent } from './lazyComponent'
 import { PluginSurfaceHost } from './shell/PluginSurfaceHost'
 import { tuiFocus } from './shell/focusService'
+import { tuiIde } from './shell/ideService'
 import type { TuiPluginCapture, TuiProvidedPluginServices } from './shell/pluginTypes'
 import { useApplicationPlugins } from '../../lib/plugins/useApplicationPlugins'
 import { usePluginCommands } from '../../lib/plugins/usePluginCommands'
@@ -326,6 +327,8 @@ import { tuiHandoff } from './shell/handoffService'
 import { tuiBookmarks } from './shell/bookmarksService'
 import { tuiSchedules } from './shell/schedulesService'
 import { tuiChiefOfStaff } from './shell/chiefOfStaffService'
+import { tuiPstack } from './shell/pstackService'
+import { tuiMattSkills } from './shell/mattSkillsService'
 import { tuiProvenance } from './shell/provenanceService'
 import { tuiCheckpoints } from './shell/checkpointsService'
 import { tuiSessionInsights } from './shell/sessionInsightsService'
@@ -1538,8 +1541,9 @@ function OpenTuiWorkspace() {
       if (summaries.length === 0) continue
       const parentSession = filteredSessionsForSidebar.find((session) => sessionKey(session) === parentKey)
       if (!parentSession) continue
-      const entries: SidebarSubagentEntry[] = summaries.map((summary) => ({ kind: 'summary', summary }))
       const existing = map.get(parentKey)
+      const listed = new Set(existing?.flatMap(child => child.kind === 'session' ? [child.session.sessionId] : []))
+      const entries: SidebarSubagentEntry[] = summaries.filter(summary => !listed.has(summary.agentId)).map(summary => ({ kind: 'summary', summary }))
       if (existing) existing.push(...entries)
       else map.set(parentKey, entries)
     }
@@ -3641,7 +3645,7 @@ function OpenTuiWorkspace() {
     ...tuiNotifications.service,
     notice: applicationNotice,
     desktop: notifyTeamEvent,
-  }, focus: tuiFocus }), [applicationNotice, notifyTeamEvent])
+  }, focus: tuiFocus, ide: tuiIde }), [applicationNotice, notifyTeamEvent])
   const pendingAsksByKey = useMemo(() => {
     const byKey = new Map<string, PendingPermission[]>()
     for (const ask of [...pendingPermissions, ...backgroundPrompts]) {
@@ -5442,6 +5446,8 @@ function OpenTuiWorkspace() {
     bookmarks: tuiBookmarks,
     schedules: tuiSchedules,
     'chief-of-staff': tuiChiefOfStaff,
+    pstack: tuiPstack,
+    'matt-skills': tuiMattSkills,
     'session-navigation': { open: openSessionAtMessage },
     'activity-control': activityControl,
     provenance: tuiProvenance,

@@ -17,6 +17,8 @@ import {
   deletePiSession,
   listPiSessions,
   openPiAgentSession,
+  peekPiAgentSession,
+  openPiSubagentSessionManager,
   setPiSessionName,
 } from '../piClient'
 import {
@@ -42,12 +44,55 @@ import {
   sessionMessageIdentity,
 } from '../liveTranscripts'
 import { readMappedMessagesCache, writeMappedMessagesCache } from '../mappedMessagesCache'
+import { piSubagentRows, readPiSubagentProgress } from '../piSubagents'
+import { readSessionCompaction } from '../sessionCompaction'
+import { readPiMcpStatus } from '../piMcpDiagnostics'
 import { PI_SLASH_COMMANDS } from '../piComposer'
 import { sortMessagesChronologically } from './shared'
 import type { SessionAdapter } from './types'
 
+async function piChildren(sessionId: string) {
+  const entries = await getPiSessionEntries(sessionId)
+  const rows = new Map(readPiSubagentProgress(sessionId).map(row => [row.agentId, row]))
+  for (const entry of entries.slice(-500)) {
+    if (entry.type !== 'message') continue
+    const message = entry.message as { role: string; toolName?: string; toolCallId?: string; customType?: string; details?: unknown; isError?: boolean }
+    const result = message.role === 'toolResult' && message.toolName === 'subagent'
+    if (!result && !(message.role === 'custom' && message.customType === 'subagent-notify')) continue
+    for (const row of piSubagentRows(message.toolCallId ?? entry.id, message.details, result && message.isError ? 'failed' : undefined)) {
+      const previous = rows.get(row.agentId)
+      rows.set(row.agentId, { ...row, childSessionId: row.childSessionId ?? previous?.childSessionId, sessionFile: row.sessionFile ?? previous?.sessionFile })
+    }
+  }
+  const recent = [...rows.values()].slice(-50)
+  const catalog = recent.some(row => row.childSessionId || row.sessionFile) ? await listPiSessions().catch(() => []) : []
+  const knownIds = new Set(catalog.map(row => row.id))
+  const knownPaths = new Map(catalog.map(row => [row.path, row.id]))
+  const projected = await Promise.all(recent.map(async ({ childSessionId, sessionFile, ...row }) => {
+    const listed = sessionFile ? knownPaths.get(sessionFile) : childSessionId && knownIds.has(childSessionId) ? childSessionId : undefined
+    const manager = !listed && sessionFile ? await openPiSubagentSessionManager(sessionId, sessionFile) : undefined
+    const linked = listed ?? manager?.getSessionId()
+    const transcriptAvailable = !!linked && linked !== sessionId && (!childSessionId || childSessionId === linked)
+    const agentId = transcriptAvailable ? linked : row.agentId
+    const summary = { ...row, agentId, transcriptAvailable }
+    return { summary, manager: transcriptAvailable ? manager : undefined }
+  }))
+  return [...new Map(projected.map(child => [child.summary.agentId, child])).values()]
+}
+
 export const piAdapter: SessionAdapter = {
   provider: 'pi',
+
+  async readSubagentSummaries(sessionId) {
+    return (await piChildren(sessionId)).map(child => child.summary)
+  },
+
+  async readSubagentMessages(sessionId, agentId) {
+    const child = (await piChildren(sessionId)).find(row => row.summary.agentId === agentId && row.summary.transcriptAvailable)
+    if (!child) return []
+    const entries = child.manager ? child.manager.getBranch() : await getPiSessionEntries(agentId)
+    return mapPiEntriesToSessionMessages(agentId, entries)
+  },
 
   async listSessions({ limit, offset, dir }) {
     const sessions = await listPiSessions(dir || undefined)
@@ -166,22 +211,35 @@ export const piAdapter: SessionAdapter = {
       if (currentModel && thinkingLevel !== undefined) break
     }
 
-    const agentSession = await openPiAgentSession(sessionId)
-    const sessionFile = agentSession.sessionManager.getSessionFile()
-    const cwd = agentSession.sessionManager.getCwd()
-    const stats = agentSession.getSessionStats()
+    const agentSession = peekPiAgentSession(sessionId)
+    const sessionFile = agentSession?.sessionManager.getSessionFile()
+    const cwd = agentSession?.sessionManager.getCwd()
+    const stats = agentSession?.getSessionStats()
+    const context = stats?.contextUsage
+    const compaction = readSessionCompaction('pi', sessionId)
+    const tools = agentSession?.getAllTools() ?? []
+    const mcp = agentSession ? readPiMcpStatus(agentSession) : undefined
+    const mcpTools = tools.filter(tool => tool.name === 'mcp' || tool.name.startsWith('mcp__')).map(tool => tool.name)
+    const contextItems = context?.tokens != null
+      ? [`${context.tokens.toLocaleString()}${context.contextWindow ? ` / ${context.contextWindow.toLocaleString()}` : ''} tokens`]
+      : ['Context usage unavailable']
+    if (!compaction.status && entries.some(entry => entry.type === 'compaction')) contextItems.push('Earlier compaction recorded')
 
     return {
       currentModel: currentModel ?? null,
-      sections: mapPiDiagnosticsToSections({
-        sessionId,
-        cwd,
-        currentModel,
-        thinkingLevel: agentSession.thinkingLevel ?? thinkingLevel,
-        toolNames: agentSession.getActiveToolNames(),
-        sessionFile,
-        stats,
-      }),
+      sections: [
+        { id: 'context', title: 'CONTEXT', items: contextItems, compaction },
+        { id: 'mcp', title: 'MCP', items: mcp ?? (mcpTools.length ? ['Server status unavailable', ...mcpTools] : ['MCP inventory unavailable']) },
+        ...mapPiDiagnosticsToSections({
+          sessionId,
+          cwd,
+          currentModel,
+          thinkingLevel: agentSession?.thinkingLevel ?? thinkingLevel,
+          toolNames: agentSession?.getActiveToolNames() ?? [],
+          sessionFile,
+          stats,
+        }),
+      ],
     }
   },
 }

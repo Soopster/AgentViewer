@@ -34,12 +34,19 @@ declare global {
 }
 
 const BUNDLED_BEHAVIORS: Record<string, () => Promise<PluginBehaviorModule>> = {
+  'web-results': async () => (await import('../../plugins/web-results/server')).behavior,
   'project-memory': async () => (await import('../../plugins/project-memory/server')).behavior,
   'adaptive-ui': async () => (await import('../../plugins/adaptive-ui/server')).behavior,
   'plan-review': async () => (await import('../../plugins/plan-review/server')).behavior,
+  pstack: async () => (await import('../../plugins/pstack/server')).behavior,
+  'matt-skills': async () => (await import('../../plugins/matt-skills/server')).behavior,
   'chief-of-staff': async () => (await import('../../plugins/chief-of-staff/server')).behavior,
   'second-opinion': async () => (await import('../../plugins/second-opinion/server')).behavior,
   'composer-context': async () => (await import('../../plugins/composer-context/server')).behavior,
+}
+
+export const bundledPiToolLoaders = {
+  'pi-interview': async () => (await import('../../plugins/pi-interview/server')).interviewTool,
 }
 
 function state(): BehaviorState {

@@ -37,6 +37,27 @@ const saturation = ([r, g, b]: [number, number, number]) => (Math.max(r, g, b) -
 const hex = (rgb: [number, number, number]) => `#${rgb.map((value) => value.toString(16).padStart(2, '0')).join('')}`
 
 await settle(2500)
+// A plugin surface marked `scrim` turns the same scrim on, so it must be mounted above it.
+// It was mounted at the plugin overlay layer beneath, and the whole panel read as disabled.
+act(() => { setup.mockInput.pressKey('?') })
+await settle(400)
+for (const ch of 'latest features and how to use them') act(() => { setup.mockInput.pressKey(ch) })
+await settle(300)
+act(() => { setup.mockInput.pressEnter() })
+await settle(1500)
+const guideFrame = setup.captureCharFrame()
+const guideRow = guideFrame.split('\n').findIndex((line) => line.includes('Agents remember the project'))
+if (guideRow < 0) fail(`the palette did not open What's new in Agent Viewer:\n${guideFrame}`)
+// The scrim's colour pass does not run under the test renderer, so the order is asserted, not the pixels.
+const { MODAL_SCRIM_Z_INDEX } = await import('./layers')
+const guideFrameBox = setup.renderer.root.findDescendantById('plugin-overlay-frame:feature-guide')
+if (!guideFrameBox) fail('the plugin overlay frame did not mount with its id')
+if ((guideFrameBox?.zIndex ?? 0) <= MODAL_SCRIM_Z_INDEX) {
+  fail(`a modal plugin surface renders at z-index ${guideFrameBox?.zIndex}, at or below the modal scrim's ${MODAL_SCRIM_Z_INDEX}`)
+}
+act(() => { setup.mockInput.pressEscape() })
+await settle(600)
+
 const before = cells()
 // ⇧F opens the worktree task modal, which sits in the middle of the screen.
 act(() => { setup.mockInput.pressKey('F', { shift: true }) })
@@ -82,5 +103,5 @@ if (!title || hex(title.fg) !== theme.amber.toLowerCase()) {
   fail(`the modal's title is ${title ? hex(title.fg) : 'missing'}, expected the theme's ${theme.amber} — the scrim reached the panel`)
 }
 
-console.log(`modal scrim smoke passed (${compared} cells dimmed, ${coloured} coloured cells desaturated, the panel untouched)`)
+console.log(`modal scrim smoke passed (${compared} cells dimmed, ${coloured} coloured cells desaturated, the panel and a modal plugin surface untouched)`)
 process.exit(0)

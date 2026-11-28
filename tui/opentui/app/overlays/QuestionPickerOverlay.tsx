@@ -88,7 +88,7 @@ export function QuestionPickerOverlay({ pendingPermissions, width, questionPicke
           <box id="permission-prompt" backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <box borderStyle="single" borderColor={theme.violet ?? theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.violet ?? theme.amber} wrapMode="none">
-                {fitText(questions.length === 1
+                {fitText(permission.provider === 'pi' && tabbed && permission.title ? permission.title : questions.length === 1
                   ? `● ${formatProviderLabel(permission.provider ?? 'claude')} asks`
                   : `● ${formatProviderLabel(permission.provider ?? 'claude')} asks · ${questions.length} questions`, innerWidth)}
               </text>

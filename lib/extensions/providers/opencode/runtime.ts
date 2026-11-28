@@ -9,8 +9,10 @@ import { pathToFileURL } from 'node:url';
 import { getCoordinatorOpenCodeToolMask } from '../../../coordinatorProviderBindings'
 import { withTimeout } from "../../../withTimeout";
 import { providerStartupTimeoutMs } from "../../../providerWarmup";
-import { OPENCODE_OPTIONS, getOpenCodeSession, openCodeData } from "../../../opencodeSessions";
+import { OPENCODE_OPTIONS, getOpenCodeSession, getOpenCodeSessionMessages, openCodeData, openCodeDirectoryQuery } from "../../../opencodeSessions";
 import { PendingRequestGoneError } from "../../../pendingRequestGone";
+import { COMPACT_CONTEXT_ACTION } from "../../../plugins/diagnostics";
+import { beginSessionCompaction, readSessionCompaction } from "../../../sessionCompaction";
 import { clearRunningSession, interruptRunningSession, setRunningSession } from "../../../sessionRuntime";
 import type { TurnCheckpoint } from "../../../checkpoints";
 import { appendPortableComposerContext, assertComposerAttachmentsSupported, planComposerAttachments, resolveLocalComposerAttachmentPath } from "../../../composerAttachments";
@@ -18,7 +20,8 @@ import type { AgentProvider, ContextUsage, SendAttachment, ReasoningEffortLevel 
 import type { DynamicToolSpec } from "../../../codex-schema/v2";
 import { getOpenCodeClient, getOpenCodeV2Client } from "../../../opencodeClient";
 import { getOpenCodeSessionSnapshot, subscribeToOpenCodeEvents } from "../../../opencodeHarness";
-import { decodeOpenCodeModelValue, currentOpenCodeModelValue, mapOpenCodeModelsToSessionModels, mapOpenCodeContextUsage, summarizeOpenCodeDiffs, updateOpenCodeTurnOutputUsage } from "../../../opencodeMapper";
+import { decodeOpenCodeModelValue, latestOpenCodeModelValue, currentOpenCodeModelValue, mapOpenCodeModelsToSessionModels, mapOpenCodeContextUsage, summarizeOpenCodeDiffs, updateOpenCodeTurnOutputUsage } from "../../../opencodeMapper";
+import { selectedOpenCodeSessionModel } from '../../../opencodeModels';
 import { openCodeStreamEnvelope, type OpenCodeMessageRole } from "../../../opencodeStreamEvents";
 import type { Event as OpenCodeEvent, FileDiff as OpenCodeFileDiff, AgentPartInput as OpenCodeAgentPartInput, FilePartInput as OpenCodeFilePartInput, Session as OpenCodeSession, TextPartInput as OpenCodeTextPartInput } from '@opencode-ai/sdk';
 import type { QuestionRequest as OpenCodeQuestionRequest } from '@opencode-ai/sdk/v2';
@@ -187,6 +190,51 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
                 path: { id: sessionId },
             });
             return { ok: true };
+        }
+        if (action === COMPACT_CONTEXT_ACTION) {
+            const finish = beginSessionCompaction('opencode', sessionId);
+            let subscription: ReturnType<typeof subscribeToOpenCodeEvents> | undefined;
+            try {
+                const session = await getOpenCodeSession(sessionId);
+                const query = openCodeDirectoryQuery(session);
+                const [statuses, modelValue] = await Promise.all([
+                    client.session.status({ ...OPENCODE_OPTIONS, query }),
+                    selectedOpenCodeSessionModel(session) ?? getOpenCodeSessionMessages(sessionId)
+                        .then(latestOpenCodeModelValue, () => null),
+                ]);
+                const model = decodeOpenCodeModelValue(modelValue);
+                const status = openCodeData<Record<string, { type: string }>>(statuses)[sessionId];
+                if (status && status.type !== 'idle') throw new Error('This session is busy.');
+                const events = subscribeToOpenCodeEvents({ sessionId, directory: query?.directory });
+                subscription = events;
+                await client.session.summarize({ ...OPENCODE_OPTIONS, path: { id: sessionId }, query, ...(model ? { body: model } : {}) });
+                const timeout = setTimeout(() => {
+                    finish('unconfirmed');
+                    events.close();
+                }, 120_000);
+                timeout.unref?.();
+                void (async () => {
+                    try {
+                        for await (const frame of events.events) {
+                            if (frame.type !== 'event' || frame.sessionId !== sessionId) continue;
+                            if (frame.event.type === 'session.compacted' && (frame.event.properties as { reason?: string }).reason !== 'auto') {
+                                finish('completed');
+                                return;
+                            }
+                            if (frame.event.type === 'session.error') { finish('failed'); return; }
+                        }
+                        finish('unconfirmed');
+                    } finally {
+                        clearTimeout(timeout);
+                        events.close();
+                    }
+                })().catch(() => finish('unconfirmed'));
+                return { ok: true, status: 'pending' };
+            } catch (error) {
+                subscription?.close();
+                finish('failed');
+                throw error;
+            }
         }
         if (action === 'summarize') {
             const response = await client.session.summarize({
@@ -433,6 +481,7 @@ export async function createOpenCodeStream(sessionId: string, signal: AbortSigna
                         parts: buildOpenCodeParts(text, []),
                     },
                 });
+                if (readSessionCompaction('opencode', targetSessionId).status === 'pending') throw new Error('Wait for this session to finish compacting before sending another message.');
                 setRunningSession(sessionId, {
                     provider: 'opencode',
                     requestId: turnRequestId,

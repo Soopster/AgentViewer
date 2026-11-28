@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '@/lib/plugins/activation'
 import type { PluginServiceId } from '@/lib/plugins/types'
 import type { WebPluginView } from './pluginTypes'
 
-export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'second-opinion', 'focus-mode', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
+export const WEB_PLUGIN_SERVICES: readonly PluginServiceId[] = ['pstack', 'matt-skills', 'instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'second-opinion', 'focus-mode', 'open-in-ide', 'notifications', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'subagent-transcript', 'session-tabs', 'shell-overview', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'session-fleet', 'channel-bridge', 'ide-bridge', 'reader-slot', 'live-transcript', 'task-control', 'messaging', 'page-location', 'session', 'session-diagnostics', 'session-transcript', 'repository', 'composer', 'browser-location', 'session-pull-request', 'coordination']
 
 export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   'session-alerts': async () => (await import('@/plugins/session-alerts/web')).module,
@@ -25,9 +25,12 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   recaps: async () => (await import('@/plugins/recaps/web')).module,
   'daily-summary': async () => (await import('@/plugins/daily-summary/web')).module,
   'whats-new': async () => (await import('@/plugins/whats-new/web')).module,
+  'feature-guide': async () => (await import('@/plugins/feature-guide/web')).module,
   handoff: async () => (await import('@/plugins/handoff/web')).module,
   bookmarks: async () => (await import('@/plugins/bookmarks/web')).module,
   schedules: async () => (await import('@/plugins/schedules/web')).module,
+  pstack: async () => (await import('@/plugins/pstack/web')).module,
+  'matt-skills': async () => (await import('@/plugins/matt-skills/web')).module,
   'chief-of-staff': async () => (await import('@/plugins/chief-of-staff/web')).module,
   'skill-picker': async () => (await import('@/plugins/skill-picker/web')).module,
   provenance: async () => (await import('@/plugins/provenance/web')).module,
@@ -42,6 +45,7 @@ export const webPluginViews = createPluginViewRegistry<WebPluginView>('web', {
   proof: async () => (await import('../../plugins/proof/web')).module,
   'second-opinion': async () => (await import('../../plugins/second-opinion/web')).module,
   'focus-mode': async () => (await import('../../plugins/focus-mode/web')).module,
+  'open-in-ide': async () => (await import('../../plugins/open-in-ide/web')).module,
   checkpoints: async () => (await import('@/plugins/checkpoints/web')).module,
   'file-history': async () => (await import('@/plugins/file-history/web')).module,
   'session-insights': async () => (await import('@/plugins/session-insights/web')).module,

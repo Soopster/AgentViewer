@@ -1,8 +1,9 @@
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { PendingRequestGoneError } from './pendingRequestGone'
-import type { PendingQuestionAnswers } from './permissions'
+import { currentProviderInstanceId } from './providerInstances'
+import type { PendingQuestion, PendingQuestionAnswers } from './permissions'
 
-type PiUiDialogMethod = 'select' | 'confirm' | 'input' | 'editor'
+type PiUiDialogMethod = 'select' | 'confirm' | 'input' | 'editor' | 'interview'
 export type PiUiRequest = {
   method: PiUiDialogMethod | 'notify' | 'setStatus' | 'setWidget' | 'setTitle' | 'set_editor_text'
   title?: string
@@ -10,16 +11,19 @@ export type PiUiRequest = {
   placeholder?: string
   prefill?: string
   options?: string[]
+  questions?: PendingQuestion[]
+  toolCallId?: string
   timeout?: number
   signal?: AbortSignal
   notifyType?: 'info' | 'warning' | 'error'
   value?: string
 }
-export type PiUiResult = string | boolean | undefined
+export type PiUiResult = string | boolean | PendingQuestionAnswers | undefined
 export type PiUiHandler = (request: PiUiRequest) => Promise<PiUiResult>
 
 type PendingPiUiRequest = {
   method: PiUiDialogMethod
+  questions?: PendingQuestion[]
   resolve: (result: PiUiResult) => void
   timer?: ReturnType<typeof setTimeout>
   requestPayload: Record<string, unknown>
@@ -44,8 +48,12 @@ const piUiBoundSessions = globalThis.__agentViewerPiUiBoundSessions
 const pendingPiUiRequests = globalThis.__agentViewerPendingPiUiRequests
   ?? (globalThis.__agentViewerPendingPiUiRequests = new Map<string, PendingPiUiRequest>())
 
+function piUiSessionKey(sessionId: string): string {
+  return JSON.stringify([currentProviderInstanceId('pi'), sessionId])
+}
+
 function pendingPiUiKey(sessionId: string, requestId: string): string {
-  return `${sessionId}:${requestId}`
+  return `${piUiSessionKey(sessionId)}:${requestId}`
 }
 
 function defaultPiUiResult(method: PiUiRequest['method']): PiUiResult {
@@ -57,14 +65,15 @@ function findPendingPiUiRequest(sessionId: string, requestId: string): PendingPi
 }
 
 async function dispatchPiUi(sessionId: string, request: PiUiRequest): Promise<PiUiResult> {
-  const handler = piUiHandlers.get(sessionId)
+  const handler = piUiHandlers.get(piUiSessionKey(sessionId))
   return handler ? handler(request) : defaultPiUiResult(request.method)
 }
 
 export function installPiUiHandler(sessionId: string, handler: PiUiHandler): () => void {
-  piUiHandlers.set(sessionId, handler)
+  const key = piUiSessionKey(sessionId)
+  piUiHandlers.set(key, handler)
   return () => {
-    if (piUiHandlers.get(sessionId) === handler) piUiHandlers.delete(sessionId)
+    if (piUiHandlers.get(key) === handler) piUiHandlers.delete(key)
   }
 }
 
@@ -131,6 +140,7 @@ function piUiRequestedPayload(sessionId: string, requestId: string, request: PiU
         placeholder: request.placeholder,
         prefill: request.prefill,
         options: request.options,
+        questions: request.questions,
       },
     },
   }
@@ -150,15 +160,15 @@ export function createPiUiBridge(
       if (request.message?.trim()) enqueue(turnNoticeEvent(request.message.trim()))
       return undefined
     }
-    if (request.method !== 'select' && request.method !== 'confirm' && request.method !== 'input' && request.method !== 'editor') {
+    if (request.method !== 'select' && request.method !== 'confirm' && request.method !== 'input' && request.method !== 'editor' && request.method !== 'interview') {
       return undefined
     }
     const method = request.method
     if (request.signal?.aborted) return defaultPiUiResult(method)
-    const requestId = `pi-ui-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const requestId = request.toolCallId ? `pi-interview-${request.toolCallId}` : `pi-ui-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    if (findPendingPiUiRequest(sessionId, requestId)) throw new Error('This question is already pending.')
     const requestPayload = piUiRequestedPayload(sessionId, requestId, request)
     activeIds.add(requestId)
-    enqueue(`data: ${JSON.stringify(requestPayload)}\n\n`)
     return new Promise<PiUiResult>((resolve) => {
       const key = pendingPiUiKey(sessionId, requestId)
       let settled = false
@@ -183,10 +193,12 @@ export function createPiUiBridge(
       request.signal?.addEventListener('abort', onAbort, { once: true })
       pendingPiUiRequests.set(key, {
         method,
+        questions: request.questions,
         resolve: finish,
         timer,
         requestPayload,
       })
+      enqueue(`data: ${JSON.stringify(requestPayload)}\n\n`)
     })
   }
 }
@@ -206,6 +218,10 @@ export function respondPiUiPermission(
 ): void {
   const pending = findPendingPiUiRequest(sessionId, requestId)
   if (!pending) throw new PendingRequestGoneError('Question')
+  if (pending.method === 'interview' && response === 'reject') {
+    pending.resolve(undefined)
+    return
+  }
   if (pending.method !== 'confirm') {
     throw new Error('Only Pi confirmation prompts support permission responses')
   }
@@ -215,13 +231,35 @@ export function respondPiUiPermission(
 export function respondPiUiQuestion(sessionId: string, requestId: string, answers: PendingQuestionAnswers): void {
   const pending = findPendingPiUiRequest(sessionId, requestId)
   if (!pending) throw new PendingRequestGoneError('Question')
+  if (pending.method === 'interview') {
+    const accepted: PendingQuestionAnswers = {}
+    for (const question of pending.questions ?? []) {
+      const id = question.id!
+      const values = Object.hasOwn(answers, id) ? answers[id]! : []
+      const options = new Set(question.options.map(option => option.value ?? option.label))
+      if ((!values.length && question.required) ||
+          (!question.multiSelect && values.length > 1) ||
+          new Set(values).size !== values.length ||
+          values.some(value => !value.trim() || value.length > 4000 || (!question.allowFreeform && !options.has(value)))) {
+        throw new Error('Answer the required questions and use the available options.')
+      }
+      if (values.length) accepted[id] = values
+    }
+    pending.resolve(accepted)
+    return
+  }
   const first = answers.value?.[0] ?? Object.values(answers)[0]?.[0]
   if (first == null) throw new Error('answer is required')
   pending.resolve(pending.method === 'confirm' ? first === 'true' : first)
 }
 
+export async function requestPiInterview(sessionId: string, toolCallId: string, title: string, questions: PendingQuestion[], signal?: AbortSignal): Promise<PendingQuestionAnswers | undefined> {
+  const result = await dispatchPiUi(sessionId, { method: 'interview', toolCallId, title, questions, signal, timeout: 600_000 })
+  return typeof result === 'object' ? result : undefined
+}
+
 export function listPendingPiUiPayloads(sessionId: string): Record<string, unknown>[] {
-  const prefix = `${sessionId}:`
+  const prefix = `${piUiSessionKey(sessionId)}:`
   return Array.from(pendingPiUiRequests)
     .filter(([key]) => key.startsWith(prefix))
     .map(([, pending]) => pending.requestPayload)

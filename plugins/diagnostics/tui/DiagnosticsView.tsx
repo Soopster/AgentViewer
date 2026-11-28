@@ -9,6 +9,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { Session, SessionDiagnosticSection } from '../../../lib/types'
 import { fitText, isCtrlKey, isShiftedKey, popoverRootProps, type TuiPluginKeyEvent, type TuiPluginViewProps } from '../../../tui/opentui/shell/sdk'
+import { COMPACT_CONTEXT_ACTION } from '../../../lib/plugins/diagnostics'
+import { compactionLabel } from '../domain/actions'
 import { DiagnosticsTable, diagnosticRuns } from './DiagnosticsTable'
 
 type McpPolicy = 'default' | 'auto'
@@ -24,6 +26,8 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
   const [error, setError] = useState<string | null>('error', null)
   const [notice, setNotice] = useState<string | null>('notice', null)
   const [busy, setBusy] = useState<string | null>('busy', null)
+  const [mcpFilter, setMcpFilter] = useState('mcp-filter', '')
+  const [filtering, setFiltering] = useState('mcp-filtering', false)
   const [mcpIndex, setMcpIndex] = useState('mcpIndex', 0)
   const [mcpPolicies, setMcpPolicies] = useState<Record<string, McpPolicy>>('mcpPolicies', {})
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
@@ -71,11 +75,20 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
   }, [request, offered === null])
 
   const controls = session ? diagnostics.hasControls(session) : false
+  const compaction = sections.find(section => section.compaction)?.compaction
+  useEffect(() => {
+    if (!session || !compaction?.busy || loading || busy) return
+    const timer = setTimeout(() => { void refresh(session) }, 2000)
+    return () => clearTimeout(timer)
+  }, [session, compaction, loading, busy, refresh])
+  const shownSections = useMemo(() => sections.map(section => !controls && section.id === 'mcp' && mcpFilter.trim()
+    ? { ...section, items: section.items.filter(item => item.toLowerCase().includes(mcpFilter.trim().toLowerCase())) }
+    : section), [sections, controls, mcpFilter])
   const mcpRows = useMemo(() => sections.find((s) => s.id === 'mcp')?.items.filter((i) => i !== 'None') ?? [], [sections])
 
   const runAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
     const signal = lifetime.current
-    if (!session || !signal || signal.aborted || actionBusy.current || !diagnostics.hasControls(session)) return null
+    if (!session || !signal || signal.aborted || actionBusy.current || (action === COMPACT_CONTEXT_ACTION ? !compaction || compaction.busy : !diagnostics.hasControls(session))) return null
     ++readSequence.current
     actionBusy.current = true
     setLoading(false)
@@ -131,11 +144,15 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
     } finally {
       if (!signal.aborted) { actionBusy.current = false; setBusy(null) }
     }
-  }, [diagnostics, refresh, session, setBusy, setError, setNotice, setSections])
+  }, [diagnostics, refresh, session, compaction, setBusy, setError, setNotice, setSections])
 
   const readDraft = services.composer?.readDraft
   const handleKey = useCallback((key: TuiPluginKeyEvent) => {
     const shortcut = { ...key, meta: key.meta ?? false, option: key.option ?? false }
+    if (filtering) {
+      if (key.name === 'escape' || key.name === 'return') { setFiltering(false); return true }
+      return false
+    }
     if (key.name === 'escape' || isShiftedKey(shortcut, 'D') || isCtrlKey(shortcut, 'c')) {
       close()
       return
@@ -155,6 +172,11 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
         scroll.scrollTo(Math.max(scroll.scrollTop - page, 0))
         return
       }
+    }
+    if (session && compaction && !controls) {
+      if (key.name === 'c' && !compaction.busy && !loading) void runAction(COMPACT_CONTEXT_ACTION, {}, COMPACT_CONTEXT_ACTION)
+      if (key.name === 'r' && !loading && !busy) void refresh(session)
+      if (key.sequence === '/') setFiltering(true)
     }
     if (!session || !controls) return
     if (mcpRows.length === 0 && key.name !== 'p' && key.name !== 's' && key.name !== 'g') return
@@ -229,7 +251,7 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
     if (key.name === 'p') { void runAction('reloadPlugins', {}, 'reload-plugins'); return }
     if (key.name === 's') { void runAction('reloadSkills', {}, 'reload-skills'); return }
     if (key.name === 'g') { void runAction('resolveSettings', {}, 'resolve-settings') }
-  }, [close, controls, mcpIndex, mcpPolicies, mcpRows, readDraft, runAction, session, setError, setMcpIndex, setMcpPolicies])
+  }, [close, controls, compaction, filtering, setFiltering, loading, busy, refresh, mcpIndex, mcpPolicies, mcpRows, readDraft, runAction, session, setError, setMcpIndex, setMcpPolicies])
   useEffect(() => { registerKeys(handleKey) }, [handleKey, registerKeys])
 
   const docked = placement !== 'overlay'
@@ -276,11 +298,20 @@ export function DiagnosticsView({ services, theme, width, height, placement, tar
         scrollY
         scrollbarOptions={scrollbarOptions}
       >
-        {sections.map((section) => (
+        {shownSections.map((section) => (
           <box key={section.id} flexDirection="column" marginTop={1} flexShrink={0}>
             <box flexShrink={0} height={1}><text fg={theme.dim}>{section.title}</text></box>
+            {section.compaction && <text fg={theme.dim}>{[compactionLabel(section.compaction.status), section.compaction.busy ? (section.compaction.status ? null : 'Session busy') : 'c Compact now', 'r Refresh'].filter(Boolean).join(' · ')}</text>}
+            {section.id === 'mcp' && !controls && compaction && (
+              filtering ? (
+                <box gap={1}>
+                  <text fg={theme.dim}>Filter MCP</text>
+                  <input focused value={mcpFilter} onInput={setMcpFilter} />
+                </box>
+              ) : <text fg={theme.dim}>/ Filter MCP{mcpFilter ? ` · ${mcpFilter}` : ''}</text>
+            )}
             {section.items.length === 0 || (section.items.length === 1 && section.items[0] === 'None') ? (
-              <box flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>
+              <box flexShrink={0} height={1}><text fg={theme.muted}>{section.id === 'mcp' && mcpFilter ? '  No matching entries' : '  None'}</text></box>
             ) : section.id === 'mcp' && controls ? (
               section.items.map((item, idx) => {
                 if (item === 'None') return <box key={idx} flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>

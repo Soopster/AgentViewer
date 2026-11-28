@@ -5,4 +5,5 @@ export const tuiApplicationPlugins: PluginApplicationLoaders = {
   'dynamic-island': async () => (await import('../../../plugins/dynamic-island/observer')).application,
   'session-alerts': async () => (await import('../../../plugins/session-alerts/tui/application')).application,
   'focus-mode': async () => (await import('../../../plugins/focus-mode/application')).application,
+  'open-in-ide': async () => (await import('../../../plugins/open-in-ide/application')).tuiApplication,
 }

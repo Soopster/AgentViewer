@@ -1,21 +1,61 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstat, readFile, readlink } from 'node:fs/promises'
+import { copyFile, lstat, mkdtemp, readFile, readlink, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-export function resultGit(cwd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => execFile('git', args, { cwd, encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+export function resultGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolve, reject) => execFile('git', args, { cwd, env, encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
     if (error) reject(new Error(stderr.trim() || error.message))
     else resolve(stdout)
   }))
 }
 
-export type StagedDependency = { target: string; base: string; tree: string }
+/** Capture reviewed working files without changing their index or HEAD. */
+export async function snapshotDependencySource(cwd: string, head: string): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), 'av-dependency-index-'))
+  const index = path.join(directory, 'index')
+  const env = { ...process.env, GIT_INDEX_FILE: index }
+  try {
+    const original = (await resultGit(cwd, ['rev-parse', '--git-path', 'index'])).trim()
+    await copyFile(path.resolve(cwd, original), index).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      await resultGit(cwd, ['read-tree', head], env)
+    })
+    await resultGit(cwd, ['add', '-A'], env)
+    const tree = (await resultGit(cwd, ['write-tree'], env)).trim()
+    return (await resultGit(cwd, ['commit-tree', tree, '-p', head, '-m', 'Coordinator reviewed source snapshot'])).trim()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+export type StagedDependency = { target: string; base: string; tree: string; ref?: string; commit?: string }
+
+export function coordinatorDependencyRef(runId: string): string {
+  return `refs/agent-viewer/dependencies/${createHash('sha256').update(runId).digest('hex')}`
+}
+
+export async function readDependencyTip(target: string, ref: string): Promise<string | undefined> {
+  const refs = await resultGit(target, ['for-each-ref', '--format=%(objectname) %(refname)', ref])
+  return refs.split('\n').find(line => line.endsWith(` ${ref}`))?.split(' ')[0]
+}
+
+/** Find the reviewed ancestor inherited by a downstream checkout. */
+export async function inheritedDependencyBase(cwd: string, head: string, base: string, dependencyTip?: string): Promise<string> {
+  if (!dependencyTip) return base
+  const inherited = (await resultGit(cwd, ['merge-base', head, dependencyTip])).trim()
+  return checkoutContainsDependencySync(cwd, base, inherited) ? inherited : base
+}
 
 /** Resolve a reviewed squash to a commit in the target's current history. */
 export function committedDependencySync(proof: StagedDependency): string | undefined {
   const sha = /^[a-f0-9]{40,64}$/
   if (!path.isAbsolute(proof.target) || !sha.test(proof.base) || !sha.test(proof.tree)) return
+  if (proof.ref) {
+    if (!/^refs\/agent-viewer\/dependencies\/[a-f0-9]{64}$/.test(proof.ref) || !proof.commit || !sha.test(proof.commit)) return
+    return checkoutContainsDependencySync(proof.target, proof.commit, proof.ref) ? proof.commit : undefined
+  }
   try {
     const entries = execFileSync('git', ['--no-optional-locks', 'log', '--ancestry-path', '--format=%H %T', `${proof.base}..HEAD`], {
       cwd: proof.target, encoding: 'utf8', timeout: 1500, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
@@ -24,9 +64,9 @@ export function committedDependencySync(proof: StagedDependency): string | undef
   } catch { return undefined }
 }
 
-export function checkoutContainsDependencySync(cwd: string, commit: string): boolean {
+export function checkoutContainsDependencySync(cwd: string, commit: string, revision = 'HEAD'): boolean {
   try {
-    execFileSync('git', ['--no-optional-locks', 'merge-base', '--is-ancestor', commit, 'HEAD'], {
+    execFileSync('git', ['--no-optional-locks', 'merge-base', '--is-ancestor', commit, revision], {
       cwd, timeout: 1500, stdio: 'ignore',
     })
     return true
@@ -65,9 +105,9 @@ export async function coordinatorCheckoutRevision(cwd: string): Promise<string> 
  * history — is "unknown", never "clean": a preview that guesses clean sends the
  * engineer into an integration that fails, which is the thing it exists to avoid.
  */
-export function previewMergeConflicts(target: string, branch: string): Promise<{ conflicts: string[] } | null> {
+export function previewMergeConflicts(target: string, branch: string, base = 'HEAD'): Promise<{ conflicts: string[] } | null> {
   return new Promise((resolve) => execFile(
-    'git', ['merge-tree', '--write-tree', '--name-only', '--no-messages', 'HEAD', branch],
+    'git', ['merge-tree', '--write-tree', '--name-only', '--no-messages', base, branch],
     { cwd: target, encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 },
     (error, stdout) => {
       const code = error ? (error as { code?: unknown }).code : 0

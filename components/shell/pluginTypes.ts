@@ -24,6 +24,7 @@ export type WebPluginServices = {
   proof?: import('../../lib/plugins/proof').ProofService
   'second-opinion'?: import('../../lib/plugins/secondOpinion').SecondOpinionService
   'focus-mode'?: import('../../lib/plugins/focusMode').FocusService
+  'open-in-ide'?: import('../../lib/plugins/openInIde').PluginIdeService
   checkpoints?: import('../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../lib/plugins/sessionTabs').PluginSessionTabs
@@ -33,6 +34,8 @@ export type WebPluginServices = {
   'file-history'?: { readonly open: (path: string) => void }
   bookmarks?: import('../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../lib/plugins/schedules').PluginSchedulesService
+  pstack?: import('../../lib/plugins/pstack').PluginPstackService
+  'matt-skills'?: import('../../lib/plugins/mattSkills').PluginMattSkillsService
   'chief-of-staff'?: import('../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
   'activity-control'?: import('../../lib/plugins/activityControl').PluginActivityControl
   'session-navigation'?: import('../../lib/plugins/bookmarks').PluginSessionNavigation

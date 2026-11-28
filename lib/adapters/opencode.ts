@@ -12,9 +12,11 @@
 
 import {
   getOpenCodeProjectDiagnostics,
+  getOpenCodeSessionSnapshot,
   ensureOpenCodeEventsStarted,
   getOpenCodeTranscriptCacheVersion,
 } from '../opencodeHarness'
+import { readSessionCompaction } from '../sessionCompaction'
 import { selectedOpenCodeSessionModel } from '../opencodeModels'
 import { getOpenCodeClient } from '../opencodeClient'
 import { getOpenCodeV2Client } from '../opencodeClient'
@@ -83,8 +85,25 @@ function lastUserAgent(messages: OpenCodeMessageBundle[]): string | null {
 export const opencodeAdapter: SessionAdapter = {
   provider: 'opencode',
 
-  // Child agents are durable sessions, not transcript-local sidebar entries.
-  async readSubagentSummaries() { return [] },
+  async readSubagentSummaries(sessionId) {
+    const parent = await getOpenCodeSession(sessionId)
+    const client = await getOpenCodeClient()
+    const query = openCodeDirectoryQuery(parent)
+    const [childrenResult, statusesResult] = await Promise.all([
+      client.session.children({ ...OPENCODE_OPTIONS, path: { id: sessionId }, query }),
+      client.session.status({ ...OPENCODE_OPTIONS, query }).catch(() => undefined),
+    ])
+    const statuses = statusesResult ? openCodeData<Record<string, { type: string }>>(statusesResult) : {}
+    return openCodeData<OpenCodeSession[]>(childrenResult).map(child => ({
+      agentId: child.id,
+      taskDescription: child.title,
+      provider: 'opencode',
+      status: statuses[child.id]?.type,
+      transcriptAvailable: true,
+      messageCount: 0,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+    }))
+  },
 
   async listSessions({ dir, limit, offset }) {
     const client = await getOpenCodeV2Client()
@@ -181,10 +200,12 @@ export const opencodeAdapter: SessionAdapter = {
     return { messages }
   },
 
-  async readSubagentMessages(_sessionId, agentId) {
+  async readSubagentMessages(sessionId, agentId) {
     // OpenCode subagents (spawned by the `task` tool) are real child sessions:
     // task_id === child sessionId. Fetch and map the child transcript so the
     // parent's task card can render the inner conversation inline.
+    const child = await getOpenCodeSession(agentId).catch(() => null)
+    if (!child || child.parentID !== sessionId) return []
     const raw = await getOpenCodeSessionMessages(agentId).catch(() => [] as OpenCodeMessageBundle[])
     if (raw.length === 0) return []
     const mapped = sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw))
@@ -293,9 +314,20 @@ export const opencodeAdapter: SessionAdapter = {
       }).catch(() => ({ data: [] as OpenCodeSession[] })),
     ])
 
+    const latestUsage = messages.findLast(message => mapOpenCodeContextUsage(message.info) !== null)?.info
+    const model = latestUsage?.role === 'assistant'
+      ? project.providers.providers.find(provider => provider.id === latestUsage.providerID)?.models[latestUsage.modelID]
+      : undefined
+    const context = mapOpenCodeContextUsage(latestUsage, model?.limit.context)
+    const compaction = readSessionCompaction('opencode', sessionId)
+    const nativeStatus = getOpenCodeSessionSnapshot(sessionId)?.status
     return {
       currentModel: selectedOpenCodeSessionModel(session) ?? latestOpenCodeModelValue(messages),
-      sections: mapOpenCodeDiagnosticsToSections({
+      sections: [{
+        id: 'context', title: 'CONTEXT',
+        items: context ? [`${context.totalTokens.toLocaleString()}${context.maxTokens > 0 ? ` / ${context.maxTokens.toLocaleString()}` : ''} tokens`] : ['Context usage unavailable'],
+        compaction: { ...compaction, busy: compaction.busy || !!(nativeStatus && nativeStatus.type !== 'idle') },
+      }, ...mapOpenCodeDiagnosticsToSections({
         providers: project.providers,
         commands: project.commands,
         agents: project.agents,
@@ -304,7 +336,7 @@ export const opencodeAdapter: SessionAdapter = {
         mcp: project.mcp,
         children: openCodeData<OpenCodeSession[]>(children),
         currentSession: session,
-      }),
+      })],
     }
   },
 }

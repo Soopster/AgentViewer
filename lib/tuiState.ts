@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { isIdeId, type IdeId } from './ideCatalog'
 
 const isStoredTheme = (value: unknown): value is string => VALID_TUI_THEMES.includes(value)
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
@@ -37,6 +38,7 @@ type TuiState = {
   pinnedTabs?: unknown
   pinnedTabsRow?: unknown
   sessionAlerts?: unknown
+  ide?: unknown
   splitPanes?: unknown
   splitOrientation?: unknown
   splitReaderShare?: unknown
@@ -365,6 +367,16 @@ export async function getConfiguredTuiSessionAlerts(): Promise<TuiSessionAlerts>
 
 export async function setConfiguredTuiSessionAlerts(sessionAlerts: TuiSessionAlerts): Promise<void> {
   await writeTuiState({ sessionAlerts })
+}
+
+/** Where a file opens: the built-in editor or the person's own (the Open in IDE plugin). Null when never chosen. */
+export async function getConfiguredIde(): Promise<IdeId | null> {
+  const parsed = await readTuiState()
+  return isIdeId(parsed.ide) ? parsed.ide : null
+}
+
+export async function setConfiguredIde(ide: IdeId): Promise<void> {
+  await writeTuiState({ ide })
 }
 
 export type TuiTabOrientation = 'horizontal' | 'vertical'

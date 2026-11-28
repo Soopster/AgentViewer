@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { WebPluginViewProps } from '../../../components/shell/pluginTypes'
 import type { SessionDiagnosticSection } from '../../../lib/types'
 import { createPluginResourceScope } from '../../../lib/plugins/lifecycle'
+import { COMPACT_CONTEXT_ACTION } from '../../../lib/plugins/diagnostics'
 import { claudeDiagnosticActionNotice } from '../domain/actions'
 
 /** Holds the session it opened on. A read can activate a runtime. */
@@ -20,6 +21,7 @@ export function useDiagnostics({ services, useState }: WebPluginViewProps) {
   const lifetime = useRef<AbortController | null>(null)
   const sequence = useRef(0)
   const actionBusy = useRef(false)
+  const compaction = diagnosticSections.find(section => section.compaction)?.compaction
 
   const refresh = useCallback(async (signal: AbortSignal) => {
     if (!session || signal.aborted) return
@@ -53,9 +55,16 @@ export function useDiagnostics({ services, useState }: WebPluginViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, diagnostics])
 
+  useEffect(() => {
+    const signal = lifetime.current?.signal
+    if (!compaction?.busy || !signal || diagnosticsLoading || claudeMcpBusy) return
+    const timer = setTimeout(() => { void refresh(signal) }, 2000)
+    return () => clearTimeout(timer)
+  }, [compaction, diagnosticsLoading, claudeMcpBusy, refresh])
+
   const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => {
     const signal = lifetime.current?.signal
-    if (!session || !signal || signal.aborted || actionBusy.current || !diagnostics.hasControls(session)) return null
+    if (!session || !signal || signal.aborted || actionBusy.current || (action === COMPACT_CONTEXT_ACTION ? !compaction || compaction.busy : !diagnostics.hasControls(session))) return null
     actionBusy.current = true
     ++sequence.current // Fence a read that started before this mutation.
     setDiagnosticsLoading(false)
@@ -71,7 +80,7 @@ export function useDiagnostics({ services, useState }: WebPluginViewProps) {
         setDiagnosticSections(current => current.map(section => section.id === 'hooks' ? { ...section, items: items.length ? items : ['None'] } : section))
         setNotice(`Hook timeline · ${events.length} match${events.length === 1 ? '' : 'es'}`)
       } else {
-        setNotice(claudeDiagnosticActionNotice(action, successNotice, result))
+        if (action !== COMPACT_CONTEXT_ACTION) setNotice(claudeDiagnosticActionNotice(action, successNotice, result))
         await refresh(signal)
       }
       return result
@@ -81,7 +90,7 @@ export function useDiagnostics({ services, useState }: WebPluginViewProps) {
     } finally {
       if (!signal.aborted) { actionBusy.current = false; setClaudeMcpBusy(null) }
     }
-  }, [session, diagnostics, refresh, setClaudeMcpBusy, setError, setNotice, setDiagnosticSections])
+  }, [session, diagnostics, compaction, refresh, setClaudeMcpBusy, setError, setNotice, setDiagnosticSections])
 
   const applyClaudeMcpPermissionMode = async (serverName: string, permissionModeKey: string, mode: 'default' | 'auto' | null, _previous: 'default' | 'auto' | undefined) => {
     const signal = lifetime.current?.signal
@@ -105,7 +114,7 @@ export function useDiagnostics({ services, useState }: WebPluginViewProps) {
     catch (error) { if (!signal.aborted) setError(error instanceof Error ? error.message : 'Invalid MCP configuration JSON') }
   }
   const searchClaudeHookEvents = async () => { await runClaudeSessionAction('listHookEvents', { query: claudeHookQuery, limit: 100 }, 'hook-search', '') }
-  return { session, diagnosticSections, diagnosticsLoading, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode, addClaudeMcpServer, searchClaudeHookEvents, claudeHookSearching: claudeMcpBusy === 'hook-search', error, notice,
+  return { compact: () => runClaudeSessionAction(COMPACT_CONTEXT_ACTION, {}, COMPACT_CONTEXT_ACTION, ''), session, diagnosticSections, diagnosticsLoading, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode, addClaudeMcpServer, searchClaudeHookEvents, claudeHookSearching: claudeMcpBusy === 'hook-search', error, notice,
     refresh: () => { const signal = lifetime.current?.signal; if (signal) void refresh(signal) },
   }
 }

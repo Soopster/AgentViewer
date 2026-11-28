@@ -38,6 +38,8 @@
   "exclude": [
     "node_modules",
     "channels",
-    "src-tauri"
+    "src-tauri",
+    "plugins/pstack/vendor",
+    "plugins/matt-skills/vendor"
   ]
 }

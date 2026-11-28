@@ -2,12 +2,14 @@
 import { useEffect, useRef } from 'react'
 import { PLUGIN_API_VERSION, type PluginViewModule } from '../../../lib/plugins/types'
 import type { WebPluginView, WebPluginViewProps } from '../../../components/shell/pluginTypes'
-import { CLAUDE_DIAGNOSTIC_ACTIONS } from '../domain/actions'
+import { CLAUDE_DIAGNOSTIC_ACTIONS, compactionLabel } from '../domain/actions'
 import { useDiagnostics } from './useDiagnostics'
 
 function DiagnosticsView(props: WebPluginViewProps) {
   const { placement, close } = props
-  const { session, diagnosticSections, diagnosticsLoading, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode, addClaudeMcpServer, searchClaudeHookEvents, claudeHookSearching, error, notice, refresh } = useDiagnostics(props)
+  const [mcpFilter, setMcpFilter] = props.useState('mcp-filter', '')
+  const { compact, session, diagnosticSections, diagnosticsLoading, claudeMcpBusy, claudeHookQuery, setClaudeHookQuery, claudeMcpPermissionModes, runClaudeSessionAction, applyClaudeMcpPermissionMode, addClaudeMcpServer, searchClaudeHookEvents, claudeHookSearching, error, notice, refresh } = useDiagnostics(props)
+  const query = mcpFilter.trim().toLowerCase()
   const controls = session ? props.services['session-diagnostics']!.hasControls(session) : false
   const closeRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { closeRef.current?.focus() }, [])
@@ -69,12 +71,17 @@ function DiagnosticsView(props: WebPluginViewProps) {
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
-                {diagnosticSections.map((section) => (
+                {diagnosticSections.map(original => {
+                  const section = original.id === 'mcp' && !controls && query
+                    ? { ...original, items: original.items.filter(item => item.toLowerCase().includes(query)) }
+                    : original
+                  return (
                   <div key={section.id}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6 }}>
                       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)' }}>
                         {section.title}
                       </span>
+                      {section.compaction && <button type="button" disabled={section.compaction.busy || !!claudeMcpBusy || diagnosticsLoading} onClick={() => { void compact() }}>Compact now</button>}
                       {section.id === 'mcp' && session && controls && (
                         <button
                           type="button"
@@ -109,6 +116,9 @@ function DiagnosticsView(props: WebPluginViewProps) {
                         </span>
                       )}
                     </div>
+                    {section.compaction?.status && <p role="status">{compactionLabel(section.compaction.status)}</p>}
+                    {section.id === 'mcp' && !controls && <input type="search" aria-label="Filter MCP inventory" placeholder="Filter MCP inventory" value={mcpFilter} onChange={event => setMcpFilter(event.target.value)} />}
+                    {section.id === 'mcp' && !controls && section.items.length === 0 && <p>No matching entries.</p>}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {section.id === 'mcp' && session && controls ? (
                         section.items.map((item, index) => {
@@ -237,7 +247,8 @@ function DiagnosticsView(props: WebPluginViewProps) {
                       )}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>

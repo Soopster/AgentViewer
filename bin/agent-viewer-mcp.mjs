@@ -1325,21 +1325,23 @@ registerCoordinatorTool('coord_capabilities', {
   annotations: { readOnlyHint: true },
 }, async ({ provider, provider_instance_id }) => textResult(await coordinatorRequest('capabilities', { provider, providerInstanceId: provider_instance_id })))
 
+const resultDestination = z.enum(['target', 'dependencies']).optional()
+
 registerCoordinatorTool('coord_read_result_diff', {
   description: bridgeDescription('coord_read_result_diff'),
-  inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), file: z.string().min(1).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(16000).optional() },
+  inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), destination: resultDestination, file: z.string().min(1).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(16000).optional() },
   annotations: { readOnlyHint: true },
-}, async ({ task_id, review_token, file, offset, limit }) => textResult(await coordinatorRequest('read_result_diff', { taskId: task_id, reviewToken: review_token, file, offset, limit })))
+}, async ({ task_id, review_token, destination, file, offset, limit }) => textResult(await coordinatorRequest('read_result_diff', { taskId: task_id, reviewToken: review_token, destination, file, offset, limit })))
 
 registerCoordinatorTool('coord_read_result', {
   description: bridgeDescription('coord_read_result'),
-  inputSchema: { task_id: z.string().min(1), include_diff: z.boolean().optional() }, annotations: { readOnlyHint: true },
-}, async ({ task_id, include_diff }) => textResult(await coordinatorRequest('read_result', { taskId: task_id, includeDiff: include_diff })))
+  inputSchema: { task_id: z.string().min(1), destination: resultDestination, include_diff: z.boolean().optional() }, annotations: { readOnlyHint: true },
+}, async ({ task_id, destination, include_diff }) => textResult(await coordinatorRequest('read_result', { taskId: task_id, destination, includeDiff: include_diff })))
 
 registerCoordinatorTool('coord_integrate_result', {
   description: bridgeDescription('coord_integrate_result'),
-  inputSchema: { task_id: z.string().min(1), review_token: z.string().min(1), request_id: z.string().min(1).max(160) },
-}, async ({ task_id, review_token, request_id }) => textResult(await coordinatorRequest('integrate_result', { taskId: task_id, reviewToken: review_token, requestId: request_id })))
+  inputSchema: { task_id: z.string().min(1), destination: resultDestination, review_token: z.string().min(1), request_id: z.string().min(1).max(160) },
+}, async ({ task_id, review_token, request_id, destination }) => textResult(await coordinatorRequest('integrate_result', { taskId: task_id, reviewToken: review_token, requestId: request_id, destination })))
 
 registerCoordinatorTool('coord_inspect_operation', {
   description: bridgeDescription('coord_inspect_operation'),

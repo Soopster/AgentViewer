@@ -13,6 +13,9 @@ import { providerStartupTimeoutMs } from "../../../providerWarmup";
 import { PI_THINKING_LEVELS } from "../../../piComposer";
 import { schedulePiLiveTranscriptCleanup, recordPiLiveBashMessage, recordPiLiveTranscriptEvent } from "../../../liveTranscripts";
 import { PendingRequestGoneError } from "../../../pendingRequestGone";
+import { recordPiSubagentProgress } from "../../../piSubagents";
+import { COMPACT_CONTEXT_ACTION } from "../../../plugins/diagnostics";
+import { beginSessionCompaction } from "../../../sessionCompaction";
 import { clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession } from "../../../sessionRuntime";
 import type { TurnCheckpoint } from "../../../checkpoints";
 import { appendPortableComposerContext, assertComposerAttachmentsSupported, planComposerAttachments, resolveLocalComposerAttachmentPath } from "../../../composerAttachments";
@@ -211,9 +214,16 @@ export async function runAction({ sessionId, body, provider }: SessionActionPara
             respondPiUiQuestion(sessionId, permissionId, answers);
             return { ok: true };
         }
-        if (action === 'summarize') {
-            await compactPiSession(sessionId);
-            return { ok: true };
+        if (action === 'summarize' || action === COMPACT_CONTEXT_ACTION) {
+            const finish = beginSessionCompaction('pi', sessionId);
+            try {
+                await compactPiSession(sessionId);
+                finish('completed');
+                return { ok: true, status: 'completed' };
+            } catch (error) {
+                finish('failed');
+                throw error;
+            }
         }
     }
     throw new Error(`Action ${action || '(missing)'} is not supported for ${"pi"} sessions`);
@@ -365,7 +375,7 @@ export async function createPiStream(sessionId: string, signal: AbortSignal, bod
                 releasePiOperation = beginPiSessionOperation(sessionId, 'turn');
                 const agentSession = isPendingSession
                     ? await createPiAgentSession(cwdOverride ?? process.cwd(), { id: sessionId })
-                    : await openPiAgentSession(sessionId);
+                    : await openPiAgentSession(sessionId, true);
                 targetSessionId = agentSession.sessionId;
                 // The warm Pi session is single-turn: a concurrent send (another tab, a
                 // rapid double-fire) would otherwise hit the raw SDK "Agent is already
@@ -646,6 +656,10 @@ export async function createPiStream(sessionId: string, signal: AbortSignal, bod
                         return;
                     // From here on `event` is a core transcript AgentEvent.
                     const agentEvent = event as PiAgentEvent;
+                    if ((event.type === 'tool_execution_update' || event.type === 'tool_execution_end') && event.toolName === 'subagent') {
+                        const result = event.type === 'tool_execution_update' ? event.partialResult : event.result;
+                        recordPiSubagentProgress(targetSessionId, event.toolCallId, result?.details, event.type === 'tool_execution_end', event.type === 'tool_execution_end' && event.isError);
+                    }
                     recordPiLiveTranscriptEvent(targetSessionId, agentEvent);
                     broadcastLiveSessionActivity('pi', targetSessionId);
                     emitPiEvent(agentEvent);

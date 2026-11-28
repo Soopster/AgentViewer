@@ -23,7 +23,8 @@ function Fixture() {
   const diagnosticsDisabled = disabledPlugins.has('diagnostics')
   const tasksDisabled = disabledPlugins.has('tasks')
   const bridgesDisabled = disabledPlugins.has('bridges')
-  const provider = new URLSearchParams(window.location.search).get('provider') === 'claude' ? 'claude' : 'codex'
+  const requestedProvider = new URLSearchParams(window.location.search).get('provider')
+  const provider = requestedProvider === 'claude' || requestedProvider === 'pi' || requestedProvider === 'opencode' ? requestedProvider : 'codex'
   const session = useMemo<Session>(() => ({ sessionId: 'same', provider, providerInstanceId: instance, summary: instance, cwd: '/fixture' }), [instance, provider])
   const messages = useMemo<SessionMessage[]>(() => [{ uuid: `prompt-${instance}`, session_id: 'same', provider, providerInstanceId: instance,
     type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: `Original ${instance} prompt` }] },

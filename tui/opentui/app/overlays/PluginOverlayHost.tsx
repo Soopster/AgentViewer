@@ -3,7 +3,8 @@ import type { SyntaxStyle } from '@opentui/core'
 import type { TuiThemePalette } from '../../../theme'
 import { PluginSurfaceHost } from '../../shell/PluginSurfaceHost'
 import { type TuiProvidedPluginServices } from '../../shell/pluginTypes'
-import { type PluginSurfaceId } from '../../../../lib/plugins/catalog'
+import { getPluginSurface, type PluginSurfaceId } from '../../../../lib/plugins/catalog'
+import { MODAL_CONTENT_Z_INDEX } from '../../layers'
 import { type WindowSurfaceKind } from '../../windowSurfaceNames'
 import { type ThreadedMessage } from '../../../../lib/threading'
 import { type TuiDensity } from '../../../theme'
@@ -72,8 +73,11 @@ export function PluginOverlayHost(props: PluginOverlayHostProps) {
           width={width}
           height={height}
           focused
-          // The control center is a modal: the root's modal scrim dims behind it.
-          scrim={pluginOverlay !== 'coordination'}
+          // A modal surface (`scrim` in its manifest) turns on the root's modal scrim, so it
+          // must be mounted above that scrim, or the panel is dimmed with everything behind it.
+          // It then needs no dimming layer of its own.
+          zIndex={getPluginSurface(pluginOverlay).scrim ? MODAL_CONTENT_Z_INDEX : undefined}
+          scrim={!getPluginSurface(pluginOverlay).scrim}
           onClose={closePluginOverlay}
           onDetach={() => offerPopoverPlacement(pluginOverlay)}
           onKeyHandlerReady={registerPluginOverlayKeys}

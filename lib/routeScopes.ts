@@ -101,6 +101,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/views': { GET: 'read', PUT: 'write' },
   // Listing is a read; every action (create, run-now, delete) starts or changes work, so POST is write.
   '/api/schedules': { GET: 'read', POST: 'write' },
+  '/api/pstack': { GET: 'read', POST: 'write' },
+  '/api/matt-skills': { GET: 'read' },
   '/api/chief-of-staff': { GET: 'read', POST: 'write' },
   '/api/sidebar-preferences': { GET: 'read', PATCH: 'write' },
   '/api/provider/instances': { GET: 'read' },
@@ -121,6 +123,8 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/proof': { GET: 'read', POST: 'write' },
   '/api/second-opinion': { GET: 'read', POST: 'write' },
   '/api/focus': { GET: 'read', POST: 'write' },
+  // Launching an editor starts a process on this machine; the route also refuses any caller that is not local.
+  '/api/ide': { GET: 'read', POST: 'write' },
   '/api/checkpoints': { GET: 'read', POST: 'write' },
   '/api/editor/lsp': { POST: 'write' },
   '/api/editor/search': { GET: 'read' },

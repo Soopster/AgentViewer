@@ -1,3 +1,5 @@
+import { manifest as pstack } from '../../plugins/pstack/manifest'
+import { manifest as mattSkills } from '../../plugins/matt-skills/manifest'
 import { manifest as tips } from '../../plugins/tips/manifest'
 import { manifest as worktreeTasks } from '../../plugins/worktree-tasks/manifest'
 import { manifest as viewStudio } from '../../plugins/view-studio/manifest'
@@ -15,6 +17,7 @@ import { manifest as planReview } from '../../plugins/plan-review/manifest'
 import { manifest as proof } from '../../plugins/proof/manifest'
 import { manifest as secondOpinion } from '../../plugins/second-opinion/manifest'
 import { manifest as focusMode } from '../../plugins/focus-mode/manifest'
+import { manifest as openInIde } from '../../plugins/open-in-ide/manifest'
 // The bundled feature plugins' manifests: metadata only, safe in Web clients,
 // the TUI root and workers. Adding a plugin adds one line here and one line in
 // each renderer's loader list (components/shell/pluginViews.ts,
@@ -48,6 +51,7 @@ import { manifest as recaps } from '../../plugins/recaps/manifest'
 import { manifest as github } from '../../plugins/github/manifest'
 import { manifest as dailySummary } from '../../plugins/daily-summary/manifest'
 import { manifest as whatsNew } from '../../plugins/whats-new/manifest'
+import { manifest as featureGuide } from '../../plugins/feature-guide/manifest'
 import { manifest as handoff } from '../../plugins/handoff/manifest'
 import { manifest as bookmarks } from '../../plugins/bookmarks/manifest'
 import { manifest as schedules } from '../../plugins/schedules/manifest'
@@ -62,9 +66,11 @@ import { manifest as omniBar } from '../../plugins/omni-bar/manifest'
 import { manifest as runDashboard } from '../../plugins/run-dashboard/manifest'
 import { manifest as modViews } from '../../plugins/mod-views/manifest'
 import type { PluginCommandSpec, PluginManifest, PluginRenderer, PluginSurfaceSpec } from './types'
+import { manifest as piInterview } from '../../plugins/pi-interview/manifest'
+import { manifest as webResults } from '../../plugins/web-results/manifest'
 import type { LocalPluginManifest } from './localManifest'
 
-export const PLUGIN_MANIFESTS = [instructionsManager, projectMemory, workflowPacks, skillsManager, adaptiveUi, planReview, proof, secondOpinion, focusMode, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, viewStudio, worktreeTasks, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
+export const PLUGIN_MANIFESTS = [pstack, mattSkills, instructionsManager, projectMemory, workflowPacks, webResults, piInterview, skillsManager, adaptiveUi, planReview, proof, secondOpinion, focusMode, openInIde, toasts, dynamicIsland, omniBar, analytics, git, files, editor, messaging, tasks, bridges, diagnostics, terminal, browser, subagents, pullRequests, checkpoints, fileHistory, coordination, desk, recaps, github, dailySummary, whatsNew, featureGuide, handoff, bookmarks, schedules, chiefOfStaff, skillPicker, provenance, remoteAccess, piActivity, runDashboard, modViews, sessionInsights, tabManager, sessionAlerts, composerContext, promptLibrary, composerTools, better, goals, tips, themePicker, viewStudio, worktreeTasks, themesClassic, themesBrand, themesMaterial, themesTerminal] as const satisfies readonly PluginManifest[]
 
 type BundledManifest = (typeof PLUGIN_MANIFESTS)[number]
 export type PluginId = BundledManifest['id']

@@ -27,14 +27,22 @@ try {
   page.setDefaultTimeout(15000)
   const errors = [], reads = [], actions = []
   let holdReads = false, releaseRead, actionFailure = false
+  let runtimeProvider = 'claude', compactionStatus, compactionReadCount = 0
   const pendingReads = []
   page.on('pageerror', error => { errors.push(error.message); console.error(error.stack) })
   await page.route('**/api/**', async route => {
     const request = route.request(), url = new URL(request.url())
     if (url.pathname.endsWith('/diagnostics')) {
       const instance = url.searchParams.get('providerInstanceId')
-      assert.equal(url.searchParams.get('provider'), 'claude')
+      assert.equal(url.searchParams.get('provider'), runtimeProvider)
       reads.push(instance)
+      if (runtimeProvider !== 'claude') {
+        if (compactionStatus === 'pending' && ++compactionReadCount > 1) compactionStatus = 'completed'
+        return route.fulfill({ json: { sections: [
+          { id: 'context', title: 'CONTEXT', items: ['12 / 120 tokens'], compaction: { status: compactionStatus, busy: compactionStatus === 'pending' } },
+          { id: 'mcp', title: 'MCP', items: ['documents · cached · 4 tools', 'issues · connected'] },
+        ] } })
+      }
       if (holdReads) await new Promise(resolve => { pendingReads.push(resolve); releaseRead = () => { for (const release of pendingReads.splice(0)) release() } })
       return route.fulfill({ json: { sections: [
         { id: 'status', title: 'STATUS', items: [`DIAGNOSTICS-${instance}`] },
@@ -45,6 +53,11 @@ try {
     if (url.pathname.endsWith('/actions') && request.method() === 'POST') {
       const body = request.postDataJSON()
       actions.push(body)
+      if (body.action === 'compactContext') {
+        assert.equal(body.provider, runtimeProvider)
+        compactionStatus = 'pending'
+        return route.fulfill({ json: { result: { ok: true, status: compactionStatus } } })
+      }
       if (actionFailure) return route.fulfill({ status: 500, json: { error: 'Fixture action failed' } })
       return route.fulfill({ json: { result: body.action === 'listHookEvents' ? { events: [{ timestamp: 'now', summary: `HOOK-${body.query}` }] } : { sourceCount: 2, effectiveKeyCount: 4 } } })
     }
@@ -93,6 +106,24 @@ try {
   assert.equal(actions.length, previousActions, 're-enabling never repeats an old mutation')
   await dialog.getByRole('button', { name: 'Close', exact: true }).press('Escape')
   await dialog.waitFor({ state: 'detached' })
+  for (const provider of ['opencode', 'pi']) {
+    runtimeProvider = provider
+    compactionStatus = undefined
+    compactionReadCount = 0
+    await page.goto(`http://127.0.0.1:${server.address().port}/?provider=${provider}`, { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: 'Diagnostics', exact: true }).click()
+    await dialog.getByText('12 / 120 tokens', { exact: true }).waitFor()
+    await dialog.getByRole('searchbox', { name: 'Filter MCP inventory' }).fill('documents')
+    await dialog.getByText('documents · cached · 4 tools', { exact: true }).waitFor()
+    assert.equal(await dialog.getByText('issues · connected', { exact: true }).count(), 0)
+    const compact = dialog.getByRole('button', { name: 'Compact now' })
+    await compact.click()
+    await dialog.getByText('Compaction requested', { exact: true }).waitFor()
+    assert.ok(await compact.isDisabled())
+    assert.equal(actions.at(-1).providerInstanceId, 'personal')
+    await dialog.getByText('Compaction completed', { exact: true }).waitFor()
+    assert.ok(await compact.isEnabled())
+  }
   assert.deepEqual(errors, [])
   console.log('Web diagnostics plugin: PASS (real MessageView, StrictMode, lazy reads, captured account, controls, errors, late reads, disable/re-enable and Escape)')
 } finally {

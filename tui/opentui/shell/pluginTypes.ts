@@ -32,6 +32,8 @@ export type TuiPluginServices = {
   handoff?: import('../../../lib/plugins/handoff').PluginHandoffService
   bookmarks?: import('../../../lib/plugins/bookmarks').PluginBookmarksService
   schedules?: import('../../../lib/plugins/schedules').PluginSchedulesService
+  pstack?: import('../../../lib/plugins/pstack').PluginPstackService
+  'matt-skills'?: import('../../../lib/plugins/mattSkills').PluginMattSkillsService
   'chief-of-staff'?: import('../../../lib/plugins/chiefOfStaff').PluginChiefOfStaffService
   /** The worktree task dialogs: naming a new task, and confirming a merge or discard. The host runs the git work. */
   'worktree-tasks'?: {
@@ -68,6 +70,7 @@ export type TuiPluginServices = {
   proof?: import('../../../lib/plugins/proof').ProofService
   'second-opinion'?: import('../../../lib/plugins/secondOpinion').SecondOpinionService
   'focus-mode'?: import('../../../lib/plugins/focusMode').FocusService
+  'open-in-ide'?: import('../../../lib/plugins/openInIde').PluginIdeService
   checkpoints?: import('../../../lib/plugins/checkpoints').PluginCheckpointsService
   'session-insights'?: import('../../../lib/plugins/sessionInsights').PluginSessionInsightsService
   'session-tabs'?: import('../../../lib/plugins/sessionTabs').PluginSessionTabs

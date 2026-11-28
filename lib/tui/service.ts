@@ -1404,9 +1404,12 @@ export async function readTuiSessionDiagnostics(
   session: Session,
 ): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   if (isRemoteAttached()) {
-    return remoteJson(encodeSessionPath(session.sessionId, `/diagnostics${providerQuery(session.provider)}`))
+    const query = new URLSearchParams()
+    if (session.provider) query.set('provider', session.provider)
+    if (session.providerInstanceId) query.set('providerInstanceId', session.providerInstanceId)
+    return remoteJson(encodeSessionPath(session.sessionId, `/diagnostics?${query}`))
   }
-  return readViewSessionDiagnostics(session.sessionId, session.provider as AgentProvider | undefined)
+  return asSessionInstance(session, () => readViewSessionDiagnostics(session.sessionId, session.provider))
 }
 
 export async function runTuiSessionAction(

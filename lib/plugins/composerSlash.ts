@@ -1,17 +1,19 @@
 import type { PluginCommandInput } from './commands'
 // Metadata-only composer contribution. Local slash commands run before provider
 // sending, bridge routing or queueing; ordinary native commands pass through.
-import { listPluginCommands, type ResolvedPluginCommand } from './catalog'
+import { allPluginManifests, listPluginCommands, type ResolvedPluginCommand } from './catalog'
 import { isPluginEnabled } from './enablement'
 import type { AgentProvider } from '../types'
 import type { SlashCommandSuggestion } from '../slashCommands'
 import type { PluginRenderer } from './types'
 
 export function listPluginComposerSlashCommands(renderer: PluginRenderer, provider?: AgentProvider): SlashCommandSuggestion[] {
-  return eligible(renderer, provider).map(command => ({
-    command: `/${command.composerSlash!.name}`,
-    description: command.composerSlash!.description,
-    argumentHint: command.composerSlash!.argumentHint,
+  const prompts = allPluginManifests().filter(manifest => manifest.renderers.includes(renderer) && isPluginEnabled(manifest.id))
+    .flatMap(manifest => manifest.promptSlash ?? [])
+  return [...eligible(renderer, provider).map(command => command.composerSlash!), ...prompts].map(slash => ({
+    command: `/${slash.name}`,
+    description: slash.description,
+    argumentHint: slash.argumentHint,
   }))
 }
 

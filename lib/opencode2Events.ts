@@ -372,8 +372,9 @@ export class OpenCode2EventTranslator {
         return emit(events)
       }
 
+      case 'session.next.compaction.ended':
       case 'session.compaction.ended':
-        return sessionId ? emit([{ type: 'session.compacted', properties: { sessionID: sessionId } } as OpenCodeEvent]) : []
+        return sessionId ? emit([{ type: 'session.compacted', properties: { sessionID: sessionId, reason: data.reason } } as OpenCodeEvent]) : []
 
       case 'permission.asked': {
         const request = data as unknown as V2PermissionRequest

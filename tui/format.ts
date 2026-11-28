@@ -1713,5 +1713,7 @@ function pluginToolCardLines(block: Extract<ThreadedBlock, { type: 'tool_thread'
   const source = expanded && card.blocks?.length ? cardBlockLines(card.blocks) : card.lines
   const body = (expanded ? source : card.lines.slice(0, 1)).map(text => line(truncateLine(sanitizeLine(text)), bodyTone))
   const failed = block.result?.is_error ? [line('tool call failed', 'result_error')] : []
-  return [line(`tool ${truncateLine(card.title)}`, 'tool'), ...body, ...failed]
+  const raw = expanded && block.result ? (resultRawTextOf(block) ?? '').split('\n').slice(0, 100)
+    .map(text => line(truncateLine(sanitizeLine(text)), bodyTone)) : []
+  return [line(`tool ${truncateLine(card.title)}`, 'tool'), ...body, ...failed, ...raw]
 }

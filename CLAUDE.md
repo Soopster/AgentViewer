@@ -2894,6 +2894,29 @@ gate too (`CoordinatorConversation`), and held session alerts carry their sessio
 
 `npm run focus:smoke` (four mutations verified: warnings held, urgent notice held, launch replay, extend dropping held items).
 
+### Open in IDE (`lib/ide/`, `lib/plugins/openInIde.ts`, `plugins/open-in-ide`) (load-bearing)
+
+Files open in the person's own editor (VS Code, Cursor, Windsurf, Zed, JetBrains, Sublime, or a GUI `$VISUAL`/`$EDITOR`) at the line.
+The palette's "Open files in…" picks the editor, and the choice is saved as `ide` in tui.json, so the TUI and the web agree on it.
+
+- **Every place that opens a file asks `routeFileOpen` first.** The plugin installs that route from its application module, and with
+  the plugin off nothing changes. In the TUI the one entry point is `openEditorAt` (`app/slices/pluginSessionFor.ts`), and the `open-file`
+  service, transcript links, Engineering `o`, Files ⇧E, changed files and Second Opinion all reach it. On the web, `OpenFileButton` (↗ on
+  Read/Edit/Write/MultiEdit/file-change cards) and markdown file links (`file://…#L12`, or `src/a.ts:12` resolved against the session cwd)
+  are drawn only while a route exists, so a dead link is never shown.
+- **The TUI keeps its built-in editor until a person chooses another**; the web, which has none, uses the first editor it finds.
+  A failed launch says why, and in the TUI it falls back to the built-in editor.
+- **Argv only, never a shell string** (`lib/ide/launch.ts`). Detection stats PATH and the macOS app bundles' CLIs without spawning anything.
+  A VS Code-family editor is also given the file's checkout (the nearest `.git`), so the file opens in that repository's window.
+- **A terminal `$EDITOR` is refused**: a detached child has no terminal. Use the built-in editor (⌃G still edits the prompt in `$EDITOR`).
+- **`POST /api/ide` `open` refuses any caller that is not a page served to this machine.** It needs a local `Origin` (a browser always
+  sends one on a POST) as well as local trust, because a paired phone must not open windows on the desktop.
+
+`npm run ide:smoke` covers argv per editor, validation, a real detached launch, both renderers' routes, the fallback and the origin guard
+in `ideLaunchSmoke.ts`, and runs a real App click in `ideOpenSmoke.tsx`. Mutation-checked: dropping `-g`, dropping `+N`, dropping the
+origin guard, dropping the fallback, and removing the TUI hook. Checked live: VS Code on macOS opened the repo window at the line. Not
+verified: the web ↗ button in a real browser.
+
 ### Agent memory (`lib/project-memory/`, `plugins/project-memory`) (load-bearing)
 
 Agents keep a memory per project across sessions and providers, in the same store and panel as the notes people
@@ -2922,6 +2945,50 @@ on the web; `agentMemory`, which is on when the field is missing).
 
 `npm run project-memory:smoke` covers all of this against a real git repository and worktree. Dropping the
 per-session dedupe, dropping the person-note guard, and keying on cwd were each verified to fail it.
+
+### pstack (`lib/pstack/`, `plugins/pstack`) (load-bearing)
+
+cursor/plugins' pstack (MIT) vendored under `plugins/pstack/vendor` by `scripts/vendorPstack.mjs <clone>`, which pins
+the commit in `VENDOR.json`. **Never edit the vendored files**: Cursor names are translated by `plugins/pstack/adapter.md`.
+Not shipped: `setup-pstack` (replaced by the panel's model roles), `make-bot-ui`, `statechart`, the Benny automations.
+`vendor` is excluded in `tsconfig.json` (its scripts have their own dependencies).
+
+- **`/pstack <task>` (or `/pstack /<skill> <task>`) is a prompt command** (`promptSlash`: listed in the `/` menu, never
+  handled locally). The `beforeTurn` hook appends `<pstack_context>` with the adapter's and skill's paths, so all five
+  providers get it by reading files; the task stays first for the session title. One message only, as upstream.
+- **Model roles are the user's** (`~/.config/agent-viewer/pstack.json`, `AGENT_VIEWER_PSTACK_CONFIG`), one line each:
+  `provider[:instance] [model] [effort]`, comma separated for panels. An unreadable line is refused; an unadvertised
+  model is saved, shown, and left out of the prompt. A broken file is never overwritten.
+- The skills are a read-only, copy-only root in Skills Manager and the Skill picker. Copying one skill alone breaks
+  its `../<name>/` references. `arena` and `interrogate` also install as Coordinator playbooks (`lib/pstack/playbooks.ts`).
+
+`npm run pstack:smoke`. Not verified live: a real provider following `/pstack`, and the Web panel in a browser.
+
+### Matt Pocock skills (`lib/mattSkills/`, `plugins/matt-skills`) (load-bearing)
+
+mattpocock/skills (MIT) vendored under `plugins/matt-skills/vendor` by `scripts/vendorMattSkills.mjs <clone>`: the 27
+skills upstream's own plugin manifest ships (not `misc/` or `in-progress/`), without their bucket folders, contents
+unchanged, commit pinned in `VENDOR.json`. **Never edit them**: harness differences belong in `adapter.md`.
+It shares `lib/skillPacks/` (library lookup and command parsing) with pstack.
+
+- **`/matt <task>` runs upstream's router `ask-matt`; `/matt /<skill> <task>` runs one.** Same prompt-command path as
+  `/pstack`. The context block names the skill the user started and whether the checkout has
+  `docs/agents/issue-tracker.md` (written by `setup-matt-pocock-skills`, which ships).
+- **User-invoked skills stay user-invoked**: the adapter tells the agent never to start one itself. "Call the Skill
+  tool with X" means read the bundled file. This is guidance the model reads, not something enforced.
+- The panel shows repository setup and the skills (⏎ puts the command in the composer), and installs `matt-code-review`
+  as a Coordinator playbook. Skills are a read-only root in Skills Manager and the Skill picker.
+
+`npm run matt-skills:smoke`. Not verified live: a real provider following `/matt`, and the Web panel in a browser.
+
+### What's new in Agent Viewer (`lib/featureGuide.ts`, `plugins/feature-guide`)
+
+A hand-written guide to the app's recent features and how to use each one, in the terminal and on the Web
+(palette → "What's new in Agent Viewer"). It is product copy, not history: the `whats-new` plugin reads the
+current repository's git log, this one describes Agent Viewer itself. **When a feature ships, add an entry at the
+top of `FEATURE_GUIDE`** with the date, its TUI and Web steps, and the palette `command` that opens it (`o` in the
+TUI runs it). Features in the week ending at the newest entry are marked new. `featureGuideSmoke.tsx` fails when an
+entry names a plugin or TUI palette command that does not exist, so a renamed command cannot leave a dead "try it".
 
 ### Remote access
 

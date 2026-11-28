@@ -4,7 +4,7 @@ import { createPluginViewRegistry } from '../../../lib/plugins/activation'
 import type { PluginServiceId } from '../../../lib/plugins/types'
 import type { TuiPluginView } from './pluginTypes'
 
-export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'second-opinion', 'focus-mode', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes', 'view-studio', 'worktree-tasks']
+export const TUI_PLUGIN_SERVICES: readonly PluginServiceId[] = ['pstack', 'matt-skills', 'instructions-manager', 'project-memory', 'skills-manager', 'adaptive-ui', 'plan-review', 'proof', 'second-opinion', 'focus-mode', 'open-in-ide', 'notifications', 'shell-overview', 'run-launch', 'playbooks', 'daily-summary', 'whats-new', 'handoff', 'checkpoints', 'session-insights', 'session-tabs', 'bookmarks', 'schedules', 'chief-of-staff', 'session-navigation', 'activity-control', 'provenance', 'remote-access', 'subagent-transcript', 'session-transcript', 'repository', 'composer', 'clipboard', 'open-file', 'directory-picker', 'scroll-preferences', 'notices', 'file-history', 'session', 'live-transcript', 'task-control', 'session-diagnostics', 'messaging', 'channel-bridge', 'ide-bridge', 'browser-location', 'window-selection', 'coordination', 'session-fleet', 'themes', 'view-studio', 'worktree-tasks']
 
 export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   'omni-bar': async () => (await import('../../../plugins/omni-bar/tui')).module,
@@ -25,6 +25,7 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   proof: async () => (await import('../../../plugins/proof/tui')).module,
   'second-opinion': async () => (await import('../../../plugins/second-opinion/tui')).module,
   'focus-mode': async () => (await import('../../../plugins/focus-mode/tui')).module,
+  'open-in-ide': async () => (await import('../../../plugins/open-in-ide/tui')).module,
   checkpoints: async () => (await import('../../../plugins/checkpoints/tui')).module,
   'file-history': async () => (await import('../../../plugins/file-history/tui')).module,
   messaging: async () => (await import('../../../plugins/messaging/tui')).module,
@@ -45,9 +46,12 @@ export const tuiPluginViews = createPluginViewRegistry<TuiPluginView>('tui', {
   recaps: async () => (await import('../../../plugins/recaps/tui')).module,
   'daily-summary': async () => (await import('../../../plugins/daily-summary/tui')).module,
   'whats-new': async () => (await import('../../../plugins/whats-new/tui')).module,
+  'feature-guide': async () => (await import('../../../plugins/feature-guide/tui')).module,
   handoff: async () => (await import('../../../plugins/handoff/tui')).module,
   bookmarks: async () => (await import('../../../plugins/bookmarks/tui')).module,
   schedules: async () => (await import('../../../plugins/schedules/tui')).module,
+  pstack: async () => (await import('../../../plugins/pstack/tui')).module,
+  'matt-skills': async () => (await import('../../../plugins/matt-skills/tui')).module,
   'chief-of-staff': async () => (await import('../../../plugins/chief-of-staff/tui')).module,
   'skill-picker': async () => (await import('../../../plugins/skill-picker/tui')).module,
   'mod-views': async () => (await import('../../../plugins/mod-views/tui')).module,

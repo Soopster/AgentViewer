@@ -36,6 +36,7 @@ import { join } from 'node:path'
 import { type RunningRegistryEntry } from '../types'
 import { REATTACH_POLL_MS } from '../timing'
 import { sameJson } from '../perf'
+import { readTuiSubagentSummaries } from '../../../../lib/tui/reads'
 import { readTuiSubagentSummariesAsync } from '../../sessionDetailWorkerClient'
 import { type SubagentSummary } from '../../../../lib/types'
 import { SUBAGENT_SUMMARY_CACHE_LIMIT } from '../layoutConstants'
@@ -616,18 +617,32 @@ export function runProviderSubagentSummariesEffect(ctx: ProviderSubagentSummarie
   if (!target) return
   const cacheKey = sessionKey(target)
   const read = subagentSummariesReadRef.current
-  if (read.has(cacheKey)) return
+  const live = target.provider === 'pi' || target.provider === 'opencode'
+  if (!live && read.has(cacheKey)) return
   let cancelled = false
-  void readTuiSubagentSummariesAsync(target).then((subagents) => {
-    if (cancelled) return
-    read.add(cacheKey)
-    if (read.size > SUBAGENT_SUMMARY_CACHE_LIMIT) read.delete(read.values().next().value!)
-    if (subagents.length === 0) return
-    setProviderSubagentSummaries((previous) => {
-      const next = new Map(previous).set(cacheKey, subagents)
-      for (const key of next.keys()) if (next.size > SUBAGENT_SUMMARY_CACHE_LIMIT && key !== cacheKey) next.delete(key)
-      return next
-    })
-  }).catch(() => {})
-  return () => { cancelled = true }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const poll = async () => {
+    try {
+      const subagents = live
+        ? await readTuiSubagentSummaries(target.sessionId, target.provider, target.providerInstanceId)
+        : await readTuiSubagentSummariesAsync(target)
+      if (cancelled) return
+      read.add(cacheKey)
+      if (read.size > SUBAGENT_SUMMARY_CACHE_LIMIT) read.delete(read.values().next().value!)
+      setProviderSubagentSummaries((previous) => {
+        const old = previous.get(cacheKey) ?? []
+        if (JSON.stringify(old) === JSON.stringify(subagents)) return previous
+        const next = new Map(previous)
+        if (subagents.length) next.set(cacheKey, subagents)
+        else next.delete(cacheKey)
+        for (const key of next.keys()) if (next.size > SUBAGENT_SUMMARY_CACHE_LIMIT && key !== cacheKey) next.delete(key)
+        return next
+      })
+    } catch { /* A provider can temporarily lose its connection. Retry live reads. */ }
+    finally {
+      if (live && !cancelled) timer = setTimeout(() => { void poll() }, 5000)
+    }
+  }
+  void poll()
+  return () => { cancelled = true; clearTimeout(timer) }
 }

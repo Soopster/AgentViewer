@@ -50,24 +50,41 @@ function Subagents({ services, placement, close, useState: useScopedState }: Web
   const [selected, setSelected] = useScopedState<string | null>('agent', null)
   const [messages, setMessages] = useState<SessionMessage[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const active = list?.find(agent => agent.agentId === selected)
   useEffect(() => {
     setList(null)
     if (!session) return undefined
     const controller = new AbortController()
-    transcripts.list(session, controller.signal)
-      .then(next => { if (!controller.signal.aborted) { setList(next); if (!next.some(agent => agent.agentId === selected)) setSelected(next[0]?.agentId ?? null) } })
-      .catch(cause => { if (!controller.signal.aborted) setError(message(cause)) })
-    return () => controller.abort()
-  }, [transcripts, session?.provider, session?.sessionId])
+    let inFlight = false
+    const poll = () => {
+      if (inFlight) return
+      inFlight = true
+      void transcripts.list(session, controller.signal).then(next => {
+        if (controller.signal.aborted) return
+        setList(next)
+        setError(null)
+        setSelected(current => next.some(agent => agent.agentId === current) ? current : next[0]?.agentId ?? null)
+      }).catch(cause => {
+        if (!controller.signal.aborted) setError(message(cause))
+      }).finally(() => { inFlight = false })
+    }
+    poll()
+    if (session.provider !== 'pi' && session.provider !== 'opencode') return () => controller.abort()
+    const timer = setInterval(poll, 5000)
+    return () => {
+      clearInterval(timer)
+      controller.abort()
+    }
+  }, [transcripts, session?.provider, session?.providerInstanceId, session?.sessionId, setSelected])
   useEffect(() => {
     setMessages(null)
-    if (!session || !selected) return undefined
+    if (!session || !selected || active?.transcriptAvailable === false) return undefined
     const controller = new AbortController()
     transcripts.load(session, selected, controller.signal)
       .then(next => { if (!controller.signal.aborted) setMessages(next) })
       .catch(cause => { if (!controller.signal.aborted) setError(message(cause)) })
     return () => controller.abort()
-  }, [transcripts, session?.provider, session?.sessionId, selected])
+  }, [transcripts, session?.provider, session?.providerInstanceId, session?.sessionId, selected, active?.transcriptAvailable])
   useEffect(() => {
     if (docked) return undefined
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
@@ -92,12 +109,12 @@ function Subagents({ services, placement, close, useState: useScopedState }: Web
                 <button key={agent.agentId} type="button" data-subagent={agent.agentId} onClick={() => setSelected(agent.agentId)}
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 12px', border: 'none', borderBottom: '1px solid var(--border)', background: agent.agentId === selected ? 'var(--surface-3)' : 'transparent', color: 'var(--text)', cursor: 'pointer' }}>
                   <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.taskDescription || agent.agentId}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{agent.messageCount} messages · {Math.round((agent.usage.totalTokens ?? agent.usage.inputTokens + agent.usage.outputTokens) / 1000)}k tokens</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{[agent.status, agent.messageCount ? `${agent.messageCount} messages` : null, (agent.usage.totalTokens ?? agent.usage.inputTokens + agent.usage.outputTokens) > 0 ? `${(agent.usage.totalTokens ?? agent.usage.inputTokens + agent.usage.outputTokens).toLocaleString()} tokens` : null].filter(Boolean).join(' · ') || (agent.transcriptAvailable === false ? 'Transcript unavailable' : 'Transcript available')}</div>
                 </button>
               ))}
             </div>
             <div style={{ overflow: 'auto', padding: '10px 14px', fontSize: 13, minWidth: 0 }}>
-              {messages === null ? <div style={{ color: 'var(--text-2)' }}>Reading the transcript…</div> : <Transcript messages={messages} />}
+              {active?.transcriptAvailable === false ? <div>Child transcript unavailable.</div> : messages === null ? <div style={{ color: 'var(--text-2)' }}>Reading the transcript…</div> : <Transcript messages={messages} />}
             </div>
           </div>
         )}

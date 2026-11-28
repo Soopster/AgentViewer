@@ -11,14 +11,14 @@ export type PluginCategory = typeof PLUGIN_CATEGORIES[number]
 
 const BY_ID: Readonly<Record<string, PluginCategory>> = {
   coordination: 'Agents & coordination', handoff: 'Agents & coordination', messaging: 'Agents & coordination', bridges: 'Agents & coordination',
-  schedules: 'Agents & coordination', 'chief-of-staff': 'Agents & coordination', subagents: 'Agents & coordination', 'run-dashboard': 'Agents & coordination',
+  pstack: 'Agents & coordination', 'matt-skills': 'Agents & coordination', schedules: 'Agents & coordination', 'chief-of-staff': 'Agents & coordination', subagents: 'Agents & coordination', 'run-dashboard': 'Agents & coordination',
   'workflow-packs': 'Agents & coordination', 'session-alerts': 'Agents & coordination', tasks: 'Agents & coordination', 'plan-review': 'Agents & coordination', proof: 'Agents & coordination',
   git: 'Code & repository', files: 'Code & repository', editor: 'Code & repository', 'pull-requests': 'Code & repository', github: 'Code & repository',
   checkpoints: 'Code & repository', 'file-history': 'Code & repository', provenance: 'Code & repository', terminal: 'Code & repository', browser: 'Code & repository', diagnostics: 'Code & repository',
   better: 'Composer', goals: 'Composer', tips: 'Composer', 'composer-context': 'Composer', 'composer-tools': 'Composer', 'prompt-library': 'Composer',
   'skill-picker': 'Composer', 'skills-manager': 'Composer', 'instructions-manager': 'Composer', 'project-memory': 'Composer', 'adaptive-ui': 'Composer',
   analytics: 'Sessions & history', 'session-insights': 'Sessions & history', 'daily-summary': 'Sessions & history', recaps: 'Sessions & history', bookmarks: 'Sessions & history',
-  'tab-manager': 'Sessions & history', desk: 'Sessions & history', 'whats-new': 'Sessions & history', 'remote-access': 'Sessions & history', 'pi-activity': 'Sessions & history',
+  'tab-manager': 'Sessions & history', desk: 'Sessions & history', 'whats-new': 'Sessions & history', 'feature-guide': 'Sessions & history', 'remote-access': 'Sessions & history', 'pi-activity': 'Sessions & history',
   toasts: 'Interface', 'dynamic-island': 'Interface', 'omni-bar': 'Interface', 'mod-views': 'Interface', 'theme-picker': 'Interface', 'view-studio': 'Interface', 'worktree-tasks': 'Code & repository',
 }
 

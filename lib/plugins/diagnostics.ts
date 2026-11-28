@@ -7,3 +7,5 @@ export type PluginSessionDiagnosticsService = {
   readonly run: (session: Readonly<SessionIdentity>, action: string, extra: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>
   readonly hasControls: (session: Readonly<SessionIdentity>) => boolean
 }
+
+export const COMPACT_CONTEXT_ACTION = 'compactContext'

@@ -1,5 +1,7 @@
 import type { ProtocolTask, ProtocolRunSnapshot } from './agentProtocol'
 
+export type CoordinatorResultDestination = 'target' | 'dependencies'
+
 export type CoordinatorResultReview = {
   task: ProtocolTask
   findings: { summary: string; detail?: string }[]
@@ -7,6 +9,7 @@ export type CoordinatorResultReview = {
   checkout: null | {
     path: string; branch: string; head: string; base: string; target: string
     files: string[]; diff: string; diffTruncated: boolean; diffIncluded?: boolean; revision: string; token: string
+    dependencyRef?: string; dependencyTip?: string; integrationBase?: string
   }
   verification: 'current' | 'stale' | 'unbound' | 'missing' | 'failed'
   integrationBlockers: string[]

@@ -151,6 +151,7 @@ export type PluginManifest = {
   readonly apiVersion: typeof PLUGIN_API_VERSION
   readonly id: string
   readonly title: string
+  readonly enabledByDefault?: boolean
   /** One sentence for the plugin manager. */
   readonly description: string
   /** The plugin manager's heading for this plugin (lib/plugins/managerCategories.ts); unset falls back to the built-in map. */
@@ -216,6 +217,11 @@ export type PluginManifest = {
   /** Operations for agents, called through the agent-viewer MCP bridge (lib/plugins/pluginTools.ts). The handlers are the behavior module's `tools`. */
   readonly tools?: readonly import('./pluginTools').PluginToolSpec[]
   /** Headless server contributions, loaded on the shared send path, never by listing views. */
+  /**
+   * Slash commands that are part of the prompt: listed in the composer's `/` menu but sent like any
+   * other message, for this plugin's `beforeTurn` hook to expand. Names omit `/`.
+   */
+  readonly promptSlash?: readonly { readonly name: string; readonly description: string; readonly argumentHint?: string }[]
   readonly behavior?: { readonly hooks: readonly ('beforeTurn' | 'afterTurn' | 'beforeSteer' | 'permission' | 'toolCard' | 'transcriptCard' | 'runtimeEvent')[]; readonly order?: number; readonly permissionMode?: 'policy' | 'automation' }
   /**
    * Standing schedules this plugin offers. They are listed in Schedules but never run
@@ -225,7 +231,7 @@ export type PluginManifest = {
   /** App-lifetime observers, independent of whether any surface is open. */
   readonly application?: {
     readonly events: readonly 'sessionActivity'[]
-    readonly services: readonly ('notifications' | 'activity' | 'permissions' | 'repository' | 'focus')[]
+    readonly services: readonly ('notifications' | 'activity' | 'permissions' | 'repository' | 'focus' | 'ide')[]
   }
   /** Version of the plugin's scoped state; a mismatch restores defaults. */
   readonly stateVersion: number
@@ -322,6 +328,8 @@ export type PluginServiceId =
   | 'second-opinion'
   /** Focus Mode's block and what it held. */
   | 'focus-mode'
+  /** Which editor files open in, and opening one there. */
+  | 'open-in-ide'
   | 'notifications'
   | 'shell-overview'
   | 'run-launch'
@@ -338,6 +346,10 @@ export type PluginServiceId =
   | 'schedules'
   /** A repository's Chief of Staff: read it, start it, hand it a request. */
   | 'chief-of-staff'
+  /** pstack's bundled skills and the user's model roles. */
+  | 'pstack'
+  /** Matt Pocock's bundled skills and the repository's setup for them. */
+  | 'matt-skills'
   | 'view-studio'
   | 'worktree-tasks'
   /** Open a session in the reader, optionally at a message. */

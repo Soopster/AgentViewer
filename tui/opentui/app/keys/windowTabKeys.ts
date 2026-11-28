@@ -108,6 +108,7 @@ export function handleWindowAndTabKeys({
       handled(() => {
         const entry = sidebarEntries[selectedSidebarEntryIndex]
         if (entry?.type === 'subagent' && entry.entry.kind === 'summary') {
+          if (entry.entry.summary.transcriptAvailable === false) return
           setSubagentTranscriptSelection({ parent: entry.parentSession, agent: entry.entry.summary })
           setPluginOverlay('subagents')
           return

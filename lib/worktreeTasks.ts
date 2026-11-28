@@ -116,7 +116,7 @@ async function pruneStaleWorktrees(repoRoot: string): Promise<void> {
  * current HEAD. Returns the created task; throws with git's own message when
  * the worktree or branch can't be created.
  */
-export async function createWorktreeTask(cwd: string, name: string): Promise<WorktreeTask> {
+export async function createWorktreeTask(cwd: string, name: string, startPoint?: string): Promise<WorktreeTask> {
   const repoRoot = await findRepoRoot(cwd)
   if (!repoRoot) throw new Error(`Not a git repository: ${cwd}`)
   const baseSlug = slugify(name)
@@ -139,7 +139,7 @@ export async function createWorktreeTask(cwd: string, name: string): Promise<Wor
       // path free — try to create
     }
     try {
-      await git(repoRoot, ['worktree', 'add', worktreePath, '-b', branch])
+      await git(repoRoot, ['worktree', 'add', worktreePath, '-b', branch, ...(startPoint ? [startPoint] : [])])
     } catch (err) {
       // Branch may exist from an earlier discarded task; retry with a suffix.
       if (err instanceof Error && /already exists/i.test(err.message) && attempt < 20) {

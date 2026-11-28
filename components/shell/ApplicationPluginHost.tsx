@@ -16,6 +16,7 @@ import type { WebPluginServices } from './pluginTypes'
 import { useWebShellOverview, readGit, type WebShellActions } from './shellOverviewService'
 import { webProof } from './proofService'
 import { webFocus } from './focusService'
+import { webIde } from './ideService'
 
 const NO_SHELL_ACTIONS: WebShellActions = { openPalette: () => {}, newSession: () => {} }
 import type { PluginApplicationServices } from '../../lib/plugins/application'
@@ -93,7 +94,7 @@ export function ApplicationPluginHost({ teamAttention, sessions, selectedSession
         try { new Notification(`agent-viewer · ${title}`, { body }) } catch { /* host unavailable */ }
       }
     },
-  }, focus: webFocus }), [showNotice])
+  }, focus: webFocus, ide: webIde }), [showNotice])
   // A draft waits until its session is the selected one, so it cannot land in another composer.
   const [pendingDraft, setPendingDraft] = useState<{ key: string | null; text: string } | null>(null)
   const selectedKey = selectedSession ? sessionIdentityKey(selectedSession) : null

@@ -28,3 +28,12 @@ export function claudeDiagnosticActionNotice(
   if (sources == null && effective == null) return fallback
   return `Settings resolved${sources == null ? '' : ` · ${sources} source${sources === 1 ? '' : 's'}`}${effective == null ? '' : ` · ${effective} effective key${effective === 1 ? '' : 's'}`}`
 }
+
+export function compactionLabel(status: 'pending' | 'completed' | 'failed' | 'unconfirmed' | undefined): string | undefined {
+  switch (status) {
+    case 'pending': return 'Compaction requested'
+    case 'completed': return 'Compaction completed'
+    case 'failed': return 'Compaction failed'
+    case 'unconfirmed': return 'Compaction completion unconfirmed'
+  }
+}

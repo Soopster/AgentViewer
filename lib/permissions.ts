@@ -489,6 +489,11 @@ export function extractPiQuestion(payload: unknown): PendingPermission | null {
   const method = stringField(data, 'method')
   const title = stringField(data, 'title')
   if (!id || !method || !title) return null
+  if (method === 'interview') {
+    const questions = Array.isArray(data.questions) ? data.questions as PendingQuestion[] : []
+    if (questions.length === 0) return null
+    return { id, sessionId: stringField(data, 'sessionId'), provider: 'pi', toolName: 'agent_viewer_interview', title, questions, canApproveAlways: false }
+  }
   const rawOptions = Array.isArray(data.options)
     ? data.options.filter((option): option is string => typeof option === 'string')
     : []

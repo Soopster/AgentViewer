@@ -106,7 +106,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           showProviderInSessionRows
             ? formatProviderLabel(subagentEntry.summary.provider ?? entry.parentSession.provider)
             : null,
-          `${subagentEntry.summary.messageCount} msgs`,
+          subagentEntry.summary.status ?? (subagentEntry.summary.messageCount ? `${subagentEntry.summary.messageCount} msgs` : null),
           summaryTokens > 0 ? `${fmtTokens(summaryTokens)} tokens` : null,
         ])
     return (
@@ -122,6 +122,7 @@ export function runBuildSidebarRow(ctx: BuildSidebarRowContext, entry: SidebarEn
           if (subagentEntry.kind === 'session') selectSidebarSession(subagentEntry.session)
           else {
             setSidebarSubagentCursor(entry.key)
+            if (subagentEntry.summary.transcriptAvailable === false) return
             setSubagentTranscriptSelection({ parent: entry.parentSession, agent: subagentEntry.summary })
             setPluginOverlay('subagents')
           }

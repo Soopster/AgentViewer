@@ -28,6 +28,8 @@ scrubInheritedAgentIdentity()
 // A coordinated agent is told to read the coordinate-agents skill, and the
 // checkout it works in is almost never this repository. Every mode launched
 // from here inherits where the shipped copy lives.
+process.env.AGENT_VIEWER_PSTACK_DIR ||= fileURLToPath(new URL('../plugins/pstack', import.meta.url))
+process.env.AGENT_VIEWER_MATT_SKILLS_DIR ||= fileURLToPath(new URL('../plugins/matt-skills', import.meta.url))
 process.env.AGENT_VIEWER_COORD_SKILL_PATH ||= fileURLToPath(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url))
 
 const args = process.argv.slice(2)

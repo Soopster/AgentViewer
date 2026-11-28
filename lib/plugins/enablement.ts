@@ -8,36 +8,50 @@
 // activating. Disabling is a preference, not an uninstall, so an id that names
 // no bundled plugin is kept — a build that drops a plugin and a later one that
 // restores it must not lose the user's choice.
+import { PLUGIN_MANIFESTS } from './catalog'
+import type { PluginManifest } from './types'
+
 export const PLUGIN_SETTINGS_VERSION = 1
 
-export type PluginSettings = { readonly version: typeof PLUGIN_SETTINGS_VERSION; readonly disabled: readonly string[] }
+export type PluginSettings = { readonly version: typeof PLUGIN_SETTINGS_VERSION; readonly disabled: readonly string[]; readonly enabledOptIns?: readonly string[] }
 
-export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = { version: PLUGIN_SETTINGS_VERSION, disabled: [] }
+const defaultOff = (PLUGIN_MANIFESTS as readonly PluginManifest[]).filter(plugin => plugin.enabledByDefault === false).map(plugin => plugin.id)
+export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = { version: PLUGIN_SETTINGS_VERSION, disabled: defaultOff }
 
-/** Anything malformed reads as the default: every plugin on. */
+function validIds(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 64) : []
+}
+
+/** Anything malformed reads as the manifest defaults. */
 export function decodePluginSettings(value: unknown): PluginSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return DEFAULT_PLUGIN_SETTINGS
-  const { version, disabled } = value as { version?: unknown; disabled?: unknown }
+  const { version, disabled, enabledOptIns } = value as { version?: unknown; disabled?: unknown; enabledOptIns?: unknown }
   if (version !== PLUGIN_SETTINGS_VERSION || !Array.isArray(disabled)) return DEFAULT_PLUGIN_SETTINGS
-  const ids = [...new Set(disabled.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 64))].sort()
-  return { version: PLUGIN_SETTINGS_VERSION, disabled: ids }
+  const optIns = [...new Set(validIds(enabledOptIns))].sort()
+  const ids = new Set(validIds(disabled))
+  for (const id of defaultOff) if (!optIns.includes(id)) ids.add(id)
+  return { version: PLUGIN_SETTINGS_VERSION, disabled: [...ids].sort(), ...(optIns.length ? { enabledOptIns: optIns } : {}) }
 }
 
 export function withPluginEnabled(settings: PluginSettings, id: string, enabled: boolean): PluginSettings {
   const disabled = new Set(settings.disabled)
   if (enabled) disabled.delete(id)
   else disabled.add(id)
-  return { version: PLUGIN_SETTINGS_VERSION, disabled: [...disabled].sort() }
+  const optIns = new Set(settings.enabledOptIns)
+  if (enabled && defaultOff.includes(id)) optIns.add(id)
+  if (!enabled) optIns.delete(id)
+  return decodePluginSettings({ version: PLUGIN_SETTINGS_VERSION, disabled: [...disabled], enabledOptIns: [...optIns] })
 }
 
 let current: PluginSettings = DEFAULT_PLUGIN_SETTINGS
-let disabledSet: ReadonlySet<string> = new Set()
+let disabledSet: ReadonlySet<string> = new Set(defaultOff)
 const listeners = new Set<() => void>()
 
 export function applyPluginSettings(settings: PluginSettings): void {
   const next = decodePluginSettings(settings)
-  if (next.disabled.join('\n') === current.disabled.join('\n')) return
+  const changed = next.disabled.join('\n') !== current.disabled.join('\n')
   current = next
+  if (!changed) return
   disabledSet = new Set(next.disabled)
   for (const listener of [...listeners]) listener()
 }

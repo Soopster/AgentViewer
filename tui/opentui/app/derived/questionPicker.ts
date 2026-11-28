@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { type PendingPermission, type PendingQuestion, type PendingQuestionOption } from '../../../../lib/permissions'
-import { isCodexQuestionnaire } from '../../../../lib/questionnaire'
+import { isTabbedQuestionnaire } from '../../../../lib/questionnaire'
 import { QUESTION_PICKER_MIN_TRANSCRIPT_ROWS, QUESTION_PICKER_MIN_ROWS, QUESTION_PREVIEW_MIN_ROWS } from '../pickers'
 
 export type QuestionPickerPlan = {
@@ -56,7 +56,7 @@ export function runQuestionPickerPlan(ctx: QuestionPickerPlanContext): QuestionP
     - QUESTION_PICKER_MIN_TRANSCRIPT_ROWS,
     QUESTION_PICKER_MIN_ROWS,
   )
-  if (isCodexQuestionnaire(permission)) {
+  if (isTabbedQuestionnaire(permission)) {
     return runCodexQuestionnairePlan({
       questions, questionFocusIndex, questionOptionIndex, questionPreviewLines, budget,
     })

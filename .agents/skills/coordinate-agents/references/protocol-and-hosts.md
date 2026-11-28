@@ -342,13 +342,23 @@ for complete inspection. The human UI preview remains unchanged.
 Reading does not approve a human gate. After inspecting it, pass
 `checkout.token` as `review_token` to `coord_integrate_result`, with the task ID
 and a required stable `request_id`. Source or target changes invalidate that
-review. The shared implementation rejects dirty targets, path-grant violations,
+review. The shared implementation rejects path-grant violations,
 stale verification, open decisions, pending teammate native questions, retained
-execution, unknown/conflicted merge previews, and unapproved required reviews.
+execution, and unknown or conflicted merge previews.
 Foreign hosts must integrate in their owning host.
 
-Integration commits any uncommitted source work onto its task branch and
-squash-merges it into the target as staged changes. It never commits the target.
+Use `destination=dependencies` on the overview, diff pages, and integration to
+publish a reviewed isolated prerequisite before final approval. This creates a
+commit on a run-local ref without changing either checkout or its index. The
+response includes `dependency.ref` and `dependency.commit`. Managed staffing
+uses a base containing all required commits. For an external worker, use a
+checkout containing those commits. Publish all required prerequisites to the
+same run branch if no single checkout contains their commits.
+
+The default `destination=target` requires a clean target and any configured
+final approval. It commits uncommitted source changes and stages a squash
+in the main checkout for the operator to commit. The review shows any inherited
+prerequisite changes that the squash would carry into the target.
 Keep unrelated edits and ask their owner to resolve a blocked target; do not
 stash or reset another lane to make the gate pass. The operation uses the same
 replay key through UI and MCP. After a lost response retry identical arguments

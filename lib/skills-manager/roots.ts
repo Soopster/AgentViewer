@@ -3,11 +3,18 @@ import path from 'node:path'
 import { lstat, realpath } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { listProviderInstances, type ProviderInstance } from '../providerInstances'
+import { isPluginEnabled } from '../plugins/enablement'
+import { pstackSkillsDir } from '../pstack/library'
+import { mattLibrary } from '../mattSkills/service'
 import type { SkillRoot } from '../plugins/skillsManager'
 export const skillDigest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex')
-export type SkillsContext = { home: string; environment: Record<string, string | undefined>; instances: Pick<ProviderInstance, 'id' | 'provider' | 'displayName' | 'environment'>[]; dataDir: string }
+export type SkillsContext = { home: string; environment: Record<string, string | undefined>; instances: Pick<ProviderInstance, 'id' | 'provider' | 'displayName' | 'environment'>[]; dataDir: string; bundled?: readonly { path: string; label: string }[] }
 export async function skillsContext(): Promise<SkillsContext> {
-  return { home: homedir(), environment: process.env, instances: await listProviderInstances(), dataDir: process.env.AGENT_VIEWER_SKILLS_DATA_DIR || path.join(homedir(), '.agent-viewer', 'skills-manager') }
+  const bundled = [
+    ...isPluginEnabled('pstack') ? [{ path: pstackSkillsDir(), label: 'pstack (bundled)' }] : [],
+    ...isPluginEnabled('matt-skills') ? [{ path: mattLibrary.skillsDir(), label: 'Matt Pocock skills (bundled)' }] : [],
+  ]
+  return { bundled, home: homedir(), environment: process.env, instances: await listProviderInstances(), dataDir: process.env.AGENT_VIEWER_SKILLS_DATA_DIR || path.join(homedir(), '.agent-viewer', 'skills-manager') }
 }
 /** Canonicalize existing ancestors too, so aliases to a missing folder share one identity. */
 export async function canonicalSkillPath(input: string): Promise<string> {
@@ -27,6 +34,7 @@ export async function discoverSkillRoots(cwd: string, context: SkillsContext): P
   // Shared skills remain visible even if no particular provider is enabled.
   add(path.join(context.home, '.agents', 'skills'), 'user', 'Shared agent skills', 'Shared')
   add(path.join(project, '.agents', 'skills'), 'project', 'Shared project skills', 'Shared')
+  for (const bundle of context.bundled ?? []) add(bundle.path, 'user', bundle.label, 'Library (copy source; not loaded by providers)')
   for (const instance of context.instances) {
     const env = { ...context.environment, ...instance.environment }, home = env.HOME || env.USERPROFILE || context.home
     const label = `${instance.displayName} (${instance.id})`
@@ -50,6 +58,7 @@ export async function discoverSkillRoots(cwd: string, context: SkillsContext): P
       try { const stat = await lstat(candidate.path); exists = true; if (!stat.isDirectory() && !stat.isSymbolicLink()) { writable = false; note = 'Location is not a directory' } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       if (canonical !== candidate.path) { writable = false; note = 'Linked location; copies must target a direct skill folder' }
     } catch (error) { canonical = candidate.path; writable = false; note = error instanceof Error ? error.message : String(error) }
+    if (context.bundled?.some(bundle => path.resolve(bundle.path) === candidate.path)) { writable = false; note = 'Shipped with Agent Viewer; copy from here' }
     const existing = roots.get(canonical)
     if (existing) {
       if (!existing.consumers.includes(candidate.consumer)) existing.consumers.push(candidate.consumer)

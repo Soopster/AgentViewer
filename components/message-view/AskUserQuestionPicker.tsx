@@ -4,7 +4,7 @@ import { useState, useSyncExternalStore } from 'react'
 import { type ColorTreatment, subscribeColorTreatment, getCurrentColorTreatment, DEFAULT_COLOR_TREATMENT } from '../../lib/colorTreatment'
 import { type PendingPermission, type PendingQuestionAnswers, initialQuestionState } from '../../lib/permissions'
 import { getAssistantDisplayName } from '../../lib/provider'
-import { questionAnswerValues, questionIsAnswered, isCodexQuestionnaire } from '../../lib/questionnaire'
+import { questionAnswerValues, questionIsAnswered, isTabbedQuestionnaire } from '../../lib/questionnaire'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 
@@ -16,8 +16,8 @@ export function AskUserQuestionPicker(props: {
 }) {
   // Codex's requestUserInput gets the CLI's tabbed questionnaire (one tab per
   // question plus Submit). Every other provider keeps the stacked picker.
-  return isCodexQuestionnaire(props.permission)
-    ? <CodexQuestionnairePicker {...props} />
+  return isTabbedQuestionnaire(props.permission)
+    ? <TabbedQuestionnairePicker {...props} />
     : <StackedQuestionPicker {...props} />
 }
 
@@ -302,7 +302,7 @@ function StackedQuestionPicker({ permission, busy, onSubmit, onCancel }: PickerP
 }
 
 /** Codex CLI parity: one tab per question plus a Submit tab. */
-function CodexQuestionnairePicker({ permission, busy, onSubmit, onCancel }: PickerProps) {
+function TabbedQuestionnairePicker({ permission, busy, onSubmit, onCancel }: PickerProps) {
   const questions = permission.questions ?? []
   const [selections, setSelections] = useState(() => initialQuestionState(questions).selections)
   const [freeformAnswers, setFreeformAnswers] = useState(() => initialQuestionState(questions).freeformAnswers)
@@ -363,7 +363,7 @@ function CodexQuestionnairePicker({ permission, busy, onSubmit, onCancel }: Pick
       }}
     >
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
-        {questions.length === 1
+        {permission.provider === 'pi' && permission.title ? permission.title : questions.length === 1
           ? `${getAssistantDisplayName(permission.provider ?? 'claude')} asks`
           : `${getAssistantDisplayName(permission.provider ?? 'claude')} asks · ${questions.length} questions`}
       </div>

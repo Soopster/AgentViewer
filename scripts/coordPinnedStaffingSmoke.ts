@@ -33,7 +33,9 @@ mock.module(fileURLToPath(new URL('../lib/sessionBackend.ts', import.meta.url)),
   })),
 }))
 const coord = await import('../lib/agentCoordination')
-const { readExternalCoordinatorResultReview, integrateExternalCoordinatorResult } = await import('../lib/coordinatorResultReviewServer')
+const { readExternalCoordinatorResultReview, readExternalCoordinatorResultDiff, integrateExternalCoordinatorResult } = await import('../lib/coordinatorResultReviewServer')
+const { coordinatorCheckoutRevision } = await import('../lib/coordinatorResultGit')
+const { executeExternalCoordinatorAction } = await import('../lib/agentCoordinationExternal')
 const recipe = { name: 'pinned-staffing', maxAgents: 2, phases: [{ title: 'Work', tasks: [
   { key: 'first', title: 'Create evidence', detail: 'Write artifact.txt', paths: ['artifact.txt'], provider: 'codex' },
   { title: 'Review evidence', detail: 'Review the first result', provider: 'claude', dependsOn: ['first'] },
@@ -136,6 +138,96 @@ try {
   for (const close of turns.values()) close()
 }
 
+const reviewedRecipe = { name: 'reviewed-staffing', maxAgents: 2, requireReview: true, phases: [{ title: 'Work', tasks: [
+  { key: 'first', title: 'Create prerequisite', detail: 'Write prerequisite.txt', paths: ['prerequisite.txt'], verifyCommands: ['git diff --check'], provider: 'codex' },
+  { key: 'inspect', title: 'Inspect prerequisite', detail: 'Read prerequisite.txt without editing', paths: ['prerequisite.txt'], provider: 'claude', dependsOn: ['first'] },
+  { title: 'Use prerequisite', detail: 'Write downstream.txt', paths: ['downstream.txt'], provider: 'codex', dependsOn: ['inspect'] },
+] }] }
+await coord.writeRunPlaybook(cwd, reviewedRecipe)
+execFileSync('git', ['add', '.agent-viewer/playbooks'])
+execFileSync('git', ['commit', '-qm', 'Save reviewed workflow'])
+const { snapshot: reviewed } = await coord.startProtocolRun({
+  provider: 'codex', prompt: 'Test dependency integration before final review', baseCwd: cwd, playbookName: reviewedRecipe.name,
+})
+const reviewedRunId = reviewed.run.id
+const reviewedController = globalThis.__agentViewerCoordinatorControllers!.get(reviewedRunId)!
+const reviewer = reviewedController.sdkIdentities.get('lead')!
+const readReviewed = async () => (await coord.readProtocolRun(reviewedRunId))!
+try {
+  await until(async () => (await readReviewed()).agents.some(agent => agent.role === 'teammate' && turns.has(agent.sessionId)))
+  const first = (await readReviewed()).agents.find(agent => agent.role === 'teammate')!
+  writeFileSync(path.join(first.worktreePath, 'prerequisite.txt'), 'reviewed prerequisite\n')
+  assert.equal((await coord.completeExternalProtocolTask(reviewedController.sdkIdentities.get(first.id)!, {
+    taskId: 'task-1', summary: 'Prerequisite written', filesChanged: ['prerequisite.txt'],
+  })).accepted, true)
+  turns.get(first.sessionId)!()
+  await until(async () => (await readReviewed()).agents.some(agent => agent.id === first.id && agent.status === 'done'))
+  const target = await readExternalCoordinatorResultReview(reviewer, 'task-1')
+  assert.match(target.integrationBlockers.join(' '), /run review is not approved/)
+  await assert.rejects(integrateExternalCoordinatorResult(reviewer, 'task-1', target.checkout!.token, 'early-main'), /run review is not approved/)
+  await assert.rejects(coord.reviewProtocolRunAdmin(reviewedRunId, { approved: true, summary: 'Early approval' }), /every task to be terminal/)
+  writeFileSync('staged-local.txt', 'keep staged\n')
+  execFileSync('git', ['add', 'staged-local.txt'])
+  writeFileSync('untracked-local.txt', 'keep untracked\n')
+  const before = await coordinatorCheckoutRevision(cwd)
+  const sourceBefore = await coordinatorCheckoutRevision(first.worktreePath)
+  const dependency = await readExternalCoordinatorResultReview(reviewer, 'task-1', false, 'dependencies')
+  assert.deepEqual(dependency.integrationBlockers, [])
+  assert.equal(dependency.verification, 'current')
+  assert.notEqual(dependency.checkout!.token, target.checkout!.token)
+  const diff = await readExternalCoordinatorResultDiff(reviewer, {
+    taskId: 'task-1', destination: 'dependencies', reviewToken: dependency.checkout!.token, file: 'prerequisite.txt',
+  })
+  assert.match(diff.diff, /\+reviewed prerequisite/)
+  await assert.rejects(readExternalCoordinatorResultDiff(reviewer, {
+    taskId: 'task-1', reviewToken: dependency.checkout!.token,
+  }), /changed since review/)
+  const publish = () => executeExternalCoordinatorAction({
+    ...reviewer, action: 'integrate_result', taskId: 'task-1', reviewToken: dependency.checkout!.token,
+    requestId: 'publish-prerequisite', destination: 'dependencies',
+  }) as ReturnType<typeof integrateExternalCoordinatorResult>
+  const published = await publish()
+  assert.ok(published.dependency)
+  assert.deepEqual(await publish(), published, 'retry returns the exact published dependency')
+  assert.equal(await coordinatorCheckoutRevision(cwd), before)
+  assert.equal(await coordinatorCheckoutRevision(first.worktreePath), sourceBefore)
+  assert.equal((await readReviewed()).run.review.status, 'pending')
+  assert.equal((await coord.readExternalProtocolActionableStatus(reviewer)).actionable.awaitingIntegration, undefined)
+  await coord.runProtocolMaintenanceSweep()
+  await until(async () => (await readReviewed()).agents.some(agent => agent.provider === 'claude' && turns.has(agent.sessionId)))
+  const inspection = (await readReviewed()).agents.find(agent => agent.provider === 'claude')!
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: inspection.worktreePath, encoding: 'utf8' }).trim(), published.dependency.commit)
+  assert.equal(readFileSync(path.join(inspection.worktreePath, 'prerequisite.txt'), 'utf8'), 'reviewed prerequisite\n')
+  assert.equal((await coord.completeExternalProtocolTask(reviewedController.sdkIdentities.get(inspection.id)!, {
+    taskId: 'task-2', summary: 'Prerequisite inspected',
+  })).accepted, true)
+  turns.get(inspection.sessionId)!()
+  assert.equal((await readReviewed()).tasks.find(task => task.id === 'task-2')!.receipt!.requiresIntegration, undefined)
+  await until(async () => (await readReviewed()).agents.some(agent => agent.provider === 'codex' && agent.role === 'teammate' && turns.has(agent.sessionId)))
+  const next = (await readReviewed()).agents.find(agent => agent.provider === 'codex' && agent.role === 'teammate' && turns.has(agent.sessionId))!
+  assert.equal(readFileSync(path.join(next.worktreePath, 'prerequisite.txt'), 'utf8'), 'reviewed prerequisite\n')
+  writeFileSync(path.join(next.worktreePath, 'downstream.txt'), 'built with prerequisite\n')
+  assert.equal((await coord.completeExternalProtocolTask(reviewedController.sdkIdentities.get(next.id)!, {
+    taskId: 'task-3', summary: 'Downstream result', filesChanged: ['downstream.txt'],
+  })).accepted, true)
+  turns.get(next.sessionId)!()
+  await until(async () => (await readReviewed()).agents.some(agent => agent.id === next.id && agent.status === 'done'))
+  assert.match((await readExternalCoordinatorResultReview(reviewer, 'task-3')).integrationBlockers.join(' '), /run review is not approved/)
+  execFileSync('git', ['add', 'untracked-local.txt'])
+  execFileSync('git', ['commit', '-qm', 'Save local fixture state'])
+  await coord.reviewProtocolRunAdmin(reviewedRunId, { approved: true, summary: 'Final review approved' })
+  const final = await readExternalCoordinatorResultReview(reviewer, 'task-3')
+  assert.deepEqual(final.integrationBlockers, [])
+  assert.deepEqual(final.checkout!.files.sort(), ['downstream.txt', 'prerequisite.txt'])
+  assert.ok((await integrateExternalCoordinatorResult(reviewer, 'task-3', final.checkout!.token, 'approved-main')).staged)
+  assert.equal(readFileSync('prerequisite.txt', 'utf8'), 'reviewed prerequisite\n')
+  assert.equal(readFileSync('downstream.txt', 'utf8'), 'built with prerequisite\n')
+  execFileSync('git', ['commit', '-qm', 'Integrate the approved workflow'])
+} finally {
+  await coord.stopProtocolRun(reviewedRunId)
+  for (const close of turns.values()) close()
+}
+
 const sessionId = 'staffing-chat'
 await coord.configureInteractiveCoordinator({ sessionId, provider: 'codex', cwd, maxAgents: 2, useWorktrees: false })
 const chat = await coord.sessionCoordinatorIdentity(sessionId, 'codex')
@@ -160,5 +252,5 @@ try {
   await coord.stopProtocolRun(chat.runId)
   for (const close of turns.values()) close()
 }
-console.log('Pinned staffing passed: managed and interactive rotation, live ownership, startup failure, gate rollback, durable checkout and credential retirement')
+console.log('Pinned staffing passed: managed and interactive rotation, live ownership, startup failure, gate rollback, reviewed dependency handoff and final approval')
 process.exit(0)

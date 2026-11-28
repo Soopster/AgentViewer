@@ -149,6 +149,12 @@ function negotiation(body: Record<string, unknown>): {
   }
 }
 
+function resultDestination(value: unknown): 'target' | 'dependencies' {
+  if (value === undefined || value === 'target') return 'target'
+  if (value === 'dependencies') return 'dependencies'
+  throw new Error('Result destination must be target or dependencies')
+}
+
 export async function executeExternalCoordinatorAction(body: Record<string, unknown>): Promise<unknown> {
   const action = text(body.action)
   const requestId = optionalText(body.requestId)
@@ -239,12 +245,12 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   if (action === 'read_result_diff') {
     const { readExternalCoordinatorResultDiff } = await import('./coordinatorResultReviewServer')
     if (!text(body.taskId) || !text(body.reviewToken)) throw new Error('Pass task_id and review_token from coord_read_result')
-    return readExternalCoordinatorResultDiff(participantIdentity!, { taskId: text(body.taskId), reviewToken: text(body.reviewToken), file: optionalText(body.file), offset: body.offset === undefined ? undefined : Number(body.offset), limit: body.limit === undefined ? undefined : Number(body.limit) })
+    return readExternalCoordinatorResultDiff(participantIdentity!, { taskId: text(body.taskId), reviewToken: text(body.reviewToken), destination: resultDestination(body.destination), file: optionalText(body.file), offset: body.offset === undefined ? undefined : Number(body.offset), limit: body.limit === undefined ? undefined : Number(body.limit) })
   }
   if (action === 'read_result') {
     const { readExternalCoordinatorResultReview } = await import('./coordinatorResultReviewServer')
     if (!text(body.taskId)) throw new Error('task_id is required')
-    return readExternalCoordinatorResultReview(participantIdentity!, text(body.taskId), body.includeDiff === true)
+    return readExternalCoordinatorResultReview(participantIdentity!, text(body.taskId), body.includeDiff === true, resultDestination(body.destination))
   }
   if (action === 'integrate_result') {
     const taskId = text(body.taskId)
@@ -252,7 +258,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     if (!taskId || !reviewToken || !requestId) throw new Error('Pass task_id, review_token from coord_read_result and a stable request_id')
     const { integrateExternalCoordinatorResult } = await import('./coordinatorResultReviewServer')
     // The shared integration implementation owns the replay key; do not nest it.
-    return integrateExternalCoordinatorResult(participantIdentity!, taskId, reviewToken, requestId)
+    return integrateExternalCoordinatorResult(participantIdentity!, taskId, reviewToken, requestId, resultDestination(body.destination))
   }
   if (action === 'inspect_operation') {
     const spec = COORD_TOOL_SPECS.find(spec => spec.name === text(body.toolName))

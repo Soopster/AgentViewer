@@ -6,6 +6,7 @@ import type { RefObject } from 'react'
 import React, { useMemo, useRef } from 'react'
 import { type TuiPluginCapture, type TuiProvidedPluginServices } from '../../shell/pluginTypes'
 import { isPluginEnabled } from '../../../../lib/plugins/enablement'
+import { routeFileOpen } from '../../../../lib/plugins/openInIde'
 import { getPluginSurface, type PluginSurfaceId } from '../../../../lib/plugins/catalog'
 import { type PopoverWindowKind, type SurfaceMeta } from '../../popoverWindows'
 import { type ThreadedMessage } from '../../../../lib/threading'
@@ -115,6 +116,12 @@ export function usePluginSessionForGroup(ctx: UsePluginSessionForGroupContext) {
   // Opens the editor on a file (1-based line, or null for its remembered place):
   // in its window when it has one (the open-popover effect routes it), else full screen.
   const openEditorAt = useStableEvent((path: string | null, line: number | null) => {
+    // A file goes to the person's own editor when the Open in IDE plugin takes it;
+    // it hands it back here when the launch fails.
+    if (path && routeFileOpen({ path, line }, () => openBuiltInEditorAt(path, line))) return
+    openBuiltInEditorAt(path, line)
+  })
+  const openBuiltInEditorAt = useStableEvent((path: string | null, line: number | null) => {
     if (!isPluginEnabled('editor')) {
       showNotice('info', 'The editor is off · turn it on in Plugins (⌃K palette)')
       return

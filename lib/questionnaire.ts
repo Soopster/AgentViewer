@@ -1,14 +1,12 @@
 import type { PendingPermission, PendingQuestion, PendingQuestionAnswers } from './permissions'
 
 /**
- * Codex's blocking `item/tool/requestUserInput` request is a questionnaire, not
- * an approval. It gets the Codex CLI's tabbed treatment (one tab per question
- * plus Submit) rather than the stacked picker used elsewhere.
+ * Blocking questionnaires from Codex and Pi have one tab per question and a Submit tab.
  */
-export function isCodexQuestionnaire(permission: PendingPermission | null | undefined): boolean {
+export function isTabbedQuestionnaire(permission: PendingPermission | null | undefined): boolean {
   return !!permission
-    && permission.provider === 'codex'
-    && permission.toolName === 'item/tool/requestUserInput'
+    && ((permission.provider === 'codex' && permission.toolName === 'item/tool/requestUserInput')
+      || (permission.provider === 'pi' && permission.toolName === 'agent_viewer_interview'))
     && permission.asyncQuestion !== true
     && (permission.questions?.length ?? 0) > 0
 }
@@ -17,7 +15,7 @@ export function isCodexQuestionnaire(permission: PendingPermission | null | unde
 export function questionTabCount(permission: PendingPermission | null | undefined): number {
   const count = permission?.questions?.length ?? 0
   if (count === 0) return 0
-  return isCodexQuestionnaire(permission) ? count + 1 : count
+  return isTabbedQuestionnaire(permission) ? count + 1 : count
 }
 
 export function clampQuestionTab(permission: PendingPermission | null | undefined, index: number): number {

@@ -11,6 +11,7 @@
 
 export type CardTone = 'default' | 'muted' | 'success' | 'warning' | 'error'
 export type CardBlock =
+  | { readonly type: 'link'; readonly label: string; readonly url: string }
   | { readonly type: 'heading'; readonly text: string }
   | { readonly type: 'text'; readonly text: string; readonly tone?: CardTone }
   | { readonly type: 'kv'; readonly rows: readonly (readonly [string, string])[] }
@@ -32,6 +33,14 @@ export function scrubCardText(value: unknown, max: number): string {
   return String(value ?? '').replace(ANSI, '').replace(/\r\n?/g, '\n').replace(CONTROL, '').slice(0, max)
 }
 
+export function externalCardUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 2000) return undefined
+  try {
+    const url = new URL(value)
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password) return url.href
+  } catch { /* malformed link */ }
+}
+
 const TONES = new Set<string>(['default', 'muted', 'success', 'warning', 'error'])
 const tone = (value: unknown): { tone?: CardTone } => (typeof value === 'string' && TONES.has(value) && value !== 'default' ? { tone: value as CardTone } : {})
 
@@ -43,6 +52,10 @@ export function decodeCardBlocks(value: unknown): CardBlock[] {
   for (const entry of value.slice(0, L.blocks)) {
     const block = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>
     if (block.type === 'heading' && typeof block.text === 'string' && block.text.trim()) out.push({ type: 'heading', text: scrubCardText(block.text, L.heading) })
+    else if (block.type === 'link') {
+      const url = externalCardUrl(block.url)
+      if (url && typeof block.label === 'string') out.push({ type: 'link', label: scrubCardText(block.label, L.label), url })
+    }
     else if (block.type === 'text' && typeof block.text === 'string') out.push({ type: 'text', text: scrubCardText(block.text, L.text), ...tone(block.tone) })
     else if (block.type === 'badge' && typeof block.text === 'string' && block.text.trim()) out.push({ type: 'badge', text: scrubCardText(block.text, L.label), ...tone(block.tone) })
     else if (block.type === 'kv' && Array.isArray(block.rows)) {
@@ -65,6 +78,7 @@ export function cardBlockLines(blocks: readonly CardBlock[]): string[] {
   const lines: string[] = []
   for (const block of blocks) {
     if (block.type === 'heading') lines.push(block.text)
+    else if (block.type === 'link') lines.push(`${block.label} · ${block.url}`)
     else if (block.type === 'text') lines.push(...block.text.split('\n'))
     else if (block.type === 'badge') lines.push(`[${block.text}]`)
     else if (block.type === 'kv') {

@@ -55,6 +55,8 @@ import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProto
 import { readJsonResponse } from '@/lib/httpResponse'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { AnsiText } from './AnsiText'
+import { OpenFileButton, useFileOpenAvailable } from './shell/OpenFileButton'
+import { routeFileOpen } from '@/lib/plugins/openInIde'
 import type { PierreAnnotationMetadata, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
 import { useDiffComments, type DiffComment } from './diffComments'
 
@@ -362,7 +364,23 @@ function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentProp
 }
 
 function transcriptUrlTransform(url: string, key: string): string {
-  return key === 'href' && codexThreadIdFromLink(url) ? url : defaultUrlTransform(url)
+  // `file://` links are kept so a path an agent cited can open in the person's editor.
+  return key === 'href' && (codexThreadIdFromLink(url) || /^file:\/\//i.test(url)) ? url : defaultUrlTransform(url)
+}
+
+/** A link to a file in the project: `file:///abs#L12`, or a scheme-less path with an extension (`src/a.ts#L12`, `src/a.ts:12`). */
+function transcriptFileLink(href: string | undefined): { path: string; line: number | null } | null {
+  if (!href || href.startsWith('#')) return null
+  let rest: string
+  if (/^file:\/\//i.test(href)) {
+    try { rest = decodeURI(href.replace(/^file:\/\/(localhost)?/i, '')) } catch { return null }
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) return null
+  else rest = href
+  const match = /^(.*?)(?:#L(\d+)(?:-L?\d+)?|:(\d+)(?::\d+)?)?$/.exec(rest)
+  const path = match?.[1] ?? ''
+  if (!/\.[A-Za-z0-9]{1,8}$/.test(path.split('/').pop() ?? '') && !/^file:/i.test(href)) return null
+  const line = Number(match?.[2] ?? match?.[3] ?? 0)
+  return path ? { path, line: line > 0 ? line : null } : null
 }
 
 function TranscriptAnchor({ href, children }: React.ComponentPropsWithoutRef<'a'>) {
@@ -375,9 +393,20 @@ function TranscriptAnchor({ href, children }: React.ComponentPropsWithoutRef<'a'
       navigate({ provider: 'codex', sessionId: threadId, providerInstanceId: session.providerInstanceId ?? 'codex' })
     }} style={{ color: 'var(--violet)', textDecoration: 'underline', cursor: 'pointer' }}>{children}</button>
   }
+  const fileLink = transcriptFileLink(href)
+  if (fileLink) return <TranscriptFileAnchor path={fileLink.path} line={fileLink.line} cwd={session?.cwd ?? null}>{children}</TranscriptFileAnchor>
   return githubAnchor(href, children) ?? (
     <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--violet)', textDecoration: 'underline' }}>{children}</a>
   )
+}
+
+/** A cited file. Opens in the person's editor while Open in IDE is on; otherwise it is text, never a dead link. */
+function TranscriptFileAnchor({ path, line, cwd, children }: { path: string; line: number | null; cwd: string | null; children: React.ReactNode }) {
+  const available = useFileOpenAvailable()
+  if (!available || (!path.startsWith('/') && !cwd)) return <span style={{ color: 'var(--violet)' }}>{children}</span>
+  return <button type="button" onClick={(event) => { event.stopPropagation(); routeFileOpen({ path, line, cwd }) }}
+    title={`Open ${path}${line ? `:${line}` : ''} in your editor`}
+    style={{ color: 'var(--violet)', textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 0, padding: 0, font: 'inherit' }}>{children}</button>
 }
 
 const mdComponents: Components = {
@@ -795,6 +824,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
+          <OpenFileButton path={filePath} />
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-3)', flexShrink: 0 }}>
             {sign}
           </span>
@@ -870,6 +900,7 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
+          <OpenFileButton path={filePath} />
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
             {lines} lines
           </span>
@@ -1031,6 +1062,7 @@ function FileChangeDiffRegion({
         }}>
           {filePath}
         </span>
+        <OpenFileButton path={filePath} />
         <DiffCommentButton
           selectedLines={comments.selectedLines}
           currentSelectionNote={comments.currentSelectionNote}
@@ -1803,6 +1835,7 @@ function ReadCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {basename(filePath)}
           </span>
+          <OpenFileButton path={filePath} line={typeof input.offset === 'number' ? input.offset : null} />
           {rangeLabel && (
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>{rangeLabel}</span>
           )}
@@ -2699,6 +2732,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {basename(filePath)}
           </span>
+          <OpenFileButton path={filePath} />
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0, border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>
             {edits.length} edit{edits.length !== 1 ? 's' : ''}
           </span>
@@ -3710,11 +3744,14 @@ function PluginToolCard({ thread }: { thread: ToolThread }) {
     <div data-plugin-tool-card={card.pluginId} style={{ border: `1px solid ${failed ? PLUGIN_CARD_TONE.error : PLUGIN_CARD_TONE[card.tone]}`, borderRadius: 8, padding: '6px 10px', fontSize: 12.5, background: 'var(--surface)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.title}</span>
-        <button type="button" onClick={() => { reportUiInteraction('toggle', thread.toolUse.name, sessionTarget); setShowRaw(value => !value) }} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'hide input' : thread.toolUse.name}</button>
+        <button type="button" onClick={() => { reportUiInteraction('toggle', thread.toolUse.name, sessionTarget); setShowRaw(value => !value) }} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: 0, cursor: 'pointer' }}>{showRaw ? 'Hide raw data' : thread.toolUse.name}</button>
       </div>
       {card.blocks?.length ? <PluginCardBlocks blocks={card.blocks} /> : card.lines.map((text, index) => <div key={index} style={{ color: card.tone === 'error' ? PLUGIN_CARD_TONE.error : 'var(--text-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>)}
       {failed ? <div style={{ color: PLUGIN_CARD_TONE.error }}>tool call failed</div> : null}
-      {showRaw ? <pre style={{ marginTop: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', color: 'var(--text-2)' }}>{JSON.stringify(thread.toolUse.input, null, 2)}</pre> : null}
+      {showRaw && <>
+        <pre style={{ marginTop: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', color: 'var(--text-2)' }}>{JSON.stringify(thread.toolUse.input, null, 2)}</pre>
+        {thread.result && <ToolResultSection result={thread.result} toolName={thread.toolUse.name} />}
+      </>}
     </div>
   )
 }
@@ -5286,7 +5323,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const HydrationContext = createContext(false)
 const SessionContext = createContext<string | undefined>(undefined)
-const ArtifactSessionContext = createContext<Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId'> | undefined>(undefined)
+const ArtifactSessionContext = createContext<Pick<Session, 'sessionId' | 'provider' | 'providerInstanceId' | 'cwd'> | undefined>(undefined)
 const ViewModeContext = createContext<WebViewMode>('conversation')
 const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
 
@@ -5304,8 +5341,8 @@ const TurnDurationContext = createContext<Map<string, number> | undefined>(undef
 export function MessageDensityProvider({ density, children, onOpenSession, turnDurations, session }: { session?: Session; density: MessageDensity; children: React.ReactNode; onOpenSession?: (session: Session) => void; turnDurations?: Map<string, number> }) {
   const [hydrated, setHydrated] = useState(false)
   const value = useMemo(() => densityConfig(density), [density])
-  const artifactSession = useMemo(() => session ? { sessionId: session.sessionId, provider: session.provider, providerInstanceId: session.providerInstanceId } : undefined,
-    [session?.sessionId, session?.provider, session?.providerInstanceId])
+  const artifactSession = useMemo(() => session ? { sessionId: session.sessionId, provider: session.provider, providerInstanceId: session.providerInstanceId, cwd: session.cwd } : undefined,
+    [session?.sessionId, session?.provider, session?.providerInstanceId, session?.cwd])
 
   useEffect(() => {
     setHydrated(true)

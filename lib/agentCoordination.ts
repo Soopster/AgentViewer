@@ -5,7 +5,7 @@ import { EXECUTION_ATTEMPT_SCHEMA, beginExecutionAttempt, updateExecutionAttempt
 import { coordinatorBackgroundWork, type CoordinatorDeadAgent } from './coordinatorInteractiveState'
 import { markCoordinatorRejection } from './coordinatorRejection'
 import { readCoordinatorCapabilities, validateCoordinatorSelection } from './coordinatorCapabilities'
-import { checkoutContainsDependencySync, committedDependencySync, coordinatorCheckoutRevision, resultGit, type StagedDependency } from './coordinatorResultGit'
+import { checkoutContainsDependencySync, committedDependencySync, coordinatorCheckoutRevision, coordinatorDependencyRef, inheritedDependencyBase, readDependencyTip, resultGit, type StagedDependency } from './coordinatorResultGit'
 // Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
 // a LEAD session decomposes the prompt into a shared task list, named
 // TEAMMATES (each in an isolated git worktree) self-claim tasks and work a
@@ -1013,6 +1013,14 @@ async function openDatabase(): Promise<SqliteDatabase> {
       task_id TEXT NOT NULL, receipt_at TEXT NOT NULL, proof_json TEXT NOT NULL,
       PRIMARY KEY (run_id, task_id)
     )`)
+    db.exec(`CREATE TABLE IF NOT EXISTS protocol_dependency_publications (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL, receipt_at TEXT NOT NULL, commit_id TEXT NOT NULL,
+      target TEXT NOT NULL, proof_json TEXT NOT NULL,
+      PRIMARY KEY (run_id, commit_id)
+    );
+    CREATE INDEX IF NOT EXISTS protocol_dependency_publications_task
+      ON protocol_dependency_publications (run_id, task_id, receipt_at)`)
     pruneExpiredRunsSync(db)
     lastRunPruneAt = Date.now()
     return db
@@ -6211,7 +6219,12 @@ async function isolatedResultRequiresIntegration(agent: ProtocolAgent): Promise<
   try {
     const checkout = await findWorktreeTaskForCwd(agent.worktreePath)
     if (!checkout) return true
-    const base = (await resultGit(checkout.path, ['merge-base', 'HEAD', (await resultGit(checkout.repoRoot, ['rev-parse', 'HEAD'])).trim()])).trim()
+    const [targetHead, dependencyTip] = await Promise.all([
+      resultGit(checkout.repoRoot, ['rev-parse', 'HEAD']),
+      readReviewedDependencyTip(agent.runId, checkout.repoRoot),
+    ])
+    const mainBase = (await resultGit(checkout.path, ['merge-base', 'HEAD', targetHead.trim()])).trim()
+    const base = await inheritedDependencyBase(checkout.path, 'HEAD', mainBase, dependencyTip)
     const [tracked, untracked] = await Promise.all([
       resultGit(checkout.path, ['diff', '--name-only', base, '--']),
       resultGit(checkout.path, ['ls-files', '--others', '--exclude-standard']),
@@ -6220,43 +6233,104 @@ async function isolatedResultRequiresIntegration(agent: ProtocolAgent): Promise<
   } catch { return true }
 }
 
-type DependencyCheckCache = Map<string, { commit?: string; checkouts: Map<string, boolean> }>
+type DependencyCheckCache = Map<string, { commits: { commit: string; proof: StagedDependency }[]; checkouts: Map<string, boolean> }>
+
+export async function readReviewedDependencyTip(runId: string, target: string): Promise<string | undefined> {
+  const tip = await readDependencyTip(target, coordinatorDependencyRef(runId))
+  if (!tip) return
+  const db = await getDatabase()
+  if (!db.prepare('SELECT 1 FROM protocol_dependency_publications WHERE run_id = ? AND commit_id = ? AND target = ?').get(runId, tip, target)) {
+    throw new Error('The run dependency branch points to an unrecognized commit. Inspect its Git ref before continuing.')
+  }
+  return tip
+}
+
+function integrationDependencies(task: ProtocolTask, tasksById: Map<string, ProtocolTask>): ProtocolTask[] {
+  const pending = new Set(task.blockedBy)
+  const dependencies: ProtocolTask[] = []
+  for (const id of pending) {
+    const dependency = tasksById.get(id)
+    if (!dependency) continue
+    if (dependency.receipt?.requiresIntegration) dependencies.push(dependency)
+    for (const prerequisite of dependency.blockedBy) pending.add(prerequisite)
+  }
+  return dependencies
+}
 
 function dependencyIntegrationBlockerSync(db: SqliteDatabase, task: ProtocolTask, tasksById: Map<string, ProtocolTask>, cwd?: string, cache?: DependencyCheckCache): string | undefined {
-  for (const id of task.blockedBy) {
-    const dependency = tasksById.get(id)
-    if (!dependency?.receipt?.requiresIntegration) continue
+  for (const dependency of integrationDependencies(task, tasksById)) {
+    const id = dependency.id
+    const receiptAt = dependency.receipt!.recordedAt
     let state = cache?.get(id)
     if (!state) {
       const row = db.prepare('SELECT receipt_at, proof_json FROM protocol_task_integrations WHERE run_id = ? AND task_id = ?')
         .get(task.runId, id) as Row | undefined
-      const proof = parseJsonObject<StagedDependency>(row?.proof_json)
-      state = { commit: row?.receipt_at === dependency.receipt.recordedAt && proof ? committedDependencySync(proof) : undefined, checkouts: new Map() }
+      const published = db.prepare('SELECT proof_json FROM protocol_dependency_publications WHERE run_id = ? AND task_id = ? AND receipt_at = ?')
+        .all(task.runId, id, receiptAt) as Row[]
+      const proofs = (row?.receipt_at === receiptAt ? [...published, row] : published)
+        .flatMap(entry => parseJsonObject<StagedDependency>(entry.proof_json) ?? [])
+      const commits = proofs.flatMap(proof => {
+        const commit = committedDependencySync(proof)
+        return commit ? [{ commit, proof }] : []
+      })
+      state = { commits, checkouts: new Map() }
       cache?.set(id, state)
     }
-    if (!state.commit) {
+    if (!state.commits.length) {
       const run = db.prepare('SELECT require_review, review_json FROM protocol_runs WHERE id = ?').get(task.runId) as Row | undefined
       if (Number(run?.require_review) && parseJsonObject<{ status?: string }>(run?.review_json)?.status !== 'approved') {
-        return `Integration of ${id} is gated on run-wide review, which requires all tasks to finish. Split the prerequisite into a reviewed run or use a shared checkout for the workflow.`
+        return `Awaiting reviewed integration of ${id}. Use destination=dependencies with coord_read_result, coord_read_result_diff and coord_integrate_result while run-wide review is pending.`
       }
-      return `Awaiting reviewed integration of ${id}. Stage its result and commit the staged tree to the target checkout.`
+      return `Awaiting reviewed integration of ${id}. Publish to the run dependency branch or commit the reviewed staged tree in the target checkout.`
     }
     if (!cwd) continue
-    const contains = state.checkouts.get(cwd) ?? checkoutContainsDependencySync(cwd, state.commit)
+    const contains = state.checkouts.get(cwd) ?? state.commits.some(({ commit }) => checkoutContainsDependencySync(cwd, commit))
     state.checkouts.set(cwd, contains)
     if (!contains) return `This checkout lacks the committed integration of ${id}. Use a checkout based on the integrated target.`
   }
 }
 
+function dependencyWorktreeBaseSync(db: SqliteDatabase, task: ProtocolTask, tasksById: Map<string, ProtocolTask>, cwd: string): string | undefined {
+  const cache: DependencyCheckCache = new Map()
+  const blocker = dependencyIntegrationBlockerSync(db, task, tasksById, undefined, cache)
+  if (blocker) throw new Error(blocker)
+  const required = [...cache.values()]
+  if (!required.length) return
+  const containsAll = (revision: string) => required.every(({ commits }) =>
+    commits.some(({ commit }) => checkoutContainsDependencySync(cwd, commit, revision)))
+  if (containsAll('HEAD')) return
+  for (const { commits } of required) {
+    const base = commits.find(({ commit, proof }) => proof.ref && containsAll(commit))
+    if (base) return base.commit
+  }
+  throw new Error('No reviewed checkout contains all prerequisite results. Publish their results to the same run dependency branch.')
+}
+
+function assertIntegrationReceiptSync(db: SqliteDatabase, identity: ExternalProtocolIdentity, taskId: string, receiptAt: string): void {
+  const lead = requireExternalParticipantSync(db, identity)
+  const task = externalTaskInspectionSync(db, identity.runId, taskId).task
+  if (lead.role !== 'lead' || task.status !== 'completed' || task.receipt?.recordedAt !== receiptAt
+    || foreignInteractiveHostSync(db, identity.runId)) throw new Error('The result changed while recording its integration')
+}
+
 export async function recordStagedTaskIntegration(identity: ExternalProtocolIdentity, taskId: string, receiptAt: string, proof: StagedDependency): Promise<void> {
   await enqueueWrite(db => {
-    const lead = requireExternalParticipantSync(db, identity)
-    const task = externalTaskInspectionSync(db, identity.runId, taskId).task
-    if (lead.role !== 'lead' || task.status !== 'completed' || task.receipt?.recordedAt !== receiptAt
-      || foreignInteractiveHostSync(db, identity.runId)) throw new Error('The result changed while recording its staged integration')
+    assertIntegrationReceiptSync(db, identity, taskId, receiptAt)
     db.prepare('INSERT OR REPLACE INTO protocol_task_integrations (run_id, task_id, receipt_at, proof_json) VALUES (?, ?, ?, ?)')
       .run(identity.runId, taskId, receiptAt, JSON.stringify(proof))
   })
+  notifyRunChanged(identity.runId)
+}
+
+export async function publishTaskDependency(identity: ExternalProtocolIdentity, taskId: string, receiptAt: string, proof: StagedDependency & { ref: string; commit: string }, previousTip?: string): Promise<void> {
+  // A recorded candidate is usable only once the Git ref contains its commit.
+  // This ordering leaves an inspectable proof if the process stops after the CAS.
+  await enqueueWrite(db => {
+    assertIntegrationReceiptSync(db, identity, taskId, receiptAt)
+    db.prepare('INSERT OR IGNORE INTO protocol_dependency_publications (run_id, task_id, receipt_at, commit_id, target, proof_json) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(identity.runId, taskId, receiptAt, proof.commit, proof.target, JSON.stringify(proof))
+  })
+  await resultGit(proof.target, ['update-ref', proof.ref, proof.commit, previousTip ?? '0'.repeat(proof.commit.length)])
   notifyRunChanged(identity.runId)
 }
 
@@ -7416,7 +7490,7 @@ async function staffMissingPinnedLane(controller: RunController): Promise<boolea
     const ready = tasks.filter(task => task.status === 'pending' && !task.ownerAgentId && task.targetRole !== 'lead'
       && task.seat !== 'director' && taskDepsCompleted(task, tasksById) && !dependencyIntegrationBlockerSync(db, task, tasksById, undefined, integrations)
       && !findTaskLockConflict(task, locks, ''))
-    const missing = ready.filter(task => (task.requestedProvider || task.blockedBy.some(id => tasksById.get(id)?.receipt?.requiresIntegration))
+    const missing = ready.filter(task => (task.requestedProvider || integrationDependencies(task, tasksById).length)
       && !workers.some(agent => taskEligibleForClaim(db, task, tasksById, agent, active, integrations)))
     if (!missing.length) return false
     const retire = active.length < run.maxAgents ? undefined : workers.find(agent =>
@@ -10374,9 +10448,19 @@ async function spawnTeammateSession(
   let token: string | undefined
   try {
     instance = await resolveProviderInstance(requestedInstanceId ?? (lead?.provider === teammateProvider ? lead.providerInstanceId : teammateProvider), teammateProvider)
+    let startPoint: string | undefined
+    if (controller.useWorktrees && assignment) {
+      const tasks = new Map(listTasksSync(db, controller.runId).map(task => [task.id, task]))
+      const task = tasks.get(assignment.taskId)
+      if (task && integrationDependencies(task, tasks).length) {
+        const repo = await findRepoRoot(controller.baseCwd)
+        if (!repo) throw new Error('Cannot find the repository for prerequisite integration.')
+        startPoint = dependencyWorktreeBaseSync(db, task, tasks, repo)
+      }
+    }
     noteKeyedSideEffect()
     workspace = controller.useWorktrees
-      ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
+      ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`, startPoint)
       : { path: controller.baseCwd, branch: '' }
     session = await withProviderInstance(instance.id, teammateProvider, () => createNewViewSession({
       provider: teammateProvider,

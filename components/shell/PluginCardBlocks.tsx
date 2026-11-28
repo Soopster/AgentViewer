@@ -7,6 +7,7 @@ export function PluginCardBlocks({ blocks }: { blocks: readonly CardBlock[] }) {
   return <div data-card-blocks style={{ display: 'grid', gap: 4, marginTop: 4 }}>
     {blocks.map((block, index) => {
       if (block.type === 'heading') return <div key={index} style={{ fontWeight: 600, color: 'var(--text)' }}>{block.text}</div>
+      if (block.type === 'link') return <a key={index} href={block.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--cyan)', overflowWrap: 'anywhere' }}>{block.label}</a>
       if (block.type === 'text') return <div key={index} style={{ color: TONE_COLOR[block.tone ?? 'default'], whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.text}</div>
       if (block.type === 'badge') return <span key={index} style={{ justifySelf: 'start', fontSize: 11, padding: '1px 8px', borderRadius: 999, border: `1px solid ${TONE_COLOR[block.tone ?? 'default']}`, color: TONE_COLOR[block.tone ?? 'default'] }}>{block.text}</span>
       if (block.type === 'kv') return <dl key={index} style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px', margin: 0 }}>{block.rows.map(([key, value], row) => [<dt key={`k${row}`} style={{ color: 'var(--text-3, var(--text-2))' }}>{key}</dt>, <dd key={`v${row}`} style={{ margin: 0, color: 'var(--text-2)', wordBreak: 'break-word' }}>{value}</dd>])}</dl>

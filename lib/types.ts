@@ -253,6 +253,8 @@ export type Session = {
 export type SubagentSummary = {
   agentId: string
   taskDescription?: string
+  status?: string
+  transcriptAvailable?: boolean
   messageCount: number
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens?: number }
   startedAt?: string
@@ -340,6 +342,7 @@ export type SessionDiagnosticSection = {
   id: string
   title: string
   items: string[]
+  compaction?: { status?: 'pending' | 'completed' | 'failed' | 'unconfirmed'; busy: boolean }
 }
 
 export type SessionInfo = {

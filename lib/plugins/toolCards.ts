@@ -1,3 +1,5 @@
+import { thinJson } from './thinJson'
+export { thinJson } from './thinJson'
 // Plugin tool cards on the read path. A transcript window is annotated with each
 // plugin's presentation of its tool calls (ToolUseBlock.pluginCard) before it is
 // returned, so the Web and the TUI — and a mod's server-side hook — share one
@@ -20,7 +22,7 @@ subscribePluginEnablement(() => { cache.clear(); reportedShapes.clear() })
 
 type ToolResult = NonNullable<PluginToolCardContext['result']>
 
-type RawResult = { readonly full: string; readonly isError: boolean }
+type RawResult = { readonly full: string; readonly isError: boolean; readonly structured?: unknown }
 
 /** The whole text of each tool result in a window, by call id. Nothing is parsed or cut here: that happens only for a call a hook is asked about. */
 function collectToolResults(messages: SessionMessage[]): Map<string, RawResult> {
@@ -32,34 +34,18 @@ function collectToolResults(messages: SessionMessage[]): Map<string, RawResult> 
       if (block?.type !== 'tool_result') continue
       const result = block as ToolResultBlock
       const full = typeof result.content === 'string' ? result.content : Array.isArray(result.content) ? result.content.map(part => (part as { type?: string; text?: unknown })?.type === 'text' ? String((part as { text?: unknown }).text ?? '') : '').join('\n') : ''
-      results.set(result.tool_use_id, { full, isError: result.is_error === true })
+      results.set(result.tool_use_id, { full, isError: result.is_error === true, structured: result.structuredContent })
     }
   }
   return results
 }
 
 const JSON_PARSE_MAX_CHARS = 2_000_000
-const THIN = { depth: 8, items: 100, keys: 100, string: 4_000, nodes: 20_000 }
-/** A parsed value reduced to a bounded size, keeping its shape: what a hook is handed as `result.json`. */
-export function thinJson(value: unknown): unknown {
-  let nodes = 0
-  const walk = (v: unknown, depth: number): unknown => {
-    if (++nodes > THIN.nodes) return undefined
-    if (typeof v === 'string') return v.length > THIN.string ? `${v.slice(0, THIN.string)}…` : v
-    if (v === null || typeof v === 'number' || typeof v === 'boolean') return v
-    if (depth >= THIN.depth) return Array.isArray(v) ? [] : {}
-    if (Array.isArray(v)) return v.slice(0, THIN.items).map(item => walk(item, depth + 1))
-    if (typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).slice(0, THIN.keys).map(([key, item]) => [key, walk(item, depth + 1)]))
-    return undefined
-  }
-  return walk(value, 0)
-}
-
 /** What a hook sees of a result: bounded text, and the JSON of the whole result when it has one. */
 function presentResult(raw: RawResult): ToolResult {
   let json: unknown
   if (raw.full.length <= JSON_PARSE_MAX_CHARS && /^\s*[[{]/.test(raw.full)) { try { json = thinJson(JSON.parse(raw.full)) } catch { /* not JSON */ } }
-  return { text: raw.full.slice(0, PLUGIN_TOOL_RESULT_MAX_CHARS), isError: raw.isError, truncated: raw.full.length > PLUGIN_TOOL_RESULT_MAX_CHARS, ...(json !== undefined ? { json } : {}) }
+  return { text: raw.full.slice(0, PLUGIN_TOOL_RESULT_MAX_CHARS), isError: raw.isError, truncated: raw.full.length > PLUGIN_TOOL_RESULT_MAX_CHARS, ...(json !== undefined ? { json } : {}), ...(raw.structured != null ? { structured: thinJson(raw.structured) } : {}) }
 }
 
 const reportedShapes = new Set<string>()

@@ -1,3 +1,5 @@
+import { realpath, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { registerProviderDiagnostics } from './providerDiagnostics'
 import type {
   SessionManager,
@@ -16,8 +18,19 @@ import { selectIdleProviderPoolEvictions } from './providerPoolPolicy'
 // session never pays for Pi just because sessionBackend imports this module.
 // All runtime SDK access goes through loadPiSdk(); the imports above are
 // type-only (erased at compile time, zero runtime cost).
+import { loadPiPluginTools, piPluginToolIds } from './plugins/piTools'
+import { observePiMcpStatus } from './piMcpDiagnostics'
+
+async function piResources(sdk: PiSdk, cwd: string, settingsManager: SettingsManager) {
+  const eventBus = sdk.createEventBus()
+  const attachMcpStatus = observePiMcpStatus(eventBus)
+  const resourceLoader = new sdk.DefaultResourceLoader({ cwd, agentDir: sdk.getAgentDir(), settingsManager, eventBus })
+  await resourceLoader.reload()
+  return { resourceLoader, attachMcpStatus }
+}
+
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
-type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+type PiPoolEntry = { session: AgentSession; pluginTools?: string; lastUsed: number; timer: ReturnType<typeof setTimeout> }
 type PiSessionListCacheEntry = { sessions: PiSessionInfo[]; expiresAt: number }
 type PiSessionOperation = 'turn' | 'compact' | 'fork' | 'delete'
 type PiSessionOperationEntry = { operation: PiSessionOperation; token: symbol }
@@ -374,6 +387,22 @@ async function readPiSessionEntries(sessionId: string): Promise<SessionEntry[]> 
   throw new Error(`Pi session not found: ${sessionId}`)
 }
 
+/** Read the provider extension's nested transcript through Pi, under the resolved parent session root. */
+export async function openPiSubagentSessionManager(parentId: string, sessionFile: string): Promise<SessionManager | undefined> {
+  if (!isAbsolute(sessionFile) || !sessionFile.endsWith('.jsonl')) return undefined
+  try {
+    const parent = await realpath(await resolvePiSessionPath(parentId))
+    const root = join(dirname(parent), basename(parent, '.jsonl'))
+    const child = await realpath(sessionFile)
+    const inside = relative(root, child)
+    if (!inside || isAbsolute(inside) || inside === '..' || inside.startsWith(`..${sep}`) || !(await stat(child)).isFile()) return undefined
+    const { SessionManager } = await loadPiSdk()
+    const manager = SessionManager.open(child)
+    const header = manager.getHeader()
+    return header && header.id !== parentId ? manager : undefined
+  } catch { return undefined }
+}
+
 export async function getPiSessionMessages(sessionId: string): Promise<AgentMessage[]> {
   const entries = await readPiSessionEntries(sessionId)
   const messages: AgentMessage[] = []
@@ -415,12 +444,14 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
   const build = (async () => {
     const activityToken = beginPiActivity(options.id, 'Loading Pi provider')
     try {
-      const { DefaultPackageManager, SessionManager, SettingsManager, createAgentSession, getAgentDir } = await loadPiSdk()
+      const sdk = await loadPiSdk()
+      const { DefaultPackageManager, SessionManager, SettingsManager, createAgentSession, getAgentDir } = sdk
       const sessionManager = options.id
         ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
         : undefined
       const settingsManager = piSessionScopedSettings(SettingsManager.create(cwd))
-      const customTools = options.id ? getCoordinatorPiTools(options.id) : undefined
+      const pluginTools = piPluginToolIds()
+      const customTools = [...(options.id ? getCoordinatorPiTools(options.id) ?? [] : []), ...await loadPiPluginTools(pluginTools)]
       updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
       const missingPackages = new DefaultPackageManager({ cwd, agentDir: getAgentDir(), settingsManager })
         .listConfiguredPackages()
@@ -428,11 +459,13 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       for (const entry of missingPackages) {
         appendPiActivity(activityToken, `Missing ${entry.source}; Pi will install it`)
       }
+      const { resourceLoader, attachMcpStatus } = await piResources(sdk, cwd, settingsManager)
       const result = await createAgentSession(
         sessionManager
-          ? { sessionManager, settingsManager, ...(customTools ? { customTools } : {}) }
-          : { cwd, settingsManager, ...(customTools ? { customTools } : {}) },
+          ? { sessionManager, settingsManager, resourceLoader, ...(customTools.length ? { customTools } : {}) }
+          : { cwd, settingsManager, resourceLoader, ...(customTools.length ? { customTools } : {}) },
       )
+      attachMcpStatus(result.session)
       const id = result.session.sessionId
       const file = result.session.sessionFile
       if (file) {
@@ -441,8 +474,10 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       // Seed the pool so openPiAgentSession hits the cache on the 2nd message instead of
       // calling createAgentSession again (which would re-run resourceLoader.reload() and
       // package resolution, causing spurious npm install output on every new session).
+      attachMcpStatus(result.session)
       const entry: PiPoolEntry = {
         session: result.session,
+        pluginTools: pluginTools.join(','),
         lastUsed: Date.now(),
         timer: setTimeout(() => {}, 0),
       }
@@ -502,6 +537,10 @@ export function selectPiPoolEvictions(
 }
 
 /** Number of warm Pi AgentSessions currently pooled. Diagnostics only. */
+export function peekPiAgentSession(sessionId: string): AgentSession | undefined {
+  return piSessionPool.get(sessionId)?.session
+}
+
 export function piPoolSize(): number {
   return piSessionPool.size
 }
@@ -568,10 +607,14 @@ function schedulePiEviction(sessionId: string): void {
   }
 }
 
-export async function openPiAgentSession(sessionId: string): Promise<AgentSession> {
+export async function openPiAgentSession(sessionId: string, refreshPluginTools = false): Promise<AgentSession> {
   assertPiSessionOpenAllowed(sessionId)
+  const pluginTools = piPluginToolIds()
   const cached = piSessionPool.get(sessionId)
-  if (cached) {
+  if (cached && refreshPluginTools && !cached.session.isStreaming && (cached.pluginTools ?? '') !== pluginTools.join(',')) {
+    piSessionPool.delete(sessionId)
+    disposePiEntry(cached)
+  } else if (cached) {
     cached.lastUsed = Date.now()
     schedulePiEviction(sessionId)
     return cached.session
@@ -584,8 +627,9 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
     const activityToken = beginPiActivity(sessionId, 'Loading Pi provider')
     try {
       const sm = await openPiSessionManager(sessionId)
-      const { DefaultPackageManager, SettingsManager, createAgentSession, getAgentDir } = await loadPiSdk()
-      const customTools = getCoordinatorPiTools(sessionId)
+      const sdk = await loadPiSdk()
+      const { DefaultPackageManager, SettingsManager, createAgentSession, getAgentDir } = sdk
+      const customTools = [...(getCoordinatorPiTools(sessionId) ?? []), ...await loadPiPluginTools(pluginTools)]
       const settingsManager = piSessionScopedSettings(SettingsManager.create(sm.getCwd()))
       updatePiActivity(activityToken, 'resolving-packages', 'Checking Pi extensions and packages')
       const missingPackages = new DefaultPackageManager({ cwd: sm.getCwd(), agentDir: getAgentDir(), settingsManager })
@@ -594,13 +638,16 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
       for (const entry of missingPackages) {
         appendPiActivity(activityToken, `Missing ${entry.source}; Pi will install it`)
       }
+      const { resourceLoader, attachMcpStatus } = await piResources(sdk, sm.getCwd(), settingsManager)
       const result = await createAgentSession({
+        resourceLoader,
         sessionManager: sm,
         settingsManager,
-        ...(customTools ? { customTools } : {}),
+        ...(customTools.length ? { customTools } : {}),
       })
       const entry: PiPoolEntry = {
         session: result.session,
+        pluginTools: pluginTools.join(','),
         lastUsed: Date.now(),
         timer: setTimeout(() => {}, 0),
       }

@@ -534,16 +534,16 @@ try {
   if (operationRead?.toolName !== 'coord_delegate' || operationRead?.operationRequestId !== 'lost-delegation' || operationRead?.runId !== 'run-1') {
     throw new Error('MCP operation inspection lost original tool/key or participant scope')
   }
-  await client.callTool({ name: 'coord_read_result', arguments: { task_id: 'completed-result' } })
-  await client.callTool({ name: 'coord_integrate_result', arguments: { task_id: 'completed-result', review_token: 'source-and-target-pin', request_id: 'integrate-reviewed' } })
-  await client.callTool({ name: 'coord_read_result_diff', arguments: { task_id: 'completed-result', review_token: 'source-and-target-pin', file: 'file.txt', offset: 100, limit: 500 } })
+  await client.callTool({ name: 'coord_read_result', arguments: { task_id: 'completed-result', destination: 'dependencies' } })
+  await client.callTool({ name: 'coord_integrate_result', arguments: { task_id: 'completed-result', destination: 'dependencies', review_token: 'source-and-target-pin', request_id: 'integrate-reviewed' } })
+  await client.callTool({ name: 'coord_read_result_diff', arguments: { task_id: 'completed-result', destination: 'dependencies', review_token: 'source-and-target-pin', file: 'file.txt', offset: 100, limit: 500 } })
   const diffRead = seen.find(entry => entry.body?.action === 'read_result_diff')?.body
-  if (diffRead?.file !== 'file.txt' || diffRead?.offset !== 100 || diffRead?.limit !== 500 || diffRead?.reviewToken !== 'source-and-target-pin') throw new Error('MCP result diff lost page/filter/revision arguments')
+  if (diffRead?.destination !== 'dependencies' || diffRead?.file !== 'file.txt' || diffRead?.offset !== 100 || diffRead?.limit !== 500 || diffRead?.reviewToken !== 'source-and-target-pin') throw new Error('MCP result diff lost destination/page/filter/revision arguments')
   const resultRead = seen.find(entry => entry.body?.action === 'read_result')?.body
   const resultApply = seen.find(entry => entry.body?.action === 'integrate_result')?.body
-  if (resultRead?.taskId !== 'completed-result' || resultRead?.runId !== 'run-1'
-    || resultApply?.reviewToken !== 'source-and-target-pin' || resultApply?.requestId !== 'integrate-reviewed') {
-    throw new Error('MCP result tools lost task scope, review pin or replay key')
+  if (resultRead?.taskId !== 'completed-result' || resultRead?.runId !== 'run-1' || resultRead?.destination !== 'dependencies'
+    || resultApply?.destination !== 'dependencies' || resultApply?.reviewToken !== 'source-and-target-pin' || resultApply?.requestId !== 'integrate-reviewed') {
+    throw new Error('MCP result tools lost destination, task scope, review pin or replay key')
   }
   await client.callTool({ name: 'coord_status', arguments: { view: 'actionable' } })
   if (!seen.some(entry => entry.body?.action === 'status' && entry.body?.view === 'actionable')) throw new Error('MCP status lost the actionable view')
