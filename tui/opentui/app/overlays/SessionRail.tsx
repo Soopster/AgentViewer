@@ -75,7 +75,6 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             height={sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows : '100%'}
             onMouseDown={event => { if (event.button === 0) onFocus?.() }}
             flexShrink={0}
-            overflow={sidebarExtraRows > 0 ? 'hidden' : undefined}
             border={sidebarView === 'sessions' ? ['top', 'left', 'right', 'bottom'] : true}
             borderStyle="single"
             borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
@@ -104,7 +103,9 @@ export function SessionRail({ showRail, sidebarWidth, sidebarExtraRows, mainCont
             </> : null}
             {workspacesEnabled ? <SpacesRail iconSet={iconSet} theme={theme} width={sidebarWidth} onManage={openSpaces} under={fullScreenPopoverOpen} /> : null}
             {sidebarView === 'sessions' && controls ? controls : sidebarView === 'coordinator' && coordinatorControls ? coordinatorControls : <box id="sidebar-project-scope" height={1} flexShrink={0} paddingX={1} onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setAllProjects(value => !value) } }}><text fg={theme.muted} wrapMode="none" selectable={false}>{allProjects ? 'All projects ▾' : 'This project ▾'}</text></box>}
-            <box flexGrow={1} minHeight={0} paddingX={1} flexDirection="column">
+            {/* The list is clipped here, never on the frame: the heading, sort and count are painted
+                over its borders, and a clipping frame does not paint them. */}
+            <box flexGrow={1} minHeight={0} paddingX={1} flexDirection="column" overflow="hidden">
               {sidebarView === 'coordinator' ? (
                 <Slot
                   name="sidebar_content"
