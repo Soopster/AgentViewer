@@ -110,8 +110,10 @@ export function FeatureGuidePopover({ theme, accentColor, width, height, onClose
 
   const tryIt = useCallback(() => {
     if (!entry?.command || !onRunCommand) return
-    if (onRunCommand(entry.command)) onClose()
-    else onNotice('info', entry.plugin ? `Turn on the ${entry.plugin} plugin (palette → Plugins) to use this.` : 'That command is not available here.', 4000)
+    // Close first: the guide and most commands share the overlay slot, so closing
+    // after running would close whatever the command just opened.
+    onClose()
+    if (!onRunCommand(entry.command)) onNotice('info', entry.plugin ? `Turn on the ${entry.plugin} plugin (palette → Plugins) to use this.` : 'That command is not available here.', 4000)
   }, [entry, onClose, onNotice, onRunCommand])
 
   const handleKey = useCallback((key: KeyEvent) => {

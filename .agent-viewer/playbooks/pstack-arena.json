@@ -1,0 +1,51 @@
+{
+  "name": "pstack-arena",
+  "description": "Competing attempts, one base, the best parts of the rest grafted in.",
+  "argsHint": "The change or task, the repository paths involved, and what success looks like.",
+  "maxAgents": 4,
+  "phases": [
+    {
+      "title": "Fan out",
+      "tasks": [
+        {
+          "key": "candidate-1",
+          "title": "Candidate 1",
+          "detail": "Produce your own complete solution to {{args}} in your own worktree, without reading other candidates' work. Finish with a short rationale naming the alternatives you rejected, and the checks you actually ran.",
+          "role": "teammate",
+          "verifyCommands": []
+        },
+        {
+          "key": "candidate-2",
+          "title": "Candidate 2",
+          "detail": "Produce your own complete solution to {{args}} in your own worktree, without reading other candidates' work. Finish with a short rationale naming the alternatives you rejected, and the checks you actually ran.",
+          "role": "teammate",
+          "verifyCommands": []
+        },
+        {
+          "key": "candidate-3",
+          "title": "Candidate 3",
+          "detail": "Produce your own complete solution to {{args}} in your own worktree, without reading other candidates' work. Finish with a short rationale naming the alternatives you rejected, and the checks you actually ran.",
+          "role": "teammate",
+          "verifyCommands": []
+        }
+      ]
+    },
+    {
+      "title": "Pick and graft",
+      "tasks": [
+        {
+          "key": "synthesis",
+          "title": "Pick a base and graft",
+          "detail": "Write 3-6 gradeable criteria for {{args}}, then read every candidate end to end and score each. Pick the base a maintainer can extend most easily, graft the few worthwhile parts of the others by hand, and verify the result. Report the base and why, each graft and its source, and the verification output.",
+          "role": "lead",
+          "dependsOn": [
+            "candidate-1",
+            "candidate-2",
+            "candidate-3"
+          ],
+          "verifyCommands": []
+        }
+      ]
+    }
+  ]
+}

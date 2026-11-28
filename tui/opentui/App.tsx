@@ -470,6 +470,7 @@ import { EngineeringInspectorWindow } from './engineering/EngineeringInspectorWi
 import { useEngineeringLayout } from './engineering/state'
 import { PaneResizeProvider, usePaneResize } from './paneResize'
 import { ResizeReadout } from './ResizeReadout'
+const HOST_PALETTE_COMMAND_IDS: ReadonlySet<string> = new Set(COMMANDS.map((command) => command.id))
 // The View Studio's side-panel choices: every surface the panel can open, plugins' included.
 registerViewSidePanelSurfaces(RIGHT_PANEL_SURFACE_KINDS.map((kind) => ({ kind, label: surfaceKindLabel(kind) })))
 export { readRootRenderCount } from './app/perf'
@@ -5268,6 +5269,8 @@ function OpenTuiWorkspace() {
   const runCommandForPlugin = useStableEvent((id: string): boolean => {
     const command = getPluginCommand(id)
     if (command) { runPluginCommand(command); return true }
+    // A host command runs as the palette would run it (`runCommand` promises both kinds).
+    if (HOST_PALETTE_COMMAND_IDS.has(id)) { executeCommandPalette(id); return true }
     return false
   })
   const activityControl = useActivityControl({

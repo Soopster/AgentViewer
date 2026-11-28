@@ -1,0 +1,51 @@
+{
+  "name": "pstack-interrogate",
+  "description": "Adversarial review: only findings proven by a run survive.",
+  "argsHint": "The change or task, the repository paths involved, and what success looks like.",
+  "maxAgents": 4,
+  "phases": [
+    {
+      "title": "Attack",
+      "tasks": [
+        {
+          "key": "behavior",
+          "title": "Break it: behavior and edge cases",
+          "detail": "Adversarial review of {{args}}, concentrating on behavior and edge cases. Try to break the change. Prove each finding with a run against the real code (a failing test, a repro script, or command output) and report the exact command, its output, and what the intent requires. Leave out anything you did not run. Do not fix anything in the shared checkout. No findings is a valid result.",
+          "role": "teammate",
+          "verifyCommands": []
+        },
+        {
+          "key": "state",
+          "title": "Break it: state, concurrency and failure handling",
+          "detail": "Adversarial review of {{args}}, concentrating on state, concurrency and failure handling. Try to break the change. Prove each finding with a run against the real code (a failing test, a repro script, or command output) and report the exact command, its output, and what the intent requires. Leave out anything you did not run. Do not fix anything in the shared checkout. No findings is a valid result.",
+          "role": "teammate",
+          "verifyCommands": []
+        },
+        {
+          "key": "boundaries",
+          "title": "Break it: inputs, permissions and external interfaces",
+          "detail": "Adversarial review of {{args}}, concentrating on inputs, permissions and external interfaces. Try to break the change. Prove each finding with a run against the real code (a failing test, a repro script, or command output) and report the exact command, its output, and what the intent requires. Leave out anything you did not run. Do not fix anything in the shared checkout. No findings is a valid result.",
+          "role": "teammate",
+          "verifyCommands": []
+        }
+      ]
+    },
+    {
+      "title": "Verify",
+      "tasks": [
+        {
+          "key": "verdict",
+          "title": "Rerun every finding",
+          "detail": "For each finding on {{args}}, rerun its command. Keep it only if the output shows the failure and the failure breaks the intent. Merge findings with one root cause. Report intent, verified findings with command and output, and what was dropped and why. Do not apply fixes.",
+          "role": "lead",
+          "dependsOn": [
+            "behavior",
+            "state",
+            "boundaries"
+          ],
+          "verifyCommands": []
+        }
+      ]
+    }
+  ]
+}
