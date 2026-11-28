@@ -11,6 +11,12 @@
 :root[data-view-strip-hints='false'] .av-web-composer-hint:not([data-busy]) { display: none; }
 
 :root[data-view-composer='inline'] .av-web-composer-card { border-width: 1px 0 0 !important; border-radius: 0 !important; background: transparent !important; }
+:root[data-view-composer-fill='surface'] .av-web-composer-card { background: var(--surface) !important; }
+:root[data-view-composer-fill='bg'] .av-web-composer-card { background: var(--bg) !important; }
+:root[data-view-composer-fill='blend'] .av-web-composer-card { background: color-mix(in srgb, var(--surface) 50%, var(--bg)) !important; }
+:root[data-view-composer-fill='raised'] .av-web-composer-card { background: var(--surface-3) !important; }
+:root[data-view-composer-fill='tinted'] .av-web-composer-card { background: color-mix(in srgb, var(--cyan) 8%, var(--surface)) !important; }
+:root[data-view-composer-fill='deep'] .av-web-composer-card { background: color-mix(in srgb, var(--bg) 75%, black) !important; }
 :root[data-view-composer-border='square'] .av-web-composer-card { border-radius: 0 !important; }
 :root[data-view-composer-border='rounded'] .av-web-composer-card { border-radius: 16px !important; }
 :root[data-view-composer-border='heavy'] .av-web-composer-card { border-width: 2px !important; border-radius: 4px !important; }
@@ -94,6 +100,14 @@
 :root[data-view-rail-fill='deep'] [data-sidebar='sidebar'] { background: color-mix(in srgb, var(--bg) 75%, black) !important; }
 :root[data-view-rail-fill] [data-sidebar='sidebar'] > * { background: transparent !important; }
 
+/* ── transcript ── */
+:root[data-view-transcript-fill='surface'] .av-timeline-scroll { background: var(--surface); }
+:root[data-view-transcript-fill='bg'] .av-timeline-scroll { background: var(--bg); }
+:root[data-view-transcript-fill='blend'] .av-timeline-scroll { background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+:root[data-view-transcript-fill='raised'] .av-timeline-scroll { background: var(--surface-3); }
+:root[data-view-transcript-fill='tinted'] .av-timeline-scroll { background: color-mix(in srgb, var(--cyan) 8%, var(--surface)); }
+:root[data-view-transcript-fill='deep'] .av-timeline-scroll { background: color-mix(in srgb, var(--bg) 75%, black); }
+
 /* ── stream details ── */
 .av-stream-time { flex-shrink: 0; margin-left: auto; color: var(--text-3); font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
 :root[data-view-message-layout='continuous'] .av-stream-message:not(.av-stream-message--user) .av-stream-marker { display: none; }
@@ -117,3 +131,5 @@
 
 .av-web-composer-git-cluster[data-strip-color='accent'] * { color: var(--cyan) !important; }
 .av-web-composer-git-cluster[data-strip-color='bright'] * { color: var(--text) !important; }
+
+.av-web-composer-strip-row { flex-basis: 100%; display: flex; flex-wrap: wrap; }

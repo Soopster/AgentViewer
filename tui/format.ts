@@ -41,9 +41,10 @@ import {
   formatClaudeRuntimeDetailLines,
 } from '../lib/claudeSdkFeatures'
 import { pathBasename } from '../lib/projectPaths'
+import { BASH_OK_LINE } from './format/types'
 import { computeTurnDurationsMs, type ThreadedBlock, type ThreadedMessage, type ToolThread } from '../lib/threading'
 import { buildTaskRegistry, type TaskRegistry } from '../lib/taskRegistry'
-import type { ContentBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
+import type { ContentBlock, TextBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
 import type { TuiDensity } from './theme'
 import { fileEditStatsFromToolCalls, type FileEditStat } from '../lib/turnEditStats'
 
@@ -239,6 +240,8 @@ export function formatDurationMs(value: number): string {
   return `${Math.round(value / 1000)}s`
 }
 
+const BASH_META_LINE = /^(?:exit_code|duration_ms):\s*-?[0-9.]+$/
+
 function parseBashResultMeta(raw: string): { outputLineCount: number; exitCode: number | null; durationMs: number | null } {
   let outputLineCount = 0
   let exitCode: number | null = null
@@ -325,12 +328,11 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     const isError = normalizedThread.result?.is_error === true
     const raw = resultTextOf(normalizedThread) ?? ''
     const meta = parseBashResultMeta(raw)
+    const failed = isError || (meta.exitCode != null && meta.exitCode !== 0)
     const status = normalizedThread.result
-      ? isError
-        ? 'ERROR'
-        : meta.exitCode != null && meta.exitCode !== 0
-          ? `exit ${meta.exitCode}`
-          : 'OK'
+      ? meta.exitCode != null && meta.exitCode !== 0
+        ? `exit ${meta.exitCode}`
+        : isError ? 'ERROR' : 'OK'
       : 'running'
     const details = [
       meta.outputLineCount > 0 ? `${meta.outputLineCount} line${meta.outputLineCount === 1 ? '' : 's'}` : '',
@@ -339,7 +341,7 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     ].filter(Boolean)
     return [
       line(`tool Bash: $ ${compactOneLine(command, 120)}`, 'tool'),
-      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`, isError ? 'result_error' : (meta.durationMs ?? 0) >= SLOW_TOOL_MS ? 'system' : normalizedThread.result ? 'result_ok' : 'dim'),
+      line(`${failed ? '✗' : normalizedThread.result ? '✓' : '…'} ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`, failed ? 'result_error' : (meta.durationMs ?? 0) >= SLOW_TOOL_MS ? 'system' : normalizedThread.result ? 'result_ok' : 'dim'),
     ]
   }
 
@@ -517,9 +519,14 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
   return [...content, ...links.map(link => line(`artifact: ${sanitizeLine(link.title || link.name)} — ${link.uri}`, 'muted'))]
 }
 
+function subagentLine(block: TextBlock): TuiTranscriptCardLine {
+  return { ...line(sanitizeLine(block.text), 'agent'), subagent: block.subagentActivity }
+}
+
 function formatBlockContent(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text': {
+      if (block.subagentActivity) return [subagentLine(block)]
       const protocolLines = textLinesForProtocolAwareBlock(block.text, false)
       if (protocolLines) return protocolLines
       return block.text.trim()
@@ -971,7 +978,10 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
   const blockAnalysis = analyzeCardBlocks(message)
   const asyncQuestions = message.blocks.some(block => block.type === 'tool_thread' && block.toolUse.input.asyncUserInput === true)
-  const category = asyncQuestions ? 'conversation' : blockAnalysis.category
+  const subagents = message.blocks.flatMap(block => block.type === 'text' && block.subagentActivity ? [block.subagentActivity] : [])
+  const subagentsOnly = subagents.length > 0 && subagents.length === message.blocks.length
+  // Drawn as plain rows: as a tool card each record would get a header of its own and be folded.
+  const category = asyncQuestions || subagentsOnly ? 'conversation' : blockAnalysis.category
   const reasoningOnly = message.blocks.length > 0 && message.blocks.every(block => block.type === 'thinking' && block.reasoning)
   const autoFold = reasoningOnly || (category !== 'conversation' && category !== 'insight')
   const previewSourceLines = previewLines
@@ -1007,7 +1017,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     searchHaystackLower: deferSearchText ? '' : cardSearchHaystack(label, searchText),
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     editDiff: blockAnalysis.hasSyntheticEdit ? synthesizeEditDiff(message) : undefined,
-    markdownContent: !asyncQuestions && (category === 'conversation' || category === 'insight')
+    markdownContent: !asyncQuestions && !subagentsOnly && (category === 'conversation' || category === 'insight')
       ? extractMarkdownContent(message.blocks)
       : undefined,
     hasMermaidDiagrams,
@@ -1016,6 +1026,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     pending: !asyncQuestions && blockAnalysis.pending || undefined,
     fileEdits: cardFileEdits(message),
     toolTimings: cardToolTimings(message),
+    ...(subagentsOnly ? { subagents } : {}),
   }
 }
 
@@ -1131,6 +1142,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
 function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text': {
+      if (block.subagentActivity) return [subagentLine(block)]
       const protocolLines = textLinesForProtocolAwareBlock(block.text, true)
       if (protocolLines) return protocolLines
       return block.text.trim()
@@ -1234,13 +1246,18 @@ function formatBlockExpandedContent(block: ThreadedBlock, activeForms?: TaskActi
         if (!normalizedBlock.result) return [...lines, line('… running', 'dim')]
         const content = resultRawTextOf(normalizedBlock)
         const meta = parseBashResultMeta(content ?? '')
-        lines.push(line(isError ? '✗ ERROR' : meta.exitCode != null && meta.exitCode !== 0 ? `✗ exit ${meta.exitCode}` : '✓ OK', isError || (meta.exitCode != null && meta.exitCode !== 0) ? 'result_error' : 'result_ok'))
-        if (content) {
-          for (const l of sanitizeLine(content).split('\n')) {
-            const trimmed = l.trimEnd()
-            if (trimmed.length > 0) lines.push(line(truncateLine(trimmed), 'muted'))
-          }
-        }
+        const output = sanitizeLine(content ?? '').split('\n')
+          .map((entry) => entry.trimEnd())
+          // The exit code and duration are the status line's, not something the command printed.
+          .filter((entry) => entry.length > 0 && !BASH_META_LINE.test(entry) && entry !== 'No output recorded.')
+        if (isError || (meta.exitCode != null && meta.exitCode !== 0)) {
+          lines.push(line([
+            meta.exitCode != null && meta.exitCode !== 0 ? `✗ exit ${meta.exitCode}` : '✗ ERROR',
+            meta.durationMs != null ? formatDurationMs(meta.durationMs) : '',
+            output.length === 0 ? 'no output' : '',
+          ].filter(Boolean).join(' · '), 'result_error'))
+        } else lines.push(line(BASH_OK_LINE, 'result_ok'))
+        for (const entry of output) lines.push(line(truncateLine(entry), 'muted'))
         return lines
       }
 

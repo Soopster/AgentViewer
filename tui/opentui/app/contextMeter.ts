@@ -1,4 +1,5 @@
-import { type ClaudePlanLimits, tightestPlanLimit } from '../../../lib/claudePlanLimits'
+import type { ClaudePlanLimits } from '../../../lib/claudePlanLimits'
+import { stripLimitEntries, type StripStatEntry } from '../../../lib/sessionStripStats'
 import type { ContextUsage } from '../../../lib/types'
 import type { TuiThemePalette } from '../../theme'
 import type { InlineTextSegment } from './inlineText'
@@ -35,27 +36,13 @@ export function contextBarSegments(
     { text: ` ${pct}%`, fg: fillColor },
   ]
 }
-// When a plan window resets, as the clock reads it: `6:50pm` today, `Sat 3pm`
-// otherwise — the screenshot that prompted this said "resets 6:50pm".
-function formatLimitReset(resetsAt: number, now = Date.now()): string {
-  const at = new Date(resetsAt)
-  const hours = at.getHours()
-  const minutes = at.getMinutes()
-  const clock = `${hours % 12 || 12}${minutes ? `:${String(minutes).padStart(2, '0')}` : ''}${hours < 12 ? 'am' : 'pm'}`
-  if (resetsAt - now < 20 * 60 * 60 * 1000 && at.getDate() === new Date(now).getDate()) return clock
-  return `${at.toLocaleDateString('en', { weekday: 'short' })} ${clock}`
-}
 // The composer border's limit chip, coloured as it nears the limit; null with
 // no reading, or when the reading's window has already reset.
-export function planLimitSegment(limits: ClaudePlanLimits | null, theme: TuiThemePalette, now = Date.now()): InlineTextSegment | null {
-  const window = tightestPlanLimit(limits)
-  if (!window || (window.resetsAt != null && window.resetsAt <= now)) return null
-  const pct = Math.round(window.utilization)
-  const reset = window.resetsAt != null ? ` ↻${formatLimitReset(window.resetsAt, now)}` : ''
-  return {
-    text: `limit:${window.label} ${pct}%${reset}`,
-    fg: pct >= 90 ? theme.red : pct >= 75 ? theme.amber : theme.dim,
-  }
+export function planLimitSegments(limits: ClaudePlanLimits | null, theme: TuiThemePalette, now = Date.now()): InlineTextSegment[] {
+  return stripLimitEntries(limits?.windows ?? [], now).map((entry) => stripEntrySegment(entry, theme))
+}
+export function stripEntrySegment({ tone, ...entry }: StripStatEntry, theme: TuiThemePalette): InlineTextSegment {
+  return { ...entry, fg: tone === 'bad' ? theme.red : tone === 'warn' ? theme.amber : tone === 'good' ? theme.green : theme.dim }
 }
 export function formatContextUsageChip(usage: Pick<ContextUsage, 'totalTokens' | 'maxTokens' | 'percentage'>): string {
   const total = fmtTokens(usage.totalTokens)

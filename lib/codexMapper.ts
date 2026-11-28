@@ -6,7 +6,10 @@ import type {
   SessionInfo,
   SessionMessage,
   SessionModelInfo,
+  SubagentActivity,
+  TextBlock,
 } from './types'
+import { subagentName } from './subagentActivity'
 import type {
   CodexExperimentalFeature,
   CodexFileUpdateChange,
@@ -53,10 +56,33 @@ function escapeBashTag(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** Codex runs a `!command` as `<shell> -lc '<command>'`; show what was typed. */
+/**
+ * Codex runs every command as `<shell> -lc <word>`; show what was asked for.
+ * Unwrapped here, on the whole command, because a renderer only ever sees a
+ * truncated one with no closing quote to match. Anything that is not exactly one
+ * shell word after the flag is left as it is.
+ */
 export function unwrapCodexShellCommand(command: string): string {
-  const match = /^\S+ -l?c '([\s\S]*)'$/.exec(command)
-  return match ? match[1]!.replace(/'\\''/g, "'") : command
+  const match = /^(?:\S*\/)?(?:zsh|bash|sh) -l?c ([\s\S]+)$/.exec(command)
+  return match ? unquoteShellWord(match[1]!) ?? command : command
+}
+
+/** The value of one POSIX shell word, however its quoted pieces are joined; null if it is not one word. */
+function unquoteShellWord(word: string): string | null {
+  // A bare operator, expansion or space means the shell saw more than one literal word.
+  const piece = /'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|\\([\s\S])|([^\s'"\;&|<>()$`]+)/y
+  let value = ''
+  while (piece.lastIndex < word.length) {
+    const match = piece.exec(word)
+    if (!match) return null
+    value += match[1] ?? match[2]?.replace(/\\(["\\$`])|\\\n/g, '$1') ?? match[3] ?? match[4]!
+  }
+  return value
+}
+
+/** One sub-agent record as a transcript row: its name and what happened, with the ids kept beside the text. */
+function subagentActivityBlock(activity: SubagentActivity): TextBlock {
+  return { type: 'text', text: `⤷ ${subagentName(activity.path)} ${activity.kind}`, subagentActivity: activity }
 }
 
 function msToIsoTimestamp(ms: number | null | undefined): string | undefined {
@@ -235,7 +261,7 @@ function mapItemToMessages(
         id: toolUseId,
         name: 'Bash',
         input: {
-          command: item.command,
+          command: unwrapCodexShellCommand(item.command),
           cwd: item.cwd,
           status: item.status,
           source: item.source,
@@ -334,14 +360,9 @@ function mapItemToMessages(
       return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'subAgentActivity':
-      return [makeMessage(
-        threadId,
-        baseId,
-        'assistant',
-        `Sub-agent ${item.kind}: ${item.agentPath} (${item.agentThreadId})`,
-        turnId,
-        timestamp,
-      )]
+      return [makeMessage(threadId, baseId, 'assistant', [
+        subagentActivityBlock({ path: item.agentPath, threadId: item.agentThreadId, kind: item.kind }),
+      ], turnId, timestamp)]
     case 'webSearch': {
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{

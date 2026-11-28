@@ -1609,6 +1609,10 @@ presentation, and that difference is preserved as `agentCards: 'none'`).
   `WEB_VIEW_FIELDS`; `scripts/webViewStyleSmoke.ts` pins that and every CSS selector's field and value.
 - **The composer strip's rules are shared** (`lib/composerStrip.ts`: TUI dock, Studio preview and web).
   A `strip*` field never hides a permission-mode warning or a meter that needs attention.
+- **Strip readings** (`lib/sessionStripStats.ts`: tokens, cache hits, lines, active time, plan limits, pull
+  request) are off by default except the closest limit, are computed or fetched only while a view shows them,
+  and are left out when there is no data. Plan windows are read only through a warm Claude session. Transcript
+  readings cover the messages the client has loaded. `stripRows: 'two'` adds one row to the composer's height.
 - **Sidebar:** the filtering rules (scratch, settled, activity) live in `lib/sessionSidebarModel.ts`.
   Sort, scratch hiding and settled visibility are one tui.json store
   (`GET/PATCH /api/sidebar-preferences`). The web polls `/api/sessions/running` for the same
@@ -1682,6 +1686,23 @@ second renderer; TRANSCRIPT is the opencode-styled sibling and keeps its cursor.
   first-row rule, the tail detach on expand, `e` not clearing clicks, and the
   reserved banner. The recenter guard needs more than `READER_CARD_WINDOW` cards
   and is not pinned.
+
+#### Tool noise and turn overview (load-bearing)
+
+- **Codex commands are unwrapped in the mapper** (`unwrapCodexShellCommand`, a one-shell-word unquoter: Codex joins quoted
+  pieces into one word). A renderer only sees a truncated command with no closing quote to match.
+- **The plain `✓ OK` row is hidden at render time, never removed from the card** (`renderedBodyLines`, `hidesOkRow`):
+  failure detection, markers and pending state still read the lines. A slow command's duration sits beside its time.
+- **A sub-agent record is a text block with `subagentActivity`**; threading and the code-block extractor pass it through.
+  Its card is category `conversation` on purpose: as `technical` it was drawn as a tool card and swallowed by activity
+  grouping, so it never merged. Merging is in `visibleCardsForTranscriptView`. Codex child transcripts are read with
+  `thread/read`, never resumed. A click opens one through module slots (`windowCardActions.ts`), not card props.
+- **`turnDigest` is the one source** for turn rules, the outline (click `Turn n/m`, or palette `turn-outline`) and
+  "N failed", which jumps to the first failure. The outline's state is a store, so the root never re-renders for it.
+- **"New since you left" uses its own file** (`lib/tuiLastSeen.ts`): reader state is dropped when following the tail,
+  which is exactly when this matters. Written only on leaving a window, and only when more was read.
+
+`turnOverviewSmoke.tsx` (logic) and `turnOverviewAppSmoke.tsx` (the strip, clicks, outline keys, divider).
 
 #### Clickable transcript targets (load-bearing)
 

@@ -3,17 +3,24 @@
 import type { ViewSpec } from '../tui/viewSpec'
 
 export type ComposerStripSpec = Pick<ViewSpec, 'stripBadge' | 'stripSeparator' | 'stripColor' | 'stripModel' | 'stripEffort'
-  | 'stripContext' | 'stripCost' | 'stripFolder' | 'stripGit' | 'stripLabels' | 'stripContextStyle'>
+  | 'stripContext' | 'stripCost' | 'stripFolder' | 'stripGit' | 'stripLabels' | 'stripContextStyle'
+  | 'stripLimits' | 'stripPr' | 'stripTokens' | 'stripCache' | 'stripLines' | 'stripDuration'>
 
 export type ComposerStripPart = 'model' | 'effort' | 'context' | 'limit' | 'cost' | 'folder' | 'branch' | 'git-count'
+  | 'pr' | 'tokens' | 'cache' | 'lines' | 'duration'
 
-export function stripShows(spec: ComposerStripSpec, segment: { part?: ComposerStripPart; urgent?: boolean }): boolean {
+export function stripShows(spec: ComposerStripSpec, segment: { part?: ComposerStripPart; urgent?: boolean; tightest?: boolean }): boolean {
   if (segment.urgent) return true
   switch (segment.part) {
     case 'model': return spec.stripModel
     case 'effort': return spec.stripEffort
-    case 'context':
-    case 'limit': return spec.stripContext
+    case 'context': return spec.stripContext
+    case 'limit': return spec.stripLimits === 'all' || (spec.stripLimits === 'tightest' && segment.tightest === true)
+    case 'pr': return spec.stripPr
+    case 'tokens': return spec.stripTokens
+    case 'cache': return spec.stripCache
+    case 'lines': return spec.stripLines
+    case 'duration': return spec.stripDuration
     case 'cost': return spec.stripCost
     case 'folder': return spec.stripFolder
     case 'branch': return spec.stripGit !== 'off'
@@ -51,7 +58,7 @@ export type StripPalette = { muted: string; accent: string; bright: string }
  * Drops hidden entries, rewrites their text and recolours the rest. Entries
  * without a `part` (modes and warnings) are left as they are.
  */
-export function shapeStripSegments<T extends { text: string; fg: string; part?: ComposerStripPart; urgent?: boolean; percent?: number }>(
+export function shapeStripSegments<T extends { text: string; fg: string; part?: ComposerStripPart; urgent?: boolean; percent?: number; tightest?: boolean }>(
   segments: T[], spec: ComposerStripSpec, palette: StripPalette,
 ): T[] {
   const colour = spec.stripColor === 'default' ? null : palette[spec.stripColor]
@@ -77,6 +84,17 @@ export function stripFolderLabel(cwd: string, style: ViewSpec['stripFolderStyle'
   if (style === 'name') return name
   const parts = cwd.split(/[\\/]+/).filter(Boolean)
   return parts.length > 1 ? parts.slice(-2).join('/') : name
+}
+
+/** The readings a two-row strip moves to its second row. */
+const STAT_PARTS: ReadonlySet<ComposerStripPart> = new Set<ComposerStripPart>(['limit', 'pr', 'tokens', 'cache', 'lines', 'duration'])
+export function isStripStat(segment: { part?: ComposerStripPart }): boolean {
+  return segment.part !== undefined && STAT_PARTS.has(segment.part)
+}
+
+/** Whether the view asks for any reading taken from the transcript, so it is only computed when shown. */
+export function stripWantsStats(spec: Pick<ViewSpec, 'stripTokens' | 'stripCache' | 'stripLines' | 'stripDuration'>): boolean {
+  return spec.stripTokens || spec.stripCache || spec.stripLines || spec.stripDuration
 }
 
 export function stripSeparatorText(separator: ViewSpec['stripSeparator']): string {

@@ -10,7 +10,18 @@ export type McpResourceLink = {
   size?: number
 }
 
-export type TextBlock = { type: 'text'; text: string }
+export type TextBlock = {
+  type: 'text'
+  text: string
+  /** Set when this row records what a sub-agent did; `text` already says it in words. */
+  subagentActivity?: SubagentActivity
+}
+export type SubagentActivity = {
+  /** The agent's path in its tree, e.g. `/root/task_plugin`. */
+  path: string
+  threadId: string
+  kind: 'started' | 'interacted' | 'interrupted' | 'completed'
+}
 export type McpInvocation = {
   server: string
   tool: string

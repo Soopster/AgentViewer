@@ -330,6 +330,8 @@ Choose **Nerd Font**, **Powerline**, **Diamond**, **Slanted**, **Pixelated** or 
 
 **View Studio → Composer** also shapes the strip on the composer's bottom border: the provider badge (filled, bracketed, dotted, text or off), the separator, entry colour (own, muted, accent or bright), label length, how context reads (including a bar), whether settings or the folder lead, the folder name alone or with its parent, which of model, effort, context, cost and folder show, the git detail, and the idle key hints. Permission-mode warnings, and context or plan-limit meters that need attention, always show.
 
+The strip can also show Claude plan limits (closest to full, or all), the linked pull request, the newest reply's tokens, the prompt cache hit ratio, estimated lines changed and active time, on one row or two. All but the closest limit are off by default, and a reading with no data is left out.
+
 The web View Studio draws the strip too, along with the composer frame, transcript styling, session tabs, borders and rail settings. Fields marked **terminal** in the web Studio (icon sets, the card cursor and other terminal-only features) are saved with the view but only change the terminal.
 
 **View Studio → Panels → Border theme** picks the lines a view's window borders are drawn with: square, rounded, heavy, double, double rails, dashed, heavy dashed, dotted or ASCII, or **none** to hide borders. Focus and emphasis frames keep their heavy or double lines in every theme. These need no Nerd Font.

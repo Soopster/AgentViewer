@@ -1,4 +1,5 @@
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
+import type { SessionStripStats } from '@/lib/sessionStripStats'
 import { ComposerStrip, useComposerStripSpec } from './ComposerStrip'
 import { mergeComposerRewrite } from '../../lib/plugins/composer'
 import type { AgentProvider } from '../../lib/types'
@@ -193,6 +194,7 @@ type ComposerShellProps = {
   composerStatusColor: string
   /** List-price estimate for the transcript; null when its provider reports no usage. */
   sessionCostUsd: number | null
+  stripSessionStats: SessionStripStats | null
   composerRuntime: ComposerRuntimeState
   composerStatusDetail: string
   composerStatus: string
@@ -249,7 +251,7 @@ export function ComposerShell(props: ComposerShellProps) {
     setAttachmentPanelOpen,
     canUseIdeBridge, ideBridge, pluginServices, contextUsage, reattachedRunning, sendMessage,
     canSubmitMessage, activeToolCount, backgroundClaudeTasks, backgroundingTasks, cancelSend,
-    awaitingPersistedTurn, composerStatusColor, sessionCostUsd, composerRuntime, composerStatusDetail,
+    awaitingPersistedTurn, composerStatusColor, sessionCostUsd, stripSessionStats, composerRuntime, composerStatusDetail,
     composerStatus, codexThinking, composerGitBranch, setBranchSwitcherOpen, composerWorkingDirectory,
     branchSwitcherOpen, onOpenGit, composerGitTitle, composerGitSummary, composerGitHasDetails,
     handleComposerBranchSwitched, teammatesServices, returnToChat, rewindPreview,
@@ -1403,6 +1405,8 @@ export function ComposerShell(props: ComposerShellProps) {
                 contextUsage={contextUsage}
                 costUsd={sessionCostUsd}
                 cwd={composerWorkingDirectory}
+                session={session}
+                stats={stripSessionStats}
               />
               <span className="av-web-composer-meta">
                 <span className="av-web-composer-hint" data-busy={sendBusy || undefined}>

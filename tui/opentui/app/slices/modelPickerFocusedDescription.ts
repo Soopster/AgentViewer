@@ -1,4 +1,8 @@
 /** @jsxImportSource @opentui/react */
+import type { ViewSpec } from '../../../viewSpec'
+import { stripWantsStats } from '../../../../lib/composerStrip'
+import { computeSessionStripStats, stripPrEntry, stripStatEntries } from '../../../../lib/sessionStripStats'
+import { useSessionPr } from '../../sessionPrStore'
 import type { RefObject } from 'react'
 import type { TuiThemePalette } from '../../../theme'
 import type { SessionInfo } from '../../../../lib/types'
@@ -33,7 +37,8 @@ export type UseModelPickerFocusedDescriptionGroupContext = {
   composerEnableWorkflow: boolean
   composerTargetSessionInfo: SessionInfo | null
   /** Messages of the session on screen, for the cost estimate. */
-  selectedRawMessages: ReadonlyArray<{ type?: string; message?: unknown; uuid?: string }> | undefined
+  selectedRawMessages: ReadonlyArray<{ type?: string; message?: unknown; uuid?: string; timestamp?: string; parent_tool_use_id?: string | null }> | undefined
+  viewSpec: ViewSpec
 }
 
 export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocusedDescriptionGroupContext) {
@@ -42,7 +47,7 @@ export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocused
     sessionContextUsageCacheRef, composerPermissionMode, theme, composerCurrentModel,
     composerAccentColor, composerModelLookupSettled, tuiEffort, tuiOpenCodeAgent,
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
-    composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo, selectedRawMessages,
+    composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo, selectedRawMessages, viewSpec,
   } = ctx
 
   const modelPickerFocusedDescription = modelPickerFocusedOption?.description
@@ -62,14 +67,25 @@ export function useModelPickerFocusedDescriptionGroup(ctx: UseModelPickerFocused
       ? estimateSessionCostUsd(selectedRawMessages, composerCurrentModel) : null,
     [composerTargetSession, selectedSessionKey, selectedRawMessages?.length, costTail, composerCurrentModel])
   const [composerPlanLimits, setComposerPlanLimits] = useState<ClaudePlanLimits | null>(null)
+  const wantsStats = stripWantsStats(viewSpec)
+  const sessionStats = useMemo(
+    () => wantsStats && composerTargetSession && selectedSessionKey === sessionKey(composerTargetSession) && selectedRawMessages
+      ? computeSessionStripStats(selectedRawMessages) : null,
+    [wantsStats, composerTargetSession, selectedSessionKey, selectedRawMessages?.length, costTail])
+  // The pull request's feed runs `gh`, so only a view that shows it subscribes.
+  const linkedPr = viewSpec.stripPr ? composerTargetSession?.inbox?.linkedPr : undefined
+  const prDetail = useSessionPr(linkedPr?.cwd ?? composerTargetSession?.cwd ?? '', linkedPr).detail
+  const stripStats = useMemo(
+    () => [...(linkedPr && prDetail ? [stripPrEntry(prDetail)] : []), ...stripStatEntries(sessionStats)],
+    [linkedPr?.url, prDetail, sessionStats])
   // One-line chip summarising the active model, explicit effort, and any
   // provider-specific send knobs.
   const composerKnobSegments = useMemo(() => runComposerKnobSegments({
     composerTargetSession, composerPermissionMode, theme, composerCurrentModel,
-    composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits, sessionCostUsd,
+    composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits, sessionCostUsd, stripStats,
     tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
     composerCopilotPermissionMode, composerCopilotContextTier, composerEnableWorkflow,
-  }), [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, sessionCostUsd, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }), [composerAccentColor, composerCodexApproval, composerCodexMode, composerContextUsage, composerPlanLimits, sessionCostUsd, stripStats, theme, composerCopilotContextTier, composerCopilotPermissionMode, composerCurrentModel, composerEnableWorkflow, composerModelLookupSettled, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.dim, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
   const [composerGitSummary, setComposerGitSummary] = useState<GitSummary | null>(null)

@@ -42,9 +42,9 @@ export function promptNavigationPreview(card: TuiTranscriptCard): string {
   }).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim() || stickyPromptText(card)
 }
 
-export function PromptNavigation({ cards, currentKey, following, width, theme, onJump, onLatest }: {
+export function PromptNavigation({ cards, currentKey, following, width, theme, onJump, onLatest, onOutline }: {
   cards: readonly TuiTranscriptCard[]; currentKey: string | null; following: boolean
-  width: number; theme: TuiThemePalette; onJump: (key: string) => void; onLatest: () => void
+  width: number; theme: TuiThemePalette; onJump: (key: string) => void; onLatest: () => void; onOutline?: () => void
 }) {
   const { prompts, current } = useMemo(() => promptNavigationState(cards, currentKey, following), [cards, currentKey, following])
   const rows = promptNavigationRows(width)
@@ -57,7 +57,7 @@ export function PromptNavigation({ cards, currentKey, following, width, theme, o
     { id: 'latest', label: ' Latest ', enabled: true, action: onLatest },
   ]
   return <box id="prompt-navigation" height={rows} flexShrink={0} paddingX={1} flexDirection={stacked ? 'column' : 'row'} backgroundColor={theme.surface2}>
-    <text fg={theme.text} width={Math.max(1, stacked ? width : width - 41)} height={1} wrapMode="none">{fitText(label, Math.max(1, stacked ? width : width - 41))}</text>
+    <text id="prompt-navigation:outline" selectable={false} onMouseUp={onOutline} fg={theme.text} width={Math.max(1, stacked ? width : width - 41)} height={1} wrapMode="none">{fitText(label, Math.max(1, stacked ? width : width - 41))}</text>
     {!stacked ? <text fg={theme.dim} width={3} height={1} wrapMode="none">{' │ '}</text> : null}
     <box height={stacked ? rows - 1 : 1} width={stacked ? width : 38} flexDirection="row" flexWrap="wrap" flexShrink={0}>
       {controls.map(control => control.enabled

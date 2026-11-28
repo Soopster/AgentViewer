@@ -87,6 +87,11 @@ export function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], formatExpan
       ? normalizeToolThreadForTui(originalBlock)
       : originalBlock
 
+    if (block.type === 'text' && block.subagentActivity) {
+      lines.push(...formatExpandedBlock(block))
+      continue
+    }
+
     if (block.type === 'tool_thread' && block.toolUse.name === 'Read') {
       const readBlock = readCodeBlockFromTool(block, `read${n++}`)
       if (readBlock) all.push(readBlock)

@@ -11,11 +11,11 @@ export type WebViewStyle = Partial<ViewSpec>
 /** Fields drawn through this store (the rest of the web's fields set its display settings). */
 export const WEB_STYLE_FIELDS = [
   'composer', 'composerStatus', 'composerBorder', 'composerSize',
-  'stripBadge', 'stripSeparator', 'stripColor', 'stripLabels', 'stripContextStyle', 'stripOrder', 'stripFolderStyle', 'stripModel', 'stripEffort', 'stripContext', 'stripCost', 'stripFolder', 'stripGit', 'stripHints',
+  'stripBadge', 'stripSeparator', 'stripColor', 'stripLabels', 'stripContextStyle', 'stripOrder', 'stripFolderStyle', 'stripLimits', 'stripPr', 'stripTokens', 'stripCache', 'stripLines', 'stripDuration', 'stripRows', 'stripModel', 'stripEffort', 'stripContext', 'stripCost', 'stripFolder', 'stripGit', 'stripHints',
   'showThinking', 'showSubagents', 'turnBoundaries', 'thinking',
   'promptMarker', 'replyMarker', 'markerColor', 'promptBand', 'promptRule', 'userBold', 'toolRows', 'diffPreview',
   'tabs', 'tabStyle', 'tabWidth', 'tabClose', 'tabNumbers', 'tabSeparators', 'tabTitle', 'tabStripFill', 'tabHover', 'tabAccent', 'tabTruncate',
-  'railFill',
+  'railFill', 'transcriptFill', 'composerFill',
   'messageLayout', 'promptTimestamps', 'replyTimestamps', 'turnFooter', 'completedTurnHint', 'liveReasoning', 'scrollbar',
   'tabIcons', 'borders', 'borderTheme', 'showToolCalls', 'sidebarView', 'sidePanel',
 ] as const satisfies readonly ViewSpecKey[]

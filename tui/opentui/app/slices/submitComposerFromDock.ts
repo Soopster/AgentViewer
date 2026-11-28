@@ -68,6 +68,7 @@ export type UseSubmitComposerFromDockGroupContext = {
   presentationHidesComposer: boolean
   embeddedComposer: boolean
   composerDockHeight: number
+  stripStatRow: import('../inlineText').InlineTextSegment[] | null
   chatComposerFocused: boolean
   setComposerActive: React.Dispatch<React.SetStateAction<boolean>>
   composerDockTextareaHeight: number
@@ -135,7 +136,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
     composerHistoryScopeLabel, composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
     composerStashOpen, composerStashVisibleCount, composerStash, composerStashIndex,
     activeQueuedComposerSends, composerQueueDurable, composerWindowOpen, composerHidden,
-    presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused,
+    presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused, stripStatRow,
     setComposerActive, composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth,
     composerSlashHint, clickComposerStatus, composerDockStatsFor, composerDraftState,
     hoverComposerStatus, setComposerStatusHover, composerStatusHover, chatComposerHintWidth,
@@ -204,7 +205,7 @@ export function useSubmitComposerFromDockGroup(ctx: UseSubmitComposerFromDockGro
   // the conversation rather than a docked control.
   const embeddedComposerChrome: WindowChrome | null = runEmbeddedComposerChrome({
     composerWindowOpen, composerHidden, presentationHidesComposer, embeddedComposer,
-    composerDockHeight, theme, chatComposerFocused, composerActive, setComposerActive, composerIcon: ctx.composerIcon,
+    composerDockHeight, stripStatRow, theme, chatComposerFocused, composerActive, setComposerActive, composerIcon: ctx.composerIcon,
     composerTextareaRef, renderComposerTextarea, submitComposerFromDock,
     composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth, composerSlashHint,
     clickComposerStatus, composerDockStatsFor, composerDraftState, hoverComposerStatus,

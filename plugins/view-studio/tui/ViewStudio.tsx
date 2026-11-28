@@ -4,7 +4,7 @@
 // is drawn with the draft, so every change is seen on the real conversation,
 // and the specimen at the bottom shows the style fields on a fixed sample even
 // when the open session has no prompt, thinking or tool call to show them on.
-import { orderStripGroups, shapeStripSegments, stripBadgeSegment, stripFolderLabel, stripSeparatorText, type ComposerStripPart } from '../../../tui/opentui/shell/sdkViews'
+import { isStripStat, orderStripGroups, shapeStripSegments, stripBadgeSegment, stripFolderLabel, stripSeparatorText, type ComposerStripPart } from '../../../tui/opentui/shell/sdkViews'
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BoxRenderable, MouseEvent } from '@opentui/core'
 import { TextAttributes } from '@opentui/core'
@@ -314,9 +314,9 @@ const FIELD_REGION: Partial<Record<ViewSpecKey, MockRegion>> = {
   appTabs: 'tabs', readerHeader: 'header', completedTurnHint: 'hint', liveReasoning: 'reasoning', idleTicker: 'ticker',
   composer: 'composer', contextSidebar: 'sidebar', scrollbar: 'scrollbar', scrollMarkerJump: 'scrollbar',
   liveText: 'livetext', composerStatus: 'status',
-  stripBadge: 'strip', stripSeparator: 'strip', stripColor: 'strip', stripLabels: 'strip', stripContextStyle: 'strip', stripOrder: 'strip', stripFolderStyle: 'strip', stripModel: 'strip', stripEffort: 'strip', stripContext: 'strip',
-  stripCost: 'strip', stripFolder: 'strip', stripGit: 'strip', stripHints: 'strip', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', cursor: 'keys', stickyHeaders: 'header',
-  sessionRail: 'rail', sidebarView: 'rail', railFill: 'rail', tabs: 'tabstrip', tabOrientation: 'tabstrip',
+  stripBadge: 'strip', stripSeparator: 'strip', stripColor: 'strip', stripLabels: 'strip', stripContextStyle: 'strip', stripOrder: 'strip', stripFolderStyle: 'strip', stripLimits: 'strip', stripPr: 'strip', stripTokens: 'strip', stripCache: 'strip', stripLines: 'strip', stripDuration: 'strip', stripRows: 'strip', stripModel: 'strip', stripEffort: 'strip', stripContext: 'strip',
+  stripCost: 'strip', stripFolder: 'strip', stripGit: 'strip', stripHints: 'strip', composerTitle: 'composer', composerBorder: 'composer', composerSize: 'composer', composerWidth: 'composer', composerFill: 'composer', cursor: 'keys', stickyHeaders: 'header',
+  sessionRail: 'rail', sidebarView: 'rail', railFill: 'rail', transcriptFill: 'cards', tabs: 'tabstrip', tabOrientation: 'tabstrip',
   tabStyle: 'tabstrip', tabWidth: 'tabstrip', tabClose: 'tabstrip', tabNumbers: 'tabstrip', tabIcons: 'tabstrip', tabSeparators: 'tabstrip', tabTitle: 'tabstrip',
   tabStripFill: 'tabstrip', tabHover: 'tabstrip', tabAccent: 'tabstrip', tabActivity: 'tabstrip', tabOverflow: 'tabstrip', tabTruncate: 'tabstrip', focusMode: 'header',
   borders: 'frame', fleetStrip: 'fleet', taskPanel: 'taskpanel', sidePanel: 'sidepanel', sidePanelPlacement: 'sidepanel',
@@ -415,7 +415,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
         <box flexDirection="column" flexGrow={1}>
           <box border={spec.borders !== false} borderStyle="rounded" borderColor={region === 'cards' || marked('frame') ? theme.amber : theme.border2}
             title={spec.borders !== false && !focusMode ? ` ${name} ` : undefined} titleColor={theme.cyan} flexDirection="row">
-            <box flexDirection="column" width={columnWidth + 1}>
+            <box flexDirection="column" width={columnWidth + 1} backgroundColor={railFillColor(theme, spec.transcriptFill)}>
               {spec.appTabs
                 ? <MockRow theme={theme} marked={marked('tabs')}><text fg={theme.muted} wrapMode="none"><span fg={theme.text} bg={theme.surface3}> Current </span>  Sessions  Agents</text></MockRow>
                 : marked('tabs') ? <Placeholder theme={theme} text="app tabs off" /> : null}
@@ -474,7 +474,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
           : <text fg={theme.cyan} bg={theme.surface2} wrapMode="none">{'▌ '}<span fg={theme.muted}>Working · 12s</span></text>}
       </MockRow>
       {spec.composer === 'docked'
-        ? <box border borderStyle={spec.composerBorder === 'square' ? 'single' : spec.composerBorder} borderColor={marked('composer') ? theme.amber : theme.border2}
+        ? <box backgroundColor={railFillColor(theme, spec.composerFill)} border borderStyle={spec.composerBorder === 'square' ? 'single' : spec.composerBorder} borderColor={marked('composer') ? theme.amber : theme.border2}
             title={spec.composerTitle ? ' To: build · CLAUDE ' : undefined} titleColor={theme.dim}
             height={spec.composerSize === 'tall' ? 5 : 3} marginLeft={spec.composerWidth === 'reader' ? railWidth : 0} paddingX={1}>{composerRow}</box>
         : null}
@@ -490,7 +490,7 @@ function ViewMockup({ spec, theme, width, name, focus, density }: {
   )
 }
 
-type MockSegment = { text: string; fg: string; bg?: string; attributes?: number; part?: ComposerStripPart; percent?: number }
+type MockSegment = { text: string; fg: string; bg?: string; attributes?: number; part?: ComposerStripPart; percent?: number; tightest?: boolean }
 
 /** The composer's bottom strip on sample values, shaped as the dock shapes it. Drawn first so it is never clipped. */
 function MockStrip({ spec, theme, width }: { spec: ViewSpec; theme: TuiThemePalette; width: number }) {
@@ -500,6 +500,13 @@ function MockStrip({ spec, theme, width }: { spec: ViewSpec; theme: TuiThemePale
     { text: 'ctx:42%', fg: theme.green, part: 'context', percent: 42 },
     { text: 'cost:~$1.20', fg: theme.dim, part: 'cost' },
     { text: 'effort:auto', fg: theme.dim, part: 'effort' },
+    { text: 'limit:5h 40%', fg: theme.dim, part: 'limit', tightest: true },
+    { text: 'limit:7d 12%', fg: theme.dim, part: 'limit' },
+    { text: 'PR #12 Approved', fg: theme.green, part: 'pr' },
+    { text: 'tokens:↑42.0k ↓1.2k', fg: theme.dim, part: 'tokens' },
+    { text: 'cache:91% hit', fg: theme.dim, part: 'cache' },
+    { text: 'lines:~+120 -18', fg: theme.dim, part: 'lines' },
+    { text: 'active:4m 10s', fg: theme.dim, part: 'duration' },
   ], spec, { muted: theme.dim, accent: theme.cyan, bright: theme.text })
   const location = shapeStripSegments<MockSegment>([
     { text: `${stripFolderLabel('/code/app/web', spec.stripFolderStyle, 'web')}  `, fg: theme.dim, part: 'folder' },
@@ -509,15 +516,21 @@ function MockStrip({ spec, theme, width }: { spec: ViewSpec; theme: TuiThemePale
   ], spec, { muted: theme.dim, accent: theme.cyan, bright: theme.text })
   const separator = stripSeparatorText(spec.stripSeparator)
   const badge = stripBadgeSegment(spec.stripBadge, 'Claude', theme.amber, theme.bg)
-  const [first, middle, last] = orderStripGroups<MockSegment>(spec.stripOrder, entries, location)
+  const statRow = spec.stripRows === 'two' ? entries.filter(isStripStat) : []
+  const [first, middle, last] = orderStripGroups<MockSegment>(spec.stripOrder, statRow.length ? entries.filter(entry => !isStripStat(entry)) : entries, location)
   const groups = [...(badge ? [[badge]] : []), ...first.map(entry => [entry]), ...(middle.length ? [middle] : []), ...last.map(entry => [entry])]
   const segments: MockSegment[] = groups.flatMap((group, index) => index ? [{ text: separator, fg: theme.dim }, ...group] : group)
   // Two rows: the preview is narrower than a dock.
   return (
     <box flexDirection="column">
-      <text id="view-studio-strip-sample" wrapMode="char" width={width} height={2}>
+      <text id="view-studio-strip-sample" wrapMode="char" width={width} height={4}>
         {segments.map((segment, index) => <span key={index} fg={segment.fg} bg={segment.bg} attributes={segment.attributes}>{segment.text}</span>)}
       </text>
+      {spec.stripRows === 'two' ? (
+        <text wrapMode="char" width={width} height={2}>
+          {statRow.map((segment, index) => <span key={index} fg={segment.fg}>{`${index ? separator : ''}${segment.text}`}</span>)}
+        </text>
+      ) : null}
       <text fg={theme.dim} wrapMode="none">{spec.stripHints ? '⏎ send · ⌃R search · ⌃O expand' : '┄ idle key hints hidden'}</text>
     </box>
   )

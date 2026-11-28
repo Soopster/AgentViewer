@@ -1,5 +1,6 @@
 import type { AnsiRun } from '../../lib/ansiOutput'
 import type { ThreadedMessage } from '../../lib/threading'
+import type { SubagentActivity } from '../../lib/types'
 import type { FileEditStat } from '../../lib/turnEditStats'
 
 export type TuiTranscriptLineTone =
@@ -17,6 +18,8 @@ export type TuiTranscriptLineTone =
   | 'diff_meta'
 
 export type TuiTranscriptCardLine = {
+  /** A sub-agent record: clicking the row opens that agent's transcript. */
+  subagent?: SubagentActivity
   text: string
   tone: TuiTranscriptLineTone
   /** Terminal colours the line's text carried (`text` is the same characters without the escapes). */
@@ -77,10 +80,15 @@ export type TuiTranscriptCard = {
    * still running rather than complete.
    */
   pending?: boolean
+  /** Set when the card is nothing but sub-agent records (see mergeSubagentCards). */
+  subagents?: SubagentActivity[]
   /** Files this card's tool calls changed, with line counts (see lib/turnEditStats.ts). */
   fileEdits?: FileEditStat[]
   /** Tool calls on this card that reported how long they ran (Bash `duration_ms`). */
   toolTimings?: ToolTiming[]
 }
+
+/** The status line of a command that simply worked. Renderers leave it out: the green marker says it. */
+export const BASH_OK_LINE = '✓ OK'
 
 export type ToolTiming = { name: string; label: string; durationMs: number }

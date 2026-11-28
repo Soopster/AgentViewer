@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import type { ViewSpec } from '../../../viewSpec'
+import { transcriptThemeFor } from '../derived/tabs'
 import type { RefObject } from 'react'
 import type { SyntaxStyle } from '@opentui/core'
 import type { TuiThemePalette } from '../../../theme'
@@ -288,7 +289,7 @@ return (
       searchQuery={sessionKey(splitSession) === selectedSessionKey ? deferredSearchQuery : ''}
       activeSearchKey={searchMatches.length ? visibleTranscriptCards[searchMatches[searchMatchIndex] ?? -1]?.key ?? null : null}
       registerHandle={registerSplitPaneHandle}
-      theme={theme}
+      theme={transcriptThemeFor(theme, viewSpec.transcriptFill)}
       densityState={densityState}
       density={density}
       showToolCalls={showToolCalls}

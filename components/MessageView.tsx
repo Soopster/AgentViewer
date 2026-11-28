@@ -1,5 +1,6 @@
 'use client'
 
+import { computeSessionStripStats } from '@/lib/sessionStripStats'
 import { useWebViewStyle } from './message-view/webViewStyle'
 import { estimateSessionCostUsd } from '@/lib/analytics'
 import { runHandleDeleteSession } from './message-view/actions/deleteSession'
@@ -1278,7 +1279,10 @@ function MessageViewInner({
       }
     : null), [optimisticUserText, optimisticContextText, session?.provider, session?.providerInstanceId, session?.sessionId, showLiveTimelineOverlay])
   const sessionCostUsd = useMemo(() => estimateSessionCostUsd(messages, selectedModel), [messages, selectedModel])
-  const showLiveReasoning = useWebViewStyle().liveReasoning !== false
+  const viewStyle = useWebViewStyle()
+  const showLiveReasoning = viewStyle.liveReasoning !== false
+  const wantsStripStats = Boolean(viewStyle.stripTokens || viewStyle.stripCache || viewStyle.stripLines || viewStyle.stripDuration)
+  const stripSessionStats = useMemo(() => wantsStripStats ? computeSessionStripStats(messages) : null, [messages, wantsStripStats])
   const codexThinking = useMemo(() => {
     if (session?.provider !== 'codex') return undefined
     for (let index = liveThreadedMessages.length - 1; index >= 0; index--) {
@@ -2393,6 +2397,7 @@ function MessageViewInner({
         awaitingPersistedTurn={awaitingPersistedTurn}
         composerStatusColor={composerStatusColor}
         sessionCostUsd={sessionCostUsd}
+        stripSessionStats={stripSessionStats}
         composerRuntime={composerRuntime}
         composerStatusDetail={composerStatusDetail}
         composerStatus={composerStatus}

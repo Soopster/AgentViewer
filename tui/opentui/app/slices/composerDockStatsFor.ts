@@ -15,6 +15,8 @@ import { type InlineTextSegment, composerSendingHintSegments } from '../inlineTe
 import { footerDockStatsReserve, fitHintText } from '../contextMeter'
 import { mixHexColor } from '../transcriptStyle'
 
+import { tabStripColor } from '../derived/tabs'
+
 export type UseComposerDockStatsForGroupContext = {
   buildComposerStatsSegments: (lineCount: number, draftLength: number) => InlineTextSegment[]
   composerVisualLineCount: number
@@ -22,6 +24,7 @@ export type UseComposerDockStatsForGroupContext = {
   composerKnobSegments: InlineTextSegment[]
   stripSeparator: ViewSpec['stripSeparator']
   stripHints: boolean
+  composerFill: ViewSpec['composerFill']
   stripOrder: ViewSpec['stripOrder']
   theme: TuiThemePalette
   composerLocationSegments: InlineTextSegment[]
@@ -76,7 +79,7 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
     splitChordPending, attentionNeedsInputCount, footerSegments, rightPaneWidth, composerSlashHint,
     composerWindowContentWidth, composerRewindItems, composerRewindIndex, setComposerRewindItems,
     rewindToPrompt, composerSlashOpen, composerSlashCommands, composerFirstLine,
-    composerSlashIndex, insertSlashAtCursor, stripSeparator, stripHints, stripOrder,
+    composerSlashIndex, insertSlashAtCursor, stripSeparator, stripHints, stripOrder, composerFill,
   } = ctx
 
   // The stats row shows the character count, which changes on every key; the rows that draw it
@@ -121,9 +124,10 @@ export function useComposerDockStatsForGroup(ctx: UseComposerDockStatsForGroupCo
   const chatComposerFocused = composerActive && !composerFocusBlocked
   // Fullscreen has no border to light up, so a focused composer is told apart
   // by its ground: a wash of its accent over the surface, dock and draft alike.
+  const dockSurface = tabStripColor(theme, composerFill)
   const composerDockBackground = fullscreenMode && chatComposerFocused
-    ? mixHexColor(composerAccentColor, theme.surface, 0.12) ?? theme.surface3
-    : theme.surface
+    ? mixHexColor(composerAccentColor, dockSurface, 0.12) ?? theme.surface3
+    : dockSurface
   // The textarea paints its own background over whatever the parent draws, so
   // chat mode's highlighted bar needs the textarea itself tinted to match —
   // otherwise the bar only shows through the "› " prefix and padding slivers.

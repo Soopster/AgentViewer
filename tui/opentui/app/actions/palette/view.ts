@@ -8,6 +8,11 @@ import { type Session } from '../../../../../lib/types'
 import { SIDEBAR_RESIZE_STEP } from '../../layoutConstants'
 import { sessionKey } from '../../sessionList'
 import { cycleDensityValue } from '../../viewHelpers'
+import { openSelectedWindowOutline } from '../../windowCardActions'
+
+registerHostCommand(['turn-outline'], (ctx) => {
+    if (!openSelectedWindowOutline()) ctx.setError('No transcript window to outline')
+})
 
 registerHostCommand(['transcript-pager'], (ctx, id, locals) => {
     const { openSelectedTranscriptInPager } = ctx

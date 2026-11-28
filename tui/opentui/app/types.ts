@@ -18,7 +18,7 @@ export type CardLandmark = {
   kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn' | 'break'
   text: string
   /** A turn rule's prompt card: clicking the rule opens that turn's checkpoint. */
-  promptKey?: string
+  promptKey?: string; failureKey?: string
 }
 // Stable per-card data: expensive to compute, independent of landmark indices and search.
 export type StableCardData = {

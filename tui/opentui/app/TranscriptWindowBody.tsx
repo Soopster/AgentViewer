@@ -86,6 +86,8 @@ export type TranscriptWindowInputs = Pick<TranscriptCardVariantInputs,
   resumeMarkerIndex: number
   unreadBoundaryIndex: number
   pendingNewCount: number
+  /** Words for the unread rule when it marks what arrived while the reader was away. */
+  unreadLabel?: string
   provider: ProviderSelection
   shouldEnableSyntaxHighlighting: boolean
   searchMatches: number[]
@@ -299,7 +301,7 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
     visibleTranscriptCards, followTail, isScrollbackView, scrollbackExpanded, scrollbackToggledKeys,
     resolvedExpandedKeys, thinkingFullKeys, expandedCardKeys, collapsedCardKeys, viewSpec, focused, transcriptView,
     isPreviewMode, isChatLikeView, isContinuousView, groupedToolView, liveCardCount, resumeMarkerIndex,
-    unreadBoundaryIndex, pendingNewCount, provider, shouldEnableSyntaxHighlighting, searchMatches, searchMatchIndex,
+    unreadBoundaryIndex, pendingNewCount, unreadLabel, provider, shouldEnableSyntaxHighlighting, searchMatches, searchMatchIndex,
     bookmarkKeys, agentToolCursorByGroupKey, transcriptCursorKey, cursorIndex, sessionKey, readerWindowGaugeRef,
     readerWindowOutputRef,
     readerScrollFixupRef, transcriptScrollRef, theme, densityState, syntaxStyle, rightPaneWidth,
@@ -613,10 +615,11 @@ export function TranscriptWindowBody({ inputs }: { inputs: TranscriptWindowInput
       isChatLikeView,
       viewQuietTurns(viewSpec),
       viewSpec.timeMarkers,
+      unreadLabel,
     )
     renderedTranscriptCards.forEach((card, index) => byCard.set(card, next[index]))
     return next
-  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, viewSpec, isChatLikeView])
+  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, unreadLabel, viewSpec, isChatLikeView])
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {
       isExpanded: boolean

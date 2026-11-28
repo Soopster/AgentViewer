@@ -5,7 +5,8 @@ import { type ContextUsage, type Session } from '../../../../lib/types'
 import { type TuiEffort, type TuiCodexApproval, type TuiCopilotPermissionMode, type TuiCopilotContextTier } from '../types'
 import { type InlineTextSegment } from '../inlineText'
 import { fmtCost } from '../../../../lib/analytics'
-import { contextBarColor, formatContextUsageChip, planLimitSegment } from '../contextMeter'
+import { contextBarColor, formatContextUsageChip, planLimitSegments, stripEntrySegment } from '../contextMeter'
+import type { StripStatEntry } from '../../../../lib/sessionStripStats'
 import { PERMISSION_MODE_GLYPH, PERMISSION_MODE_LABEL } from '../pickers'
 import { type PendingPermission } from '../../../../lib/permissions'
 import { type QuestionPickerPlan } from './questionPicker'
@@ -25,6 +26,8 @@ export type ComposerKnobSegmentsContext = {
   composerPlanLimits: ClaudePlanLimits | null
   /** List-price estimate for the session on screen; null when its provider reports no usage. */
   sessionCostUsd: number | null
+  /** The pull request and transcript readings the view asked for. */
+  stripStats: StripStatEntry[]
   tuiEffort: TuiEffort
   tuiOpenCodeAgent: string
   composerCodexMode: 'default' | 'plan'
@@ -39,7 +42,7 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   const {
     composerTargetSession, composerPermissionMode, theme, composerCurrentModel,
     composerAccentColor, composerModelLookupSettled, composerContextUsage, composerPlanLimits,
-    sessionCostUsd, tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
+    sessionCostUsd, stripStats, tuiEffort, tuiOpenCodeAgent, composerCodexMode, composerCodexApproval, tuiCopilotMode,
     composerCopilotPermissionMode, composerCopilotContextTier, composerEnableWorkflow,
   } = ctx
   const parts: InlineTextSegment[] = []
@@ -74,10 +77,9 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   }
   // Spend is an estimate at list price, so it is marked `~` and stays quiet (dim).
   if (sessionCostUsd != null && sessionCostUsd >= 0.005) meters.push({ text: `cost:~${fmtCost(sessionCostUsd)}`, fg: theme.dim, action: 'analytics', part: 'cost' })
-  const limitSegment = planLimitSegment(composerPlanLimits, theme)
-  if (limitSegment) {
-    metersUrgent ||= limitSegment.fg !== theme.dim
-    meters.push({ ...limitSegment, action: 'analytics', part: 'limit', urgent: limitSegment.fg !== theme.dim })
+  for (const limit of planLimitSegments(composerPlanLimits, theme)) {
+    metersUrgent ||= limit.urgent === true
+    meters.push({ ...limit, action: 'analytics' })
   }
   if (metersUrgent) parts.splice(afterMode, 0, ...meters)
   else parts.push(...meters)
@@ -103,6 +105,7 @@ export function runComposerKnobSegments(ctx: ComposerKnobSegmentsContext) {
   if (composerTargetSession?.provider === 'claude' && composerEnableWorkflow) {
     parts.push({ text: 'workflow:on', fg: theme.cyan })
   }
+  parts.push(...stripStats.map((entry) => stripEntrySegment(entry, theme)))
   return parts
 }
 

@@ -115,6 +115,15 @@ export type ViewSpec = {
   stripCost: boolean
   stripFolder: boolean
   stripGit: 'full' | 'branch' | 'off'
+  /** Plan windows. One at 75% or more is shown whatever this says. */
+  stripLimits: 'tightest' | 'all' | 'off'
+  stripPr: boolean
+  stripTokens: boolean
+  stripCache: boolean
+  stripLines: boolean
+  stripDuration: boolean
+  /** Two rows give the plan limits, pull request and session readings a row of their own. */
+  stripRows: 'one' | 'two'
   /** The idle key hints at the strip's right end. */
   stripHints: boolean
   // Tabs: how the session tab strip draws.
@@ -146,6 +155,10 @@ export type ViewSpec = {
   sidebarView: 'sessions' | 'coordinator' | null
   /** What the session rail is painted: the window surface, or one of the strip fills. */
   railFill: ViewSurfaceFill
+  /** What transcript windows are painted, from the same fills as the rail. */
+  transcriptFill: ViewSurfaceFill
+  /** What the docked composer is painted, from the same fills. */
+  composerFill: ViewSurfaceFill
   tabs: boolean | null
   tabOrientation: 'horizontal' | 'vertical' | null
   focusMode: boolean | null
@@ -183,13 +196,14 @@ const CARDS: ViewSpec = {
   liveText: true, composerTitle: true, composerStatus: 'rail', composerBorder: 'rounded', composerSize: 'auto', composerWidth: 'full',
   stripBadge: 'filled', stripSeparator: '·', stripColor: 'default', stripLabels: 'full', stripContextStyle: 'default', stripOrder: 'settings', stripFolderStyle: 'name', stripModel: true, stripEffort: true, stripContext: true, stripCost: true,
   stripFolder: true, stripGit: 'full', stripHints: true,
+  stripLimits: 'tightest', stripPr: false, stripTokens: false, stripCache: false, stripLines: false, stripDuration: false, stripRows: 'one',
   cardFilter: 'all', toolGrouping: 'none', agentCards: 'none', foldDefault: 'default', dimAutoFolded: false,
   turnBoundaries: 'rules', turnFooter: false, showThinking: true, showSubagents: true, timeMarkers: true,
   iconSet: 'standard', messageLayout: 'markers', promptMarker: '❯', replyMarker: 'tone', markerColor: 'role', promptBand: 'stream', promptRule: true,
   userBold: true, thinking: 'tone', toolRows: 'default', promptTimestamps: false, replyTimestamps: false, diffPreview: true, textWidth: 'measure',
   tabStyle: 'chrome', workspaceTabStyle: null, tabWidth: 'fill', tabClose: 'active', tabNumbers: false, tabIcons: 'status', tabSeparators: true, tabTitle: 'title',
   tabStripFill: 'blend', tabHover: 'tint', tabAccent: 'off', tabActivity: 'spinner', tabOverflow: 'scroll', tabTruncate: 'end',
-  sessionRail: null, sidebarView: null, railFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null, borderTheme: 'square',
+  sessionRail: null, sidebarView: null, railFill: 'surface', transcriptFill: 'surface', composerFill: 'surface', tabs: null, tabOrientation: null, focusMode: null, borders: null, borderTheme: 'square',
   fleetStrip: null, taskPanel: null, sidePanel: null, sidePanelPlacement: null,
   density: null, transcriptWidth: null, showToolCalls: null, diffLayout: null, lightweight: null, stickyHeaders: null,
   toolbarIconSet: null, transcriptIconSet: null, windowIconSet: null, popupIconSet: null, workspaceIconSet: null,
@@ -355,6 +369,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
     options: [{ value: 'auto', label: 'grow' }, { value: 'compact', label: 'compact' }, { value: 'tall', label: 'tall' }] },
   { key: 'composerWidth', section: 'Composer', label: 'Dock width', help: 'Span the terminal, or only the reader column beside the rail.',
     options: [{ value: 'full', label: 'full' }, { value: 'reader', label: 'reader column' }] },
+  { key: 'composerFill', section: 'Composer', label: 'Dock fill', help: 'Behind the docked composer: the window\'s surface, a step down from it, the app background, a step above the window, a wash of the accent, or darker than the background.',
+    options: [{ value: 'surface', label: 'surface' }, { value: 'blend', label: 'blend' }, { value: 'bg', label: 'background' }, { value: 'raised', label: 'raised' }, { value: 'tinted', label: 'tinted' }, { value: 'deep', label: 'deep' }] },
   { key: 'stripBadge', section: 'Composer', label: 'Strip badge', help: 'The provider chip at the start of the bottom strip.',
     options: [{ value: 'filled', label: 'filled' }, { value: 'brackets', label: '[brackets]' }, { value: 'dot', label: '● dot' }, { value: 'text', label: 'text' }, { value: 'off', label: 'off' }] },
   { key: 'stripSeparator', section: 'Composer', label: 'Strip separator', help: 'What divides the bottom strip\'s entries.',
@@ -376,6 +392,15 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'stripFolder', section: 'Composer', label: 'Strip folder', help: 'The project folder.', options: ON_OFF },
   { key: 'stripGit', section: 'Composer', label: 'Strip git', help: 'The branch with its changed, untracked and stash counts, the branch alone, or neither.',
     options: [{ value: 'full', label: 'branch + counts' }, { value: 'branch', label: 'branch' }, { value: 'off', label: 'off' }] },
+  { key: 'stripLimits', section: 'Composer', label: 'Strip limits', help: 'Claude plan windows: the one closest to full, all of them, or none. One at 75% or more always shows.',
+    options: [{ value: 'tightest', label: 'closest' }, { value: 'all', label: 'all' }, { value: 'off', label: 'off' }] },
+  { key: 'stripPr', section: 'Composer', label: 'Strip pull request', help: 'The linked pull request\'s number and where it stands.', options: ON_OFF },
+  { key: 'stripTokens', section: 'Composer', label: 'Strip last tokens', help: 'The newest reply\'s input and output tokens, where the provider reports them.', options: ON_OFF },
+  { key: 'stripCache', section: 'Composer', label: 'Strip cache hits', help: 'How much of the session\'s input came from the prompt cache, where reported.', options: ON_OFF },
+  { key: 'stripLines', section: 'Composer', label: 'Strip lines changed', help: 'Lines added and removed, estimated from Edit and Write calls.', options: ON_OFF },
+  { key: 'stripDuration', section: 'Composer', label: 'Strip active time', help: 'Time spent in turns, not counting the idle time between them.', options: ON_OFF },
+  { key: 'stripRows', section: 'Composer', label: 'Strip rows', help: 'One row, or a second one for limits, the pull request and session readings.',
+    options: [{ value: 'one', label: 'one' }, { value: 'two', label: 'two' }] },
   { key: 'stripHints', section: 'Composer', label: 'Strip key hints', help: 'The idle key hints on the right. Hints for a running turn and the reader\'s status bar stay.', options: ON_OFF },
   // Tabs
   { key: 'tabs', section: 'Tabs', label: 'Session tabs', help: 'Pin the session tab strip on or off.',
@@ -414,6 +439,8 @@ export const VIEW_SPEC_FIELDS: readonly ViewSpecField[] = [
   { key: 'sidebarView', section: 'Panels', label: 'Rail opens on', help: 'Switch the rail to Sessions or Coordinator when entering the view.',
     options: [KEEP, { value: 'sessions', label: 'sessions' }, { value: 'coordinator', label: 'coordinator' }] },
   { key: 'railFill', section: 'Panels', label: 'Rail fill', help: 'Behind the session rail: the window\'s surface, a step down from it, the app background, a step above the window, a wash of the accent, or darker than the background.',
+    options: [{ value: 'surface', label: 'surface' }, { value: 'blend', label: 'blend' }, { value: 'bg', label: 'background' }, { value: 'raised', label: 'raised' }, { value: 'tinted', label: 'tinted' }, { value: 'deep', label: 'deep' }] },
+  { key: 'transcriptFill', section: 'Panels', label: 'Transcript fill', help: 'Behind transcript windows: the window\'s surface, a step down from it, the app background, a step above the window, a wash of the accent, or darker than the background.',
     options: [{ value: 'surface', label: 'surface' }, { value: 'blend', label: 'blend' }, { value: 'bg', label: 'background' }, { value: 'raised', label: 'raised' }, { value: 'tinted', label: 'tinted' }, { value: 'deep', label: 'deep' }] },
   { key: 'focusMode', section: 'Panels', label: 'Focus mode', help: 'Pin focus mode: rail and header chrome hidden.',
     options: [INHERIT, { value: true, label: 'on' }, { value: false, label: 'off' }] },
@@ -668,11 +695,11 @@ export const WEB_VIEW_FIELDS: ReadonlySet<ViewSpecKey> = new Set<ViewSpecKey>([
   'flow', 'toolGrouping', 'agentCards', 'foldDefault', 'cardFilter', 'density', 'transcriptWidth', 'textWidth',
   'diffLayout', 'stickyHeaders', 'promptNavigation', 'sessionRail', 'contextSidebar', 'composerWidth',
   'composer', 'composerStatus', 'composerBorder', 'composerSize',
-  'stripBadge', 'stripSeparator', 'stripColor', 'stripLabels', 'stripContextStyle', 'stripOrder', 'stripFolderStyle', 'stripModel', 'stripEffort', 'stripContext', 'stripCost', 'stripFolder', 'stripGit', 'stripHints',
+  'stripBadge', 'stripSeparator', 'stripColor', 'stripLabels', 'stripContextStyle', 'stripOrder', 'stripFolderStyle', 'stripLimits', 'stripPr', 'stripTokens', 'stripCache', 'stripLines', 'stripDuration', 'stripRows', 'stripModel', 'stripEffort', 'stripContext', 'stripCost', 'stripFolder', 'stripGit', 'stripHints',
   'showThinking', 'showSubagents', 'turnBoundaries', 'thinking',
   'promptMarker', 'replyMarker', 'markerColor', 'promptBand', 'promptRule', 'userBold', 'toolRows', 'diffPreview',
   'tabs', 'tabStyle', 'tabWidth', 'tabClose', 'tabNumbers', 'tabSeparators', 'tabTitle', 'tabStripFill', 'tabHover', 'tabAccent', 'tabTruncate',
-  'railFill',
+  'railFill', 'transcriptFill', 'composerFill',
   'messageLayout', 'promptTimestamps', 'replyTimestamps', 'turnFooter', 'completedTurnHint', 'liveReasoning', 'scrollbar',
   'tabIcons', 'borders', 'borderTheme', 'showToolCalls', 'sidebarView', 'sidePanel',
 ])

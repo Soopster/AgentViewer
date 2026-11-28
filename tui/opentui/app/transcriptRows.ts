@@ -5,13 +5,16 @@ import type { TuiTranscriptWidth } from '../../../lib/tuiState'
 import { mergeFileEditStats } from '../../../lib/turnEditStats'
 import type { ProviderSelection } from '../../../lib/types'
 import type { TuiTranscriptCard, TuiTranscriptCardLine, TuiTranscriptCodeBlock } from '../../format'
+import { BASH_OK_LINE } from '../../format/types'
 import type { TuiTranscriptView, TuiThemePalette } from '../../theme'
 import { extractDiffText, PIERRE_DIFF_CACHE } from './diffCache'
 import type { InlineTextSegment } from './inlineText'
 import { formatTimeGap } from './liveStream'
 import { readerRowCard } from './readerRows'
 import { MAX_CODE_BLOCK_RENDER_LINES, MAX_MARKDOWN_SYNTAX_CHARS } from './timing'
-import { turnSummaryText, EMPTY_LANDMARKS, transcriptToolColor, streamToolCardMarker, streamStatusColor, toolNameFromTranscriptLine, transcriptColor, streamToolGroupMarker, transcriptAccent } from './transcriptStyle'
+import { EMPTY_LANDMARKS, transcriptToolColor, streamToolCardMarker, streamStatusColor, toolNameFromTranscriptLine, transcriptColor, streamToolGroupMarker, transcriptAccent } from './transcriptStyle'
+import { turnDigest, turnDigestText } from './turnDigest'
+import { mergeSubagentCards } from './subagentCards'
 import type { CardLandmark, AgentToolGroupCard, CardDisplayData } from './types'
 import { type TuiPierreDiffView, buildPierreDiffView } from '../pierreDiffView'
 import { joinMeta } from '../textLayout'
@@ -29,7 +32,7 @@ function landmarksEqual(a: CardLandmark[], b: CardLandmark[]): boolean {
   if (a === b) return true
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i].kind !== b[i].kind || a[i].text !== b[i].text || a[i].promptKey !== b[i].promptKey) return false
+    if (a[i].kind !== b[i].kind || a[i].text !== b[i].text || a[i].promptKey !== b[i].promptKey || a[i].failureKey !== b[i].failureKey) return false
   }
   return true
 }
@@ -41,7 +44,8 @@ export function computeAllLandmarks(
   previous: CardLandmark[][] | null,
   streamMode: boolean,
   quietTurns = false,
-  timeMarkers = true): CardLandmark[][] {
+  timeMarkers = true,
+  unreadLabel?: string): CardLandmark[][] {
   const result: CardLandmark[][] = new Array(cards.length)
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i]
@@ -61,6 +65,7 @@ export function computeAllLandmarks(
       landmarks = landmarks ?? []
       let text = ''
       let promptKey: string | undefined
+      let failureKey: string | undefined
       if (card.role === 'user') {
         for (let turnIndex = i - 1; turnIndex >= 0; turnIndex -= 1) {
           const turnCard = cards[turnIndex]
@@ -68,14 +73,18 @@ export function computeAllLandmarks(
           const elapsedMs = prev.timestampMs != null && turnCard.timestampMs != null && prev.timestampMs >= turnCard.timestampMs
             ? prev.timestampMs - turnCard.timestampMs
             : null
-          text = turnSummaryText(cards, turnIndex, i, elapsedMs) ?? ''
-          if (text) promptKey = turnCard.key
+          const digest = turnDigest(cards, turnIndex, i, elapsedMs)
+          text = turnDigestText(digest) ?? ''
+          if (text) {
+            promptKey = turnCard.key
+            failureKey = digest.firstFailureKey ?? undefined
+          }
           break
         }
       }
       // SCROLLBACK keeps a rule only where it carries the turn's summary; a
       // full-width line between a tool row and the reply after it is chrome.
-      landmarks.push(promptKey ? { kind: 'turn', text, promptKey } : { kind: quietTurns && !text ? 'break' : 'turn', text })
+      landmarks.push(promptKey ? { kind: 'turn', text, promptKey, failureKey } : { kind: quietTurns && !text ? 'break' : 'turn', text })
     }
 
     if (i === resumeMarkerIndex) {
@@ -83,11 +92,11 @@ export function computeAllLandmarks(
       landmarks.push({ kind: 'resume', text: 'LAST READ POSITION' })
     }
 
-    if (i === unreadBoundaryIndex && pendingNewCount > 0) {
+    if (i === unreadBoundaryIndex && (unreadLabel || pendingNewCount > 0)) {
       landmarks = landmarks ?? []
       landmarks.push({
         kind: 'unread',
-        text: `NEW SINCE LAST READ  ${pendingNewCount} message${pendingNewCount === 1 ? '' : 's'}`,
+        text: unreadLabel ?? `NEW SINCE LAST READ  ${pendingNewCount} message${pendingNewCount === 1 ? '' : 's'}`,
       })
     }
 
@@ -144,6 +153,13 @@ function transcriptLandmarks(
 
   return landmarks
 }
+function isPlainOkLine(line: TuiTranscriptCardLine): boolean {
+  return line.tone === 'result_ok' && line.text === BASH_OK_LINE
+}
+/** True when a card's drawn body leaves out its "✓ OK" row, so the header has to carry the success. */
+export function hidesOkRow(card: TuiTranscriptCard, bodyLines: readonly TuiTranscriptCardLine[]): boolean {
+  return bodyLines[0]?.tone === 'tool' && !bodyLines.some(isPlainOkLine) && card.expandedLines.some(isPlainOkLine)
+}
 export function renderedBodyLines(
   card: TuiTranscriptCard,
   isExpanded: boolean,
@@ -169,6 +185,8 @@ export function renderedBodyLines(
   } else {
     base = source.slice(0, previewLimit)
   }
+  // Under a command, a bare "✓ OK" row says only what the green marker already does.
+  if (base[0]?.tone === 'tool' && base.some(isPlainOkLine)) return base.filter((line) => !isPlainOkLine(line))
   if (base.length > 0) return base
   // A thinking card with thinking hidden has nothing to show here — the
   // thinking-mode hint rendered beneath already explains the empty state, so the
@@ -357,14 +375,15 @@ export function visibleCardsForTranscriptView(cards: TuiTranscriptCard[], view: 
     : cards
   const shown = spec.showThinking && spec.showSubagents ? filtered : filtered.filter(card =>
     (spec.showThinking || !isThinkingOnlyCard(card)) && (spec.showSubagents || !card.subagentDepth))
+  const merged = mergeSubagentCards(shown)
   // Agents view drops the empty assistant shells a tool-only message leaves
   // behind (a header and a "No visible content" row each) before grouping, so
   // the tool calls either side of one merge into a single group.
-  if (spec.toolGrouping === 'agents') return groupAgentsToolCards(shown.filter(card => !isStreamGhostCard(card)))
+  if (spec.toolGrouping === 'agents') return groupAgentsToolCards(merged.filter(card => !isStreamGhostCard(card)))
   // Ghosts go first: an empty assistant shell between two tool calls would
   // otherwise split them into two groups.
-  if (spec.toolGrouping === 'stream') return groupStreamToolCards(shown.filter(card => !isStreamGhostCard(card)))
-  return shown
+  if (spec.toolGrouping === 'stream') return groupStreamToolCards(merged.filter(card => !isStreamGhostCard(card)))
+  return merged
 }
 /** A card that is nothing but reasoning: hidden whole when a view hides thinking. */
 function isThinkingOnlyCard(card: TuiTranscriptCard): boolean {

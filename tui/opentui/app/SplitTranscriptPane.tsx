@@ -8,7 +8,13 @@ import { reportCardToolInteraction } from './reportCardInteraction'
 import { transcriptMeasure } from '../engineeringLayout'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { WindowButton } from '../WindowButton'
-import { PromptNavigation, promptNavigationRows } from './PromptNavigation'
+import { PromptNavigation, promptNavigationPreview, promptNavigationRows, promptNavigationState } from './PromptNavigation'
+import { latestTurnSubagents, mergeSubagentCards, type SubagentStripEntry } from './subagentCards'
+import { SubagentStrip } from './SubagentStrip'
+import { closeTurnOutline, openTurnOutline, turnOutlineRows } from './turnOutline'
+import { TurnOutlinePanel } from './TurnOutlinePanel'
+import { useSinceYouLeft } from './useSinceYouLeft'
+import { openSubagent, registerTranscriptWindow } from './windowCardActions'
 import { transcriptViewportPosition, useTranscriptWindowPositions } from '../transcriptWindowState'
 import { useWorkspaceContext } from '../workspaceContext'
 import { registerTuiMetricsGauge } from '../metricsLogger'
@@ -445,7 +451,7 @@ export function SplitTranscriptPaneInner({
     const liveKeys = new Set(liveCards.map(card => card.key))
     const merged = liveCards.length ? [...cards.filter(card => !liveKeys.has(card.key)), ...liveCards] : cards
     return lightView
-      ? groupStreamToolCards(merged.filter(card => card.category !== 'system')).filter(card => !isStreamGhostCard(card))
+      ? groupStreamToolCards(mergeSubagentCards(merged.filter(card => card.category !== 'system'))).filter(card => !isStreamGhostCard(card))
       : visibleCardsForTranscriptView(merged, viewSpec)
   }, [cards, liveCards, viewSpec, lightView])
   // Counted against the persisted cards: live cards are additions and must not
@@ -994,7 +1000,9 @@ export function SplitTranscriptPaneInner({
   const [taskStripOpen, setTaskStripOpen] = useState(false)
   const stripRows = taskStripRows(taskStrip, taskStripOpen)
   const navigationRows = viewSpec.promptNavigation && allPaneCards.length ? promptNavigationRows(innerWidth) : 0
-  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows - navigationRows, 1)
+  const subagents = useMemo(() => latestTurnSubagents(allPaneCards, running), [allPaneCards, running])
+  const subagentRows = subagents.length ? 1 : 0
+  const bodyRows = Math.max(calculateSplitPaneBodyRows(height + 2 - frameExtent, statusRowCount) - (header?.rows ?? 0) - (footer?.rows ?? 0) - stripRows - navigationRows - subagentRows, 1)
   const hiddenCount = lightStart
   const windowGaugeRef = useRef<ReaderWindowGauge>({ start: 0, end: 0, total: 0, settled: true })
   // The window holding the selected transcript reports its card window, which
@@ -1075,6 +1083,32 @@ export function SplitTranscriptPaneInner({
   const thinkingFullKeys = useMemo(() => thinkingMode
     ? new Set(allPaneCards.filter(card => card.lines.some(line => line.tone === 'thinking')).map(card => card.key))
     : EMPTY_EXPANDED_KEYS, [allPaneCards, thinkingMode])
+  const since = useSinceYouLeft({
+    sessionKey: key, cards: allPaneCards, ready: status !== 'loading' && status !== 'error',
+    reading: visible && followTail, seenAt: session.inbox?.seenAt ?? 0,
+  })
+  const sinceIndex = useMemo(() => since ? allPaneCards.findIndex(card => card.key === since.cardKey) : -1, [allPaneCards, since])
+  const openOutline = useStableEvent(() => {
+    const rows = turnOutlineRows(allPaneCards, promptNavigationPreview)
+    if (!rows.length) return
+    const { current } = promptNavigationState(allPaneCards, cursorKey, followTail)
+    openTurnOutline({
+      owner: key, rows, index: current, partial: lightStart > 0,
+      onJump: cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) },
+    })
+  })
+  const selectedWindow = useStableEvent(() => selected)
+  useEffect(() => visible ? registerTranscriptWindow({
+    selected: selectedWindow,
+    has: cardKey => cardsRef.current.some(card => card.key === cardKey),
+    jumpToKey: cardKey => navigationHandle.current?.jumpToKey(cardKey, false),
+    session: () => sessionRef.current,
+    openOutline,
+  }) : undefined, [visible, selectedWindow, openOutline])
+  useEffect(() => () => closeTurnOutline(key), [key, visible])
+  const openStripEntry = useStableEvent((entry: SubagentStripEntry) => {
+    if (entry.threadId) openSubagent(sessionRef.current, { path: entry.name, threadId: entry.threadId, kind: 'interacted' })
+  })
   const activatePaneDiffHover = useCallback((anchor: string) => diffControls.activateDiffHover(anchor, { namespace: key, scrollTop: scrollRef.current?.scrollTop ?? null }), [diffControls.activateDiffHover, key])
   const openPaneDiffNote = useCallback((selection: SelectedLineRange, cardKey?: string) => diffControls.openDiffNote(key, selection, cardKey), [diffControls.openDiffNote, key])
   const sendPaneDiffNote = useCallback((...args: Parameters<TranscriptWindowInputs['sendDiffNoteToComposer']>) => diffControls.sendDiffNoteToComposer(key, ...args), [diffControls.sendDiffNoteToComposer, key])
@@ -1087,7 +1121,7 @@ export function SplitTranscriptPaneInner({
     transcriptView, viewSpec, focused, isPreviewMode: false,
     isChatLikeView: paneStreamLike, isContinuousView: viewSpec.messageLayout === 'continuous',
     groupedToolView: viewSpec.toolGrouping !== 'none', liveCardCount: liveCards.length,
-    resumeMarkerIndex: -1, unreadBoundaryIndex: -1, pendingNewCount: 0,
+    resumeMarkerIndex: -1, unreadBoundaryIndex: sinceIndex, pendingNewCount: 0, unreadLabel: since?.label,
     provider: session.provider ?? 'claude', shouldEnableSyntaxHighlighting,
     searchMatches: searchMatchIndexes, searchMatchIndex: Math.max(activeMatch, 0), bookmarkKeys: bookmarkedKeys,
     agentToolCursorByGroupKey, transcriptCursorKey: cursorKey,
@@ -1158,9 +1192,10 @@ export function SplitTranscriptPaneInner({
         <WindowButton id={selected ? 'reader-window-close' : `split-pane-close:${paneIndex}`} label=" × " theme={theme} tone="danger" onPress={closeThisPane} />
       </box>
       {header ? <box flexDirection="column" flexShrink={0}>{header.render(width)}</box> : null}
-      {navigationRows ? <PromptNavigation cards={allPaneCards} currentKey={stickyKey ?? cursorKey} following={followTail} width={innerWidth} theme={theme}
+      {navigationRows ? <PromptNavigation cards={allPaneCards} currentKey={stickyKey ?? cursorKey} following={followTail} width={innerWidth} theme={theme} onOutline={openOutline}
         onJump={cardKey => { onActivate(paneIndex); navigationHandle.current?.jumpToKey(cardKey, false) }}
         onLatest={() => { onActivate(paneIndex); const last = allPaneCards.at(-1); if (last) navigationHandle.current?.jumpToKey(last.key, true) }} /> : null}
+      {subagentRows ? <SubagentStrip entries={subagents} width={innerWidth} theme={theme} onOpen={openStripEntry} /> : null}
       <box flexGrow={1} paddingX={1} overflow="hidden">
         {status === 'error' ? (
           <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
@@ -1203,6 +1238,7 @@ export function SplitTranscriptPaneInner({
         {scrollbarVisible && visible && allPaneCards.length > 0 ? <TranscriptScrollbar scrollRef={scrollRef} heightsRef={windowGaugeRef} cards={allPaneCards} rows={bodyRows} theme={theme} focused={focused} markers={markersOn && allPaneCards.length > 1}
           onJump={viewSpec.scrollMarkerJump ? jumpToMarker : undefined} onSeek={seekScrollbar} /> : null}
         {stickyCard && !viewSpec.promptNavigation ? <StickyPromptHeader card={stickyCard} theme={theme} accent={accent} width={width} /> : null}
+        <TurnOutlinePanel owner={key} width={innerWidth} rows={bodyRows} theme={theme} />
       </box>
       {taskStrip ? <TaskStrip state={taskStrip} open={taskStripOpen} onToggle={() => setTaskStripOpen((value) => !value)} theme={theme} accent={accent} width={innerWidth} /> : null}
       {liveText ? (

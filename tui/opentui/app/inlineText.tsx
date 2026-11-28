@@ -21,6 +21,8 @@ export type InlineTextSegment = {
   urgent?: boolean
   /** A context meter's reading, for views that draw it another way. */
   percent?: number
+  /** The plan window closest to full. */
+  tightest?: boolean
 }
 /** The action of the segment under a column of a row drawn by renderInlineTextSegments. */
 

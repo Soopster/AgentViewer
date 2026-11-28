@@ -44,6 +44,7 @@ export const COMMANDS: PaletteCommand[] = [
   { id: 'fold-parent', label: 'Fold/expand parent card', key: 'Enter', category: 'Transcript' },
   { id: 'copy', label: 'Copy selected message', key: 'y', category: 'Transcript' },
   { id: 'reply', label: 'Reply to selected message', key: '⇧Q', category: 'Transcript' },
+  { id: 'turn-outline', label: 'Turn outline: jump to any prompt', key: '', category: 'Transcript' },
   { id: 'bookmark-toggle', label: 'Bookmark message', key: 'b', category: 'Transcript' },
   { id: 'bookmark-prev', label: 'Jump to previous bookmark', key: '[', category: 'Transcript' },
   { id: 'bookmark-jump', label: 'Jump to next bookmark', key: ']', category: 'Transcript' },

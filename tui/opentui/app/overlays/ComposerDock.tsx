@@ -29,6 +29,8 @@ type ComposerDockProps = {
   /** The view leaves the dock's border untitled. */
   hideDockTitle: boolean
   dockBorderStyle: 'rounded' | 'single' | 'heavy'
+  /** The second strip row's entries; null when the view keeps one row. */
+  stripStatRow: InlineTextSegment[] | null
   composerDockEmphasized: boolean
   composerAccentColor: string
   theme: TuiThemePalette
@@ -73,7 +75,7 @@ export function ComposerDock(props: ComposerDockProps) {
   const {
     composerWindowOpen, composerHidden, presentationHidesComposer, embeddedComposer,
     composerAreaOffset, composerAreaWidth, composerDockBackground, fullscreenMode,
-    composerDockRouted, hideDockTitle, dockBorderStyle, composerDockEmphasized, composerAccentColor, theme,
+    composerDockRouted, hideDockTitle, dockBorderStyle, stripStatRow, composerDockEmphasized, composerAccentColor, theme,
     composerTurnStatusInBorder, composerTargetMessage, composerDockTitleWidth,
     composerDockBorderTitle, composerDockHeight, surfacePanelFocused, setSurfacePanelFocused,
     composerActive, setComposerActive, composerTextareaRef, composerDockTextareaWidth,
@@ -157,6 +159,11 @@ export function ComposerDock(props: ComposerDockProps) {
             width: composerDockTextareaWidth,
             background: composerDockBackground,
           })}
+          {stripStatRow ? (
+            <box id="composer-dock-strip-stats" height={1} flexShrink={0} overflow="hidden">
+              <text fg={theme.dim} wrapMode="none" selectable={false}>{renderInlineTextSegments(stripStatRow, composerDockTextareaWidth, theme.dim)}</text>
+            </box>
+          ) : null}
           {/* Stats and key hints sit *in* the bottom border rather than on a
               row above it — the same trick the top border's title uses, worth
               a whole row of draft back. Fullscreen has no border to sit in, so
@@ -170,7 +177,7 @@ export function ComposerDock(props: ComposerDockProps) {
             flexDirection="row"
             alignItems="center"
           >
-            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
+            <box width={composerDockFooterStatsWidth} overflow="hidden" backgroundColor={fullscreenMode ? undefined : composerDockBackground} onMouseDown={event => { if (!voiceStatus && !composerSlashHint) clickComposerStatus(event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseMove={event => { if (!voiceStatus && !composerSlashHint) hoverComposerStatus('dock', event, dockFooterStatsFor(composerDraftState.read().length), composerDockFooterStatsWidth) }} onMouseOut={() => setComposerStatusHover(null)}>
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none" selectable={false}>
                 {voiceStatus ? fitText(voiceStatus, composerDockFooterStatsWidth) : composerSlashHint
                   ? fitText(composerSlashHint, composerDockFooterStatsWidth)
@@ -179,7 +186,7 @@ export function ComposerDock(props: ComposerDockProps) {
             </box>
             {dockShowsStatusBar ? <TeammatesAttention inline theme={theme} width={Math.floor(composerDockTextareaWidth / 3)} session={selectedSession} /> : null}
             <box flexGrow={1} />
-            {composerDockFooterHintWidth > 0 ? <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : theme.surface}>
+            {composerDockFooterHintWidth > 0 ? <box width={composerDockFooterHintWidth} minWidth={0} flexShrink={1} overflow="hidden" backgroundColor={fullscreenMode ? undefined : composerDockBackground}>
               <text fg={composerActive && !visibleComposerSending ? composerAccentColor : theme.dim} wrapMode="none">
                 {dockShowsStatusBar
                   ? renderInlineTextSegments(footerSegments, composerDockFooterHintWidth, theme.dim)

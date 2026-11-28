@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/react */
+import { turnDigest, turnDigestText } from './turnDigest'
+import { jumpToCardInWindow } from './windowCardActions'
 import { type NativeResourceOwner, SyntaxStyle, RGBA, type MouseEvent } from '@opentui/core'
 import React from 'react'
-import { formatFileEditSummary, mergeFileEditStats } from '../../../lib/turnEditStats'
+import { mergeFileEditStats } from '../../../lib/turnEditStats'
 import type { ProviderSelection } from '../../../lib/types'
 import type { TuiTranscriptCard, TuiTranscriptCardLine } from '../../format'
 import { type TuiDensity, type TuiThemePalette, THEME, getProviderAccent } from '../../theme'
@@ -344,7 +346,12 @@ export function turnSummaryMouseProps(landmark: CardLandmark) {
       turnSummaryPress = null
       if (event.button !== 0 || !press || press.promptKey !== promptKey) return
       if (press.x !== event.x || press.y !== event.y) return
-      turnSummaryOpener?.(promptKey)
+      // "2 failed" goes to the first failure; the rest of the line opens the turn's changes.
+      const failed = landmark.failureKey ? /\d+ failed/.exec(landmark.text) : null
+      // The rule is drawn as `─ text ─…`, so the text starts two cells in.
+      const column = event.target ? event.x - event.target.x - 2 : -1
+      if (failed && column >= failed.index && column < failed.index + failed[0].length) jumpToCardInWindow(landmark.failureKey!)
+      else turnSummaryOpener?.(promptKey)
     },
   }
 }
@@ -370,13 +377,7 @@ function streamCardLatestTimestampMs(card: TuiTranscriptCard): number | null {
 // to files, so "what did it actually do" needs no scroll back through tools.
 // Either half stands alone; null when there is nothing to say.
 export function turnSummaryText(cards: readonly TuiTranscriptCard[], promptIndex: number, endIndex: number, elapsedMs: number | null): string | null {
-  const edits = formatFileEditSummary(mergeFileEditStats(cards.slice(promptIndex + 1, endIndex).map((card) => card.fileEdits)))
-  const worked = elapsedMs != null && elapsedMs >= 1000 ? `Worked for ${formatElapsedClock(elapsedMs)}` : null
-  const activity = cards.slice(promptIndex + 1, endIndex).flatMap(card => (card as AgentToolGroupCard).agentToolCards ?? [card])
-  const commands = activity.filter(card => card.category === 'technical').length
-  const failures = activity.filter(card => card.lines.some(line => line.tone === 'result_error')).length
-  const parts = [worked, commands ? `${commands} tool calls` : null, failures ? `${failures} failed` : null, edits].filter(Boolean)
-  return parts.length ? parts.join(' · ') : null
+  return turnDigestText(turnDigest(cards, promptIndex, endIndex, elapsedMs))
 }
 export function streamCompletedTurnHint(cards: TuiTranscriptCard[]): CardLandmark | null {
   let userIndex = -1
@@ -397,8 +398,9 @@ export function streamCompletedTurnHint(cards: TuiTranscriptCard[]): CardLandmar
     }
     elapsedMs = completedAt - startedAt
   }
-  const text = turnSummaryText(cards, userIndex, cards.length, elapsedMs)
-  return text ? { kind: 'turn', text, promptKey: cards[userIndex].key } : null
+  const digest = turnDigest(cards, userIndex, cards.length, elapsedMs)
+  const text = turnDigestText(digest)
+  return text ? { kind: 'turn', text, promptKey: cards[userIndex].key, failureKey: digest.firstFailureKey ?? undefined } : null
 }
 export function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
   switch (line.tone) {

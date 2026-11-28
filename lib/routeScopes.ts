@@ -39,6 +39,7 @@ export const ROUTE_SCOPES: Record<string, Partial<Record<HttpMethod, RouteScope>
   '/api/sessions/[sessionId]/messages/[uuid]/raw': { GET: 'write' },
   '/api/sessions/[sessionId]/models': { GET: 'read' },
   '/api/sessions/[sessionId]/diagnostics': { GET: 'read' },
+  '/api/sessions/[sessionId]/plan-limits': { GET: 'read' },
   '/api/sessions/[sessionId]/commands': { GET: 'read' },
   '/api/sessions/[sessionId]/subagents': { GET: 'read' },
   '/api/sessions/[sessionId]/subagents/[agentId]/messages': { GET: 'read' },

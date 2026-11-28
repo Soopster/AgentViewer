@@ -446,6 +446,10 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
           break
         }
         case 'text': {
+          if ((b as TextBlock).subagentActivity) {
+            threadedBlocks.push(b as TextBlock)
+            break
+          }
           const txt = (b as TextBlock).text
           if (txt.trim()) {
             for (const chunk of splitSystemReminders(txt)) threadedBlocks.push(chunk)

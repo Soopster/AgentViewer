@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { isClaudeComposerPermissionMode } from '../../lib/claudePermissionMode'
-import { shapeStripSegments } from './composerStrip'
+import { isStripStat, joinStripSegments, shapeStripSegments } from './composerStrip'
 import { useSessionPrActions, useSessionPrAutoLink } from './app/slices/sessionPr'
 import { useComposerTurnContext } from '../../lib/plugins/useComposerTurnContext'
 import { matchPluginComposerSlashCommand, pluginComposerSlashInput } from '../../lib/plugins/composerSlash'
@@ -288,11 +288,15 @@ import { subscribePluginThemes, type ThemeMenuGroup, THEMES, isLightThemeMode, O
 import { pastedImageDisplayName, isComposerDraftSnapshot, isQueuedComposerSend, type ComposerDraftShape, composerDraftLineCount, activeMentionAttachments, composerSnapshotText, attachmentCountLabel, computeComposerDraftShape, sameComposerDraftShape, detectMentionAtCursor, imageAttachmentCount, pasteImageMimeType, inferPastedImageMimeType, composerKeyBindings, compactComposerEntryText, composerEntryLineCount } from './app/composerInput'
 import { cardClipboardText, writeClipboard, normalizePastedFilePath, pastedFileMimeTypeForPath, readClipboardImage, readClipboardText, isWslRuntime } from './app/clipboard'
 import { type InlineTextSegment, renderInlineTextSegments, renderInlineMarkdownSpans, LIVE_PREVIEW_HEIGHT, wrapLivePreviewTail, LIVE_PREVIEW_BODY_LINES, inlineSegmentIndexAt, inlineSegmentActionAt, composerSendingHintSegments, DraftLengthSpans, LivePreviewCard } from './app/inlineText'
-import { contextBarColor, formatContextUsageChip, planLimitSegment, formatLiveOutputTokens, fmtTokens, footerDockStatsReserve, formatTuiComposerIdleHint, fitHintText, contextBarSegments } from './app/contextMeter'
+import { contextBarColor, formatContextUsageChip, formatLiveOutputTokens, fmtTokens, footerDockStatsReserve, formatTuiComposerIdleHint, fitHintText, contextBarSegments } from './app/contextMeter'
 import { formatModelChipValue, timeAgo } from './app/format'
 import { Spinner, TAB_SPINNER_FRAMES, TAB_SPINNER_INTERVAL_MS, ComposerWaitingStatus, IdleTicker } from './app/chrome'
 import { isDurableSessionMessage, isLiveAssistantTextMessage, hasLiveAssistantMessage, persistedTurnSettled, hasPersistedAssistantAfterBaseline, hasPersistedUserAfterBaseline, completeCodexQuestionLiveMessage, makeLiveUserMessage, codexQuestionLiveMessage, streamEventIndex, updateLiveToolThreadInput, applyLiveToolResult, extractOpenCodeLiveToolThread, extractOpenCodeLiveSubagent, extractCodexLiveToolActivity, applyLiveToolActivity, appendCodexLiveToolOutput, extractCopilotFinalAssistantMessage, extractStreamingAssistantText, extractStreamingReasoningText, shouldReplaceLiveAssistantText, makeLiveAssistantTextMessage, extractCodexVisibleAssistantText, shouldReplaceCodexVisibleAssistantText, liveAssistantTextKey, extractSseFrames } from './app/liveStream'
 import { mergeCoordinatorGroups, liftNeedsInput, liftSidebarGroup, PINNED_SESSIONS_KEY, RUNNING_SESSIONS_KEY, isCollapsedByDefaultProject, sessionKey, sessionActivityMs, groupSidebarDates, buildSidebarEntries, sidebarEntrySession, withPendingInboxEdits, sessionsShallowEqual, sessionDetailOwnerKeys, sidebarEntrySessionKey, isSessionRecentlyTouched, createSidebarRowElements, PENDING_INBOX_EDIT_MS } from './app/sessionList'
+import { registerSubagentRowOpener } from './app/windowCardActions'
+import { handleTurnOutlineKey } from './app/turnOutline'
+import { subagentName } from '../../lib/subagentActivity'
+import type { SubagentActivity } from '../../lib/types'
 import { mixHexColor, buildComposerSyntaxStyle, densityConfig, buildSyntaxStyle, registerTurnSummaryOpener } from './app/transcriptStyle'
 
 
@@ -1634,13 +1638,14 @@ function OpenTuiWorkspace() {
   })
   const composerDraftShapeRef = useRef<ComposerDraftShape | null>(null)
   const composerDraftLines = composerDraftLineCount(composerDraft, composerTextareaRef.current?.plainText === composerDraft ? composerTextareaRef.current.editorView.getTotalVirtualLineCount() : null)
-  const composerDockChromeHeight = fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT
+  const stripExtraRows = viewSpec.stripRows === 'two' ? 1 : 0
+  const composerDockChromeHeight = (fullscreenMode ? 1 : COMPOSER_DOCK_CHROME_HEIGHT) + stripExtraRows
   const {
     presentationHidesComposer, composerDockHeight, composerDockTextareaHeight,
     composerTargetSessionInfo, composerCurrentModel, composerModelLookupSettled,
     filteredModelPickerOptions,
   } = useComposerHeightGroup({
-    composerHeightPreference: manualComposerHeight, composerSize: viewSpec.composerSize,
+    composerHeightPreference: manualComposerHeight, composerSize: viewSpec.composerSize, stripExtraRows,
     embeddedComposer, composerDraftLines, height, reservedHeaderRows: topBarRows, fullscreenMode, composerDockChromeHeight,
     windowPresentation, composerTargetSessionIdentity, composerWindowOpen, composerHidden,
     composerTargetSession, sessionDetail, selectedSessionKey, sessionDetailCacheRef,
@@ -1687,7 +1692,7 @@ function OpenTuiWorkspace() {
     composerAccentColor, composerModelLookupSettled, tuiEffort, tuiOpenCodeAgent,
     composerCodexMode, composerCodexApproval, tuiCopilotMode, composerCopilotPermissionMode,
     composerCopilotContextTier, composerEnableWorkflow, composerTargetSessionInfo,
-    selectedRawMessages: sessionDetail?.rawMessages,
+    selectedRawMessages: sessionDetail?.rawMessages, viewSpec,
   })
   const composerIconSet = viewSpec.composerIconSet ?? viewSpec.iconSet
   const composerPromptIcon = tuiIcon(composerIconSet, 'prompt', '')
@@ -1717,8 +1722,11 @@ function OpenTuiWorkspace() {
     }
     return shapeStripSegments(parts, viewSpec, { muted: theme.dim, accent: composerAccentColor, bright: theme.text })
   }, [composerGitBranch, composerGitSummary, composerIconSet, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.green, theme.text, composerAccentColor, viewSpec])
+  const stripStatRow = useMemo(() => stripExtraRows ? joinStripSegments(composerKnobSegments.filter(isStripStat), viewSpec.stripSeparator, theme.dim) : null,
+    [composerKnobSegments, stripExtraRows, theme.dim, viewSpec.stripSeparator])
   const buildComposerStatsSegments = (lineCount: number, draftLength: number) => runBuildComposerStatsSegments({
-    composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel, composerKnobSegments,
+    composerConfig, theme, composerAccentColor, composerProvider, composerAttachmentLabel,
+    composerKnobSegments: stripExtraRows ? composerKnobSegments.filter(segment => !isStripStat(segment)) : composerKnobSegments,
     composerLocationSegments, composerWorkingDirectory, composerPathIcon: tuiIcon(composerIconSet, 'folder', ''),
     stripBadge: viewSpec.stripBadge, stripSeparator: viewSpec.stripSeparator, stripOrder: viewSpec.stripOrder, stripFolderStyle: viewSpec.stripFolderStyle,
   }, lineCount, draftLength)
@@ -2486,7 +2494,7 @@ function OpenTuiWorkspace() {
   } = useActiveStripIndexGroup({
     shownPopoverTab, visibleTabSessions, popoverTabs, activeTabIndex, mainContentHeight,
     effectiveSurfacePanelRows, composerStatusBlockHeight, composerPopoverHeight, embeddedComposer,
-    composerDockHeight, fullscreenMode, rightSidePanelVisible, workspacesEnabled, spacesState,
+    composerDockHeight, fullscreenMode, rightSidePanelVisible, composerAreaOffset, composerAccessoryRows, workspacesEnabled, spacesState,
     sidebarWidth, provider, sessions, normalizedSessionQuery, scratchFilter, settledFilter,
     filteredSessionsForSidebar: sidebarFilteredSessions, spaceSessions, providerInstances, providerInstanceId,
     sidebarSortLabel, sessionSearchQuery, coordinatorHeaderCounts, themeMode, transcriptDiffNotes,
@@ -4364,6 +4372,18 @@ function OpenTuiWorkspace() {
     showSettled, gitRepoCwd, sessionDetail, setCheckpointFocusPrompt, setPluginOverlay,
   })
   useEffect(() => registerTurnSummaryOpener(openTurnCheckpoint), [])
+  const openSubagentTranscript = useStableEvent((parent: Session, activity: SubagentActivity) => {
+    if (!isPluginEnabled('subagents')) {
+      showNotice('info', 'Sub-agents are off · turn them on in Plugins (⌃K palette)')
+      return
+    }
+    setSubagentTranscriptSelection({ parent, agent: {
+      agentId: activity.threadId, taskDescription: subagentName(activity.path), messageCount: 0,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, provider: parent.provider ?? 'codex',
+    } })
+    setPluginOverlay('subagents')
+  })
+  useEffect(() => registerSubagentRowOpener(openSubagentTranscript), [openSubagentTranscript])
 
   // Clicking a link in the transcript.
   //
@@ -6569,6 +6589,8 @@ function OpenTuiWorkspace() {
       key.stopPropagation()
       action()
     }
+    // The turn outline, drawn inside a window, owns every key while it is open.
+    if (handleTurnOutlineKey(key)) { handled(() => {}); return }
     // The View Studio owns every key while it is open.
     if (viewDraft) {
       handled(() => { viewStudioKeyHandlerRef.current?.({ name: key.name, sequence: key.sequence, ctrl: key.ctrl, meta: key.meta, shift: key.shift }) })
@@ -6811,6 +6833,7 @@ function OpenTuiWorkspace() {
     chatComposerStatsWidth, chatComposerHintFitted, chatComposerHintWidth,
     composerWindowFooterHintWidth, composerWindowFooterStatsWidth, pickSlashInsteadOfSubmit,
   } = useComposerDockStatsForGroup({
+    composerFill: viewSpec.composerFill,
     stripSeparator: viewSpec.stripSeparator, stripOrder: viewSpec.stripOrder, stripHints: viewSpec.stripHints,
     buildComposerStatsSegments, composerVisualLineCount, composerDraft, composerKnobSegments,
     theme, composerLocationSegments, composerWindowVisualLineCount, composerAttachmentLabel,
@@ -6849,7 +6872,7 @@ function OpenTuiWorkspace() {
     composerHistoryScopeLabel, composerHistoryIndex, composerRewindItems, composerRewindVisibleCount, composerRewindIndex,
     composerStashOpen, composerStashVisibleCount, composerStash, composerStashIndex,
     activeQueuedComposerSends, composerQueueDurable, composerWindowOpen, composerHidden,
-    presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused,
+    presentationHidesComposer, embeddedComposer, composerDockHeight, chatComposerFocused, stripStatRow,
     setComposerActive, composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth,
     composerSlashHint, clickComposerStatus, composerDockStatsFor, composerDraftState,
     hoverComposerStatus, setComposerStatusHover, composerStatusHover, chatComposerHintWidth,
@@ -7349,54 +7372,57 @@ function OpenTuiWorkspace() {
         controller={composerAccessories.controller} isCurrent={composerAccessories.isCurrent} services={composerAccessoryServices}
         theme={theme} width={composerAreaWidth} viewportWidth={width} height={height} marginLeft={composerAreaOffset} />
 
-      <ComposerStatusStack
-        presentationHidesComposer={presentationHidesComposer}
-        liveStatus={liveStatus}
-        visibleComposerSending={visibleComposerSending}
-        theme={theme}
-        width={width}
-        composerLiveReasoning={composerLiveReasoning}
-        hideLiveReasoning={!viewSpec.liveReasoning}
-        composerProvider={composerProvider}
-        tuiEffort={tuiEffort}
-        composerThinkingTokens={composerThinkingTokens}
-        codexThinking={codexThinking}
-        liveReasoningPreviewLines={liveReasoningPreviewLines}
-        embeddedComposer={embeddedComposer}
-        composerTurnStatusInBorder={composerTurnStatusInBorder}
-        dotStatus={viewSpec.composerStatus === 'dot'}
-        hideLiveText={!viewSpec.liveText}
-        densityState={densityState}
-        composerSendStartedAt={composerSendStartedAt}
-        composerWaitingStatusSeed={composerWaitingStatusSeed}
-        composerWaitingSuffix={composerWaitingSuffix}
-        composerWaitingOnUser={composerWaitingOnUser}
-        reattachedRunning={reattachedRunning}
-        visibleAwaitingPersistedTurn={visibleAwaitingPersistedTurn}
-        composerTargetSession={composerTargetSession}
-        sessionDetail={sessionDetail}
-        visibleLiveToolActivities={visibleLiveToolActivities}
-        visibleRunningToolCount={visibleRunningToolCount}
-        composerActivityVisible={composerActivityVisible}
-        liveSubagentText={liveSubagentText}
-        livePromptSuggestion={livePromptSuggestion}
-        composerSendState={composerSendState}
-        composerStatusMessage={composerStatusMessage}
-        visibleComposerLiveText={visibleComposerLiveText}
-        visibleComposerError={visibleComposerError}
-        liveAssistantTextCardVisible={liveAssistantTextCardVisible}
-        liveAssistantPreviewLines={liveAssistantPreviewLines}
-        composerAccentColor={composerAccentColor}
-      />
+      {/* Kept to the composer's column, or it paints over a rail running down beside it. */}
+      <box marginLeft={composerAreaOffset} width={composerAreaWidth} flexShrink={0} flexDirection="column">
+        <ComposerStatusStack
+          presentationHidesComposer={presentationHidesComposer}
+          liveStatus={liveStatus}
+          visibleComposerSending={visibleComposerSending}
+          theme={theme}
+          width={composerAreaWidth}
+          composerLiveReasoning={composerLiveReasoning}
+          hideLiveReasoning={!viewSpec.liveReasoning}
+          composerProvider={composerProvider}
+          tuiEffort={tuiEffort}
+          composerThinkingTokens={composerThinkingTokens}
+          codexThinking={codexThinking}
+          liveReasoningPreviewLines={liveReasoningPreviewLines}
+          embeddedComposer={embeddedComposer}
+          composerTurnStatusInBorder={composerTurnStatusInBorder}
+          dotStatus={viewSpec.composerStatus === 'dot'}
+          hideLiveText={!viewSpec.liveText}
+          densityState={densityState}
+          composerSendStartedAt={composerSendStartedAt}
+          composerWaitingStatusSeed={composerWaitingStatusSeed}
+          composerWaitingSuffix={composerWaitingSuffix}
+          composerWaitingOnUser={composerWaitingOnUser}
+          reattachedRunning={reattachedRunning}
+          visibleAwaitingPersistedTurn={visibleAwaitingPersistedTurn}
+          composerTargetSession={composerTargetSession}
+          sessionDetail={sessionDetail}
+          visibleLiveToolActivities={visibleLiveToolActivities}
+          visibleRunningToolCount={visibleRunningToolCount}
+          composerActivityVisible={composerActivityVisible}
+          liveSubagentText={liveSubagentText}
+          livePromptSuggestion={livePromptSuggestion}
+          composerSendState={composerSendState}
+          composerStatusMessage={composerStatusMessage}
+          visibleComposerLiveText={visibleComposerLiveText}
+          visibleComposerError={visibleComposerError}
+          liveAssistantTextCardVisible={liveAssistantTextCardVisible}
+          liveAssistantPreviewLines={liveAssistantPreviewLines}
+          composerAccentColor={composerAccentColor}
+        />
+      </box>
 
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
-
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
-
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerHistoryPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerStashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
-      {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+      <box marginLeft={composerAreaOffset} width={composerAreaWidth} flexShrink={0} flexDirection="column">
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerMentionPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerHistoryPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerStashPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer ? renderComposerRewindPanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+        {!composerWindowOpen && !composerHidden && !presentationHidesComposer && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerAreaWidth, Math.max(composerAreaWidth - 4, 20)) : null}
+      </box>
 
       {composerTerminalTargets.length > 0 && !composerWindowOpen && !composerHidden && !presentationHidesComposer ? <TerminalTargetStrip targets={composerTerminalTargets} theme={theme} left={composerAreaOffset} width={composerAreaWidth} bottom={composerDockHeight + composerAccessoryRows} /> : null}
       <ComposerDock
@@ -7410,6 +7436,7 @@ function OpenTuiWorkspace() {
         fullscreenMode={fullscreenMode}
         composerDockRouted={composerDockRouted}
         hideDockTitle={!viewSpec.composerTitle}
+        stripStatRow={stripStatRow}
         dockBorderStyle={viewSpec.composerBorder === 'square' ? 'single' : viewSpec.composerBorder}
         composerDockEmphasized={composerDockEmphasized}
         composerAccentColor={composerAccentColor}
@@ -7457,11 +7484,11 @@ function OpenTuiWorkspace() {
         theme={theme} width={composerAreaWidth} viewportWidth={width} height={height} marginLeft={composerAreaOffset} />
 
       {!searchMode && !fullscreenMode && !statusBarInDock ? (
-        <box backgroundColor={theme.surface2} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
+        <box backgroundColor={theme.surface2} marginLeft={composerAreaOffset} width={composerAreaWidth} paddingX={1} height={1} flexShrink={0} flexDirection="row" overflow="hidden">
           <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-            <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
+            <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(composerAreaWidth - 2, 20), theme.dim)}</text>
           </box>
-          <TeammatesAttention inline theme={theme} width={Math.floor(width / 3)} session={selectedSession} />
+          <TeammatesAttention inline theme={theme} width={Math.floor(composerAreaWidth / 3)} session={selectedSession} />
         </box>
       ) : null}
 

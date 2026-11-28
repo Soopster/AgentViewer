@@ -52,13 +52,15 @@ export type OmniSegment = { action: OmniAction; text: string }
 export function overviewSegments(snapshot: ShellOverviewSnapshot, git: GitSummary | null, width: number, now: number, commands: readonly string[] = [], layout: OmniLayout = DEFAULT_OMNI_LAYOUT, glyph: (id: OmniItemId | 'commands') => string = omniGlyph): OmniSegment[] {
   const project = snapshot.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || snapshot.cwd || 'Workspace'
   const enabled = layout.filter(item => item.enabled).map(item => item.id)
+  // "0 running · 0 needs input" under a warning icon asks for attention nothing needs.
+  const quiet = snapshot.runningCount === 0 && snapshot.attentionCount === 0
   const attention: OmniSegment = {
     action: 'attention',
     text: `${glyph('attention')}${width < 60 ? snapshot.attentionCount : ' ' + `${snapshot.runningCount} running · ${snapshot.attentionCount} needs input`}`,
   }
   // Command access is the way back to everything else: always present, always last.
   const commandsSegment: OmniSegment = { action: 'commands', text: `${glyph('commands')} ${width < 40 ? 'Cmds' : 'Commands…'}` }
-  if (width < 60) return [...(enabled.includes('attention') ? [attention] : []), commandsSegment]
+  if (width < 60) return [...(!quiet && enabled.includes('attention') ? [attention] : []), commandsSegment]
   const changes = git ? git.modified + git.untracked : 0
   const repository = width >= 100 && git
     ? `${project} / ${git.branch} · ${changes ? `${changes} changed` : 'clean'}${git.stashes ? ` · ${git.stashes} stashed` : ''}`
@@ -68,12 +70,12 @@ export function overviewSegments(snapshot: ShellOverviewSnapshot, git: GitSummar
   const candidate = (id: OmniItemId): OmniSegment | null => {
     if (id === 'repository') return { action: 'repository', text: `${glyph('repository')} ${repository}` }
     if (id === 'session') return width >= 100 ? { action: 'session', text: `${glyph('session')} ` + [snapshot.provider, snapshot.sessionTitle, `${snapshot.running ? '● ' : ''}${snapshot.activity}`, elapsed].filter(Boolean).join(' · ') } : null
-    if (id === 'attention') return attention
+    if (id === 'attention') return quiet ? null : attention
     if (id === 'new-session') return { action: 'new-session', text: `${glyph(id)} New` }
     return commands.includes(id) ? { action: id, text: `${glyph(id)} ${label(id)}` } : null
   }
   // Repository, activity, attention and commands are kept; shortcuts take what is left after those, in the user's order.
-  let budget = width - attention.text.length - commandsSegment.text.length - 4 - 90
+  let budget = width - (quiet ? 0 : attention.text.length) - commandsSegment.text.length - 4 - 90
   const out: OmniSegment[] = []
   for (const id of enabled) {
     const segment = candidate(id)

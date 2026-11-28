@@ -65,6 +65,11 @@ export const codexAdapter: SessionAdapter = {
 
   // Child agents are durable sessions, not transcript-local sidebar entries.
   async readSubagentSummaries() { return [] },
+  // A sub-agent is a thread of its own. `thread/read` reports it without
+  // loading it; a resume would boot its MCP servers and take its writer lock.
+  async readSubagentMessages(_sessionId, agentId) {
+    return mapCodexThreadToMessages(await readCodexThreadWithFullTurns(agentId), await readCodexReasoningMetadata(agentId))
+  },
 
   async listSessions({ limit, offset, dir }) {
     const client = getCodexClient()

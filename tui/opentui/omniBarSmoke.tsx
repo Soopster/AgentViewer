@@ -98,6 +98,8 @@ try {
   assert(!availableActions({ snapshot, readGit, run: () => {} }).some(action => ['files', 'processes', 'index-search', 'editor', 'github', 'session'].includes(action.id)), 'unavailable actions were offered')
   const clean = overviewSegments(snapshot, { branch: 'main', modified: 0, untracked: 0, stashes: 2 }, 220, Date.now())
   assert(clean[0]!.text.includes('clean · 2 stashed'))
+  assert(!overviewSegments(snapshot, null, 220, 0).some(segment => segment.action === 'attention'), 'zero counters still asked for attention')
+  assert(!overviewSegments(snapshot, null, 40, 0).some(segment => segment.action === 'attention'))
   for (const action of ['repository', 'session', 'attention', 'commands'] as const) {
     const node = setup.renderer.root.findDescendantById(`omni-bar:${action}`)!
     await act(async () => { await setup.mockMouse.click(node.x + 1, node.y) })
@@ -157,7 +159,7 @@ try {
   // Layout: normalise, reorder, disable; the bar follows, and Commands stays last.
   const reordered = moveLayoutItem(toggleLayoutItem(DEFAULT_OMNI_LAYOUT, DEFAULT_OMNI_LAYOUT.findIndex(item => item.id === 'files')), 2, -2)
   assert.equal(reordered[0]!.id, 'new-session')
-  const ids = (layout: typeof reordered) => overviewSegments(snapshot, null, 220, 0, ['files', 'editor'], layout).map(segment => segment.action)
+  const ids = (layout: typeof reordered) => overviewSegments({ ...snapshot, runningCount: 1 }, null, 220, 0, ['files', 'editor'], layout).map(segment => segment.action)
   assert.deepEqual(ids(reordered), ['new-session', 'repository', 'session', 'attention', 'commands'], 'disabled or reordered items did not follow the layout')
   assert.deepEqual(normalizeLayout([{ id: 'editor' }, { id: 'nope' }, { id: 'editor' }]).slice(0, 2).map(item => item.id), ['editor', 'repository'])
   assert.equal(normalizeLayout('garbage').length, DEFAULT_OMNI_LAYOUT.length)

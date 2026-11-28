@@ -36,6 +36,17 @@ export function railThemeFor(theme: TuiThemePalette, fill: TabDisplay['tabStripF
   return { ...theme, surface: tabStripColor(theme, fill) }
 }
 
+const transcriptThemes = new WeakMap<TuiThemePalette, Map<TabDisplay['tabStripFill'], TuiThemePalette>>()
+
+/** `railThemeFor` for transcript windows. Cached: panes and cards are memoized on the theme's identity. */
+export function transcriptThemeFor(theme: TuiThemePalette, fill: TabDisplay['tabStripFill']): TuiThemePalette {
+  let byFill = transcriptThemes.get(theme)
+  if (!byFill) transcriptThemes.set(theme, byFill = new Map())
+  let filled = byFill.get(fill)
+  if (!filled) byFill.set(fill, filled = railThemeFor(theme, fill))
+  return filled
+}
+
 /** An inactive tab under the pointer: most of the way from the strip to the active tab's surface, never a coloured tint. */
 export function tabHoverColor(theme: TuiThemePalette, strip: string): string {
   if (strip === theme.surface) return mixHexColor(theme.surface2, strip, 0.7) ?? theme.surface2

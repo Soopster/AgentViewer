@@ -30,6 +30,8 @@ export type UseActiveStripIndexGroupContext = {
   composerDockHeight: number
   fullscreenMode: boolean
   rightSidePanelVisible: boolean
+  composerAreaOffset: number
+  composerAccessoryRows: number
   workspacesEnabled: boolean
   spacesState: SpacesState
   sidebarWidth: number
@@ -91,7 +93,7 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   const {
     shownPopoverTab, visibleTabSessions, popoverTabs, activeTabIndex, mainContentHeight,
     effectiveSurfacePanelRows, composerStatusBlockHeight, composerPopoverHeight, embeddedComposer,
-    composerDockHeight, fullscreenMode, rightSidePanelVisible, workspacesEnabled, spacesState,
+    composerDockHeight, fullscreenMode, rightSidePanelVisible, composerAreaOffset, composerAccessoryRows, workspacesEnabled, spacesState,
     sidebarWidth, provider, sessions, normalizedSessionQuery, scratchFilter, settledFilter,
     filteredSessionsForSidebar, spaceSessions, providerInstances, providerInstanceId,
     sidebarSortLabel, sessionSearchQuery, coordinatorHeaderCounts, themeMode, transcriptDiffNotes,
@@ -119,15 +121,14 @@ export function useActiveStripIndexGroup(ctx: UseActiveStripIndexGroupContext) {
   // composer instead of leaving a blank block below itself.
   const surfacePanelHeight = Math.max(
     8,
-    mainContentHeight + effectiveSurfacePanelRows + composerStatusBlockHeight + composerPopoverHeight
+    mainContentHeight + effectiveSurfacePanelRows + composerStatusBlockHeight + composerPopoverHeight + composerAccessoryRows
       + (embeddedComposer ? 0 : composerDockHeight) + (fullscreenMode ? 0 : 2),
   )
 
-  // With a right-hand panel open the composer docks under the reader column
-  // only, so the rail runs down beside it like the panel does — otherwise the
-  // dock's rows under the rail are left empty.
+  // A dock kept to the reader column (a right-hand panel is open, or the view
+  // asks for it) leaves the rows beside it to the rail, which runs down them.
   // A panel docked under the reader leaves the rail running down beside it too.
-  const sidebarExtraRows = rightSidePanelVisible ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
+  const sidebarExtraRows = rightSidePanelVisible || composerAreaOffset > 0 ? Math.max(surfacePanelHeight - mainContentHeight, 0) : effectiveSurfacePanelRows
   // Extended, the rail outgrows its row, so nothing clips the list to the
   // frame any more: budget the list to the frame's inside.
   const sidebarRowBudget = Math.max((sidebarExtraRows > 0 ? mainContentHeight + sidebarExtraRows - 2 : mainContentHeight) - (workspacesEnabled ? (spacesState.spaces.length === 1 ? 1 : Math.min(4, spacesState.spaces.length) + 2) + 1 : 0), 4)

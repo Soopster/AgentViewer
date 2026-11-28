@@ -186,6 +186,7 @@ export type EmbeddedComposerChromeContext = {
   presentationHidesComposer: boolean
   embeddedComposer: boolean
   composerDockHeight: number
+  stripStatRow: InlineTextSegment[] | null
   theme: TuiThemePalette
   chatComposerFocused: boolean
   composerIcon?: string
@@ -219,7 +220,7 @@ export function runEmbeddedComposerChrome(ctx: EmbeddedComposerChromeContext) {
     composerDockTextareaHeight, chatComposerStatusWidth, chatComposerStatsWidth, composerSlashHint,
     clickComposerStatus, composerDockStatsFor, composerDraftState, hoverComposerStatus,
     setComposerStatusHover, composerAccentColor, composerStatusHover, chatComposerHintWidth,
-    visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted,
+    visibleComposerSending, composerDockSendingHintSegments, chatComposerHintFitted, stripStatRow,
   } = ctx
 return !composerWindowOpen && !composerHidden && !presentationHidesComposer && embeddedComposer ? {
   rows: composerDockHeight,
@@ -266,6 +267,11 @@ return !composerWindowOpen && !composerHidden && !presentationHidesComposer && e
             })}
           </box>
         </box>
+        {stripStatRow ? (
+          <box id="chat-composer-strip-stats" height={1} flexShrink={0} overflow="hidden" paddingX={1}>
+            <text fg={theme.dim} wrapMode="none" selectable={false}>{renderInlineTextSegments(stripStatRow, Math.max(chatComposerStatusWidth - 2, 1), theme.dim)}</text>
+          </box>
+        ) : null}
         <box
           id="chat-composer-status"
           position="absolute"

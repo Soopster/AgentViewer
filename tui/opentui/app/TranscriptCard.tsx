@@ -26,7 +26,9 @@ import { type InlineTextSegment, renderInlineTextSegments, renderInlineMarkdownS
 import { formatCopilotTimestamp } from './format'
 import { streamStatusColor, transcriptColor, streamToolGroupMarker, diffRowColor, formatDiffLineNumber, diffRowIndicator, terminalSelectionColors, turnSummaryMouseProps, streamLandmarkText, streamLineMarker, mixHexColor, continuousUserBackground, streamUserBackground, streamContinuationMarker, transcriptBackground, diffRowBackground, diffGutterBar, SplitDiffSide } from './transcriptStyle'
 import { extractDiffText } from './diffCache'
-import { cardDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, agentToolCardsFor, streamToolSummaryName, agentToolCardIsExpanded, nestedAgentToolDisplay, streamActivitySummarySegments, isStreamActivityToolCard, transcriptToolLineSegments, streamToolSummarySegments, streamToolDetailLine, agentsToolSummaryLine, coordinatorResultSegments, countCodeBlockLines, codeBlockHeight, sliceCodeBlockLines, codeBlockLabel, isCompactSystemCard, codeBlockHiddenLineCount } from './transcriptRows'
+import { cardDiffText, shouldCenterTranscriptCard, canRenderMarkdownWithSyntax, agentToolCardsFor, streamToolSummaryName, agentToolCardIsExpanded, nestedAgentToolDisplay, streamActivitySummarySegments, isStreamActivityToolCard, transcriptToolLineSegments, streamToolSummarySegments, streamToolDetailLine, agentsToolSummaryLine, coordinatorResultSegments, countCodeBlockLines, codeBlockHeight, sliceCodeBlockLines, codeBlockLabel, isCompactSystemCard, codeBlockHiddenLineCount, hidesOkRow } from './transcriptRows'
+import { formatDurationMs } from '../../format'
+import { subagentMouseProps } from './subagentMouse'
 import { streamDiffPreviewData, StreamDiffPreview } from './StreamDiffPreview'
 import { type TranscriptDiffNoteDraft, type TranscriptDiffNote, type TranscriptDiffSelectionSpan, transcriptDiffStackRowAnchor, transcriptDiffSplitRowAnchor, transcriptDiffSelectionPointForStackRow, transcriptDiffSelectionPointForSplitRow, transcriptDiffCardNamespace, transcriptDiffSelectionKey, transcriptDiffSelectionSpanFromRowRange, transcriptDiffSelectionSpanFromSelection, renderTranscriptDiffNoteDraft, renderTranscriptDiffNoteCard } from './transcriptDiffSelection'
 import { highlightToolOutput, toolOutputContext } from './codeHighlight'
@@ -861,7 +863,13 @@ export function TranscriptCardInner({
     // opencode's do; only the prompt draws the rule.
     const continuousInset = 3
     const showsTime = Boolean(card.timestampMs) && (card.role === 'user' ? viewStyle.promptTimestamps : viewStyle.replyTimestamps)
-    const copilotTimeWidth = showsTime ? 8 : 0
+    const okRowHidden = hidesOkRow(card, bodyLines)
+    // A command that took a while says so beside its time.
+    const slowMs = okRowHidden ? (card.toolTimings ?? []).reduce((total, timing) => total + timing.durationMs, 0) : 0
+    const timeText = showsTime && card.timestampMs
+      ? `${slowMs >= 1000 ? `${formatDurationMs(slowMs)} · ` : ''}${formatCopilotTimestamp(card.timestampMs)}`
+      : ''
+    const copilotTimeWidth = timeText ? Math.max(8, timeText.length + 1) : 0
     const streamTextWidth = continuousMode
       ? Math.max(streamLandmarkWidth - continuousInset - streamMarkerWidth, 12)
       : Math.max(streamWidth - streamMarkerWidth - copilotTimeWidth, 12)
@@ -894,6 +902,8 @@ export function TranscriptCardInner({
           ? card.role === 'user' ? theme.text : theme.cyan
           : card.role === 'user'
             ? viewStyle.markerColor === 'plain' ? theme.text : accent
+            : okRowHidden
+              ? theme.green
             : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
               ? transcriptColor(firstLine, theme)
               : theme.text
@@ -1039,7 +1049,7 @@ export function TranscriptCardInner({
         ) : (
         <>
         {firstLine ? (
-          <box flexDirection="row">
+          <box flexDirection="row" {...subagentMouseProps(card.key, firstLine)}>
             <text fg={streamMarkerColor} width={streamMarkerWidth} wrapMode="none" selectable {...selectionColors}>
               {`${streamMarker} `}
             </text>
@@ -1057,9 +1067,9 @@ export function TranscriptCardInner({
                   ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`, linkCwd)
                   : firstLine.text}
             </text>
-            {showsTime && card.timestampMs ? (
+            {timeText ? (
               <text fg={theme.dim} width={copilotTimeWidth} wrapMode="none" selectable {...selectionColors}>
-                {formatCopilotTimestamp(card.timestampMs)}
+                {timeText}
               </text>
             ) : null}
           </box>
@@ -1075,12 +1085,13 @@ export function TranscriptCardInner({
           const hang = line.tone === 'tool' || colored
             ? 0
             : Math.min(line.text.length - line.text.trimStart().length, 16, Math.max(streamChildTextWidth - 12, 0))
-          const continuationMarker = `${continuousMode ? '  ' : streamContinuationMarker(line)}${' '.repeat(hang)}`
+          const connector = okRowHidden && lineIndex === 0 ? '  └ ' : streamContinuationMarker(line)
+          const continuationMarker = `${continuousMode ? '  ' : connector}${' '.repeat(hang)}`
           const lineText = hang > 0 ? line.text.slice(hang) : line.text
           const lineWidth = streamChildTextWidth - hang
           const lineColor = thinkingColor(line, viewStyle, theme) ?? transcriptColor(line, theme)
           return (
-            <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
+            <box key={`${card.key}:s:${lineIndex}`} flexDirection="row" {...subagentMouseProps(card.key, line)}>
               <text fg={theme.dim} width={continuationMarker.length} wrapMode="none" selectable {...selectionColors}>
                 {continuationMarker}
               </text>

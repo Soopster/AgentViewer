@@ -181,6 +181,16 @@ try {
     if (!/e:auto/.test(frame()) || /effort:auto/.test(frame())) fail('short labels did not reach the dock and the preview')
     await change('stripEffort')
     if (/e:auto/.test(frame())) fail('hiding effort left it on the strip')
+    const dockHeight = () => setup.renderer.root.findDescendantById('composer-dock')!.height
+    const oneRow = dockHeight()
+    await change('stripDuration')
+    await change('stripRows')
+    if (dockHeight() !== oneRow + 1) fail(`a second strip row did not add one row to the composer (${oneRow} -> ${dockHeight()})`)
+    const statRow = setup.renderer.root.findDescendantById('composer-dock-strip-stats') ?? setup.renderer.root.findDescendantById('chat-composer-strip-stats')
+    if (!statRow || statRow.height !== 1) fail('the second strip row is not in the live composer')
+    await change('stripRows')
+    if (dockHeight() !== oneRow) fail('one row did not give the composer row back')
+    await change('stripDuration')
     // Back to as shipped, so the saved view and later checks are unaffected.
     for (const key of ['stripEffort', 'stripLabels', 'stripBadge'] as const) {
       await change(key)
