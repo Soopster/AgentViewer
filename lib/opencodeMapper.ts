@@ -8,6 +8,7 @@ import type {
   McpStatus,
   Message,
   Part,
+  FilePart,
   Session as OpenCodeSession,
 } from '@opencode-ai/sdk'
 import type {
@@ -17,19 +18,28 @@ import type {
   SessionDiagnosticSection,
   SessionInfo,
   SessionMessage,
-  SessionModelInfo,
 } from './types'
+import { compactStableFingerprint } from './compactFingerprint'
 import { OPENCODE_CAPABILITIES } from './provider'
+import { recordRawFrames } from './rawFrames'
+import { encodeOpenCodeModelValue } from './opencodeModels'
+import { openCodeAttachmentImage, openCodeAttachmentText, withOpenCodeAttachments } from './opencodeAttachments'
+import { readOpenCodeHistorySignature } from './opencode2History'
+
+export { decodeOpenCodeModelValue, mapOpenCodeModelsToSessionModels } from './opencodeModels'
 
 type OpenCodeMessageBundle = {
   info: Message
   parts: Part[]
 }
 
-type OpenCodeModelRef = {
-  providerID: string
-  modelID: string
+export function openCodeMessagesSignature(messages: OpenCodeMessageBundle[]): string {
+  const completeSignature = readOpenCodeHistorySignature(messages)
+  if (completeSignature) return completeSignature
+  const last = messages.at(-1)
+  return `${messages.length}:${last?.info.id ?? ''}:${last ? compactStableFingerprint(last) : ''}`
 }
+
 
 function normalizeTimestamp(value?: number): number | undefined {
   if (!value) return undefined
@@ -59,11 +69,11 @@ function partSummary(part: Part): string | null {
     case 'text':
       return part.text
     case 'file':
-      return `[file] ${part.filename ?? part.url}`
+      return openCodeAttachmentText(part)
     case 'agent':
-      return `Agent: ${part.name}`
+      return `↪ Switched to agent: ${part.name}`
     case 'subtask':
-      return `Subtask: ${part.description}`
+      return `↪ Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`
     case 'patch':
       return `Patched files: ${part.files.join(', ')}`
     case 'compaction':
@@ -76,6 +86,13 @@ function partSummary(part: Part): string | null {
 }
 
 function buildUserContent(parts: Part[]): ApiMessage['content'] {
+  if (parts.some(part => part.type === 'file' && openCodeAttachmentImage(part))) {
+    return parts.flatMap((part): Exclude<ApiMessage['content'], string> => {
+      const summary = partSummary(part)
+      const image = part.type === 'file' ? openCodeAttachmentImage(part) : null
+      return [...(summary ? [textBlock(summary)] : []), ...(image ? [image] : [])]
+    })
+  }
   const blocks = parts
     .map(partSummary)
     .filter((text): text is string => Boolean(text))
@@ -85,6 +102,32 @@ function buildUserContent(parts: Part[]): ApiMessage['content'] {
 function buildAssistantContent(parts: Part[]) {
   const content: Exclude<ApiMessage['content'], string> = []
   const syntheticResults: SessionMessage[] = []
+
+  const pushSyntheticResult = (
+    part: Part,
+    toolUseId: string,
+    resultContent: unknown,
+    isError = false,
+    attachments: FilePart[] = [],
+  ) => {
+    syntheticResults.push({
+      type: 'user',
+      uuid: `${part.messageID}:${part.id}:result`,
+      session_id: part.sessionID,
+      parent_tool_use_id: null,
+      provider: 'opencode',
+      message: {
+        role: 'user',
+        content: [withOpenCodeAttachments({
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: stringify(resultContent),
+          is_error: isError || undefined,
+        }, attachments)],
+      },
+      timestamp: toIsoTimestamp((part as { state?: { time?: { start?: number } } }).state?.time?.start),
+    })
+  }
 
   for (const part of parts) {
     switch (part.type) {
@@ -103,35 +146,83 @@ function buildAssistantContent(parts: Part[]) {
           input: part.state.input ?? {},
         })
         if (part.state.status === 'completed' || part.state.status === 'error') {
-          syntheticResults.push({
-            type: 'user',
-            uuid: `${part.messageID}:${part.id}:result`,
-            session_id: part.sessionID,
-            parent_tool_use_id: null,
-            provider: 'opencode',
-            message: {
-              role: 'user',
-              content: [{
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: part.state.status === 'completed' ? part.state.output : part.state.error,
-                is_error: part.state.status === 'error' || undefined,
-              }],
-            },
-            timestamp: toIsoTimestamp(part.state.time.start),
-          })
+          const attachments = (part.state as { attachments?: FilePart[] }).attachments ?? []
+          pushSyntheticResult(part, toolUseId, part.state.status === 'completed' ? part.state.output : part.state.error, part.state.status === 'error', attachments)
         }
         break
       }
-      case 'patch':
-        content.push(textBlock(`Patched files: ${part.files.join(', ')}`))
+      case 'patch': {
+        const toolUseId = `${part.id}:patch`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'FileChange',
+          input: {
+            status: 'completed',
+            hash: part.hash,
+            changes: part.files.map((path) => ({ path, kind: 'patch' })),
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          files: part.files,
+          hash: part.hash,
+        })
         break
-      case 'agent':
-        content.push(textBlock(`Using agent ${part.name}`))
+      }
+      case 'agent': {
+        const toolUseId = `${part.id}:agent`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'AgentSwitch',
+          input: {
+            name: part.name,
+            status: 'completed',
+            source: part.source,
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Switched to agent: ${part.name}`,
+          source: part.source,
+        })
         break
-      case 'file':
-        content.push(textBlock(`[file] ${part.filename ?? part.url}`))
+      }
+      case 'subtask': {
+        const toolUseId = `${part.id}:subtask`
+        const optional = part as typeof part & {
+          model?: { providerID: string; modelID: string }
+          command?: string
+        }
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Agent',
+          input: {
+            description: part.description,
+            prompt: part.prompt,
+            subagent_type: part.agent,
+            model: optional.model ? `${optional.model.providerID}/${optional.model.modelID}` : undefined,
+            command: optional.command,
+            status: 'launched',
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`,
+          agent: part.agent,
+          model: optional.model,
+          command: optional.command,
+        })
         break
+      }
+      case 'file': {
+        content.push(textBlock(openCodeAttachmentText(part)))
+        const image = openCodeAttachmentImage(part)
+        if (image) content.push(image)
+        break
+      }
       case 'retry':
         content.push(textBlock(`Retry ${part.attempt}: ${part.error.data.message}`))
         break
@@ -159,20 +250,17 @@ function messageUsage(info: Message): ApiMessage['usage'] | undefined {
   }
 }
 
-export function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
-  return JSON.stringify(model)
-}
-
-export function decodeOpenCodeModelValue(value: string | null | undefined): OpenCodeModelRef | null {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as Partial<OpenCodeModelRef>
-    return typeof parsed.providerID === 'string' && typeof parsed.modelID === 'string'
-      ? { providerID: parsed.providerID, modelID: parsed.modelID }
-      : null
-  } catch {
-    return null
-  }
+/**
+ * OpenCode 2 dropped session sharing, and nothing else this provider advertises.
+ * The reflect is gated per session rather than per provider because both server
+ * generations are supported at once (lib/opencode2Client.ts) — a user with a 1.x
+ * server must keep the button, and one on 2.x must not be offered an action that
+ * can only fail. `version` is the server's own, and the compat client stamps
+ * `OPENCODE_2_VERSION` on every session it maps.
+ */
+function capabilitiesFor(session: OpenCodeSession) {
+  if (!session.version?.startsWith('2')) return OPENCODE_CAPABILITIES
+  return { ...OPENCODE_CAPABILITIES, shareSession: false, unshareSession: false }
 }
 
 export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: string | null, firstPrompt?: string): Session {
@@ -186,7 +274,8 @@ export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: strin
     tag,
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
-    capabilities: OPENCODE_CAPABILITIES,
+    capabilities: capabilitiesFor(session),
+    parentSessionId: session.parentID,
   }
 }
 
@@ -201,8 +290,9 @@ export function mapOpenCodeSessionToInfo(session: OpenCodeSession, tag: string |
     tag: tag ?? undefined,
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
-    capabilities: OPENCODE_CAPABILITIES,
+    capabilities: capabilitiesFor(session),
     currentModel,
+    parentSessionId: session.parentID,
   }
 }
 
@@ -211,6 +301,13 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
 
   for (const entry of messages) {
     const timestamp = toIsoTimestamp(entry.info.time.created)
+    // Everything produced below came from this one bundle. See lib/rawFrames.ts.
+    const startedAt = result.length
+    const recordEntry = () => recordRawFrames(result.slice(startedAt), {
+      source: 'opencode.sdk.event',
+      messageType: entry.info.role,
+      payload: entry,
+    })
 
     if (entry.info.role === 'user') {
       result.push({
@@ -225,6 +322,7 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
         },
         timestamp,
       })
+      recordEntry()
       continue
     }
 
@@ -243,32 +341,31 @@ export function mapOpenCodeMessagesToSessionMessages(messages: OpenCodeMessageBu
       timestamp,
     })
     result.push(...assistant.syntheticResults)
+    recordEntry()
   }
 
   return result
 }
 
-export function mapOpenCodeModelsToSessionModels(config: ConfigProvidersResponse): SessionModelInfo[] {
-  const models: SessionModelInfo[] = []
-  for (const provider of config.providers) {
-    for (const model of Object.values(provider.models)) {
-      models.push({
-        value: encodeOpenCodeModelValue({ providerID: provider.id, modelID: model.id }),
-        displayName: `${provider.name} · ${model.name}`,
-        description: `${provider.id}/${model.id}`,
-        supportsEffort: Boolean(model.capabilities.reasoning),
-      })
-    }
-  }
-  return models
-}
-
 export function currentOpenCodeModelValue(message?: Message): string | null {
   if (!message) return null
-  if (message.role === 'user') {
-    return encodeOpenCodeModelValue(message.model)
+  const model = message.role === 'user'
+    ? message.model
+    : { providerID: message.providerID, modelID: message.modelID, variant: (message as Message & { variant?: string }).variant }
+  // A record that ran no model (a user `!command`) carries empty ids; encoding
+  // them put `{"providerID":"","modelID":""}` in the header as the model name.
+  if (!model?.providerID || !model.modelID) return null
+  return encodeOpenCodeModelValue(model)
+}
+
+/** The model the transcript last ran under — the newest message that names
+ *  one, so a trailing record that ran none (a `!command`) does not hide it. */
+export function latestOpenCodeModelValue(messages: Array<{ info?: Message }>): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = currentOpenCodeModelValue(messages[index]?.info)
+    if (value) return value
   }
-  return encodeOpenCodeModelValue({ providerID: message.providerID, modelID: message.modelID })
+  return null
 }
 
 export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string | undefined {
@@ -283,14 +380,23 @@ export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string |
   return undefined
 }
 
-export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null {
+export function mapOpenCodeContextUsage(message?: Message, maxTokens = 0): ContextUsage | null {
   if (!message || message.role !== 'assistant') return null
-  const totalTokens = message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
+  // Newer OpenCode payloads normalize provider-specific cache semantics into
+  // `total`. Prefer it because cached tokens are additive for some providers
+  // and already included in input for others.
+  const normalizedTotal = (message.tokens as typeof message.tokens & { total?: number }).total
+  const totalTokens = normalizedTotal
+    ?? message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
+  // An assistant message is announced before it has any usage (every step
+  // start, and a user `!command`'s record), and zero there means "not known
+  // yet". Reporting it reset the context meter to empty mid-turn.
+  if (!totalTokens) return null
   return {
     totalTokens,
-    maxTokens: 0,
-    percentage: 0,
-    model: encodeOpenCodeModelValue({ providerID: message.providerID, modelID: message.modelID }),
+    maxTokens,
+    percentage: maxTokens > 0 ? totalTokens / maxTokens * 100 : 0,
+    model: currentOpenCodeModelValue(message) ?? '',
     categories: [
       { name: 'Input', tokens: message.tokens.input, color: 'var(--cyan)' },
       { name: 'Cached Read', tokens: message.tokens.cache.read, color: 'var(--green)' },
@@ -301,6 +407,18 @@ export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null 
   }
 }
 
+export function updateOpenCodeTurnOutputUsage(
+  outputByMessageId: Map<string, number>,
+  message: Message,
+  currentTotal: number,
+): number {
+  if (message.role !== 'assistant') return currentTotal
+  const nextOutput = Math.max(0, message.tokens.output)
+  const previousOutput = outputByMessageId.get(message.id) ?? 0
+  outputByMessageId.set(message.id, nextOutput)
+  return Math.max(0, currentTotal - previousOutput + nextOutput)
+}
+
 export function mapOpenCodeDiagnosticsToSections(params: {
   providers: ConfigProvidersResponse
   commands: CommandListResponse
@@ -308,6 +426,8 @@ export function mapOpenCodeDiagnosticsToSections(params: {
   lsp: LspStatus[]
   formatters: FormatterStatus[]
   mcp: Record<string, McpStatus>
+  children?: OpenCodeSession[]
+  currentSession?: OpenCodeSession
 }): SessionDiagnosticSection[] {
   const connectedProviders = params.providers.providers.map((provider) =>
     `${provider.id} · default ${params.providers.default[provider.id] ?? 'none'}`
@@ -317,7 +437,7 @@ export function mapOpenCodeDiagnosticsToSections(params: {
     `${name} · ${status.status}${'error' in status && status.error ? ` · ${status.error}` : ''}`
   )
 
-  return [
+  const sections: SessionDiagnosticSection[] = [
     {
       id: 'providers',
       title: 'PROVIDERS',
@@ -349,6 +469,19 @@ export function mapOpenCodeDiagnosticsToSections(params: {
       items: mcpItems.length > 0 ? mcpItems : ['None'],
     },
   ]
+
+  sections.push({
+    id: 'session',
+    title: 'SESSION',
+    items: [
+      params.currentSession?.share?.url ? `Share ${params.currentSession.share.url}` : 'Share not active',
+      params.children && params.children.length > 0
+        ? `Children ${params.children.length}: ${params.children.slice(0, 5).map((child) => child.id).join(', ')}`
+        : 'Children none',
+    ],
+  })
+
+  return sections
 }
 
 export function summarizeOpenCodeDiffs(diffs: FileDiff[]): string[] {

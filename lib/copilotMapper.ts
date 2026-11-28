@@ -1,15 +1,17 @@
+import { inlineImageBlock } from './imageContent'
 import type {
+  Citations,
   GetAuthStatusResponse,
   GetStatusResponse,
-  ModelInfo,
-  SessionContext,
+  Model,
   SessionEvent,
   SessionMetadata,
-} from '@github/copilot-sdk'
+} from '@microsoft/copilot-sdk'
 import type {
   ApiMessage,
   ContentBlock,
   ContextUsage,
+  ReasoningEffortLevel,
   Session,
   SessionDiagnosticSection,
   SessionInfo,
@@ -17,6 +19,8 @@ import type {
   SessionModelInfo,
 } from './types'
 import { COPILOT_CAPABILITIES } from './provider'
+import { REASONING_EFFORT_LEVELS } from './extensions/providers/runtimeCore'
+import { recordRawFrames } from './rawFrames'
 
 type CopilotStoredMetadata = {
   title: string | null
@@ -64,10 +68,60 @@ function attachmentLabel(attachment: Record<string, unknown>): string | null {
 function userMessageContent(event: Extract<SessionEvent, { type: 'user.message' }>): string {
   const parts = [event.data.content]
   for (const attachment of event.data.attachments ?? []) {
-    const label = attachmentLabel(attachment as Record<string, unknown>)
+    const label = attachmentLabel(attachment as unknown as Record<string, unknown>)
     if (label) parts.push(label)
   }
   return parts.filter(Boolean).join('\n\n').trim()
+}
+
+function userMessageBlocks(event: Extract<SessionEvent, { type: 'user.message' }>, assets: Map<string, unknown>): ApiMessage['content'] {
+  const images = (event.data.attachments ?? []).flatMap(attachment => {
+    const image = inlineImageBlock(attachment) ?? inlineImageBlock('assetId' in attachment && attachment.assetId ? assets.get(attachment.assetId) : null)
+    return image ? [image] : []
+  })
+  return images.length ? [{ type: 'text', text: userMessageContent(event) }, ...images] : userMessageContent(event)
+}
+
+function toolResultBlocks(event: Extract<SessionEvent, { type: 'tool.execution_complete' }>, assets: Map<string, unknown>): string | ContentBlock[] {
+  const candidates = [...(event.data.result?.contents ?? []), ...(event.data.result?.binaryResultsForLlm ?? [])]
+  const images = candidates.flatMap(value => { const image = inlineImageBlock(value) ?? inlineImageBlock('assetId' in value ? assets.get(value.assetId) : null); return image ? [image] : [] })
+  return images.length ? [{ type: 'text', text: toolResultContent(event) }, ...images] : toolResultContent(event)
+}
+
+// Citations are experimental (Anthropic models only, opt-in via enableCitations) and give
+// span->source provenance for generated text. Rather than a bespoke inline-marker renderer,
+// we insert numeric markers at each span's end offset and append a source list — plain
+// markdown that the existing text renderer already handles in both web and TUI.
+function applyCitations(content: string, citations: Citations | undefined): string {
+  if (!citations || citations.spans.length === 0) return content
+
+  const sourceIndexById = new Map<string, number>()
+  for (const span of citations.spans) {
+    for (const ref of span.references) {
+      if (!sourceIndexById.has(ref.sourceId)) sourceIndexById.set(ref.sourceId, sourceIndexById.size + 1)
+    }
+  }
+
+  const spansByEndDesc = [...citations.spans].sort((a, b) => b.endIndex - a.endIndex)
+  let marked = content
+  for (const span of spansByEndDesc) {
+    const indices = [...new Set(span.references.map((ref) => sourceIndexById.get(ref.sourceId)))]
+      .filter((n): n is number => n != null)
+      .sort((a, b) => a - b)
+    if (indices.length === 0) continue
+    const marker = indices.map((n) => `[${n}]`).join('')
+    const offset = Math.max(0, Math.min(span.endIndex, marked.length))
+    marked = `${marked.slice(0, offset)}${marker}${marked.slice(offset)}`
+  }
+
+  const orderedSources = [...sourceIndexById.entries()].sort((a, b) => a[1] - b[1])
+  const sourceLines = orderedSources.map(([sourceId, index]) => {
+    const source = citations.sources.find((s) => s.id === sourceId)
+    const label = source?.title || source?.path || source?.url || sourceId
+    return source?.url ? `${index}. [${label}](${source.url})` : `${index}. ${label}`
+  })
+
+  return `${marked}\n\n---\n**Sources:**\n${sourceLines.join('\n')}`
 }
 
 function assistantMessageContent(event: Extract<SessionEvent, { type: 'assistant.message' }>): ApiMessage['content'] {
@@ -78,7 +132,7 @@ function assistantMessageContent(event: Extract<SessionEvent, { type: 'assistant
   }
 
   if (event.data.content.trim()) {
-    blocks.push({ type: 'text', text: event.data.content })
+    blocks.push({ type: 'text', text: applyCitations(event.data.content, event.data.citations) })
   }
 
   for (const toolRequest of event.data.toolRequests ?? []) {
@@ -107,13 +161,114 @@ function toolResultContent(event: Extract<SessionEvent, { type: 'tool.execution_
     ?? (event.data.success ? 'Tool completed.' : 'Tool failed.')
 }
 
-function sessionContextFromEvents(events: SessionEvent[]): SessionContext | undefined {
+function usageFromCopilotEvent(event: Extract<SessionEvent, { type: 'assistant.usage' }>): NonNullable<ApiMessage['usage']> {
+  return {
+    input_tokens: event.data.inputTokens ?? 0,
+    output_tokens: event.data.outputTokens ?? 0,
+    cache_read_input_tokens: event.data.cacheReadTokens ?? 0,
+    cache_creation_input_tokens: event.data.cacheWriteTokens ?? 0,
+  }
+}
+
+function mergeUsage(
+  left: ApiMessage['usage'] | undefined,
+  right: ApiMessage['usage'] | undefined,
+): ApiMessage['usage'] | undefined {
+  if (!left) return right
+  if (!right) return left
+  return {
+    input_tokens: left.input_tokens + right.input_tokens,
+    output_tokens: left.output_tokens + right.output_tokens,
+    cache_read_input_tokens: (left.cache_read_input_tokens ?? 0) + (right.cache_read_input_tokens ?? 0),
+    cache_creation_input_tokens: (left.cache_creation_input_tokens ?? 0) + (right.cache_creation_input_tokens ?? 0),
+  }
+}
+
+function sessionContextFromEvents(events: SessionEvent[]) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event.type === 'session.resume' && event.data.context) return event.data.context
     if (event.type === 'session.start' && event.data.context) return event.data.context
   }
   return undefined
+}
+
+function formatKeyValueSummary(value: Record<string, unknown> | undefined): string {
+  if (!value) return ''
+  return Object.entries(value)
+    .flatMap(([key, entry]) => {
+      if (entry == null) return []
+      if (Array.isArray(entry)) return [`${key}: ${entry.join(', ')}`]
+      if (typeof entry === 'object') return [`${key}: ${JSON.stringify(entry)}`]
+      return [`${key}: ${String(entry)}`]
+    })
+    .join('\n')
+}
+
+function summarizeCopilotUiCompletion(
+  event: Extract<SessionEvent, { type: 'user_input.completed' | 'elicitation.completed' | 'exit_plan_mode.completed' }>,
+): string {
+  switch (event.type) {
+    case 'user_input.completed': {
+      const answer = typeof event.data.answer === 'string' ? event.data.answer.trim() : ''
+      if (!answer) return 'User input request completed.'
+      return event.data.wasFreeform
+        ? `User input submitted (freeform): ${answer}`
+        : `User input selected: ${answer}`
+    }
+    case 'elicitation.completed': {
+      const action = typeof event.data.action === 'string' ? event.data.action : 'completed'
+      const content = event.data.content && typeof event.data.content === 'object'
+        ? formatKeyValueSummary(event.data.content as Record<string, unknown>)
+        : ''
+      return [
+        `Elicitation ${action}.`,
+        content,
+      ].filter(Boolean).join('\n')
+    }
+    case 'exit_plan_mode.completed': {
+      const lines = [
+        typeof event.data.approved === 'boolean'
+          ? `Plan mode ${event.data.approved ? 'approved' : 'not approved'}.`
+          : 'Plan mode exit completed.',
+        typeof event.data.selectedAction === 'string' ? `Action: ${event.data.selectedAction}` : '',
+        typeof event.data.autoApproveEdits === 'boolean'
+          ? `Auto-approve edits: ${event.data.autoApproveEdits ? 'on' : 'off'}`
+          : '',
+        typeof event.data.feedback === 'string' && event.data.feedback.trim()
+          ? `Feedback: ${event.data.feedback.trim()}`
+          : '',
+      ].filter(Boolean)
+      return lines.join('\n')
+    }
+  }
+  return 'Interaction completed.'
+}
+
+function mapCopilotUiCompletionEvent(
+  sessionId: string,
+  event: Extract<SessionEvent, { type: 'user_input.completed' | 'elicitation.completed' | 'exit_plan_mode.completed' }>,
+  turnId?: string,
+): SessionMessage {
+  const rawData = event.data as unknown as Record<string, unknown>
+  const { content: rawContent, ...restData } = rawData
+  return {
+    type: 'system',
+    uuid: event.id,
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    provider: 'copilot',
+    turnId,
+    timestamp: event.timestamp,
+    message: {
+      type: 'system',
+      subtype: event.type.replace(/\./g, '_'),
+      event_type: event.type,
+      raw_content: rawContent,
+      content: summarizeCopilotUiCompletion(event),
+      ...restData,
+    },
+  }
 }
 
 export function deriveCopilotState(events: SessionEvent[], metadata?: SessionMetadata | null): CopilotDerivedState {
@@ -175,7 +330,7 @@ export function mapCopilotSessionToSession(
     summary: metadata.summary ?? metadata.sessionId,
     customTitle: stored.title ?? undefined,
     lastModified: metadata.modifiedTime.getTime(),
-    cwd: metadata.context?.cwd,
+    cwd: metadata.context?.workingDirectory,
     tag: stored.tag ?? null,
     createdAt: metadata.startTime.getTime(),
     provider: 'copilot',
@@ -211,9 +366,14 @@ export function mapCopilotSessionToInfo(
 
 export function mapCopilotEventsToSessionMessages(sessionId: string, events: SessionEvent[]): SessionMessage[] {
   const messages: SessionMessage[] = []
+  const assets = new Map<string, unknown>()
+  for (const event of events) if (event.type === 'session.binary_asset') assets.set(event.data.assetId, event.data)
   let currentTurnId: string | undefined
+  const lastAssistantMessageIndexByTurn = new Map<string, number>()
+  const pendingUsageByTurn = new Map<string, NonNullable<ApiMessage['usage']>>()
 
   for (const event of events) {
+    const startedAt = messages.length
     switch (event.type) {
       case 'assistant.turn_start':
         currentTurnId = event.data.turnId
@@ -233,7 +393,7 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
           timestamp: event.timestamp,
           message: {
             role: 'user',
-            content: userMessageContent(event),
+            content: userMessageBlocks(event, assets),
           },
         })
         break
@@ -266,8 +426,67 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
             content: assistantMessageContent(event),
           },
         })
+        if (currentTurnId) {
+          const index = messages.length - 1
+          lastAssistantMessageIndexByTurn.set(currentTurnId, index)
+          const pendingUsage = pendingUsageByTurn.get(currentTurnId)
+          if (pendingUsage) {
+            ;(messages[index].message as ApiMessage).usage = pendingUsage
+            pendingUsageByTurn.delete(currentTurnId)
+          }
+        }
         break
+      case 'assistant.usage': {
+        if (!currentTurnId) break
+        const usage = mergeUsage(pendingUsageByTurn.get(currentTurnId), usageFromCopilotEvent(event))
+        const assistantIndex = lastAssistantMessageIndexByTurn.get(currentTurnId)
+        if (assistantIndex != null) {
+          const message = messages[assistantIndex]
+          if (message?.type === 'assistant') {
+            ;(message.message as ApiMessage).usage = mergeUsage((message.message as ApiMessage).usage, usage)
+          }
+        } else if (usage) {
+          pendingUsageByTurn.set(currentTurnId, usage as NonNullable<ApiMessage['usage']>)
+        }
+        break
+      }
+      // A user `!command` (the SDK's user-requested shell): bash-mode rows,
+      // the command then its output, as Claude Code and the other providers
+      // show them — not an orphaned tool result with no call.
+      case 'tool.user_requested': {
+        const data = event.data as { toolCallId?: string; arguments?: { command?: unknown } }
+        const command = typeof data.arguments?.command === 'string' ? data.arguments.command : ''
+        messages.push({
+          type: 'user',
+          uuid: `${event.id}:bash-input`,
+          session_id: sessionId,
+          parent_tool_use_id: null,
+          provider: 'copilot',
+          turnId: currentTurnId,
+          timestamp: event.timestamp,
+          message: { role: 'user', content: `<bash-input>${escapeBashTag(command)}</bash-input>` },
+        })
+        break
+      }
       case 'tool.execution_complete':
+        if ((event.data as { isUserRequested?: boolean }).isUserRequested) {
+          const exitCode = (event.data as { shellExecution?: { exitCode?: number | null } }).shellExecution?.exitCode
+          const status = event.data.success ? '' : exitCode != null && exitCode !== 0 ? `Exit code ${exitCode}` : 'Failed'
+          messages.push({
+            type: 'user',
+            uuid: `${event.id}:bash-output`,
+            session_id: sessionId,
+            parent_tool_use_id: null,
+            provider: 'copilot',
+            turnId: currentTurnId,
+            timestamp: event.timestamp,
+            message: {
+              role: 'user',
+              content: `<bash-stdout>${escapeBashTag(toolResultContent(event).trimEnd())}</bash-stdout><bash-stderr>${escapeBashTag(status)}</bash-stderr>`,
+            },
+          })
+          break
+        }
         messages.push({
           type: 'user',
           uuid: `${event.id}:tool-result`,
@@ -281,7 +500,7 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
             content: [{
               type: 'tool_result',
               tool_use_id: event.data.toolCallId,
-              content: toolResultContent(event),
+              content: toolResultBlocks(event, assets),
               is_error: event.data.success ? undefined : true,
             }],
           },
@@ -302,34 +521,80 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
           },
         })
         break
+      case 'user_input.completed':
+      case 'elicitation.completed':
+      case 'exit_plan_mode.completed':
+        messages.push(mapCopilotUiCompletionEvent(sessionId, event, currentTurnId))
+        break
       default:
         break
     }
+    // Every message this event produced came from the same SDK frame.
+    recordRawFrames(messages.slice(startedAt), {
+      source: 'copilot.sdk.event',
+      messageType: event.type,
+      payload: event,
+    })
   }
 
   return messages
 }
 
-export function mapCopilotModelsToSessionModels(models: ModelInfo[]): SessionModelInfo[] {
-  return models.map((model) => ({
-    value: model.id,
-    displayName: model.name,
-    description: `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens`,
-    supportsEffort: model.capabilities.supports.reasoningEffort,
-    supportedEffortLevels: model.supportedReasoningEfforts,
-  }))
+function longCopilotContextWindow(model: Model | undefined): number | undefined {
+  const promptTokens = model?.billing?.tokenPrices?.longContext?.maxPromptTokens
+  const outputTokens = model?.capabilities?.limits?.max_output_tokens
+  return promptTokens && outputTokens ? promptTokens + outputTokens : undefined
+}
+
+export function mapCopilotModelsToSessionModels(models: Model[]): SessionModelInfo[] {
+  return models.map((model) => {
+    const limits = model.capabilities?.limits
+    const contextWindowTokens = limits?.max_context_window_tokens
+    const longContextMax = longCopilotContextWindow(model)
+    const supportsLongContext = model.supportedContextTiers?.includes('long_context')
+      || !!model.billing?.tokenPrices?.longContext
+    const contextDescription = [
+      contextWindowTokens && `Context ${contextWindowTokens.toLocaleString()} tokens`,
+      longContextMax ? `Long ${longContextMax.toLocaleString()} tokens` : supportsLongContext && 'Long context available',
+    ].filter(Boolean).join(' · ')
+    return {
+      value: model.id,
+      displayName: model.name,
+      description: contextDescription,
+      contextWindowTokens,
+      maxInputTokens: limits?.max_prompt_tokens,
+      maxOutputTokens: limits?.max_output_tokens,
+      supportsEffort: model.capabilities?.supports?.reasoningEffort,
+      supportedEffortLevels: model.supportedReasoningEfforts?.filter(
+        (level): level is ReasoningEffortLevel => REASONING_EFFORT_LEVELS.some(known => known === level),
+      ),
+      supportsLongContext,
+    }
+  })
 }
 
 export function mapCopilotUsageToContextUsage(
   event: Extract<SessionEvent, { type: 'assistant.usage' }>,
-  models: Map<string, ModelInfo>,
-): ContextUsage {
+  models: Map<string, Model>,
+  contextTier: 'default' | 'long_context' = 'default',
+): ContextUsage | null {
+  // assistant.usage is emitted for every API call. Sub-agent, compaction, and
+  // MCP sampling calls do not represent the root conversation's context.
+  if (event.agentId || event.data.initiator) return null
+
   const inputTokens = event.data.inputTokens ?? 0
   const outputTokens = event.data.outputTokens ?? 0
   const cacheReadTokens = event.data.cacheReadTokens ?? 0
   const cacheWriteTokens = event.data.cacheWriteTokens ?? 0
-  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
-  const maxTokens = models.get(event.data.model)?.capabilities.limits.max_context_window_tokens ?? Math.max(totalTokens, 1)
+  // Anthropic reports cached input separately; OpenAI/Gemini include cached
+  // tokens in input and expose cache counts as subsets. Copilot normalizes the
+  // field names but retains the originating API's accounting semantics.
+  const cacheIsAdditionalInput = event.data.apiEndpoint === '/v1/messages'
+    || event.data.model.toLowerCase().includes('claude')
+  const totalTokens = inputTokens + outputTokens + (cacheIsAdditionalInput ? cacheReadTokens + cacheWriteTokens : 0)
+  const model = models.get(event.data.model)
+  const defaultContextWindow = model?.capabilities?.limits?.max_context_window_tokens
+  const maxTokens = (contextTier === 'long_context' ? longCopilotContextWindow(model) : defaultContextWindow) ?? 0
 
   return {
     totalTokens,
@@ -352,7 +617,16 @@ export function mapCopilotDiagnosticsToSections(params: {
   currentModel: string | null
   mode: string | null
   tools: Array<{ name: string; description?: string }>
+  currentTools?: Array<{
+    name?: string
+    displayName?: string
+    description?: string
+    mcpServerName?: string
+    mcpToolName?: string
+    deferLoading?: boolean
+  }>
   quotaItems: string[]
+  integrationItems?: string[]
   metadata?: SessionMetadata | null
   events: SessionEvent[]
   workspacePath?: string
@@ -394,15 +668,39 @@ export function mapCopilotDiagnosticsToSections(params: {
     },
     {
       id: 'tools',
-      title: 'TOOLS',
+      title: 'AVAILABLE TOOLS',
       items: params.tools.length > 0
         ? params.tools.slice(0, 20).map((tool) => tool.description ? `${tool.name} · ${tool.description}` : tool.name)
         : ['None'],
+    },
+    {
+      id: 'current-tools',
+      title: 'INITIALIZED TOOLS',
+      items: params.currentTools && params.currentTools.length > 0
+        ? params.currentTools.slice(0, 30).map((tool) => {
+            const name = tool.displayName ?? tool.name ?? 'unnamed'
+            const source = tool.mcpServerName
+              ? ` · MCP ${tool.mcpServerName}${tool.mcpToolName ? `/${tool.mcpToolName}` : ''}`
+              : ''
+            const deferred = tool.deferLoading ? ' · deferred' : ''
+            const description = tool.description ? ` · ${tool.description}` : ''
+            return `${name}${source}${deferred}${description}`
+          })
+        : ['Unavailable'],
     },
     {
       id: 'quota',
       title: 'QUOTA',
       items: params.quotaItems.length > 0 ? params.quotaItems : ['Unavailable'],
     },
+    {
+      id: 'integrations',
+      title: 'SDK INTEGRATIONS',
+      items: params.integrationItems && params.integrationItems.length > 0 ? params.integrationItems : ['Unavailable'],
+    },
   ]
+}
+
+function escapeBashTag(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

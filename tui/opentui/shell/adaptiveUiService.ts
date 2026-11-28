@@ -1,0 +1,21 @@
+import type { AdaptiveUiService } from '../../../lib/plugins/adaptiveUi'
+import { isRemoteAttached, remoteJson } from '../../../lib/tui/remote'
+// In process the TUI reads its own shape book (its transcript worker feeds it through the same
+// behaviour host); attached to a daemon it asks the daemon, which is where those reads run.
+const lazy = async () => (await import('../../../lib/adaptiveUi/runtime')).nativeAdaptiveUi
+const get = async <T>(): Promise<T> => (await remoteJson<{ result: T }>('/api/adaptive-ui')).result
+const post = async <T>(body: Record<string, unknown>): Promise<T> => (await remoteJson<{ result: T }>('/api/adaptive-ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).result
+export const tuiAdaptiveUi: AdaptiveUiService = {
+  scan: async () => isRemoteAttached() ? get() : (await lazy()).scan(),
+  setStatus: async (id, status) => { isRemoteAttached() ? await post({ action: 'set-status', id, status }) : await (await lazy()).setStatus(id, status) },
+  remove: async id => { isRemoteAttached() ? await post({ action: 'remove', id }) : await (await lazy()).remove(id) },
+  dismissShape: async (key, dismissed) => { isRemoteAttached() ? await post({ action: 'dismiss', key, dismissed }) : await (await lazy()).dismissShape(key, dismissed) },
+  applySuggestion: async id => isRemoteAttached() ? post<string>({ action: 'apply-suggestion', id }) : (await lazy()).applySuggestion(id),
+  dismissSuggestion: async id => { isRemoteAttached() ? await post({ action: 'dismiss-suggestion', id }) : await (await lazy()).dismissSuggestion(id) },
+  designHere: async key => isRemoteAttached() ? post<string>({ action: 'design-here', key }) : (await lazy()).designHere(key),
+  refineHere: async (id, instruction) => isRemoteAttached() ? post<string>({ action: 'refine-here', id, instruction }) : (await lazy()).refineHere(id, instruction),
+  refinePrompt: async id => isRemoteAttached() ? post<string>({ action: 'refine-prompt', id }) : (await lazy()).refinePrompt(id),
+  setAutoDraft: async enabled => { isRemoteAttached() ? await post({ action: 'set-auto-draft', enabled }) : await (await lazy()).setAutoDraft(enabled) },
+  learnFromHistory: async () => isRemoteAttached() ? post<string>({ action: 'learn' }) : (await lazy()).learnFromHistory(),
+  designPrompt: async key => isRemoteAttached() ? post<string>({ action: 'design-prompt', key }) : (await lazy()).designPrompt(key),
+}

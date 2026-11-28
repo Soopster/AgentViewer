@@ -1,0 +1,310 @@
+import { cardBlockLines, decodeCardBlocks, type CardBlock } from './cardBlocks'
+import { boundPluginToolResult, PLUGIN_TOOL_TIMEOUT_MS, pluginToolFullName, validatePluginToolArgs, type PluginToolSpec } from './pluginTools'
+import { onPluginRuntimeEvent } from './runtimeEvents'
+import { recordModDiagnostic } from './modDiagnostics'
+import { recordPluginPermissionReceipt, type PluginPermissionTrace } from './permissionHistory'
+import { createLazyRegistry } from '../extensions/lazyRegistry'
+import { isPluginEnabled, subscribePluginEnablement } from './enablement'
+import { createPluginResourceScope } from './lifecycle'
+import { PLUGIN_API_VERSION, type PluginManifest } from './types'
+import {
+  PluginTurnBlockedError,
+  type PluginAfterTurnContext,
+  type PluginAfterTurnResult,
+  type PluginBehaviorHook,
+  type PluginBehaviorModule,
+  type PluginBeforeTurnContext,
+  type PluginPermissionRequest,
+  type PluginToolCardContext, PluginTranscriptCardContext,
+  type PluginTurnTarget,
+  PLUGIN_PERMISSION_TIMEOUT_MS,
+} from './behavior'
+
+const order = (a: PluginManifest, b: PluginManifest) => (a.behavior?.order ?? 0) - (b.behavior?.order ?? 0) || a.id.localeCompare(b.id)
+
+/** Headless plugins have a lifetime independent of their views. No work at registration. */
+export function createPluginBehaviorHost(
+  manifests: readonly PluginManifest[],
+  loaders: Readonly<Record<string, () => Promise<PluginBehaviorModule>>>,
+) {
+  const contributors = manifests.filter(m => (m.behavior?.hooks.length ?? 0) > 0 || (m.tools?.length ?? 0) > 0).sort(order)
+  const hooked = (hook: PluginBehaviorHook) => contributors.filter(m => m.behavior?.hooks.includes(hook))
+  for (const manifest of contributors) {
+    if (!Object.hasOwn(loaders, manifest.id)) throw new Error(`Plugin ${manifest.id} has no behavior loader`)
+  }
+  const scopes = new Map<string, ReturnType<typeof createPluginResourceScope>>()
+  const registry = createLazyRegistry(loaders, (id, module) => {
+    const manifest = contributors.find(m => m.id === id && m.apiVersion === PLUGIN_API_VERSION)
+    const declaredMissing = manifest?.behavior?.hooks.some(hook => typeof module?.[hook] !== 'function') || manifest?.tools?.some(tool => typeof module?.tools?.[tool.name] !== 'function')
+    if (!manifest || module?.apiVersion !== PLUGIN_API_VERSION || module.pluginId !== id || declaredMissing
+      || (module.deactivate !== undefined && typeof module.deactivate !== 'function')) {
+      throw new Error(`Plugin ${id} behavior API or identity mismatch`)
+    }
+  })
+  const deactivate = (id: string) => {
+    const loaded = registry.peek(id)
+    registry.evict(id)
+    scopes.get(id)?.dispose()
+    scopes.delete(id)
+    try { loaded?.deactivate?.() } catch (error) { console.error(`Plugin ${id} behavior cleanup failed:`, error) }
+  }
+  const unsubscribe = subscribePluginEnablement(() => {
+    for (const manifest of contributors) if (!isPluginEnabled(manifest.id)) deactivate(manifest.id)
+  })
+  const scopeFor = (id: string) => {
+    let scope = scopes.get(id)
+    if (!scope) {
+      scope = createPluginResourceScope(id)
+      scopes.set(id, scope)
+    }
+    return scope
+  }
+  let disposed = false
+  const pendingEvents = new Map<string, { tail: Promise<void>; pending: number }>()
+  const unsubscribeEvents = hooked('runtimeEvent').length ? onPluginRuntimeEvent(event => {
+    for (const manifest of hooked('runtimeEvent')) {
+      if (disposed || !isPluginEnabled(manifest.id)) continue
+      let queue = pendingEvents.get(manifest.id)
+      if (!queue) { queue = { tail: Promise.resolve(), pending: 0 }; pendingEvents.set(manifest.id, queue) }
+      if (queue.pending >= 64) { recordModDiagnostic(manifest.id, 'runtimeEvent', 'Runtime event queue full; metadata event dropped'); continue }
+      queue.pending++
+      const lifetime = scopeFor(manifest.id).signal
+      queue.tail = queue.tail.then(async () => {
+        if (disposed || lifetime.aborted || !isPluginEnabled(manifest.id)) return
+        const signal = AbortSignal.any([lifetime, AbortSignal.timeout(1000)])
+        try { await abortable(signal, async () => (await registry.get(manifest.id)).runtimeEvent!({ event, signal })) }
+        catch (error) { recordModDiagnostic(manifest.id, 'runtimeEvent', error) }
+      }).finally(() => { queue!.pending-- })
+    }
+  }) : () => {}
+  return {
+    isLoaded: (id: string) => registry.peek(id) !== undefined,
+    /** Whether any enabled plugin observes settled turns: the host skips its work otherwise. */
+    observesSettledTurns: () => hooked('afterTurn').some(m => isPluginEnabled(m.id)),
+    dispose() {
+      if (disposed) return
+      disposed = true
+      unsubscribe()
+      unsubscribeEvents()
+      for (const manifest of contributors) deactivate(manifest.id)
+    },
+    async beforeTurn(context: PluginBeforeTurnContext): Promise<Record<string, unknown>> {
+      if (disposed) throw new Error('Plugin behavior host is disposed')
+      context.signal.throwIfAborted()
+      let body = structuredClone(context.body)
+      const target = Object.freeze({ ...context.target })
+      for (const manifest of hooked('beforeTurn')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([context.signal, scopeFor(manifest.id).signal])
+        const result = await abortable(signal, async () => {
+          signal.throwIfAborted()
+          const module = await registry.get(manifest.id)
+          signal.throwIfAborted()
+          return module.beforeTurn!({ target, signal, body: structuredClone(body) })
+        })
+        signal.throwIfAborted()
+        if (!result) continue
+        if (result.action === 'block' && typeof result.reason === 'string' && result.reason.trim()) {
+          throw new PluginTurnBlockedError(manifest.id, result.reason)
+        }
+        if (result.action !== 'patch' || !result.body || typeof result.body !== 'object' || Array.isArray(result.body)) {
+          throw new Error(`Plugin ${manifest.id} returned an invalid beforeTurn result`)
+        }
+        body = { ...body, ...structuredClone(result.body) }
+      }
+      context.signal.throwIfAborted()
+      return body
+    },
+    /** Run beforeSteer hooks in order; a block refuses delivery with its reason. */
+    async beforeSteer(context: { target: PluginTurnTarget; signal: AbortSignal; message: string }): Promise<string> {
+      if (disposed) return context.message
+      let message = context.message
+      const target = Object.freeze({ ...context.target })
+      for (const manifest of hooked('beforeSteer')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([context.signal, scopeFor(manifest.id).signal])
+        const result = await abortable(signal, async () => (await registry.get(manifest.id)).beforeSteer!({ target, signal, message }))
+        if (!result) continue
+        if (result.action === 'block' && typeof result.reason === 'string' && result.reason.trim()) throw new PluginTurnBlockedError(manifest.id, result.reason)
+        if (result.action !== 'patch' || typeof result.message !== 'string' || !result.message.trim()) throw new Error(`Plugin ${manifest.id} returned an invalid beforeSteer result`)
+        message = result.message
+      }
+      return message
+    },
+    /** Whether any enabled plugin answers approvals: bridges skip the call otherwise. */
+    presentsToolCards: () => hooked('toolCard').some(m => isPluginEnabled(m.id)),
+    /** The first plugin presentation of a tool call, or null for the built-in card. Failures and slow hooks count as none. */
+    async toolCard(context: PluginToolCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; blocks?: CardBlock[]; draft?: true; ref?: string; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
+      if (disposed) return null
+      for (const manifest of hooked('toolCard')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(500)])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).toolCard!(context))
+          if (!result) continue
+          const text = typeof result.text === 'string' ? result.text : Array.isArray(result.lines) ? result.lines.filter(line => typeof line === 'string').join('\n') : ''
+          const lines = text ? text.split('\n').map(line => line.slice(0, 400)).slice(0, 40) : []
+          const title = typeof result.title === 'string' && result.title.trim() ? result.title.trim().slice(0, 120) : undefined
+          const blocks = decodeCardBlocks(result.blocks)
+          if (!title && !lines.length && !blocks.length) continue
+          const tone = result.tone === 'success' || result.tone === 'warning' || result.tone === 'error' ? result.tone : 'info'
+          return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), ...(result.draft === true ? { draft: true as const } : {}), ...(typeof result.ref === 'string' ? { ref: result.ref.slice(0, 80) } : {}), tone }
+        } catch (error) {
+          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} toolCard failed:`, error)
+        }
+      }
+      return null
+    },
+    presentsTranscriptCards: () => hooked('transcriptCard').some(m => isPluginEnabled(m.id)),
+    /** The first plugin presentation of a non-tool block, or null for the built-in card. */
+    async transcriptCard(context: PluginTranscriptCardContext): Promise<{ pluginId: string; title?: string; lines: string[]; blocks?: CardBlock[]; tone: 'info' | 'success' | 'warning' | 'error' } | null> {
+      if (disposed) return null
+      for (const manifest of hooked('transcriptCard')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(500)])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).transcriptCard!(context))
+          if (!result) continue
+          const text = typeof result.text === 'string' ? result.text : Array.isArray(result.lines) ? result.lines.filter(line => typeof line === 'string').join('\n') : ''
+          const lines = text ? text.split('\n').map(line => line.slice(0, 400)).slice(0, 40) : []
+          const title = typeof result.title === 'string' && result.title.trim() ? result.title.trim().slice(0, 120) : undefined
+          const blocks = decodeCardBlocks(result.blocks)
+          if (!title && !lines.length && !blocks.length) continue
+          const tone = result.tone === 'success' || result.tone === 'warning' || result.tone === 'error' ? result.tone : 'info'
+          return { pluginId: manifest.id, ...(title ? { title } : {}), lines: lines.length ? lines : cardBlockLines(blocks).slice(0, 40), ...(blocks.length ? { blocks } : {}), tone }
+        } catch (error) {
+          if (!(error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError'))) console.error(`Plugin ${manifest.id} transcriptCard failed:`, error)
+        }
+      }
+      return null
+    },
+    /** The tools enabled plugins offer agents, as an agent will see them. */
+    listTools(): { pluginId: string; name: string; spec: PluginToolSpec }[] {
+      return contributors.filter(m => isPluginEnabled(m.id)).flatMap(m => (m.tools ?? []).map(spec => ({ pluginId: m.id, name: pluginToolFullName(m.id, spec.name), spec })))
+    },
+    /**
+     * Run one tool for an agent. Arguments are checked against the declaration, the handler is given a deadline, and
+     * whatever happens comes back as text for the model: a failure is a result to read, never an exception to the bridge.
+     */
+    async callTool(fullName: string, rawArgs: unknown, outerSignal?: AbortSignal, caller: { cwd?: string } = {}): Promise<{ text: string; isError: boolean }> {
+      if (disposed) return { text: 'plugins are reloading: try again in a moment', isError: true }
+      const entry = this.listTools().find(tool => tool.name === fullName)
+      if (!entry) return { text: `no tool "${fullName.slice(0, 80)}" (plugin tools: ${this.listTools().map(tool => tool.name).join(', ') || 'none are enabled'})`, isError: true }
+      const checked = validatePluginToolArgs(entry.spec, rawArgs)
+      if ('error' in checked) return { text: checked.error, isError: true }
+      const signal = AbortSignal.any([scopeFor(entry.pluginId).signal, AbortSignal.timeout(PLUGIN_TOOL_TIMEOUT_MS), ...(outerSignal ? [outerSignal] : [])])
+      try {
+        const module = await abortable(signal, async () => registry.get(entry.pluginId))
+        const result = await abortable(signal, async () => module.tools![entry.spec.name]!(checked.args, { signal, ...(caller.cwd ? { cwd: caller.cwd } : {}) }))
+        return { text: boundPluginToolResult(result), isError: false }
+      } catch (error) {
+        if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return { text: `${fullName} did not finish within ${PLUGIN_TOOL_TIMEOUT_MS / 1000}s`, isError: true }
+        recordModDiagnostic(entry.pluginId, `tool:${entry.spec.name}`, error)
+        return { text: `${fullName} failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`, isError: true }
+      }
+    },
+    observesSteering: () => hooked('beforeSteer').some(m => isPluginEnabled(m.id)),
+    decidesPermissions: () => hooked('permission').some(m => isPluginEnabled(m.id)),
+    /** Mandatory policy is evaluated completely before any automation decision. */
+    async permission(context: { target: PluginTurnTarget; request: PluginPermissionRequest; signal?: AbortSignal; fallbackAllow?: { pluginId: string; reason?: string } }): Promise<{ pluginId: string; decision: 'allow' | 'deny'; reason?: string } | null> {
+      if (disposed) return null
+      const target = Object.freeze({ ...context.target })
+      const request = freezePermissionRequest(structuredClone(context.request))
+      const traces: PluginPermissionTrace[] = []
+      type Decision = { pluginId: string; decision: 'allow' | 'deny'; reason?: string }
+      let allowed: Decision | null = null, denied: Decision | null = null, mustAsk = false
+      const modeOf = (manifest: PluginManifest): 'policy' | 'automation' => manifest.behavior?.permissionMode === 'policy' ? 'policy' : 'automation'
+      const finish = (decision: Decision | null) => {
+        recordPluginPermissionReceipt({ target, kind: request.kind, ...(request.toolName ? { toolName: request.toolName } : {}), decision: decision?.decision ?? 'ask', ...(decision ? { pluginId: decision.pluginId } : {}), traces })
+        return decision
+      }
+      const run = async (manifest: PluginManifest) => {
+        const mode = modeOf(manifest)
+        if (disposed || !isPluginEnabled(manifest.id) || context.signal?.aborted) { traces.push({ pluginId: manifest.id, mode, outcome: 'cancelled' }); mustAsk = true; return undefined }
+        const signal = AbortSignal.any([scopeFor(manifest.id).signal, AbortSignal.timeout(PLUGIN_PERMISSION_TIMEOUT_MS), ...(context.signal ? [context.signal] : [])])
+        try {
+          const result = await abortable(signal, async () => (await registry.get(manifest.id)).permission!({ target, signal, request }))
+          signal.throwIfAborted()
+          if (result && !['allow', 'deny', 'ask'].includes(result.decision)) throw new Error('Invalid permission decision')
+          traces.push({ pluginId: manifest.id, mode, outcome: result?.decision ?? 'abstain' })
+          return result
+        } catch (error) {
+          traces.push({ pluginId: manifest.id, mode, outcome: signal.aborted && !isPluginEnabled(manifest.id) ? 'cancelled' : 'error' })
+          recordModDiagnostic(manifest.id, 'permission', error)
+          mustAsk = true
+          return undefined
+        }
+      }
+      const contributors = hooked('permission').filter(manifest => isPluginEnabled(manifest.id))
+      for (const manifest of contributors.filter(manifest => modeOf(manifest) === 'policy')) {
+        const result = await run(manifest)
+        if (result?.decision === 'ask') mustAsk = true
+        if (result?.decision === 'deny' || result?.decision === 'allow') {
+          const decision = { pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) }
+          if (result.decision === 'deny') denied ??= decision
+          else allowed ??= decision
+        }
+      }
+      if (denied) return finish(denied)
+      if (mustAsk || context.signal?.aborted) return finish(null)
+      if (allowed) return finish(allowed)
+      for (const manifest of contributors.filter(manifest => modeOf(manifest) === 'automation')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const result = await run(manifest)
+        if (mustAsk || result?.decision === 'ask') return finish(null)
+        if (result?.decision === 'allow' || result?.decision === 'deny') return finish({ pluginId: manifest.id, decision: result.decision, ...(typeof result.reason === 'string' ? { reason: result.reason.slice(0, 500) } : {}) })
+      }
+      return finish(context.fallbackAllow ? { ...context.fallbackAllow, decision: 'allow' } : null)
+    },
+    /**
+     * Run every enabled afterTurn hook in order. One hook's failure is logged
+     * and the next still runs; the first valid follow-up is returned with the
+     * plugin that asked for it.
+     */
+    async afterTurn(context: Omit<PluginAfterTurnContext, 'signal'>): Promise<{ pluginId: string; message: string } | null> {
+      if (disposed) return null
+      const target = Object.freeze({ ...context.target })
+      let followUp: { pluginId: string; message: string } | null = null
+      for (const manifest of hooked('afterTurn')) {
+        if (!isPluginEnabled(manifest.id)) continue
+        const signal = scopeFor(manifest.id).signal
+        let result: PluginAfterTurnResult
+        try {
+          result = await abortable(signal, async () => {
+            const module = await registry.get(manifest.id)
+            signal.throwIfAborted()
+            return module.afterTurn!({ target, signal, readMessages: context.readMessages, followUps: context.followUps })
+          })
+        } catch (error) {
+          if (!(error instanceof Error && error.name === 'AbortError')) console.error(`Plugin ${manifest.id} afterTurn failed:`, error)
+          continue
+        }
+        if (!result || followUp) continue
+        if (result.action === 'follow-up' && typeof result.message === 'string' && result.message.trim()) {
+          followUp = { pluginId: manifest.id, message: result.message }
+        } else {
+          console.error(`Plugin ${manifest.id} returned an invalid afterTurn result`)
+        }
+      }
+      return followUp
+    },
+  }
+}
+
+/** Cancelling/disabling doesn't wait for a hook which ignores its signal. */
+function abortable<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(signal.reason)
+    signal.addEventListener('abort', aborted, { once: true })
+    Promise.resolve().then(run).then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
+  })
+}
+
+/** Hooks cannot change a later policy's view of nested tool arguments or paths. */
+function freezePermissionRequest<T>(value: T, seen = new Set<object>()): T {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value
+  seen.add(value)
+  for (const child of Object.values(value)) freezePermissionRequest(child, seen)
+  return Object.freeze(value)
+}

@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict'
+import { isAgentProvider } from './lib/provider'
+import { getProviderComposer } from './lib/providerComposer'
+import { NEW_SESSION_PROVIDER_IDS } from './lib/extensions/providers/catalog'
+import { getSessionAdapter } from './lib/extensions/providers/registry'
+import { listProviderInstances, withProviderInstance } from './lib/providerInstances'
+import { listViewSessions, readViewSessionInfo, listViewSessionMessageWindow } from './lib/sessionReads'
+
+assert.equal(isAgentProvider('contributor-fixture'), true)
+assert.equal(isAgentProvider('__proto__'), false)
+assert.equal(NEW_SESSION_PROVIDER_IDS.includes('contributor-fixture'), true)
+assert.equal(getProviderComposer('contributor-fixture').label, 'Contributor Fixture')
+const cache = () => Object.keys(require.cache)
+assert.equal(cache().some(name => name.includes('/node_modules/')), false, 'metadata imports no SDK or dependency runtime')
+assert.equal(cache().some(name => /builtinRuntime|sessionBackend/.test(name)), false)
+await getSessionAdapter('contributor-fixture')
+assert.equal(cache().some(name => /builtinRuntime|sessionBackend/.test(name)), false, 'read adapter does not activate turns')
+assert.equal(cache().some(name => name.endsWith('/contributor-fixture/runtime.ts')), false)
+assert.ok((await listProviderInstances()).some(instance => instance.provider === 'contributor-fixture'))
+for (const instance of ['fixture-a', 'fixture-b']) {
+  await withProviderInstance(instance, 'contributor-fixture', async () => {
+    const page = await listViewSessions({ provider: 'contributor-fixture', providerInstanceId: instance, limit: 10, offset: 0 })
+    assert.equal(page[0]?.summary, instance)
+    assert.equal(page[0]?.providerInstanceId, instance)
+    assert.equal((await readViewSessionInfo('same-native-id', 'contributor-fixture'))?.providerInstanceId, instance)
+    const window = await listViewSessionMessageWindow('same-native-id', { limit: 10, offset: 0 }, 'contributor-fixture')
+    assert.equal(window.messages[0]?.message.content, instance)
+    assert.equal(window.messages[0]?.providerInstanceId, instance)
+  })
+}
+// Reads also remain scoped when two accounts are awaiting work concurrently.
+await Promise.all(['fixture-a', 'fixture-b'].map(instance => withProviderInstance(instance, 'contributor-fixture', async () => {
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const window = await listViewSessionMessageWindow('same-native-id', { limit: 10, offset: 0 }, 'contributor-fixture')
+  assert.equal(window.messages[0]?.message.content, instance)
+  assert.equal(window.messages[0]?.providerInstanceId, instance)
+})))
+const backend = await import('./lib/sessionBackend')
+for (const instance of ['fixture-a', 'fixture-b']) {
+  await withProviderInstance(instance, 'contributor-fixture', async () => {
+    const created = await backend.createNewViewSession({ provider: 'contributor-fixture' })
+    assert.equal(created.provider, 'contributor-fixture')
+    await backend.prewarmViewSession({ provider: 'contributor-fixture', sessionId: created.sessionId })
+    const abort = new AbortController()
+    const response = await backend.streamViewSessionTurn({ provider: 'contributor-fixture', sessionId: created.sessionId,
+      signal: abort.signal, body: { message: 'hello' } })
+    assert.deepEqual(await backend.runViewSessionAction({ provider: 'contributor-fixture', sessionId: created.sessionId, body: { action: 'steer', message: 'follow up', allowInterrupt: false } }), { delivered: false, messageUuid: undefined })
+    if (instance === 'fixture-a') await backend.interruptViewSession(created.sessionId)
+    else abort.abort()
+    assert.match(await response.text(), /fixture stream/)
+    await assert.rejects(backend.forkViewSession({ provider: 'contributor-fixture', sessionId: created.sessionId, body: {} }), /not supported/)
+    await assert.rejects(backend.runViewSessionAction({ provider: 'contributor-fixture', sessionId: created.sessionId, body: {} }), /not supported/)
+    await assert.rejects(backend.rewindOrRollbackViewSession({ provider: 'contributor-fixture', sessionId: created.sessionId, body: {} }), /not supported/)
+    await backend.closeViewSession(created.sessionId, 'contributor-fixture')
+  })
+}
+// Closing an active session must interrupt before releasing SDK resources.
+await withProviderInstance('fixture-a', 'contributor-fixture', async () => {
+  const response = await backend.streamViewSessionTurn({ provider: 'contributor-fixture', sessionId: 'same-native-id', signal: new AbortController().signal, body: { message: 'close while running' } })
+  await backend.closeViewSession('same-native-id', 'contributor-fixture')
+  assert.match(await response.text(), /fixture stream/)
+})
+const { calls } = await import('./lib/extensions/providers/contributor-fixture/runtime')
+for (const instance of ['fixture-a', 'fixture-b']) {
+  assert.deepEqual(calls.filter(call => call.instance === instance).map(call => call.operation), instance === 'fixture-a' ? ['create', 'prewarm', 'stream', 'cancel', 'close', 'stream', 'cancel', 'close'] : ['create', 'prewarm', 'stream', 'cancel', 'close'])
+}
+assert.equal(cache().some(name => name.endsWith('/builtinRuntime.ts')), false, 'extension runtime never falls back to a bundled SDK')
+console.log('provider extension contributor workflow: PASS (two instances, reads, create, stream, interrupt, abort, close, unsupported operations)')

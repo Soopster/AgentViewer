@@ -1,0 +1,15 @@
+import type { SessionAdapter } from '../../../adapters/types'
+import { currentProviderInstanceId } from '../../../providerInstances'
+import { manifest } from './manifest'
+
+export const adapter: SessionAdapter = {
+  provider: 'contributor-fixture',
+  async listSessions() { return [{ sessionId: 'same-native-id', provider: 'contributor-fixture', summary: currentProviderInstanceId() }] },
+  async readSessionInfo(sessionId) {
+    return { sessionId, provider: 'contributor-fixture', summary: 'Fixture', lastModified: 1, capabilities: manifest.capabilities }
+  },
+  async readAllMessages(sessionId) {
+    return { messages: [{ type: 'assistant', uuid: 'fixture-message', session_id: sessionId, parent_tool_use_id: null,
+      message: { role: 'assistant', content: currentProviderInstanceId() } }] }
+  },
+}

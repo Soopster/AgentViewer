@@ -1,0 +1,159 @@
+/** @jsxImportSource @opentui/react */
+import { useEffect, useState } from 'react'
+import { PLUGIN_API_VERSION, type PluginViewModule, type PluginWidgetModule } from '../../../lib/plugins/types'
+import type { GitSummary } from '../../../lib/gitProvider'
+import { fitText, MODAL_CONTENT_Z_INDEX, iconSetSegmentCaps, tuiIcon, type TuiPluginView, type TuiPluginViewProps, type TuiPluginWidget, type TuiPluginWidgetProps } from '../../../tui/opentui/shell/sdk'
+import { availableActions, overviewSegments, runOmniAction } from '../model'
+import { moveLayoutItem, omniGlyph, omniItemLabel, toggleLayoutItem, useOmniLayout } from '../layout'
+import { omniLayoutStore } from './storage'
+
+export function OmniBar({ services, theme, width }: TuiPluginWidgetProps) {
+  const overview = services?.['shell-overview']
+  const layout = useOmniLayout(omniLayoutStore)
+  const cwd = overview?.snapshot.cwd ?? ''
+  const readGit = overview?.readGit
+  const [gitState, setGit] = useState<{ cwd: string; summary: GitSummary | null } | null>(null)
+  const [now, setNow] = useState(Date.now)
+  const [hovered, setHovered] = useState<string | null>(null)
+  const running = overview?.snapshot.running ?? false
+  const startedAt = overview?.snapshot.startedAt ?? null
+  useEffect(() => {
+    if (!cwd || !readGit) return
+    let live = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const refresh = async () => {
+      try {
+        const summary = await readGit(cwd)
+        if (live) setGit(previous => previous?.cwd === cwd && JSON.stringify(previous.summary) === JSON.stringify(summary) ? previous : { cwd, summary })
+      } catch { /* A directory without Git still has workspace context. */ }
+      finally { if (live) timer = setTimeout(() => { void refresh() }, 5_000) }
+    }
+    void refresh()
+    return () => { live = false; clearTimeout(timer) }
+  }, [cwd, readGit])
+  useEffect(() => {
+    if (!running || startedAt === null) return
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [running, startedAt])
+  if (!overview) return null
+  const caps = iconSetSegmentCaps(overview.terminalIconSet)
+  const powerline = caps !== null
+  const segments = overviewSegments(overview.snapshot, gitState?.cwd === cwd ? gitState.summary : null, width, now, overview.commands?.ids, layout,
+    id => tuiIcon(overview.terminalIconSet, id, omniGlyph(id)))
+  // Keep attention and command access intact; the repository/activity share the rest.
+  // Attention, commands and the shortcuts keep their own width; the repository and activity share the rest.
+  const flexible = (segment: { action: string }) => segment.action === 'repository' || segment.action === 'session'
+  const fixedWidth = segments.filter(segment => !flexible(segment)).reduce((sum, item) => sum + item.text.length + 2, 0)
+  const contextWidth = Math.max(0, width - fixedWidth)
+  const flexibleCount = segments.filter(flexible).length
+  let flexibleIndex = 0
+  const backgrounds = segments.map((segment, index) =>
+    hovered === segment.action || (powerline && index % 2 === 0) ? theme.surface3 : theme.surface2)
+  // A right click anywhere on the bar (segments let it bubble) opens its customization.
+  const customize = () => { if (overview.commands?.ids.includes('omni-bar-settings')) overview.commands.run('omni-bar-settings') }
+  return <box id="omni-bar" width={width} height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.surface2} overflow="hidden"
+    onMouseDown={event => { if (event.button === 2) { event.stopPropagation(); customize() } }}>
+    {segments.map((segment, index) => {
+      const cells = flexible(segment)
+        ? Math.floor(contextWidth / flexibleCount) + (flexibleIndex++ === 0 ? contextWidth % flexibleCount : 0)
+        : Math.min(width, segment.text.length + 2)
+      return <box key={segment.action} id={`omni-bar:${segment.action}`} width={cells} height={1} flexShrink={0}
+        backgroundColor={backgrounds[index]}
+        onMouseOver={() => setHovered(segment.action)} onMouseOut={() => setHovered(current => current === segment.action ? null : current)}
+        onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); runOmniAction(overview, segment.action) } }}>
+        <text fg={segment.action === 'attention' && overview.snapshot.attentionCount ? theme.amber : segment.action === 'commands' || hovered === segment.action ? theme.cyan : theme.text} wrapMode="none" selectable={false}>
+          {cells > 1 && powerline && backgrounds[index] !== (backgrounds[index + 1] ?? theme.surface2)
+            ? <>{fitText(` ${segment.text}`, cells - 1)}<span fg={backgrounds[index]} bg={backgrounds[index + 1] ?? theme.surface2}>{caps?.right ?? ' '}</span></>
+            : fitText(` ${segment.text} `, cells)}
+        </text>
+      </box>
+    })}
+  </box>
+}
+
+export function OmniActions({ services, theme, width, height, registerKeys, close }: TuiPluginViewProps) {
+  const overview = services['shell-overview']
+  const actions = overview ? availableActions(overview) : []
+  const [cursor, setCursor] = useState(0)
+  const selected = Math.min(cursor, Math.max(0, actions.length - 1))
+  const activate = (index: number) => {
+    const action = actions[index]
+    if (overview && action) { close(); runOmniAction(overview, action.id) }
+  }
+  useEffect(() => {
+    registerKeys(key => {
+      if (key.name === 'escape') { close(); return true }
+      if (key.name === 'down' || key.sequence === 'j') { setCursor((selected + 1) % Math.max(1, actions.length)); return true }
+      if (key.name === 'up' || key.sequence === 'k') { setCursor((selected + actions.length - 1) % Math.max(1, actions.length)); return true }
+      if (key.name === 'return') { activate(selected); return true }
+      return true
+    })
+    return () => registerKeys(null)
+  })
+  const popWidth = Math.max(1, Math.min(width - 2, 56))
+  const popHeight = Math.min(height, actions.length + 3)
+  const visibleRows = Math.max(0, popHeight - 3)
+  const start = Math.max(0, selected - visibleRows + 1)
+  return <box id="omni-bar-actions" position="absolute" top={Math.max(0, Math.floor((height - popHeight) / 2))} left={Math.max(0, Math.floor((width - popWidth) / 2))}
+    width={popWidth} height={popHeight} zIndex={MODAL_CONTENT_Z_INDEX} border borderStyle="single" borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title=" Omni bar actions ">
+    {actions.slice(start, start + visibleRows).map((action, offset) => {
+      const index = start + offset
+      return <box key={action.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
+      onMouseOver={() => setCursor(index)}
+      onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); activate(index) } }}>
+      <text fg={selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} ${omniGlyph(action.id)} ${action.label}`, popWidth - 2)}</text>
+      </box>
+    })}
+    <text fg={theme.dim} wrapMode="none">{fitText(' ↑↓ select · Enter open · Esc close', popWidth - 2)}</text>
+  </box>
+}
+
+export function OmniSettings({ theme, width, height, registerKeys, close }: TuiPluginViewProps) {
+  const layout = useOmniLayout(omniLayoutStore)
+  const [cursor, setCursor] = useState(0)
+  const selected = Math.min(cursor, layout.length - 1)
+  useEffect(() => {
+    registerKeys(key => {
+      if (key.name === 'escape' || key.sequence === 'q') { close(); return true }
+      if (key.name === 'down' || key.sequence === 'j' || key.sequence === 'J') {
+        if (key.shift || key.sequence === 'J') { omniLayoutStore.set(moveLayoutItem(layout, selected, 1)); setCursor(Math.min(layout.length - 1, selected + 1)) }
+        else setCursor((selected + 1) % layout.length)
+        return true
+      }
+      if (key.name === 'up' || key.sequence === 'k' || key.sequence === 'K') {
+        if (key.shift || key.sequence === 'K') { omniLayoutStore.set(moveLayoutItem(layout, selected, -1)); setCursor(Math.max(0, selected - 1)) }
+        else setCursor((selected + layout.length - 1) % layout.length)
+        return true
+      }
+      if (key.name === 'return' || key.sequence === ' ') { omniLayoutStore.set(toggleLayoutItem(layout, selected)); return true }
+      if (key.sequence === 'r') { omniLayoutStore.reset(); return true }
+      return true
+    })
+    return () => registerKeys(null)
+  })
+  const popWidth = Math.max(1, Math.min(width - 2, 60))
+  const popHeight = Math.min(height, layout.length + 4)
+  const visibleRows = Math.max(0, popHeight - 4)
+  const start = Math.max(0, Math.min(selected - visibleRows + 1, layout.length - visibleRows))
+  return <box id="omni-bar-settings" position="absolute" top={Math.max(0, Math.floor((height - popHeight) / 2))} left={Math.max(0, Math.floor((width - popWidth) / 2))}
+    width={popWidth} height={popHeight} zIndex={MODAL_CONTENT_Z_INDEX} border borderStyle="single" borderColor={theme.border2} backgroundColor={theme.surface} flexDirection="column" overflow="hidden" title=" Customize omni bar ">
+    {layout.slice(start, start + visibleRows).map((item, offset) => {
+      const index = start + offset
+      return <box key={item.id} height={1} flexShrink={0} backgroundColor={selected === index ? theme.surface2 : theme.surface}
+        onMouseOver={() => setCursor(index)}
+        onMouseDown={event => { if (event.button === 0) { event.stopPropagation(); setCursor(index); omniLayoutStore.set(toggleLayoutItem(layout, index)) } }}>
+        <text fg={!item.enabled ? theme.dim : selected === index ? theme.cyan : theme.text} wrapMode="none" selectable={false}>{fitText(` ${selected === index ? '›' : ' '} [${item.enabled ? 'x' : ' '}] ${omniGlyph(item.id)} ${omniItemLabel(item.id)}`, popWidth - 2)}</text>
+      </box>
+    })}
+    <text fg={theme.dim} wrapMode="none">{fitText(' ↑↓ select · Space toggle · ⇧↑↓ move · r reset · Esc', popWidth - 2)}</text>
+    <text fg={theme.dim} wrapMode="none">{fitText(' Commands… is always shown, last.', popWidth - 2)}</text>
+  </box>
+}
+
+export const widgets: PluginWidgetModule<TuiPluginWidget> = {
+  apiVersion: PLUGIN_API_VERSION, pluginId: 'omni-bar', widgets: { overview: OmniBar },
+}
+export const module: PluginViewModule<TuiPluginView> = {
+  apiVersion: PLUGIN_API_VERSION, pluginId: 'omni-bar', views: { 'omni-bar-actions': OmniActions, 'omni-bar-settings': OmniSettings },
+}

@@ -1,0 +1,15 @@
+// The Web app's widget loaders: static specifiers, one chunk per plugin.
+import { PLUGIN_MANIFESTS } from '../../lib/plugins/catalog'
+import { createPluginWidgetRegistry } from '../../lib/plugins/widgetHost'
+import type { WebPluginWidget } from './pluginTypes'
+
+export const webPluginWidgets = createPluginWidgetRegistry<WebPluginWidget>('web', PLUGIN_MANIFESTS, {
+  'dynamic-island': async () => (await import('../../plugins/dynamic-island/web')).widgets,
+  'plan-review': async () => (await import('../../plugins/plan-review/web/widget')).widgets,
+  proof: async () => (await import('../../plugins/proof/web')).widgets,
+  schedules: async () => (await import('../../plugins/schedules/web/widget')).widgets,
+  'focus-mode': async () => (await import('../../plugins/focus-mode/web')).widgets,
+  'pi-activity': async () => (await import('../../plugins/pi-activity/web')).widgets,
+  'omni-bar': async () => (await import('../../plugins/omni-bar/web')).widgets,
+  toasts: async () => (await import('../../plugins/toasts/web')).widgets,
+})

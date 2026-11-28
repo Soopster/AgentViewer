@@ -1,12 +1,66 @@
-export type TextBlock = { type: 'text'; text: string }
-export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+import type { SessionRecap } from './sessionRecap'
+import type { CardBlock } from './plugins/cardBlocks'
+export type McpResourceLink = {
+  type: 'resource_link'
+  uri: string
+  name: string
+  title?: string
+  description?: string
+  mimeType?: string
+  size?: number
+}
+
+export type TextBlock = {
+  type: 'text'
+  text: string
+  /** Set when this row records what a sub-agent did; `text` already says it in words. */
+  subagentActivity?: SubagentActivity
+}
+export type SubagentActivity = {
+  /** The agent's path in its tree, e.g. `/root/task_plugin`. */
+  path: string
+  threadId: string
+  kind: 'started' | 'interacted' | 'interrupted' | 'completed'
+}
+export type McpInvocation = {
+  server: string
+  tool: string
+  originCallId: string
+  status?: string
+  pluginId?: string | null
+  readOnlyHint?: boolean | null
+  appContext?: { connectorId: string; linkId: string | null; resourceUri: string | null; appName: string | null; actionName: string | null } | null
+  app?: { resourceUri: string; preferredModelDisplayMode: 'inline' | 'fullscreen' }
+}
+export type ToolUseBlock = {
+  type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; mcp?: McpInvocation
+  /** A plugin's presentation of this call (lib/plugins/toolCards.ts), drawn instead of the generic card. */
+  pluginCard?: PluginToolCard
+  /** A draft card for this call, shown beside the built-in one, labelled, for its owner to keep or discard. */
+  pluginCardDraft?: PluginToolCard
+}
+export type PluginToolCard = { pluginId: string; title: string; lines: string[]; tone: 'info' | 'success' | 'warning' | 'error'; /** Set on a draft preview (ToolUseBlock.pluginCardDraft). */ draft?: true; /** What a draft preview refers to (a rule id), so a button can act on it. */ ref?: string; /** Rich content (lib/plugins/cardBlocks.ts); `lines` stays the collapsed form and the fallback. */ blocks?: CardBlock[] }
 export type ToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string
   content: string | ContentBlock[]
   is_error?: boolean
+  /** MCP result sidecars, preserved independently of model-facing text. */
+  resourceLinks?: McpResourceLink[]
+  structuredContent?: unknown
+  mcpMeta?: Record<string, unknown>
+  /** Claude SDK sidecar metadata classifying denied/interrupted/cancelled results. */
+  tool_result_meta?: Record<string, unknown>
+  /** Structured question output, including annotations the model text omits. */
+  questionResult?: import('./askUserAnswers').AskUserAnswers
 }
-export type ThinkingBlock = { type: 'thinking'; thinking: string; signature?: string }
+export type ThinkingBlock = {
+  type: 'thinking'; thinking: string; signature?: string
+  /** Additional reasoning text returned by the provider, separate from its summary. */
+  reasoningText?: string
+  /** Provider-reported/observed reasoning activity; absent for older transcripts. */
+  reasoning?: { startedAt?: number; completedAt?: number; completed?: boolean; tokens?: number; tokenScope?: 'turn' }
+}
 export type ImageBlock = {
   type: 'image'
   // Anthropic API format
@@ -37,33 +91,123 @@ export type ApiMessage = {
     cache_read_input_tokens?: number | null
     cache_creation_input_tokens?: number | null
   }
+  /** Claude SDK envelope metadata retained for transcript diagnostics. */
+  aborted?: boolean
+  subagent_type?: string
+  subagent_retry?: Record<string, unknown>
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot'
+export type SystemMessagePayload = {
+  type: 'system'
+  subtype: string
+  content?: string
+  level?: string
+  [key: string]: unknown
+}
+
+export type AgentProvider = import('./extensions/providers/catalog').RegisteredProvider
 export type ProviderSelection = AgentProvider | 'all'
+export type ProviderInstanceId = string
+
+export type ProviderInstanceSummary = {
+  id: ProviderInstanceId
+  provider: AgentProvider
+  displayName: string
+  accentColor?: string
+  enabled: boolean
+  isDefault: boolean
+  configured: boolean
+}
+
+export type SessionInboxState = {
+  pinnedAt?: number
+  pinOrder?: number
+  settledAt?: number
+  snoozedUntil?: number
+  /** When a person last looked at this session, on any client. A finished turn older
+   *  than this is not news to anyone, so every surface drops its "done" mark together. */
+  seenAt?: number
+  /** The pull request this session's work became. Recorded so the session can
+   *  settle itself when that PR merges instead of sitting in the active list
+   *  long after the work landed. */
+  linkedPr?: LinkedPullRequest
+  /** Pull requests a person unlinked. Auto-linking never puts one of these back. */
+  declinedPrUrls?: string[]
+}
+
+export type LinkedPullRequest = {
+  /** `owner/repo`, as `gh` reports it. */
+  repo: string
+  number: number
+  url: string
+  /** Working directory to resolve the PR from — `gh` is repo-scoped and a
+   *  session's cwd is the only thing that identifies which checkout it means. */
+  cwd?: string
+  /** Last state observed from the host, uppercase as `gh` reports it
+   *  (OPEN / CLOSED / MERGED). Absent until the first refresh. */
+  state?: string
+  checkedAt?: number
+}
+export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
 export type SessionCapabilities = {
   messageFork: boolean
   resumeAtMessage: boolean
   fileRewind: boolean
   rollback: boolean
+  deleteSession: boolean
+  shareSession: boolean
+  unshareSession: boolean
+  summarizeSession: boolean
+  unrevertSession: boolean
+  respondToPermission: boolean
+  /** The runtime accepts a user message into a turn already in flight. */
+  activeSteering: boolean
+  /** The runtime returns a conversation to before an earlier prompt without leaving the session. */
+  inPlaceRewind: boolean
 }
 
 /**
  * A single entry returned by getSessionMessages().
- * The actual message (role + content) is nested under the `message` field —
- * not at the top level. Only 'user' and 'assistant' types are stored here.
+ * The actual provider payload is nested under the `message` field rather than
+ * living at the top level. Claude history can also include `system` entries.
  */
 export type SessionMessage = {
-  type: 'user' | 'assistant'
+  /** Explicit provider-native plan artifact, preserved for review discovery. */
+  planArtifact?: true
+  type: 'user' | 'assistant' | 'system'
   uuid: string
   session_id: string
-  message: ApiMessage
+  message: ApiMessage | SystemMessagePayload
   parent_tool_use_id: null
   timestamp?: string
-  origin?: { kind: string }
+  origin?: { kind: string; subkind?: string }
   provider?: AgentProvider
+  /** Configured provider runtime that owns this message/session. */
+  providerInstanceId?: ProviderInstanceId
   turnId?: string
+  taskDescription?: string
+  requestId?: string
+  /** Provider-native durable message/entry id for actions such as message fork. */
+  providerMessageId?: string
+  /**
+   * Why this message's turn is the automatic RE-RUN of a turn a worker restart
+   * interrupted (Claude SDK 0.3.270 `resume_reason`): the host's reason when it
+   * set one (`host_draining`, `checkpoint_restore`, `container_recreated`, …),
+   * else `interrupted_turn`.
+   *
+   * Without it, a re-run's first reply is indistinguishable from the interrupted
+   * attempt's — the transcript shows what looks like the same turn answered
+   * twice, and the reattach path cannot tell which one it is watching. Stamped
+   * only on a turn's first reply frame, so it marks the re-run rather than
+   * every message in it.
+   */
+  resumeReason?: string
+  /**
+   * True when Agent Viewer is surfacing an in-memory live overlay before the
+   * provider has flushed the message into its durable session history.
+   */
+  ephemeral?: boolean
 }
 
 export type Session = {
@@ -72,12 +216,50 @@ export type Session = {
   customTitle?: string
   firstPrompt?: string
   lastModified?: number
+  /** Provider update time for transcript cache invalidation; not displayed activity. */
+  transcriptUpdatedAt?: number
   cwd?: string
   tag?: string | null
   createdAt?: string | number
   provider?: AgentProvider
+  /** Configured provider runtime; defaults to the provider name for legacy sessions. */
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
+  inbox?: SessionInboxState
+  /** Idle recap and suggested next message; present only when recaps are on and still describe the latest turn. */
+  recap?: SessionRecap
   capabilities?: SessionCapabilities
+  /** Provider-native pinned state when the session backend exposes it. */
+  isPinned?: boolean
+  /**
+   * When this session was spawned as a subagent by another session, the id of
+   * the parent. Providers with durable child sessions populate this from their
+   * native hierarchy (for example OpenCode `parentID` and Codex
+   * `parentThreadId`).
+   */
+  parentSessionId?: string
+  /**
+   * Client-only flag set when the session was just created via /api/sessions/new
+   * and the underlying provider has not materialized the transcript yet. The first
+   * send carries isPendingSession so provider backends can skip resume/read paths
+   * that are unavailable before the first user message.
+   */
+  isPending?: boolean
   [key: string]: unknown
+}
+
+/** Lightweight per-subagent summary for sidebar nesting — no message content. */
+export type SubagentSummary = {
+  agentId: string
+  taskDescription?: string
+  status?: string
+  transcriptAvailable?: boolean
+  messageCount: number
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens?: number }
+  startedAt?: string
+  endedAt?: string
+  provider: AgentProvider
 }
 
 export type SendState = 'idle' | 'sending' | 'error'
@@ -91,23 +273,83 @@ export type ContextUsage = {
 }
 
 export type SessionModelInfo = {
+  /** Prices in USD per million tokens; entries may describe context-size tiers. */
+  pricing?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; contextAboveTokens?: number }[]
+  contextWindowTokens?: number
+  maxInputTokens?: number
+  maxOutputTokens?: number
+  inputModalities?: string[]
+  outputModalities?: string[]
+  supportsTools?: boolean
+  modelStatus?: string
   value: string
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max' | 'xhigh')[]
+  supportedEffortLevels?: ReasoningEffortLevel[]
+  supportsLongContext?: boolean
+}
+
+export type SessionComposerAgentOption = {
+  value: string
+  label: string
+  description?: string
+  mode?: string
+  native?: boolean
+}
+
+export type SessionComposerModeOption = {
+  value: string
+  label: string
+  description?: string
+}
+
+export type SessionComposerOptions = {
+  agents?: SessionComposerAgentOption[]
+  mentionAgents?: SessionComposerAgentOption[]
+  currentAgent?: string | null
+  modes?: SessionComposerModeOption[]
+  currentMode?: string | null
+  permissionModes?: SessionComposerModeOption[]
+  currentPermissionMode?: string | null
+}
+
+export type ComposerContextKind = 'file' | 'image' | 'terminal' | 'diff' | 'browser'
+
+export type SendAttachment = {
+  /** Inline composer reference; bytes remain on the normal attachment channel. */
+  contextKind?: ComposerContextKind
+  id?: string
+  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent' | 'extension_context'
+  path?: string
+  filePath?: string
+  displayName?: string
+  text?: string
+  data?: string
+  mimeType?: string
+  extensionId?: string
+  canvasId?: string
+  instanceId?: string
+  capturedAt?: string
+  payload?: Record<string, unknown>
+  selection?: {
+    start: { line: number; character: number }
+    end: { line: number; character: number }
+  }
 }
 
 export type SessionDiagnosticSection = {
   id: string
   title: string
   items: string[]
+  compaction?: { status?: 'pending' | 'completed' | 'failed' | 'unconfirmed'; busy: boolean }
 }
 
 export type SessionInfo = {
   sessionId: string
   summary: string
   lastModified: number
+  transcriptUpdatedAt?: number
   customTitle?: string
   firstPrompt?: string
   gitBranch?: string
@@ -115,6 +357,17 @@ export type SessionInfo = {
   tag?: string
   createdAt?: number
   provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
+  providerDisplayName?: string
+  providerAccentColor?: string
   capabilities: SessionCapabilities
+  isPinned?: boolean
   currentModel?: string
+  parentSessionId?: string
+}
+
+export type RunningSessionRef = {
+  sessionId: string
+  provider: AgentProvider
+  providerInstanceId?: ProviderInstanceId
 }

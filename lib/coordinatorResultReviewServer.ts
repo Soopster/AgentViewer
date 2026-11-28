@@ -1,0 +1,185 @@
+import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import type { ExternalProtocolIdentity } from './agentProtocol'
+import { withProviderInstance } from './providerInstances'
+import type { AgentProvider } from './types'
+import { readExternalProtocolResultContext, claimExternalProtocolResultHost, noteKeyedSideEffect, readSessionCoordinator, readInteractiveCoordinator, readInteractiveRecoveries, readSettledInteractiveExecutions, sessionCoordinatorIdentity, runExternalProtocolIdempotent, validateWorktreeTaskLocks, recordStagedTaskIntegration, publishTaskDependency, readReviewedDependencyTip } from './agentCoordination'
+import { findWorktreeTaskForCwd, mergeWorktreeTask } from './worktreeTasks'
+import { readViewSessionRunning } from './sessionBackend'
+import { coordinatorCheckoutRevision, coordinatorDependencyRef, inheritedDependencyBase, previewMergeConflicts, resultGit, snapshotDependencySource } from './coordinatorResultGit'
+import { resultVerification, type CoordinatorResultDestination, type CoordinatorResultReview } from './coordinatorResultReview'
+
+export async function readCoordinatorResultReview(sessionId: string, provider: AgentProvider, taskId: string, identity?: ExternalProtocolIdentity, options: { includeDiff?: boolean; destination?: CoordinatorResultDestination } = {}): Promise<CoordinatorResultReview> {
+  const context = identity ? await readExternalProtocolResultContext(identity, taskId) : null
+  const snapshot = context?.snapshot ?? await readSessionCoordinator(sessionId, provider)
+  const task = context?.task ?? snapshot?.tasks.find(task => task.id === taskId)
+  if (!snapshot || !task) throw new Error('Coordinator result not found')
+  const agent = snapshot.agents.find(agent => agent.id === task.ownerAgentId)
+  const review: CoordinatorResultReview = {
+    task, runReview: snapshot.run.review,
+    findings: snapshot.events.filter(event => event.taskId === taskId && ['finding', 'review.requested', 'task.failed', 'agent.blocked'].includes(event.type)).map(event => ({ summary: event.summary || event.type, detail: event.detail })),
+    checkout: null, verification: resultVerification(task), integrationBlockers: [],
+  }
+  const block = (reason: string) => review.integrationBlockers.push(reason)
+  if (task.status !== 'completed') block('Only completed tasks can be integrated.')
+  if (!snapshot.agents.some(entry => entry.role === 'lead' && entry.sessionId === sessionId)) block('Open the lead conversation to integrate.')
+  if (context ? context.executionElsewhere : (await readInteractiveCoordinator(sessionId)).executionElsewhere) block('Execution belongs to another host; inspect and integrate there.')
+  if (!agent) { block('The task has no checkout owner.'); return review }
+  if (review.integrationBlockers.some(reason => reason.includes('another host'))) return review
+  const nativeRunning = await withProviderInstance(agent.providerInstanceId ?? agent.provider, agent.provider, async () => readViewSessionRunning(agent.sessionId))
+  if (agent.turnActive || nativeRunning.running || snapshot.tasks.some(other => other.ownerAgentId === agent.id && !['completed', 'failed', 'cancelled'].includes(other.status))) block('The teammate still has active work.')
+  if ((await readInteractiveRecoveries(snapshot.run.id)).includes(agent.id)) block('Reconcile the teammate execution before integrating.')
+  if ((await readSettledInteractiveExecutions(snapshot.run.id)).includes(agent.id)) block('Inspect and acknowledge the retained teammate execution before integrating.')
+  if (nativeRunning.pendingPermissions.length || nativeRunning.pendingPrompts.length) block('Answer the teammate native permission or question in its existing UI before integrating.')
+  if (task.receipt?.needsDecision.some(decision => decision.status === 'open')) block('Resolve open decisions first.')
+  const forDependencies = options.destination === 'dependencies'
+  if (forDependencies && !task.receipt?.requiresIntegration) block('This task has no isolated code result to publish for dependencies.')
+  if (!forDependencies && snapshot.run.requireReview && snapshot.run.review.status !== 'approved') block('The required run review is not approved.')
+  // A foreign host's paths may coincidentally exist on this machine. Do not inspect them.
+  if (review.integrationBlockers.some(reason => reason.includes('another host'))) return review
+  try {
+    const worktree = await findWorktreeTaskForCwd(agent.worktreePath)
+    if (!worktree || !agent.worktreeBranch) block('Shared checkout: changes are already in place; there is no separate branch to integrate.')
+    const cwd = agent.worktreePath
+    const target = worktree?.repoRoot ?? cwd
+    const revision = await coordinatorCheckoutRevision(cwd)
+    const dependencyRef = coordinatorDependencyRef(snapshot.run.id)
+    const [head, branch, targetHead, dependencyTip, targetRevision] = await Promise.all([
+      resultGit(cwd, ['rev-parse', 'HEAD']), resultGit(cwd, ['branch', '--show-current']),
+      resultGit(target, ['rev-parse', 'HEAD']),
+      worktree ? readReviewedDependencyTip(snapshot.run.id, target) : undefined,
+      forDependencies ? undefined : coordinatorCheckoutRevision(target),
+    ])
+    const integrationBase = (forDependencies ? dependencyTip : undefined) ?? targetHead.trim()
+    const base = worktree ? (await resultGit(cwd, ['merge-base', head.trim(), integrationBase])).trim() : head.trim()
+    const [changed, untracked, diff, targetStatus] = await Promise.all([
+      resultGit(cwd, ['diff', '--name-only', '-z', base.trim(), '--']),
+      resultGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+      options.includeDiff === false ? Promise.resolve('') : resultGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', base.trim(), '--']),
+      forDependencies ? Promise.resolve('') : resultGit(target, ['status', '--porcelain=v1', '--untracked-files=all']),
+    ])
+    if (revision !== await coordinatorCheckoutRevision(cwd)) throw new Error('Checkout changed while reading; refresh before reviewing.')
+    const files = [...new Set([...changed.split('\0'), ...untracked.split('\0')].filter(Boolean))]
+    review.checkout = { path: cwd, branch: branch.trim(), head: head.trim(), base: base.trim(), target, files, diff: diff.slice(0, 200_000), diffTruncated: diff.length > 200_000, diffIncluded: options.includeDiff !== false, revision,
+      ...(forDependencies ? { dependencyRef, dependencyTip, integrationBase } : {}),
+      token: createHash('sha256').update(JSON.stringify([revision, targetRevision, forDependencies, integrationBase, dependencyTip, task.updatedAt, task.receipt, snapshot.run.review])).digest('hex') }
+    review.verification = resultVerification(task, revision)
+    if (!files.length) block('No changes to integrate.')
+    if (worktree && targetStatus.trim()) block('The target checkout has local changes; commit or stash them before integrating.')
+    if (worktree && branch.trim() !== worktree.branch) block('The checkout branch changed; inspect it before integrating.')
+    if (['failed', 'stale', 'unbound'].includes(review.verification)) block(`Verification is ${review.verification}; complete the task again with checks against the current checkout.`)
+    // Tell the engineer now, with file names, what integration would otherwise
+    // discover by failing. Skipped while another blocker already stops it.
+    if (worktree && !review.integrationBlockers.length) {
+      const preview = await previewMergeConflicts(target, head.trim(), integrationBase)
+      if (preview) {
+        review.mergePreview = preview
+        if (preview.conflicts.length) block(`Merging ${branch.trim()} would conflict in ${preview.conflicts.slice(0, 6).join(', ')}${preview.conflicts.length > 6 ? ` (+${preview.conflicts.length - 6} more)` : ''}; rebase it onto the target's HEAD first.`)
+      } else block('Merge preview is unavailable; inspect the Git state before integrating.')
+    }
+    if (worktree) {
+      // A downstream checkout inherits reviewed files from its run's dependency branch.
+      // The main review still shows the full diff and checks grants on the worker's own changes.
+      const grantBase = forDependencies ? base : await inheritedDependencyBase(cwd, head.trim(), base, dependencyTip)
+      const grantFiles = grantBase === base ? files : [...new Set([
+        ...(await resultGit(cwd, ['diff', '--name-only', '-z', grantBase, '--'])).split('\0'), ...untracked.split('\0'),
+      ].filter(Boolean))]
+      const validation = await validateWorktreeTaskLocks(worktree, { completedTaskId: task.id, changedFiles: grantFiles })
+      if (!validation.ok) block(validation.message)
+    }
+  } catch (error) {
+    review.checkout = null
+    review.error = error instanceof Error ? error.message : 'Checkout unavailable'
+    block('Could not read a stable checkout. Refresh after resolving the error.')
+  }
+  return review
+}
+
+const integrations = new Map<string, Promise<unknown>>()
+export async function integrateCoordinatorResult(sessionId: string, provider: AgentProvider, taskId: string, token: string, requestId: string, boundIdentity?: ExternalProtocolIdentity, destination: CoordinatorResultDestination = 'target'): Promise<{ staged: boolean; dependency?: { ref: string; commit: string } }> {
+  const identity = boundIdentity ?? await sessionCoordinatorIdentity(sessionId, provider)
+  return runExternalProtocolIdempotent(identity, 'integrate_result', requestId, async () => {
+    const initial = await readCoordinatorResultReview(sessionId, provider, taskId, identity, { destination, includeDiff: false })
+    const key = initial.checkout?.target ?? identity.runId
+    if (integrations.has(key)) throw new Error('Another integration is in progress. Refresh when it finishes.')
+    const operation = (async () => {
+      const review = await readCoordinatorResultReview(sessionId, provider, taskId, identity, { destination, includeDiff: false })
+      if (review.integrationBlockers.length) throw new Error(review.integrationBlockers.join(' '))
+      if (!review.checkout || review.checkout.token !== token) throw new Error('Result or target changed since review. Refresh and inspect before integrating.')
+      const worktree = await findWorktreeTaskForCwd(review.checkout.path)
+      if (!worktree) throw new Error('Worktree no longer exists')
+      await claimExternalProtocolResultHost(identity)
+      const target = worktree.repoRoot
+      const { dependencyRef: ref, dependencyTip, integrationBase } = review.checkout
+      if (ref && integrationBase && review.task.receipt?.requiresIntegration) {
+        const source = await snapshotDependencySource(worktree.path, review.checkout.head)
+        const tree = (await resultGit(target, ['merge-tree', '--write-tree', integrationBase, source])).trim()
+        const commit = (await resultGit(target, ['commit-tree', tree, '-p', integrationBase, '-m', `Coordinator reviewed dependency ${taskId}`, '-m', `Receipt: ${review.task.receipt.recordedAt}`])).trim()
+        const current = await readCoordinatorResultReview(sessionId, provider, taskId, identity, { destination, includeDiff: false })
+        if (current.integrationBlockers.length) throw new Error(current.integrationBlockers.join(' '))
+        if (current.checkout?.token !== token) throw new Error('Result or dependency branch changed before publishing. Refresh and inspect again.')
+        await publishTaskDependency(identity, taskId, review.task.receipt.recordedAt, { target, base: integrationBase, tree, ref, commit }, dependencyTip)
+        return { staged: false, dependency: { ref, commit } }
+      }
+      if (review.task.receipt?.requiresIntegration && await coordinatorCheckoutRevision(worktree.path) !== review.checkout.revision) {
+        throw new Error('Source changed before staging. Refresh and inspect the result again.')
+      }
+      const base = (await resultGit(target, ['rev-parse', 'HEAD'])).trim()
+      // Merge may commit the source and partially write the target before failing.
+      noteKeyedSideEffect()
+      const result = await mergeWorktreeTask(worktree)
+      if (result.staged && review.task.receipt?.requiresIntegration) {
+        const source = (await resultGit(worktree.path, ['rev-parse', 'HEAD'])).trim()
+        const expected = (await resultGit(target, ['merge-tree', '--write-tree', base, source])).trim()
+        const tree = (await resultGit(target, ['write-tree'])).trim()
+        if (expected !== tree || (await resultGit(target, ['rev-parse', 'HEAD'])).trim() !== base) {
+          throw new Error('Target changed during staging. Inspect the staged Git changes before continuing.')
+        }
+        await recordStagedTaskIntegration(identity, taskId, review.task.receipt.recordedAt, { target, base, tree })
+      }
+      return result
+    })()
+    integrations.set(key, operation)
+    try { return await operation } finally { integrations.delete(key) }
+  })
+}
+
+
+export async function readExternalCoordinatorResultReview(identity: ExternalProtocolIdentity, taskId: string, includeDiff = false, destination: CoordinatorResultDestination = 'target'): Promise<CoordinatorResultReview & { diffTool: string }> {
+  const { lead } = await readExternalProtocolResultContext(identity, taskId)
+  return { ...await readCoordinatorResultReview(lead.sessionId, lead.provider, taskId, identity, { includeDiff, destination }), diffTool: 'coord_read_result_diff' }
+}
+
+export async function integrateExternalCoordinatorResult(identity: ExternalProtocolIdentity, taskId: string, token: string, requestId: string, destination: CoordinatorResultDestination = 'target') {
+  const { lead } = await readExternalProtocolResultContext(identity, taskId)
+  return integrateCoordinatorResult(lead.sessionId, lead.provider, taskId, token, requestId, identity, destination)
+}
+
+
+/** Read one bounded diff page pinned to both source and target checkout state. */
+export async function readExternalCoordinatorResultDiff(identity: ExternalProtocolIdentity, params: { taskId: string; reviewToken: string; file?: string; offset?: number; limit?: number; destination?: CoordinatorResultDestination }) {
+  const offset = params.offset ?? 0
+  const limit = params.limit ?? 8000
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 16000) throw new Error('Diff offset must be a nonnegative integer and limit between 1 and 16000')
+  const before = await readExternalCoordinatorResultReview(identity, params.taskId, false, params.destination)
+  const checkout = before.checkout
+  if (!checkout || checkout.token !== params.reviewToken) throw new Error('Result or target changed since review; refresh coord_read_result before reading more diff')
+  if (params.file !== undefined && !checkout.files.includes(params.file)) throw new Error('Choose a changed file from coord_read_result checkout.files')
+  const untracked = (await resultGit(checkout.path, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean)
+  const tracked = await resultGit(checkout.path, ['--literal-pathspecs', 'diff', '--binary', '--no-ext-diff', '--no-textconv', '--no-color', checkout.base, '--', ...(params.file === undefined ? [] : [params.file])])
+  const additions: string[] = []
+  for (const file of untracked.filter(file => params.file === undefined || params.file === file)) {
+    const addition = await new Promise<string>((resolve, reject) => execFile('git', ['diff', '--no-index', '--binary', '--no-ext-diff', '--no-textconv', '--no-color', '--', '/dev/null', file], { cwd: checkout.path, encoding: 'utf8', timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error || (error as { code?: unknown }).code === 1) resolve(stdout)
+      else reject(new Error(stderr.trim() || error.message))
+    }))
+    if (tracked.length + additions.reduce((size, part) => size + part.length, 0) + addition.length > 16 * 1024 * 1024) throw new Error('Diff exceeds the read budget; select a changed file and inspect files separately')
+    additions.push(addition)
+  }
+  const diff = tracked + additions.join('')
+  const after = await readExternalCoordinatorResultReview(identity, params.taskId, false, params.destination)
+  if (after.checkout?.token !== params.reviewToken) throw new Error('Result or target changed while reading diff; refresh coord_read_result')
+  const text = diff.slice(offset, offset + limit)
+  const nextOffset = offset + text.length
+  return { taskId: params.taskId, reviewToken: params.reviewToken, file: params.file ?? null, offset, diff: text, totalChars: diff.length, hasMore: nextOffset < diff.length, nextOffset: nextOffset < diff.length ? nextOffset : null }
+}
